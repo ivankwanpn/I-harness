@@ -1,4 +1,4 @@
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,6 +8,73 @@ import { createSessionService, createDurableSessionLoader } from "@i-harness/ses
 type ModelClient = NonNullable<Parameters<typeof createSessionService>[0]["model"]>
 type LLMRequest = Parameters<ModelClient["stream"]>[0]
 import { createDesktopInput } from "../src/input.ts"
+
+it("Desktop input wakes only its exact live Session's human observer and a later prompt retrieves the same cell", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-input-steer-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  for (const sessionId of ["a", "b"]) await coordinator.create({ sessionId })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const requests = new Map<string, LLMRequest[]>(), calls = new Map<string, number>(), cells = new Map<string, string>()
+  let finished = 0, activeAborts = 0
+  const model: ModelClient = { async *stream(request) {
+    const id = request.messages.some(message => message.role === "user" && message.content === "start a") ? "a" : "b"
+    const seen = requests.get(id) ?? []; seen.push(request); requests.set(id, seen)
+    if (seen.length === 1) yield { type: "tool_call", call: { id: `start-${id}`, name: "code_exec", args: { code: `text(await tools.held_read({id:${JSON.stringify(id)}}));`, yield_time_ms: 60_000 } } }
+    else if (seen.length === 3) yield { type: "tool_call", call: { name: "code_wait", args: { cell_id: cells.get(id), yield_time_ms: 5000 } } }
+    else yield { type: "text/chunk", text: "parent turn ended" }
+    yield { type: "end" }
+  } }
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, sandbox: "danger-full-access", approveAll: true, codeMode: { mode: "mixed" }, additionalTools: [{
+    name: "held_read", description: "Held exact-session producer", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, isReadOnly: true,
+    execute: async (args: { id: string }, exec) => { calls.set(args.id, (calls.get(args.id) ?? 0) + 1); let done = false; exec.abortSignal?.addEventListener("abort", () => { if (!done) activeAborts++ }, { once: true }); await held; done = true; finished++; return `original ${args.id}` },
+  }] })
+  const input = createDesktopInput(coordinator, service)
+  try {
+    const a = await service.assemblyFor("a"), b = await service.assemblyFor("b")
+    // Cancellation is tested before observation: an admission already cancelled
+    // cannot remain a pending source. Cancellation after a delivered wake does
+    // not retroactively undo that wake.
+    a.inbox.admit({ inputId: "cancelled-human", text: "cancelled direction", delivery: "steer", intent: "user" })
+    a.inbox.cancel("cancelled-human")
+    await input.admit("a", { text: "start a", delivery: "queue" }); await input.admit("b", { text: "start b", delivery: "queue" })
+    await vi.waitFor(() => { expect(calls.get("a")).toBe(1); expect(calls.get("b")).toBe(1) }, { timeout: 5000 })
+    const queued = await input.admit("a", { text: "queued direction", delivery: "queue", start: false })
+    a.inbox.admit({ inputId: "system-steer", text: "system direction", delivery: "steer", intent: "system", synthetic: { description: "fixture", scope: "turn" } })
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(requests.get("a")).toHaveLength(1); expect(requests.get("b")).toHaveLength(1)
+    await input.cancel("a", queued.inputId)
+    const bSteer = await input.admit("b", { text: "human b direction", delivery: "steer" })
+    await vi.waitFor(() => expect(requests.get("b")).toHaveLength(2), { timeout: 5000 })
+    expect(requests.get("a")).toHaveLength(1)
+    const aSteer = await input.admit("a", { text: "human a direction", delivery: "steer" })
+    await vi.waitFor(() => expect(requests.get("a")).toHaveLength(2), { timeout: 5000 }); await input.drain()
+    expect(finished).toBe(0); expect(activeAborts).toBe(0)
+    for (const [id, assembly, steer] of [["a", a, aSteer], ["b", b, bSteer]] as const) {
+      expect(service.queueState(id).running).toBe(false)
+      const observation = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec")
+      expect(observation?.type).toBe("tool/result")
+      const output = (observation as { output: { cell_id: string; status: string; yield_reason: string } }).output
+      expect(output).toMatchObject({ status: "running", yield_reason: "user-steer" }); cells.set(id, output.cell_id)
+      expect(assembly.session.events.filter(event => event.type === "agent/input/promoted" && event.inputId === steer.inputId)).toHaveLength(1)
+      expect(requests.get(id)![1]!.messages.filter(message => message.role === "user" && message.content === `human ${id} direction`)).toHaveLength(1)
+      expect(assembly.session.events.filter(event => event.type === "user/message" && event.text === `human ${id} direction`)).toHaveLength(1)
+      expect(assembly.session.events.filter(event => event.type === "user/message" && event.text === "cancelled direction")).toHaveLength(0)
+    }
+    release()
+    for (const id of ["a", "b"]) await input.admit(id, { text: "retrieve", delivery: "queue" })
+    await input.drain()
+    for (const [id, assembly] of [["a", a], ["b", b]] as const) {
+      const observation = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_wait") as { output: unknown }
+      expect(observation.output).toMatchObject({ cell_id: cells.get(id), status: "completed" })
+      expect(JSON.stringify(observation.output)).toContain(`original ${id}`)
+      expect(assembly.session.events.filter(event => event.type === "code/cell" && event.state === "started")).toHaveLength(1)
+      expect(assembly.session.events.filter(event => event.type === "code/result")).toHaveLength(1)
+      expect(calls.get(id)).toBe(1)
+    }
+    expect(finished).toBe(2); expect(activeAborts).toBe(0)
+  } finally { release(); await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 15_000)
 
 it("admits a second input durably before the first provider response and preserves FIFO", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-input-"))

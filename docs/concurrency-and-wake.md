@@ -1,6 +1,6 @@
 # 併發、輸入准入與喚醒契約
 
-> 2026-10-13，外部審計修復。這是 **agent 執行模型的單一權威描述**；能力概覽與原始碼註解只指向此處。背景判讀見 [外部安裝與實測報告 §11、§12.2、§12.4](audit/2026-10-13-external-install-and-verification.md)。以下行號重新核對實作，不沿用審計報告的近似行號。
+> 2026-10-13，外部審計修復及 event-driven steering 更新。這是 **agent 執行模型的單一權威描述**；能力概覽與原始碼註解只指向此處。背景判讀見 [外部安裝與實測報告 §11、§12.2、§12.4](audit/2026-10-13-external-install-and-verification.md)。新增契約用檔案及符號引用，既有外部審計行號是當時的讀碼紀錄。
 >
 > 證據標記：**`[讀碼／已核對]`** = 查核指定實作，不等於端到端、跨平台或斷電實測；**`[實測]`** = 列明實際執行的命令；**`[施工中／未保證]`** = 工作方向，不宣告已完成。**INVARIANT** 是指定實作範圍內由程式維持的不變量；**CONVENTION** 是宿主接線／命名約定，不能推成所有 embedder 的保證。
 >
@@ -50,6 +50,30 @@ grep -R -n 'setInterval' packages/core-agent/src
 
 `ParentInputAdmission.wake` 成員註解保留獨立喚醒接縫：對 CLI 目前不需要，對需要分開准入／drive 的 executor（包括未來實作）有用途；service 已使用它（`packages/subagent/src/task-notification.ts:15-22`）。**不保證**自訂 adapter 的 `admit` 自帶 wake，也不把 notification 的 `woken` 標記等同於父模型已完成一個 step。
 
+### 人類 steer → 釋放正在觀察的等待 `[讀碼／已核對]`
+
+**INVARIANT — 觀察者只讀該次工具的精確 live Session。** `userSteerForTool` 只接受仍 pending 的 `intent: "user", delivery: "steer"`，訂閱 admission／promotion／cancellation 後重新讀取 Inbox。queue、system、已取消、已 promoted 或另一個 Session 的 input 不會釋放此觀察者。取消發生在已交付 wake 之後，不能撤回已返回的結果。來源在 `packages/core-tools/src/observation.ts`，Desktop 透過 `createDesktopInput.admit` 對真正 assembly Session 准入（`packages/desktop-gateway/src/input.ts`）。
+
+| 直接工具／觀察面 | steer 時的結果 | 後續取得原工作 |
+| --- | --- | --- |
+| `wait_agent` target／all | `yielded:true, yield_reason:"user-steer", timed_out:false`；target 保留原 path／session／job ID | 同 target 再等，或用原 task／job ID |
+| `spawn_agent background:false` | 同一 `agent_path, task_id, job_id`、目前 running 狀態及 steer marker | `get_task_output({task_ids:[task_id],wait:true})` |
+| `get_task_output(wait:true)` | 原 task IDs 的當前 snapshot，加 steer marker | 同一組 IDs 再讀／等 |
+| `job_output(wait:true)`，subagent／exec／workflow | 原 job 的當前 text、`status:"running"` 及 steer marker | 同一 job ID 再讀／等 |
+| `workflow_run(wait:true)` | 同一 `job_id`、目前 workflow view 及 steer marker | `job_output` 讀同一 workflow ID |
+| 前景 `bash`／`pwsh`／已選 `shell` | 同一 capture 註冊成 job，回 `job_id, promoted:true, ran_foreground_ms`；stdout 說明 `Yielded to new user input; command continues as job …` | `job_output`；`job_kill` 明確停止 |
+| outer `code_exec`／`code_wait` | 同一 `cell_id, status:"running", yield_reason:"user-steer"` 與已可交付的新輸出 | 後續 `code_wait` 讀同一 cell |
+
+Shell 的 model-facing promoted 結果沿用原 shape，原因寫在 stdout；它沒有 direct wait 的 `yielded`／`yield_reason` 欄位。Exec service 的 `PromotedRun.promotionReason` 是 service 契約。等待期限與既有 clamp 保留；只有 deadline 令 `wait_agent.timed_out` 為 true。target 被移除／替換時，`wait_agent` 返回原 identity 的 `yield_reason:"target-changed"`，不把新佔用者當作舊 child 完成。
+
+**INVARIANT — steer 釋放 observation，owner 繼續。** 不 abort、重新 spawn、重新 dispatch、重執行，也不給原 call ID 第二個 result。下一個既有 model step 才由 `claimAtStepBoundary` promote input 並加入一次 user message。parent turn 可自然結束，原 task／job／cell 仍繼續；後來另一個 turn 用原 ID 取結果。foreground spawn 保持 durable `delivery:"tool"`，完成時沒有新建背景 parent-result 通知。
+
+Code Mode 只釋放 outer observer。`resultConsumer:"code"` 令巢狀等待不讀 human-steer source；guest 的 `await tools.…` 繼續等待原本的真實結果，包括任意巢狀工具。模型不把 running/yield marker 當成該巢狀工具的實際完成值。每次 `code_wait` 只交付新的 output window；已消耗的輸出不重播。必須完成的 retention／spill I/O 仍可能延後 observation 返回。Stop／terminate／close／dispose 仍 cancel 並 join 原 owner，包含尚未回應 abort 的在途 producer。
+
+前景 shell 的 threshold 與 steer 共用同一 capture promotion。steer 不更改 launch 時選定的 process-tree／sandbox lifetime；configured threshold 維持原 transport 限制，wake-only capture 保留 complete-tree cleanup。工具 observation 正常返回會清除該工具 guard 的觀察期限；dispose 仍透過原 owner 清理／等待程序（`packages/exec/src/service.ts`、`packages/shell/src/index.ts`）。
+
+這條 observer release 不等於 completion wake。背景 child 原有 durable task outbox 仍在 admit 成功後 drive 父 lane；generic exec／workflow 完成只更新其 registry／view，沒有新增 idle-parent 自動 inference。foreground spawn 也不因 steer 轉成背景通知交付。
+
 ## 3. Promise lane：單 session 序列，跨 session 可並行 `[讀碼／已核對]`
 
 - **INVARIANT — 每個 executor 一條 SERIAL chain。** `chain` 起始為 resolved promise；每次 pump 追加 `then`，內部 `for (;;)` 每次 `await agent.run(...)` 才考慮下一個 pending input（`packages/core-agent/src/executor.ts:79`、`packages/core-agent/src/executor.ts:93-114`）。同一 executor 的 turns 不重疊；**turn 內的工具並行不是第二條 turn lane**。
@@ -58,6 +82,8 @@ grep -R -n 'setInterval' packages/core-agent/src
 - **INVARIANT — 觀測不等於重啟。** `pending()` 可讀剩餘輸入；`drain()` 等既有 chain 並傳遞 lane 的失敗，不會啟動新 pump（`packages/core-agent/src/executor.ts:162-167`）。錯誤／觀測面可以增加「尚有多少 pending」的資訊，**不改變上述剩餘輸入等待後續 drive 的語意**。本文件不綁定錯誤型別或診斷字段名，也不宣稱 promote 後失敗的輸入會自動 retry。
 
 ## 4. Step 續行與 hook 瀑布，不是 event-bus 控制流 `[讀碼／已核對]`
+
+**已 dispatch 的 batch 仍須 drain。** 一個 eligible observer 已返回，不代表同一批任意 sibling 已完成；下一個 provider step 要等已開始的 sibling 收尾。shipped subagent wait／job 工具仍採 exclusive classification；只有明確標記 `isConcurrencySafe:true` 的工具可同組並行。整合 fixture 明確把原 `job_output` body 包成 parallel-safe alias 以測試「sibling 已 dispatch」邊界，沒有修改 shipped dispatch policy（`packages/core-agent/src/execute-tool-calls.ts`、`packages/session-executor/test/event-driven-steering.test.ts`）。child admission／policy／approval／model resolution 及任意 direct tool body 都沒有取得 detachment 授權。
 
 **INVARIANT — 每步結束時 `needsContinuation = toolCallsThisStep > 0`**（`packages/core-agent/src/index.ts:761`）。有工具呼叫就再走一步；沒有工具呼叫且該步不是 refused / truncated / empty 時，才進 pre-stop 接縫（`packages/core-agent/src/index.ts:762-783`）：
 
@@ -79,7 +105,17 @@ grep -R -n 'setInterval' packages/core-agent/src
 
 模型輸入不是另一份靠通知逐步 mutate 的權威記憶體：agent 每步 `deriveMessages(session)` 並 `assertMessagesFromLog`（`packages/core-agent/src/index.ts:394-399`），projection 從 `session.events` fold（`packages/core-session/src/index.ts:585-586`、`packages/core-session/src/index.ts:689`）。需要歷史的消費端須讀 log，或用 SDK **`session/history`** 的事件頁（`packages/sdk/src/server.ts:605-637`）。本文件**不承諾** history 查詢與 subscribe 之間原子銜接、slow-consumer buffer、exactly-once 通知或 listener 例外隔離；這些須由宿主另訂契約。
 
+### 子代理 durable history／狀態 push `[讀碼／已核對]`
+
+`createChildObservation` 訂閱 owning AgentTable 以及每個精確 live child Session 的 durable events。新增／移除／狀態更新／Session 替換會 rebind；舊 identity 的晚到 events 不會更新新 child。Transient token chunks 不觸發此 invalidation，也不要求 parent 自己 append 新 event（`packages/session-executor/src/child-observation.ts`）。
+
+Gateway `createDesktopSubagents` 透過 service `onAssembly(hook,{includeExisting:true})` 接上已存在及後來建立的 assembly，50ms coalescing timer 只在有 change 時啟動，idle 沒有定時 poll。`desktop/session/subagents/changed` 經 host／main／bridge 更新 pane 的 catalog 及 selected child history。讀取先驗證 root→child lineage、origin、權限與 sequence，再選 owning registry 的 actual live child Session；未 flush 的 durable tool/result 也可讀，不靠 flush-on-read，不把 child 暴露成普通 root `service.liveSession`／SDK authority。沒有 live owner 時維持 persisted snapshot／既有 unavailable 行為。元件與 read/control 的 disposers 清除 listener 和 pending coalescer（`packages/desktop-gateway/src/session-subagents.ts`、`packages/desktop/src/renderer/session/SubagentPane.tsx`）。
+
+這條 UI durable push 與 §2 的 observer release／背景 child outbox 分別有自己的用途。其他 execution surface 的 active polling、UI clocks、provider retries、schedules、watchdog 與 write-behind 不因 child push 而消失。
+
 ## 6. 真正的輪詢點，以及不是輪詢的 timers `[讀碼／已核對]`
+
+以下保留仍存在的 polling／timer 邊界；subagent／job／workflow 等待已改為事件觀察（§6.3），不能把舊等待的 10／20ms 輪詢描述套用到目前實作。
 
 搜尋範圍是 `packages/*/src` 與 `apps/cli/src` 的 `.ts` / `.tsx`，排除 test、node_modules、release / gateway 打包副本；查核 `setInterval`、`setTimeout` 與 promise-delay 的實際控制流。**審計的五列不是整個產品所有輪詢的總數**，也不是「全都觀察外部檔案」：schedule 看 wall-clock / log，另外有 UI、登入與等待工具。
 
@@ -111,10 +147,9 @@ UI 時鐘也有 interval，但不讀外部狀態：`RuntimeFeedback` 的倒數�
 
 | 位置與證據 | 等待／重試節奏 | 範圍 |
 | --- | --- | --- |
-| `packages/subagent/src/jobs.ts:133-140` | 10ms | job terminal / deadline |
-| `packages/subagent/src/task-protocol.ts:265-272` | 20ms | task outcome / deadline |
-| `packages/subagent/src/tools.ts:274-297`、`packages/subagent/src/tools.ts:477-500` | 20ms | `wait_agent`、`job_output(wait:true)` 的 workflow / exec fallback |
-| `packages/workflow/src/tool.ts:52`、`packages/workflow/src/tool.ts:95-102` | 20ms | `workflow_run(wait:true)`；等待可在工具執行／turn 路徑上 |
+| `packages/core-tools/src/observation.ts`，`waitForObservation` | owner event subscription；若有期限，最多一個 active deadline timer | subagent job／task／AgentTable、exec／workflow job observers；原 10／20ms sleep loops 已移除 |
+| `packages/subagent/src/tools.ts`、`packages/workflow/src/tool.ts` | owner subscribe + pending human steer；workflow run 沒有新增 observer deadline | 工具仍位於 turn 路徑，事件釋放等待，不重啟 owner |
+| `packages/code-mode/src/runtime.ts` | observer subscription + 有限 deadline；worker init／CPU watchdog 仍有 timer | outer cell observation，required output retention 與 owner drain 仍須完成 |
 | `packages/fs-lock/src/win32.ts:179-222`、`packages/fs-lock/src/linux.ts:158-184` | `retryMs` 指數 backoff 至 `retryMaxMs`，有 deadline | 爭用的 OS lease 重試，不是常駐 file watcher |
 | `packages/sandbox-windows-acl/src/spawn.ts:193-210` | 1ms | PeekNamedPipe / ReadFile drain 的背壓等待 |
 | `packages/context-output/src/store.ts:22-27` | 5ms，有限次數 | Windows rename 被 EPERM / EBUSY / EACCES 拒絕時重試 |
@@ -132,6 +167,18 @@ UI 時鐘也有 interval，但不讀外部狀態：`RuntimeFeedback` 的倒數�
 **成本／消費方義務：** 新訂閱者看不到歷史，transient chunks 更不可重播；要歷史就讀 log / `session/history`。失敗 pump 的 pending 可能需要後續 drive，不可把「idle」當作「inbox empty」。單 session 序列依賴 one-executor-per-session 接線；本文沒有承諾跨程序鎖、全域公平排程、每個 observer 無損、所有 host 無輪詢或每種平台上的即時文件通知。
 
 ## 8. 重驗方式與證據範圍
+
+**2026-10-13 event-driven 整合 `[實測]`：** real assembly + controlled ModelClient／QuickJS worker／本機 held process 證明 steer 出現在下一次 provider request 時，原 producer 仍 held；parent turn 自然結束後，下一個 turn 用同一 ID 取回結果。前景 shell 分別實跑本機 Bash、PowerShell 與 selected shell。`event-driven-steering.test.ts`、`shell-promotion.test.ts` 證明一個 execution／同一 identity／一個原 call result；`execute-tool-calls.test.ts` 明確等到 eligible observer 已返回再檢查 arbitrary sibling 仍 bounds batch；`input.test.ts` 走真正 Desktop admission／service Session；`session-subagents.test.ts` 走真正 child producer，未 flush 的結果已可從 lineage-validated history 讀取。這些是來源整合證據，不是所有平台、真 provider、crash／restart 或打包版驗收。
+
+重跑時，各 native suite **依序**執行，保留 `--maxWorkers=2 --minWorkers=1`：
+
+```sh
+pnpm --filter @i-harness/session-executor exec vitest run test/event-driven-steering.test.ts test/shell-promotion.test.ts test/code-mode-children.test.ts test/code-mode.test.ts --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/core-agent exec vitest run test/executor.test.ts test/execute-tool-calls.test.ts --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/desktop-gateway exec vitest run test/input.test.ts test/session-subagents.test.ts --maxWorkers=2 --minWorkers=1
+```
+
+下列原有數字與 AST／行號核對是先前外部審計修訂的歷史證據；不代表此輪 integration、Desktop 或 frozen-head aggregate 的結果。
 
 - `nl -ba <file>` 核對上述 file:line；settings origin 用 `git show 5741a849f36ea2a56822147b516f649afe530b87:packages/settings/src/index.ts | nl -ba`，**不要**把基線行號套到施工中的工作樹。
 - source search 可用 `find packages/*/src apps/cli/src -type f \( -name '*.ts' -o -name '*.tsx' \) -exec grep -nHE 'setInterval|setTimeout|node:timers/promises' {} +`。零命中只對明示範圍／pattern 有效；本文件的 polling 判斷還閱讀了 timeout callback / delay loop，不把 grep 次數當成語意證明。

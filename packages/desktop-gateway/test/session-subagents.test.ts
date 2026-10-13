@@ -12,6 +12,60 @@ import { createDesktopSubagents } from "../src/session-subagents.ts"
 import { createAgentTable, createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 import { createChildObservation } from "../../session-executor/src/child-observation.ts"
 
+it("real service pushes a child's actual unflushed tool result while the parent waits, with lineage checked before live access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-child-push-assembly-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { maxDelayMs: 60_000 })
+  for (const sessionId of ["parent", "other"]) await coordinator.create({ sessionId })
+  let release!: () => void, entered!: () => void
+  const hold = new Promise<void>(resolve => { release = resolve }), childSecondRequest = new Promise<void>(resolve => { entered = resolve })
+  let childRequests = 0, parentRequests = 0
+  const child: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
+    if (++childRequests === 1) yield { type: "tool_call", call: { id: "child-list", name: "list_dir", args: { path: "." } } }
+    else { entered(); await hold; yield { type: "text/chunk", text: "original child final" } }
+    yield { type: "end" }
+  } }
+  const parent: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
+    if (++parentRequests === 1) yield { type: "tool_call", call: { name: "wait_agent", args: { target: "root/actual", timeout_ms: 300_000 } } }
+    else yield { type: "text/chunk", text: "parent finished" }
+    yield { type: "end" }
+  } }
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: "danger-full-access",
+    allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
+  })
+  const assembly = await service.assemblyFor("parent")
+  const changed = vi.fn(), catalog = createDesktopSubagents(coordinator, service, { onChanged: changed })
+  let turn: Promise<unknown> | undefined
+  try {
+    await assembly.tools.get("spawn_agent")!.execute({ task_name: "actual", agent_type: "explore", message: "read the workspace", background: true }, { sessionId: "parent" })
+    let enteredSecond = false
+    void childSecondRequest.then(() => { enteredSecond = true })
+    await vi.waitFor(() => expect(enteredSecond).toBe(true), { timeout: 5000 })
+    const row = assembly.subagentState().agentTable.find(row => row.path === "root/actual")!, childId = row.sessionId!
+    turn = service.submit("parent", "observe actual child", new AbortController().signal)
+    await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/dispatch")).toBe(true))
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith("parent"))
+    expect(service.queueState("parent").running).toBe(true)
+    expect(assembly.session.events.filter(event => event.type === "tool/result" && event.name === "wait_agent")).toHaveLength(0)
+    const saved = (await coordinator.snapshot!(childId)).session
+    expect(saved.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(false)
+    const flush = vi.spyOn(coordinator, "flush"), originalAccess = assembly.liveChildSession!, access = vi.fn(originalAccess)
+    assembly.liveChildSession = access
+    const history = await catalog.history("parent", childId)
+    const live = assembly.liveChildSession!(childId)!
+    expect(history.events).toEqual(live.events)
+    expect(history.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(true)
+    expect((await catalog.list("parent")).agents.find(row => row.sessionId === childId)).toMatchObject({ live: true, status: "running", path: "root/actual" })
+    access.mockClear()
+    await expect(catalog.history("other", childId)).rejects.toThrow(/scope/)
+    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled()
+    expect(service.liveSession(childId)).toBeUndefined(); expect(service.liveAssembly(childId)).toBeUndefined()
+    flush.mockRestore(); assembly.liveChildSession = originalAccess
+    release(); await turn
+    expect(childRequests).toBe(2)
+    expect((await catalog.history("parent", childId)).events.some(event => event.type === "assistant/message" && event.text === "original child final")).toBe(true)
+  } finally { release(); await turn?.catch(() => {}); await catalog.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 15_000)
+
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "desktop-subagent-catalog-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))

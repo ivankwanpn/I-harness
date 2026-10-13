@@ -8,6 +8,8 @@ When a pending user steer arrives during an eligible observation, return the par
 
 Eligible observations are direct `wait_agent`, foreground `spawn_agent` settlement, `get_task_output(wait:true)`, all three `job_output(wait:true)` backends, direct foreground `bash`/`pwsh`/selected `shell`, and outer `code_exec`/`code_wait`. Child admission, policy approval, model resolution, persistence required to publish an honest output window, and arbitrary direct tool bodies are not detachable observations.
 
+`workflow_run(wait:true)` is also an eligible observation of its existing owned job, retaining its existing guard-owned ceiling and abort-snapshot contract. Direct shell output keeps the existing promoted shape (`job_id`, `promoted`, `ran_foreground_ms`, explanatory stdout); `PromotedRun.promotionReason` is the service field, rather than a new model-facing `yielded` field. See [the current behavior contract](../../concurrency-and-wake.md) for concrete tool shapes and source integration commands.
+
 The scheduler still drains its dispatched batch. An arbitrary already-dispatched sibling can delay the next provider step after an eligible wait has yielded. This phase does not change scheduler dispatch policy, invent a continuation for arbitrary direct tools, or race/detach the whole tool batch.
 
 ## Binding constraints
