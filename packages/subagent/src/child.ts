@@ -18,7 +18,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { CodeModeConfig, CodeModeFactory } from "@i-harness/code-mode"
 import type { JobRegistry } from "./jobs.ts"
-import type { AgentTable } from "./agent-table.ts"
+import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import { builtinRoles, type SubagentRole } from "./roles.ts"
 import { forkTurns } from "./fork.ts"
 
@@ -543,7 +543,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
   const initialRun = agent.run(opts.message, controller.signal)
-  opts.table.add(childPath, {
+  const entry: ChildAgentEntry = {
     path: childPath,
     status: "running",
     // W11: the initial run starts HERE — one of the two sites that write
@@ -568,34 +568,30 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     unmount: () => childCtx.scope.unmount(),
     ...(codeModeMount ? { cancel: (reason?: string) => codeModeMount.cancel(reason) } : {}),
     dispose: async () => {
-      const entry = opts.table.get(childPath)
-      if (entry) { entry.closing = true; entry.controller.abort() }
+      opts.table.update(childPath, entry, { closing: true })
+      entry.controller.abort()
       controller.abort()
       await codeModeMount?.cancel("Subagent closed")
       await codeModeMount?.dispose()
-      await opts.table.get(childPath)?.followupChain?.catch(() => {})
+      await entry.followupChain?.catch(() => {})
       await childCtx.scope.unmount()
     },
-  })
+  }
+  opts.table.add(childPath, entry)
 
   initialRun.then(
     (result) => {
-      const e = opts.table.get(childPath)
       // The turn is done, but the child is KEPT alive (waiting) so a later
       // followup can re-drive the same agent (M9 spec §2.2). A stale error
       // from an earlier interrupted attempt is cleared on success.
-      if (e) { e.status = "waiting"; e.error = undefined; e.finalText = result.finalText }
+      opts.table.update(childPath, entry, { status: "waiting", error: undefined, finalText: result.finalText })
       opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
       opts.onSettled?.({ finalText: result.finalText, aborted: false })
     },
     (err) => {
       const aborted = controller.signal.aborted
-      const e = opts.table.get(childPath)
-      if (e) {
-        // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
-        e.status = "waiting"
-        e.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
-      }
+      // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
+      opts.table.update(childPath, entry, { status: "waiting", error: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
       opts.jobs.updateJob(jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
       opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
     },

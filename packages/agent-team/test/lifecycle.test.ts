@@ -56,6 +56,25 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it("publishes a closing barrier before draining a teammate and preserves a replacement", async () => {
+    const deps = makeDeps(), ctx = createContext(), release = Promise.withResolvers<void>()
+    const table = deps.subagents.table
+    const original = { path: "lead/helper", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], followupChain: release.promise }
+    table.add(original.path, original)
+    const handle = await mountAgentTeams(ctx, createToolRegistry(ctx), deps)
+    const seen: unknown[] = []
+    table.subscribe(change => seen.push({ kind: change.kind, closing: change.entry.closing }))
+    const closing = handle.unmount()
+    try {
+      await Promise.resolve()
+      expect(seen).toEqual([{ kind: "update", closing: true }])
+      const replacement = { ...original, controller: new AbortController() }
+      table.add(original.path, replacement)
+      release.resolve(); await closing
+      expect(table.get(original.path)).toBe(replacement)
+      expect(replacement.controller.signal.aborted).toBe(false)
+    } finally { release.resolve(); await closing }
+  })
   it("makes the generated teammate role available for resident rebuild without persisting it or replacing a custom role", async () => {
     const deps = makeDeps()
     const ctx = createContext()

@@ -53,18 +53,40 @@ export interface ChildAgentEntry {
   lastInboxSeq?: number
 }
 export interface AgentTable {
+  /** Direct external entry mutation is retained for compatibility but emits no lifecycle event. */
   entries(): Map<string, ChildAgentEntry>
   add(path: string, entry: ChildAgentEntry): void
   get(path: string): ChildAgentEntry | undefined
   remove(path: string): void
+  update(path: string, expected: ChildAgentEntry, patch: Partial<Omit<ChildAgentEntry, "path">>): boolean
+  subscribe(listener: (change: AgentTableChange) => void): () => void
+}
+export interface AgentTableChange {
+  kind: "add" | "update" | "remove"
+  path: string
+  entry: ChildAgentEntry
 }
 export function createAgentTable(): AgentTable {
   const table = new Map<string, ChildAgentEntry>()
+  const listeners = new Set<(change: AgentTableChange) => void>()
+  const publish = (change: AgentTableChange) => {
+    for (const listener of [...listeners]) { try { listener(change) } catch { /* Observers never interrupt producers. */ } }
+  }
   return {
     entries: () => table,
-    add: (path, entry) => { table.set(path, entry) },
+    add: (path, entry) => { table.set(path, entry); publish({ kind: "add", path, entry }) },
     get: (path) => table.get(path),
-    remove: (path) => { table.delete(path) },
+    remove: (path) => {
+      const entry = table.get(path)
+      if (entry) { table.delete(path); publish({ kind: "remove", path, entry }) }
+    },
+    update(path, expected, patch) {
+      if (table.get(path) !== expected) return false
+      Object.assign(expected, patch)
+      publish({ kind: "update", path, entry: expected })
+      return true
+    },
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
   }
 }
 

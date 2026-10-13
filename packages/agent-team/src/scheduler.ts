@@ -330,11 +330,12 @@ export async function mountAgentTeams(
     const realCloseChild = async (path: string): Promise<void> => {
       const entry = sub.table.get(path)
       if (!entry) return
+      sub.table.update(path, entry, { closing: true })
       entry.controller.abort()
       if (entry.dispose) await entry.dispose()
       else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
       if (entry.jobId) sub.jobs.kill(entry.jobId)
-      sub.table.remove(path)
+      if (sub.table.get(path) === entry) sub.table.remove(path)
       if (entry.sessionId) sub.agents.remove(entry.sessionId)
     }
     const interruptChild = deps.interruptChild ?? realInterruptChild
@@ -582,11 +583,12 @@ export async function mountAgentTeams(
         for (const [path, entry] of [...sub.table.entries()]) {
           if (!path.startsWith("lead/")) continue
           try {
+            sub.table.update(path, entry, { closing: true })
             entry.controller.abort()
             if (entry.dispose) await entry.dispose()
             else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
             if (entry.jobId) sub.jobs.kill(entry.jobId)
-            sub.table.remove(path)
+            if (sub.table.get(path) === entry) sub.table.remove(path)
             if (entry.sessionId) sub.agents.remove(entry.sessionId)
           } catch {
             // best-effort teardown: one broken child must not block unmount

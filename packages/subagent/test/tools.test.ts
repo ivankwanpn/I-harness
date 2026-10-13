@@ -10,7 +10,7 @@ import { createWorkflowExecutor, createWorkflowJobStore, type WorkflowDefinition
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
-import { createSubagentTools } from "../src/tools.ts"
+import { createSubagentTools, driveFollowups } from "../src/tools.ts"
 import { createTaskRegistry } from "../src/task-protocol.ts"
 import { createNotificationDrain } from "../src/task-notification.ts"
 import { registerSubagent } from "../src/index.ts"
@@ -37,6 +37,66 @@ function setup() {
 }
 
 describe("subagent tools", () => {
+  it("close publishes admission barrier and preserves an entry replaced during drain", async () => {
+    const { tools, table } = setup(), release = Promise.withResolvers<void>()
+    const original = { path: "root/c", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], dispose: () => release.promise }
+    table.add(original.path, original)
+    const seen: unknown[] = []
+    table.subscribe(change => seen.push({ kind: change.kind, closing: change.entry.closing }))
+    const closing = tools.find(t => t.name === "close_agent")!.execute({ target: original.path }, {})
+    const replacement = { ...original, controller: new AbortController() }
+    try {
+      expect(seen).toEqual([{ kind: "update", closing: true }])
+      table.add(original.path, replacement)
+      release.resolve(); await closing
+      expect(table.get(original.path)).toBe(replacement)
+      expect(replacement.controller.signal.aborted).toBe(false)
+    } finally { release.resolve(); await closing }
+  })
+  it("publishes spawn settlement and protects a replacement from late settlement and disposal", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec } = setup()
+    const release = Promise.withResolvers<void>()
+    const model: ModelClient = { async *stream() { await release.promise; yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks: createTaskRegistry() })
+    const seen: unknown[] = []
+    table.subscribe(change => seen.push({ kind: change.kind, status: change.entry.status, text: change.entry.finalText }))
+    try {
+      await all.find(t => t.name === "spawn_agent")!.execute({ message: "go", task_name: "helper" }, {})
+      const original = table.get("root/helper")!
+      const replacement = { ...original, controller: new AbortController(), session: createSession(), finalText: "replacement" }
+      table.add(original.path, replacement)
+      release.resolve()
+      await original.followupChain
+      expect(table.get(original.path)).toBe(replacement)
+      expect(replacement).toMatchObject({ status: "running", finalText: "replacement" })
+      await original.dispose!()
+      expect(replacement.controller.signal.aborted).toBe(false)
+      expect(replacement.closing).toBeUndefined()
+      expect(seen).toHaveLength(2)
+    } finally { release.resolve() }
+  })
+
+  it("publishes complete followup lifecycle patches and clears previous output at start", async () => {
+    const { table, jobs } = setup(), agents = createAgentRegistry()
+    const release = Promise.withResolvers<{ finalText: string; turns: number; reasoning: never[] }>()
+    agents.register("child", { run: async () => ({ finalText: "", turns: 0, reasoning: [] }), followup: () => release.promise })
+    const entry = { path: "root/c", status: "waiting" as const, session: createSession(), controller: new AbortController(), mailbox: [], finalText: "old", error: "old error" }
+    table.add(entry.path, entry)
+    append(entry.session, { type: "subagent/inbox", message: "next", messageId: "next-1" })
+    const seen: unknown[] = []
+    table.subscribe(change => seen.push({ status: change.entry.status, finalText: change.entry.finalText, error: change.entry.error, startedAt: change.entry.startedAt, controller: change.entry.controller }))
+    const previousController = entry.controller
+    const waiting = driveFollowups({ table, jobs, agents }, entry, "child")
+    try {
+      await Promise.resolve()
+      expect(seen[0]).toMatchObject({ status: "running", finalText: undefined, error: undefined, startedAt: expect.any(Number) })
+      expect(entry.controller).not.toBe(previousController)
+      release.resolve({ finalText: "new", turns: 1, reasoning: [] })
+      await waiting
+      expect(seen[1]).toMatchObject({ status: "waiting", finalText: "new", error: undefined })
+      expect(seen).toHaveLength(2)
+    } finally { release.resolve({ finalText: "cleanup", turns: 1, reasoning: [] }); await waiting }
+  })
   it("registers spawn_agent, wait_agent, list_agents", () => {
     const { tools } = setup()
     const names = tools.map((t) => t.name).sort()
@@ -51,6 +111,8 @@ describe("subagent tools", () => {
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const list = all.find((t) => t.name === "list_agents")!
     const wait = all.find((t) => t.name === "wait_agent")!
+    const changes: unknown[] = []
+    table.subscribe(change => changes.push({ kind: change.kind, status: change.entry.status, finalText: change.entry.finalText }))
     const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
     expect((spawnOut as { job_id: string }).job_id).toMatch(/^subagent-\d+$/)
     expect((spawnOut as { agent_path: string }).agent_path).toBe("root/helper")
@@ -58,6 +120,7 @@ describe("subagent tools", () => {
     expect((listed as { agents: { path: string }[] }).agents.map((a) => a.path)).toEqual(["root/helper"])
     const waitOut = await wait.execute({ timeout_ms: 5000 }, {})
     expect((waitOut as { timed_out: boolean }).timed_out).toBe(false)
+    expect(changes).toEqual([{ kind: "add", status: "running", finalText: undefined }, { kind: "update", status: "waiting", finalText: "child done" }])
   }, 10_000)
 
   it("spawn_agent with unknown agent_type errors", async () => {

@@ -406,7 +406,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
       const previous = entry.status
-      entry.closing = true
+      deps.table.update(entry.path, entry, { closing: true })
       entry.controller.abort()
       // M26-D3: a closed chat no longer has an outstanding settlement — terminalize
       // its task record as cancelled so a cold restore never reclassifies it.
@@ -418,7 +418,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (entry.dispose) await entry.dispose()
       else entry.unmount?.()
       if (entry.jobId) deps.jobs.kill(entry.jobId)
-      deps.table.remove(args.target)
+      if (deps.table.get(args.target) === entry) deps.table.remove(args.target)
       if (entry.sessionId) deps.agents.remove(entry.sessionId)
       return { previous_status: previous }
     },
@@ -694,6 +694,10 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     contextWindow = state.binding.contextWindow
     maxOutputTokens = state.binding.maxOutputTokens
   }
+  if (entry.closing || deps.table.get(entry.path) !== entry) {
+    await childCtx.scope.unmount()
+    return false
+  }
   // The label records what the child runs on NOW, and a rebuild can move it
   // EITHER way: a settings entry added while the toggle is on moves an
   // inheriting entry to labeled, and one removed moves it back. Assigning only
@@ -701,7 +705,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // from the session" while it runs on a configured model. (The switch-off and
   // non-ready arms returned above — those rebuilds change nothing, so the label
   // still describes the client the child was last left on.)
-  entry.modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
+  const modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
   // M70: the resumed child's checkpoint, read off the entry NOW rather than
   // inside the closure, so the seam is built from the pair that is true at
   // construction. MEASURED before wiring it: a restored entry's session is the
@@ -769,21 +773,20 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
   })
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
-  entry.status = "waiting"
-  entry.closing = false
-  entry.controller = controller
-  entry.toolRegistry = childReg
-  entry.factoryTools = codeModeMount ? ["code_exec", "code_wait"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }) : []
-  entry.unmount = () => childCtx.scope.unmount()
-  entry.cancel = codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined
-  entry.dispose = async () => {
-    entry.closing = true
-    entry.controller.abort()
-    await codeModeMount?.cancel("Subagent closed")
-    await codeModeMount?.dispose()
-    await entry.followupChain?.catch(() => {})
-    await childCtx.scope.unmount()
-  }
+  deps.table.update(entry.path, entry, {
+    status: "waiting", closing: false, controller, toolRegistry: childReg, modelLabel,
+    factoryTools: codeModeMount ? ["code_exec", "code_wait"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }) : [],
+    unmount: () => childCtx.scope.unmount(),
+    cancel: codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined,
+    dispose: async () => {
+      deps.table.update(entry.path, entry, { closing: true })
+      entry.controller.abort()
+      await codeModeMount?.cancel("Subagent closed")
+      await codeModeMount?.dispose()
+      await entry.followupChain?.catch(() => {})
+      await childCtx.scope.unmount()
+    },
+  })
   return true
 }
 
@@ -822,7 +825,7 @@ export interface FollowupDeps {
 export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
   const prev = entry.followupChain ?? Promise.resolve()
   const next = prev.then(async () => {
-    if (entry.closing) return
+    if (entry.closing || deps.table.get(entry.path) !== entry) return
     let agent = deps.agents.get(sessionId)
     if (!agent) {
       if (!deps.rebuild) return // no rebuild ability → keep the old no-op
@@ -836,32 +839,26 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
     )
     for (const ev of pending) {
-      if (entry.closing || !deps.table.get(entry.path)) return // closed mid-drain → stop
+      if (entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
       entry.lastInboxSeq = ev.seq ?? 0
       // Errors belong to the previous turn; a new attempt has no failure yet.
-      entry.error = undefined
-      entry.status = "running"
       // W11: a re-drive starts a NEW run, so the start stamp moves with the
       // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp
       // here would report a child woken a moment ago as one that has been
       // running since it was spawned — the exact wrong answer W11's signal
       // exists to prevent.
-      entry.startedAt = Date.now()
-      entry.controller = new AbortController() // fresh signal per turn (interrupt targets this)
+      deps.table.update(entry.path, entry, { error: undefined, finalText: undefined, status: "running", startedAt: Date.now(), controller: new AbortController() })
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
         const result = await agent.followup(ev.message, entry.controller.signal)
         // Clear a stale error (e.g. "aborted" from an earlier interrupted
         // turn) once a followup succeeds — otherwise a misleading error would
         // persist into the M6 snapshot.
-        entry.error = undefined
-        entry.status = "waiting"
-        entry.finalText = result.finalText
+        deps.table.update(entry.path, entry, { error: undefined, status: "waiting", finalText: result.finalText })
         if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: result.finalText })
       } catch (err) {
         const aborted = entry.controller.signal.aborted
-        entry.status = "waiting"
-        entry.error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+        deps.table.update(entry.path, entry, { status: "waiting", error: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
         if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
       }
     }

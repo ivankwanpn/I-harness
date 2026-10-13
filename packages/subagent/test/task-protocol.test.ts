@@ -12,6 +12,80 @@ function fakePersist(records: unknown[] = []) {
   }
 }
 
+it.each([Infinity, NaN, -Infinity, -1])("preserves legacy task timeout %s", async timeoutMs => {
+  vi.useFakeTimers()
+  try {
+    const tasks = createTaskRegistry(), row = tasks.submit({ identity: { parentSessionId: "p" }, agentPath: "root/c", description: "work", prompt: "work", agent: "general", delivery: "tool" })
+    const waiting = tasks.wait(row.id, timeoutMs)
+    expect(vi.getTimerCount()).toBe(0)
+    if (timeoutMs === Infinity || Number.isNaN(timeoutMs)) tasks.terminalize({ taskId: row.id, outcome: "completed" })
+    await waiting
+  } finally { vi.useRealTimers() }
+})
+it("keeps newer task subscriptions after repeated old disposal", () => {
+  const tasks = createTaskRegistry(), row = tasks.submit({ identity: { parentSessionId: "p" }, agentPath: "root/c", description: "work", prompt: "work", agent: "general", delivery: "tool" })
+  const off = tasks.subscribe(row.id, () => {})
+  off()
+  let delivered = false
+  tasks.subscribe(row.id, () => { delivered = true })
+  off()
+  tasks.terminalize({ taskId: row.id, outcome: "completed" })
+  expect(delivered).toBe(true)
+})
+
+it("publishes whole-tree cancellation once per affected task after coherent outcomes exist", async () => {
+  const onTerminalized = vi.fn(), tasks = createTaskRegistry({ onTerminalized })
+  const submit = (path: string) => tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: path, description: "work", prompt: "work", agent: "general", delivery: "parent" })
+  const root = submit("root/child"), child = submit("root/child/nested")
+  const seen: string[] = [], snapshots: unknown[] = [], trees: unknown[] = []
+  for (const task of [root, child]) {
+    tasks.subscribe(task.id, () => { throw new Error("listener") })
+    tasks.subscribe(task.id, record => {
+      seen.push(record.id); snapshots.push(record)
+      trees.push(tasks.list().map(row => row.outcome))
+    })
+  }
+  const waiting = tasks.wait(root.id, 30_000)
+  expect(tasks.cancelTree(root.id)).toEqual({ taskIds: [root.id, child.id], cancelled: 2 })
+  expect(await waiting).toMatchObject({ outcome: "cancelled" })
+  expect(tasks.terminalize({ taskId: child.id, outcome: "completed" })).toBe(false)
+  tasks.cancelTree(root.id)
+  expect(seen).toEqual([root.id, child.id])
+  expect(trees).toEqual([["cancelled", "cancelled"], ["cancelled", "cancelled"]])
+  expect(snapshots[0]).not.toBe(root)
+  expect(tasks.notifications()).toHaveLength(2)
+  expect(onTerminalized).not.toHaveBeenCalled()
+})
+it("subscribes without replay, copies claims and terminal CAS, and keeps legacy immediate waits", async () => {
+  vi.useFakeTimers()
+  const timers = vi.spyOn(globalThis, "setTimeout")
+  try {
+    const tasks = createTaskRegistry()
+    expect(() => tasks.subscribe("missing", () => {})).toThrow("unknown task")
+    await expect(tasks.wait("missing", 100)).resolves.toBeUndefined()
+    const row = tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/c", description: "work", prompt: "work", agent: "general", delivery: "tool" })
+    const seen: unknown[] = [], off = tasks.subscribe(row.id, record => seen.push(record))
+    expect(seen).toEqual([])
+    const waiting = tasks.wait(row.id, 30_000)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(vi.getTimerCount()).toBe(1)
+    expect(timers).toHaveBeenCalledTimes(1)
+    tasks.claim(row.id, "child-session", "model")
+    tasks.terminalize({ taskId: row.id, outcome: "completed", resultText: "done" })
+    tasks.terminalize({ taskId: row.id, outcome: "error" })
+    expect(await waiting).toMatchObject({ outcome: "completed" })
+    expect(vi.getTimerCount()).toBe(0)
+    expect(seen).toHaveLength(2)
+    expect(seen[0]).toMatchObject({ status: "running", childSessionId: "child-session", modelLabel: "model" })
+    expect(seen[0]).not.toHaveProperty("outcome")
+    off()
+    const restored = createTaskRegistry()
+    restored.restore({ formatVersion: 1, tasks: [{ ...row }], notifications: [] })
+    expect(await restored.wait(row.id, 100)).toMatchObject({ outcome: "completed" })
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { vi.useRealTimers() }
+})
+
 describe("task protocol store", () => {
   it("drains queued task document saves before owner teardown without creating an empty document", async () => {
     const firstWrite = Promise.withResolvers<void>()

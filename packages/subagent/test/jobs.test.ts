@@ -1,8 +1,65 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createJobRegistry } from "../src/jobs.ts"
 import { persistentJobRegistry, restoreState, snapshotState } from "../src/persist.ts"
 import { createAgentTable } from "../src/agent-table.ts"
 import { createRoleRegistry } from "../src/roles.ts"
+afterEach(() => vi.useRealTimers())
+
+it.each([Infinity, NaN, -Infinity, -1])("preserves legacy job timeout %s", async timeoutMs => {
+  vi.useFakeTimers()
+  const jobs = createJobRegistry(), { id } = jobs.registerJob("root", "subagent", "work")
+  const waiting = jobs.wait(id, timeoutMs)
+  expect(vi.getTimerCount()).toBe(0)
+  if (timeoutMs === Infinity || Number.isNaN(timeoutMs)) jobs.updateJob(id, { status: "completed" })
+  await waiting
+})
+it("keeps newer subscriptions when an old disposer is called twice", () => {
+  const jobs = createJobRegistry(), { id } = jobs.registerJob("root", "subagent", "work")
+  const off = jobs.subscribe(id, () => {})
+  off()
+  let delivered = false
+  jobs.subscribe(id, () => { delivered = true })
+  off()
+  jobs.updateJob(id, { status: "completed" })
+  expect(delivered).toBe(true)
+})
+
+it("observes a terminal transition even if the same job immediately reopens", async () => {
+  vi.useFakeTimers()
+  const timers = vi.spyOn(globalThis, "setTimeout")
+  const jobs = createJobRegistry(), { id } = jobs.registerJob("root", "subagent", "work")
+  const seen: string[] = []
+  const off = jobs.subscribe(id, snapshot => seen.push(snapshot.status))
+  const waiting = jobs.wait(id, 30_000)
+  expect(vi.getTimerCount()).toBe(1)
+  await vi.advanceTimersByTimeAsync(10_000)
+  expect(vi.getTimerCount()).toBe(1)
+  expect(timers).toHaveBeenCalledTimes(1)
+  jobs.updateJob(id, { status: "completed", output: "first" })
+  jobs.updateJob(id, { status: "running", output: "" })
+  await waiting
+  expect(jobs.read(id).status).toBe("running")
+  expect(seen).toEqual(["completed", "running"])
+  expect(vi.getTimerCount()).toBe(0)
+  off()
+})
+it("copies coherent job changes, isolates failed listeners and unsubscribes", async () => {
+  const jobs = createJobRegistry(), producer = jobs.registerJob("root", "code", "work", undefined, undefined, () => {})
+  expect(() => jobs.subscribe("absent", () => {})).toThrow("unknown job")
+  await expect(jobs.wait("absent", 100)).resolves.toBeUndefined()
+  const seen: unknown[] = []
+  jobs.subscribe(producer.id, () => { throw new Error("listener") })
+  const off = jobs.subscribe(producer.id, snapshot => seen.push(snapshot))
+  jobs.kill(producer.id)
+  producer.finish!("killed", "partial")
+  producer.finish!("killed", "ignored")
+  expect(seen).toHaveLength(2)
+  expect(seen[0]).toMatchObject({ status: "killed", output: "", endedAt: expect.any(Number) })
+  expect(seen[1]).toMatchObject({ status: "killed", output: "partial" })
+  off()
+  jobs.updateJob(producer.id, { status: "running" })
+  expect(seen).toHaveLength(2)
+})
 
 describe("job registry", () => {
   it("publishes a cancelled producer's final output without reopening or replacing its killed disposition", () => {

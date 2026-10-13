@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { waitForObservation } from "@i-harness/core-tools"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 
 export type TaskStatus = "accepted" | "running" | "completed" | "error" | "cancelled" | "recovery-required"
@@ -108,6 +109,7 @@ export interface TaskRegistry {
   cancelTree(taskId: string, error?: string): { taskIds: string[]; cancelled: number }
   runningCount(): number
   wait(taskId: string, timeoutMs: number): Promise<TaskRecord | undefined>
+  subscribe(taskId: string, listener: (record: Readonly<TaskRecord>) => void): () => void
   restore(doc: TaskProtocolDocument): void
   save(): Promise<void>
   /** Drain already-scheduled saves without creating another document write. */
@@ -116,6 +118,20 @@ export interface TaskRegistry {
 
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
   const records = new Map<string, TaskRecord>()
+  const listeners = new Map<string, Set<(record: Readonly<TaskRecord>) => void>>()
+  function subscribe(taskId: string, listener: (record: Readonly<TaskRecord>) => void): () => void {
+    if (!records.has(taskId)) throw new Error(`unknown task: ${taskId}`)
+    let set = listeners.get(taskId)
+    if (!set) { set = new Set(); listeners.set(taskId, set) }
+    set.add(listener)
+    return () => { set.delete(listener); if (!set.size && listeners.get(taskId) === set) listeners.delete(taskId) }
+  }
+  function publish(record: TaskRecord): void {
+    const snapshot = { ...record }
+    for (const listener of [...(listeners.get(record.id) ?? [])]) {
+      try { listener({ ...snapshot }) } catch { /* Observers never interrupt producers. */ }
+    }
+  }
   const byIdentity = new Map<string, TaskRecord>()
   const byChild = new Map<string, TaskRecord>()
   const notifs: TaskNotificationRecord[] = []
@@ -191,11 +207,13 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     t.timeCompleted = Date.now()
     enqueueNotification(t)
     void save()
+    publish(t)
     opts.onTerminalized?.(t)
     return true
   }
 
   return {
+    subscribe,
     submit(input) {
       // R-D3 配額：running(非終態) 計數 >= max → fail-closed
       if (runningCountUnsafe() >= maxConcurrency) throw new TaskConcurrencyLimitError(maxConcurrency)
@@ -224,6 +242,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       byIdentity.set(key, record)
       if (record.childSessionId) byChild.set(record.childSessionId, record)
       void save()
+      publish(record)
       return record
     },
     get: (taskId) => records.get(taskId),
@@ -249,6 +268,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         byChild.set(childSessionId, t)
       }
       void save()
+      publish(t)
       return true
     },
     terminalize,
@@ -269,17 +289,21 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         cancelled += 1
       }
       if (cancelled > 0) void save()
+      for (const id of taskIds) publish(records.get(id)!)
       return { taskIds, cancelled }
     },
     runningCount: runningCountUnsafe,
     async wait(taskId, timeoutMs) {
-      const deadline = Date.now() + timeoutMs
-      while (true) {
-        const t = records.get(taskId)
-        if (!t || t.outcome !== undefined) return t
-        if (Date.now() >= deadline) return t
-        await new Promise((r) => setTimeout(r, 20))
-      }
+      const current = records.get(taskId)
+      if (!current || current.outcome !== undefined) return current
+      let terminal = false
+      await waitForObservation({
+        ready: () => terminal || records.get(taskId)!.outcome !== undefined,
+        changes: { subscribe: listener => subscribe(taskId, record => { terminal ||= record.outcome !== undefined; listener() }) },
+        // Legacy non-finite positive/NaN deadlines never expired; negatives expired immediately.
+        timeoutMs: timeoutMs === -Infinity ? 0 : Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : undefined,
+      })
+      return records.get(taskId)
     },
     restore(doc) {
       // Counter seeding（Ruling M24a-T1a 同款）：還原的 id 是權威——task-<n> /
@@ -311,6 +335,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         )
         if (t.childSessionId) byChild.set(t.childSessionId, t)
       }
+      for (const t of doc.tasks) publish(t)
     },
     save,
     async flushPersistence() {
