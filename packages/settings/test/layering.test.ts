@@ -1,5 +1,5 @@
 // M27 R-E10: layered settings (global < workspace < project, last wins),
-// polling hot-reload, comment-preserving leaf-patch writes.
+// event-driven hot-reload, comment-preserving leaf-patch writes.
 import { describe, expect, it } from "vitest"
 import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -7,6 +7,20 @@ import { join } from "node:path"
 import { createLayeredStore, LayeredSettingsStore, resolveLayeredSources, watchSettings, mergeRawLayers, type LayerSource, type Settings } from "../src/index.ts"
 import { mutateSection } from "../src/sections.ts"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
+
+// WHY: native watchers must close before their Windows temp roots are removed;
+// unlike the old unref'ed poll they own OS handles (packages/fs-watch/src/index.ts:201).
+const tracked: Array<{ dispose: () => void }> = []
+function track<T extends { dispose: () => void }>(watcher: T): T {
+  tracked.push(watcher)
+  return watcher
+}
+function disposeTracked(): void {
+  for (const watcher of tracked.splice(0)) watcher.dispose()
+}
+function trackedStore(options: Parameters<typeof createLayeredStore>[0]): LayeredSettingsStore {
+  return track(createLayeredStore(options))
+}
 
 async function tmpRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ih-layers-"))
@@ -85,7 +99,7 @@ class FailingReloadStore extends LayeredSettingsStore {
   override async reloadFromDisk(): Promise<Settings> {
     const attempt = this.attempts.length
     this.attempts.push(Date.now())
-    await new Promise((r) => setTimeout(r, 100)) // the window a detection can land in
+    await new Promise((r) => setTimeout(r, 350)) // WHY: include 100ms write stability (packages/fs-watch/src/index.ts:145)
     if (attempt === 0) throw new Error("reload failed (W1 pin: the torn read)")
     return super.reloadFromDisk()
   }
@@ -107,6 +121,7 @@ describe("resolveLayeredSources (global < workspace < project)", () => {
       expect(sources[0]!.order).toBeLessThan(sources[1]!.order)
       expect(sources[2]!.order).toBeGreaterThan(sources[1]!.order)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -134,7 +149,7 @@ describe("createLayeredStore", () => {
       await writeFile(join(root, "g.json"), JSON.stringify({ model: "g-model" }), "utf8")
       await writeFile(join(root, "w.json"), JSON.stringify({ model: "w-model", sandboxMode: "read-only" }), "utf8")
       await writeFile(join(root, "p.json"), JSON.stringify({ model: "p-model", fontFamily: "hmm" }), "utf8")
-      const store = createLayeredStore({
+      const store = trackedStore({
         files: [join(root, "g.json"), join(root, "w.json"), join(root, "p.json")],
       })
       await store.load()
@@ -143,6 +158,7 @@ describe("createLayeredStore", () => {
       // unknown/partial keys degrade per-normalize; merged values are normalized once
       expect(store.get().fontSize).toBe(14)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -151,7 +167,7 @@ describe("createLayeredStore", () => {
     const root = await tmpRoot()
     try {
       await writeFile(join(root, "p.json"), JSON.stringify({ model: "p" }), "utf8")
-      const store = createLayeredStore({
+      const store = trackedStore({
         files: [join(root, "g.json"), join(root, "p.json")], // g.json never exists
       })
       const s = await store.load()
@@ -161,6 +177,7 @@ describe("createLayeredStore", () => {
       expect(await readFile(join(root, "p.json"), "utf8")).toContain('"fontSize": 16')
       expect(await readFile(join(root, "g.json"), "utf8").catch(() => "MISSING")).toBe("MISSING")
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -174,7 +191,7 @@ describe("createLayeredStore", () => {
         JSON.stringify({ model: "legacy", team: { role: "dev" }, _revision: { llm: 3 } }, null, 2),
         "utf8",
       )
-      const store = createLayeredStore({ files: [file] })
+      const store = trackedStore({ files: [file] })
       await store.load()
       await store.set({ fontSize: 16 })
       const raw = JSON.parse(await readFile(file, "utf8"))
@@ -185,6 +202,7 @@ describe("createLayeredStore", () => {
       expect(store.get().fontSize).toBe(16)
       expect((store.get() as unknown as Record<string, unknown>).team).toBeUndefined()
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -202,7 +220,7 @@ describe("createLayeredStore", () => {
           .replace('"fontSize": 15', `"fontSize": 15,\n${commentInline.slice(0, -1)}`),
         "utf8",
       )
-      const store = createLayeredStore({ files: [file] })
+      const store = trackedStore({ files: [file] })
       await store.load()
       await mutateSection("llm", [{ op: "set", path: ["defaultModel", "model"], value: "deepseek-r2" }], store, 0)
       const raw = await readFile(file, "utf8")
@@ -213,6 +231,7 @@ describe("createLayeredStore", () => {
       const parsed = JSON.parse(stripped)
       expect(parsed.llm.defaultModel.model).toBe("deepseek-r2")
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -221,44 +240,46 @@ describe("createLayeredStore", () => {
     const root = await tmpRoot()
     try {
       await writeFile(join(root, "p.json"), JSON.stringify({ model: "p" }), "utf8")
-      const store = createLayeredStore({ files: [join(root, "p.json")] })
+      const store = trackedStore({ files: [join(root, "p.json")] })
       await store.load()
       const sources: LayerSource[] = store.sources()
       expect(sources).toHaveLength(1)
       expect(sources[0]!.path).toBe(join(root, "p.json"))
       expect(sources[0]!.raws).toEqual({ model: "p" })
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
 })
 
-describe("watchSettings (polling hot-reload)", () => {
+describe("watchSettings (event-driven hot-reload)", () => {
   it("fires the change callback when the file changes; dispose stops it", async () => {
     const root = await tmpRoot()
     try {
       const file = join(root, "s.json")
       await writeFile(file, JSON.stringify({ model: "a" }), "utf8")
       const changed: string[] = []
-      const { dispose: stop } = watchSettings(file, (path) => changed.push(path), { intervalMs: 60 })
-      // wait one poll cycle to stabilize the initial snapshot
-      await new Promise((r) => setTimeout(r, 200))
+      const { dispose: stop } = track(watchSettings(file, (path) => changed.push(path), { intervalMs: 60 }))
+      // WHY: allow the baseline scan before writing (packages/fs-watch/src/index.ts:149).
+      await new Promise((r) => setTimeout(r, 300))
       await writeFile(file, JSON.stringify({ model: "b" }), "utf8")
-      await new Promise((r) => setTimeout(r, 260))
+      await waitFor(() => changed.length > 0)
       stop()
       const fired = changed.length
       expect(fired).toBeGreaterThanOrEqual(1)
       expect(changed[0]).toBe(file)
       // after dispose: a further change is not reported
       await writeFile(file, JSON.stringify({ model: "c" }), "utf8")
-      await new Promise((r) => setTimeout(r, 200))
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed.length).toBe(fired)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
 
-  it("two files changed inside ONE tick are both reported (the second is deferred, not dropped)", async () => {
+  it("two files changed together are both reported without dropping either path", async () => {
     const root = await tmpRoot()
     try {
       const a = join(root, "a.json")
@@ -268,21 +289,20 @@ describe("watchSettings (polling hot-reload)", () => {
       await replaceFile(a, "a-0")
       await replaceFile(b, "b-0")
       const changed: string[] = []
-      const { dispose: stop } = watchSettings([a, b], (path) => changed.push(path), { intervalMs: 60 })
+      const { dispose: stop } = track(watchSettings([a, b], (path) => changed.push(path), { intervalMs: 60 }))
       try {
-        // Let the initial snapshot and a tick land, so no write can race the
-        // constructor's capture (a tick that sees no change re-snapshots).
-        await new Promise((r) => setTimeout(r, 200))
+        // WHY: let fs-watch's baseline scan settle before the first pair
+        // (packages/fs-watch/src/index.ts:149).
+        await new Promise((r) => setTimeout(r, 300))
         expect(changed).toHaveLength(0)
         for (let round = 1; round <= 3; round += 1) {
-          // Both replacements complete long before the next capture, so ONE
-          // capture sees both files changed — the case where reporting the
-          // first and advancing every marker drops the second for good (its
-          // marker is what decides whether a change is ever re-detected).
+          // WHY: both push paths must survive a near-simultaneous pair; the
+          // callback bridge must not retain the old one-batch-per-tick loss
+          // mode (packages/settings/src/index.ts:1618).
           await Promise.all([replaceFile(a, `a-${round}`), replaceFile(b, `b-${round}`)])
-          await new Promise((r) => setTimeout(r, 250)) // 4 ticks at 60ms
+          await waitFor(() => changed.length >= round * 2)
         }
-        // Each round reports BOTH files; the second may arrive a tick later.
+        // Each round reports BOTH changed paths exactly once.
         expect(changed.filter((p) => p === a)).toHaveLength(3)
         expect(changed.filter((p) => p === b)).toHaveLength(3)
         expect(changed).toHaveLength(6)
@@ -290,6 +310,7 @@ describe("watchSettings (polling hot-reload)", () => {
         stop()
       }
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -303,14 +324,14 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = createLayeredStore({ files: [file], watchIntervalMs: 10, telemetry })
+      const store = trackedStore({ files: [file], watchIntervalMs: 10, telemetry })
       await store.load()
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(events).toHaveLength(0)
-      // Mutation → later tick detects + reloads + emits with the changed path.
+      // Mutation → stabilized push + reload + emit with the changed path.
       await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
-      await new Promise((r) => setTimeout(r, 200))
+      await waitFor(() => events.some((event) => event.type === "settings/changed"))
       expect(store.get().fontSize).toBe(15)
       const changed = events.filter((e) => e.type === "settings/changed")
       expect(changed.length).toBe(1)
@@ -319,10 +340,11 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       let notified: string | undefined
       store.onChange((p) => { notified = p })
       await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
-      await new Promise((r) => setTimeout(r, 200))
+      await waitFor(() => notified !== undefined)
       expect(notified).toBe(file)
       expect(events.filter((e) => e.type === "settings/changed")).toHaveLength(2)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -336,11 +358,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = createLayeredStore({ files: [file], watchIntervalMs: 10, telemetry })
+      const store = trackedStore({ files: [file], watchIntervalMs: 10, telemetry })
       await store.load()
       const changed = () => events.filter((e) => e.type === "settings/changed")
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       // "Separate" is measured in REPORTED changes, not wall-clock: the second
       // write goes out as soon as the first report lands, so a conflate that
@@ -351,13 +373,14 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await waitFor(() => changed().length >= 1)
       await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
       await waitFor(() => changed().length >= 2)
-      // Let further poll ticks land: the absorbed duplicates must not add a
+      // Let settled push echoes land: absorbed duplicates must not add a
       // third report (exactly 2, not "at least 2" — the conflate's whole job).
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(2)
       expect(store.get().fontSize).toBe(16)
       expect(changed().map((e) => e.data.path)).toEqual([file, file])
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -369,11 +392,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = new SlowReloadStore({ files: [file], watchIntervalMs: 10, telemetry })
+      const store = track(new SlowReloadStore({ files: [file], watchIntervalMs: 10, telemetry }))
       await store.load()
       const changed = () => events.filter((e) => e.type === "settings/changed")
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
       // Gate on the in-flight reload having READ the file (it read 15): the
@@ -386,10 +409,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       // The report for 16 must survive the conflate: the reload that was in
       // flight never saw 16, so only a re-check that compares STATE finds it.
       await waitFor(() => changed().length >= 2)
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(2)
       expect(store.get().fontSize).toBe(16)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -403,11 +427,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(b, JSON.stringify({ model: "b0" }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = new SlowReloadStore({ files: [a, b], watchIntervalMs: 10, telemetry })
+      const store = track(new SlowReloadStore({ files: [a, b], watchIntervalMs: 10, telemetry }))
       await store.load()
       const changed = () => events.filter((e) => e.type === "settings/changed")
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       // a.json changes ATOMICALLY (tmp + rename — the store's own write shape):
       // one stat transition. A plain writeFile truncates first, so the poll can
@@ -427,11 +451,12 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await waitFor(() => store.reads.length >= 1)
       await writeFile(b, JSON.stringify({ model: "b1" }), "utf8")
       await waitFor(() => changed().length >= 2)
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed().map((e) => e.data.path)).toEqual([a, b])
       expect(store.get().fontSize).toBe(15)
       expect(store.get().model).toBe("b1")
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -443,11 +468,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = new FailingReloadStore({ files: [file], watchIntervalMs: 10, telemetry })
+      const store = track(new FailingReloadStore({ files: [file], watchIntervalMs: 10, telemetry }))
       await store.load()
       const changed = () => events.filter((e) => e.type === "settings/changed")
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
       await waitFor(() => store.attempts.length >= 1) // the failing reload is in flight
@@ -458,11 +483,12 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       // stay at 14 and nothing would ever report.
       await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
       await waitFor(() => changed().length >= 1)
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(1)
       expect(changed()[0]!.data.path).toBe(file)
       expect(store.get().fontSize).toBe(16)
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -478,11 +504,11 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await replaceFile(c, JSON.stringify({ searchBackend: "jsonl" }))
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = new DrainRigStore({ files: [a, b, c], watchIntervalMs: 10, telemetry })
+      const store = track(new DrainRigStore({ files: [a, b, c], watchIntervalMs: 10, telemetry }))
       await store.load()
       const changed = () => events.filter((e) => e.type === "settings/changed")
-      // First tick snapshots only: the pre-existing state emits nothing.
-      await new Promise((r) => setTimeout(r, 60))
+      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
+      await new Promise((r) => setTimeout(r, 300))
       expect(changed()).toHaveLength(0)
       await replaceFile(a, JSON.stringify({ fontSize: 15 }))
       await waitFor(() => store.reads.length >= 1) // cycle 1 has read (14, b0, jsonl)
@@ -491,7 +517,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await replaceFile(b, JSON.stringify({ model: "b1" }))
       await replaceFile(c, JSON.stringify({ searchBackend: "sqlite" }))
       await waitFor(() => changed().length >= 2)
-      await new Promise((r) => setTimeout(r, 60))
+      await new Promise((r) => setTimeout(r, 300))
       // Cycle 1 reports a. Cycle 2 (draining b) fails. Cycle 3 drains c, and its
       // reload reads b's and c's settled state — one report, named c. It exists
       // only because c's entry outlived the failed cycle; a queue consumed
@@ -502,6 +528,7 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(store.get().model).toBe("b1")
       expect(store.get().searchBackend).toBe("sqlite")
     } finally {
+      disposeTracked()
       await rm(root, { recursive: true, force: true })
     }
   })

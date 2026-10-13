@@ -12,8 +12,8 @@
  */
 
 import { existsSync } from "node:fs"
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises"
-import { dirname, join, resolve } from "node:path"
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { dirname, join, resolve, sep } from "node:path"
 // Runtime import of the protocol constants (the enum's single source). Safe:
 // sections.ts only ever imports TYPES from this module, so the runtime edge
 // is one-directional (this module → sections.ts) — no evaluation-order cycle.
@@ -21,6 +21,9 @@ import { PROVIDER_PROTOCOLS } from "./sections.ts"
 import type { SettingsProviderProtocol } from "./sections.ts"
 import type { Telemetry } from "@i-harness/telemetry"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+// WHY: reuse the existing chokidar-backed watcher without adding dependencies
+// (packages/fs-watch/src/index.ts:1); its explicit roots select settings files.
+import { createFsWatcher, DEFAULT_IGNORE, type FsWatcher } from "../../fs-watch/src/index.ts"
 import { normalizeContextSubsystems, type SettingsContextSubsystems } from './context-subsystems.ts'
 export * from './context-subsystems.ts'
 
@@ -1232,8 +1235,9 @@ export interface LayeredStoreOptions {
   configDir?: string
   /** Workspace root for the workspace layer default (absent → process.cwd()). */
   workspace?: string
-  /** Polling interval for the internal hot-reload watcher (default 500ms).
-   * `false` disables it. */
+  /** WHY: preserve the existing option (test/watch.test.ts:51) while
+   * detection is event-driven. A number sets watcher-error retry delay
+   * (default 500ms); `false` disables watching entirely. */
   watchIntervalMs?: number | false
   /** M40 A6: host telemetry stream for the hot-reload change notification
    * (`settings/changed` — the manifest code is declared; this is its producer).
@@ -1275,6 +1279,9 @@ export class LayeredSettingsStore {
   private revision: Record<string, number> = {}
   private listeners = new Set<(path: string) => void>()
   private watcher: { dispose: () => void } | undefined
+  // WHY: an in-flight reload calls load(), which must not reopen a disposed
+  // watcher (test/watch-events.test.ts:190).
+  private disposed = false
   /** W1 conflate state: a reload is in flight, and the detections that arrived
    * while it was — arrival-ordered and deduped (a file re-observed inside its
    * own window, e.g. the settled half of a non-atomic write, is not a new
@@ -1351,6 +1358,7 @@ export class LayeredSettingsStore {
   }
 
   dispose(): void {
+    this.disposed = true
     this.watcher?.dispose()
     this.watcher = undefined
   }
@@ -1400,14 +1408,12 @@ export class LayeredSettingsStore {
     master.raws = doc
   }
 
-  /** Polling watcher (500ms default — no fs events, no chokidar): when a
-   * source's mtime/size changed, reload merged view + notify (settings/changed
-   * analog at the store surface: `onChange`). M40 A6: the DETECTED CHANGE
-   * (subsequent ticks only — the first tick snapshots, see watchSettings)
-   * also emits `settings/changed` to the injected telemetry stream. W1: the
-   * reload itself is conflated — see handleWatchedChange. */
+  /** WHY: use fs-watch's explicit file roots, baseline and 100ms write
+   * stability instead of polling (packages/fs-watch/src/index.ts:145).
+   * Changed paths reload the merged view and notify onChange/telemetry;
+   * W1 state-based conflate is unchanged (test/watch-events.test.ts:115). */
   private ensureWatcher(): void {
-    if (this.watcher !== undefined || this.options.watchIntervalMs === false) return
+    if (this.disposed || this.watcher !== undefined || this.options.watchIntervalMs === false) return
     const intervalMs = this.options.watchIntervalMs ?? 500
     const paths = this.resolvedRoots
       .map((s) => s.path)
@@ -1546,11 +1552,14 @@ function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
 }
 
 /**
- * Polling settings watcher (no new deps — no chokidar). `intervalMs` defaults
- * to 500. The FIRST tick only snapshots (a pre-existing state never fires);
- * a change fires the callback with the changed path. Returns a dispose() that
- * stops polling. W1/A: captures never overlap (an in-flight tick is skipped),
- * so one write can no longer be reported twice by an out-of-order overwrite.
+ * WHY: fs-watch already owns baseline filtering and chokidar's 100ms
+ * awaitWriteFinish stability (packages/fs-watch/src/index.ts:145), so a
+ * pre-existing state never fires and a non-atomic external truncate→write is
+ * stabilized before detection. The store's unchanged state conflate absorbs
+ * duplicate push detections/self-writes (test/watch-events.test.ts:115).
+ * intervalMs is retained as the error-retry delay (default 500ms), not a poll
+ * cadence. dispose() synchronously stops callbacks and asynchronously closes
+ * the watcher; the public callback still receives the changed input path.
  */
 export function watchSettings(
   paths: string | string[],
@@ -1558,64 +1567,79 @@ export function watchSettings(
   opts?: { intervalMs?: number },
 ): { dispose: () => void } {
   const files = Array.isArray(paths) ? paths : [paths]
-  const intervalMs = opts?.intervalMs ?? 500
-  let snapshot = new Map<string, string>()
-  let timer: ReturnType<typeof setInterval> | undefined
-  // W1/A: one capture at a time. `capture()` awaits a stat per file, and
-  // without this guard consecutive ticks run their captures concurrently — an
-  // OLDER capture can then resolve after a newer one and overwrite `snapshot`
-  // with its stale value, so the next tick sees the same change again and
-  // fires a SECOND onChange for one write. A tick that finds a capture in
-  // flight is SKIPPED, not queued: the next tick re-stats the current state,
-  // so skipping costs at most one poll interval of latency and can never miss
-  // a state that has settled. The initial snapshot holds the guard too —
-  // otherwise a tick could start alongside it and be overwritten by it.
-  let capturing = true
+  const byAbsolutePath = new Map(files.map((file) => [resolve(file), file]))
+  const retryMs = Math.max(10, opts?.intervalMs ?? 500)
+  let disposed = false
+  let watcher: FsWatcher | undefined
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
 
-  const capture = async (): Promise<Map<string, string>> => {
-    const snap = new Map<string, string>()
-    for (const file of files) {
-      const info = await stat(file).then(
-        (s) => `${s.mtimeMs}:${s.size}`,
-        () => "", // missing → empty marker (reappearance fires)
-      )
-      snap.set(file, info)
-    }
-    return snap
+  const retry = (): void => {
+    if (disposed) return
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined
+      start()
+    }, retryMs)
+    retryTimer.unref?.()
   }
 
-  void capture().then((snap) => {
-    snapshot = snap
-    capturing = false
-  })
-  timer = setInterval(() => {
-    if (capturing) return // one capture in flight; the next tick re-reads
-    capturing = true
-    void capture().then((snap) => {
-      capturing = false
-      for (const [file, info] of snap) {
-        if (snapshot.get(file) !== info) {
-          // One batch per tick — and advance ONLY the marker of the file just
-          // reported. Advancing the whole capture would record every other
-          // changed file as seen while reporting one of them, so their changes
-          // would be DROPPED rather than deferred (this snapshot is the only
-          // place a change is ever detected). The next tick re-finds them and
-          // reports the next one; the rest wait their turn.
-          snapshot.set(file, info)
-          onChange(file)
-          return // one batch per tick
+  const start = (): void => {
+    if (disposed || byAbsolutePath.size === 0) return
+    let active: FsWatcher
+    try {
+      const roots = new Set(byAbsolutePath.keys())
+      const ignoredSegments = new Set<string>(DEFAULT_IGNORE)
+      for (const file of byAbsolutePath.keys()) {
+        if (existsSync(file)) continue
+        let parent = dirname(file)
+        // WHY: chokidar watches a missing file via its parent. An ignored
+        // parent must be an explicit routing root too, or the selected file's
+        // first creation is lost (test/watch.test.ts:84). Its other children
+        // stay ignored; the callback map accepts only selected files.
+        while (parent.split(sep).some((part) => ignoredSegments.has(part))) {
+          roots.add(parent)
+          if (existsSync(parent)) break
+          const next = dirname(parent)
+          if (next === parent) break
+          parent = next
         }
       }
-      snapshot = snap
-    })
-  }, intervalMs)
-  // A hot-reload poll must never keep the process alive (tests / short hosts).
-  timer.unref?.()
+      active = createFsWatcher({ roots: [...roots] })
+      watcher = active
+    } catch {
+      retry()
+      return
+    }
+    void (async () => {
+      let failed = false
+      try {
+        for await (const event of active.events) {
+          if (disposed) break
+          const file = byAbsolutePath.get(resolve(event.path))
+          if (file !== undefined) onChange(file)
+        }
+      } catch {
+        // WHY: fs-watch ends its stream after surfacing a latched error
+        // (packages/fs-watch/src/index.ts:130). Catch and reopen it rather
+        // than killing hot reload or retrying an already-ended iterator.
+        failed = true
+      } finally {
+        await active.close().catch(() => {})
+        if (watcher === active) watcher = undefined
+      }
+      if (failed) retry()
+    })()
+  }
+  start()
 
   return {
     dispose: () => {
-      if (timer !== undefined) clearInterval(timer)
-      timer = undefined
+      if (disposed) return
+      disposed = true
+      if (retryTimer !== undefined) clearTimeout(retryTimer)
+      retryTimer = undefined
+      // WHY: close is asynchronous, but no buffered event may call back after
+      // synchronous dispose (test/watch.test.ts:40).
+      void watcher?.close().catch(() => {})
     },
   }
 }
