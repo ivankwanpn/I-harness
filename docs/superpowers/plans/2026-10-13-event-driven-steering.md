@@ -289,7 +289,7 @@ runtime.wait(input, exec.abortSignal, {userSteer: userSteerForTool(exec)})
 
 **Files:**
 - Create: `packages/session-executor/src/child-observation.ts`, `packages/session-executor/test/child-observation.test.ts`.
-- Modify: `packages/session-executor/src/assembly.ts`; `packages/desktop-gateway/src/session-subagents.ts`, `host.ts`; `packages/desktop/src/main/sdk-runtime.ts`, `packages/desktop/src/shared/bridge.ts`, `packages/desktop/src/renderer/session/SubagentPane.tsx`.
+- Modify: `packages/session-executor/src/assembly.ts`, `service.ts`; `packages/desktop-gateway/src/session-subagents.ts`, `host.ts`; `packages/desktop/src/main/sdk-runtime.ts`, `packages/desktop/src/shared/bridge.ts`, `packages/desktop/src/renderer/session/SubagentPane.tsx`.
 - Test: `packages/desktop-gateway/test/session-subagents.test.ts`, `subagent-host.test.ts`; `packages/desktop/test/sdk-runtime.test.ts`, `subagent-pane.test.tsx`; `packages/session-executor/test/assembly.test.ts`.
 
 **Interfaces:**
@@ -328,7 +328,7 @@ Add imports from current Session/table modules and the new factory. Additional t
 
 - [ ] **Step 3: Add gateway tests for live reads before persistence and coalescing.** Existing fake service exposes an assembly with liveChildSession and change subscription; coordinator.snapshot deliberately returns an older Session. After visibility/lineage validation, child history must include a newly appended live tool/result before flush and before turn/end. An unrelated parent must still fail. Fake timers: emit 100 changes synchronously, advance 49 ms (zero onChanged), advance 1 ms (one parent invalidation), then verify idle creates zero timers. Add new assembly attach, restored stub-to-live replacement, closed assembly cleanup, same root replacement, gateway close with pending timer, and control invalidation coalesced with lifecycle invalidation. Run `pnpm --filter @i-harness/desktop-gateway exec vitest run test/session-subagents.test.ts test/subagent-host.test.ts` red.
 
-- [ ] **Step 4: Wire gateway scope and the full Desktop route.** Attach service.onAssembly, own per-root/assembly subscription handles, remove on closed, and use a one-shot 50 ms timer per dirty root. Use `options.onChanged` only through this coalescer. Host maps callback to `makeNotification("desktop/session/subagents/changed", {sessionId})`. Add method to main allowlist and bridge union. Pane permits it after existing workspace/session scope filter and schedules both catalog/history. Gateway history uses:
+- [ ] **Step 4: Wire gateway scope and the full Desktop route.** Add `onAssembly(hook, options?: { includeExisting?: boolean })` with default future-only semantics. Test default no replay, opt-in current/future delivery exactly once, identity checks, initial-error hook removal, and unsubscribe in focused service tests. Gateway attaches with `{ includeExisting: true }`, owns per-root/assembly subscription handles, remove on closed, and use a one-shot 50 ms timer per dirty root. Use `options.onChanged` only through this coalescer. Host maps callback to `makeNotification("desktop/session/subagents/changed", {sessionId})`. Add method to main allowlist and bridge union. Pane permits it after existing workspace/session scope filter and schedules both catalog/history. Gateway history uses:
 
 ```ts
 const chain = await lineage(parentId, childId)
