@@ -686,6 +686,18 @@ const PERSISTENCE_COORDINATOR_SOURCE_UNIT = new Set([
   "packages/session-persistence/src/format/validation.ts",
 ])
 
+// S10 moves only the non-entry file-backed query owner. The existing package
+// index (legacy query implementation) and warning filter remain independent.
+const FILE_BACKED_QUERY_SOURCE_UNIT = new Set([
+  "packages/session-query/src/file-backed.ts",
+  "packages/session-query/src/file-backed/contracts.ts",
+  "packages/session-query/src/file-backed/database.ts",
+  "packages/session-query/src/file-backed/schema.ts",
+  "packages/session-query/src/file-backed/inspection.ts",
+  "packages/session-query/src/file-backed/index-refresh.ts",
+  "packages/session-query/src/file-backed/query.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -701,6 +713,7 @@ function declarationOwner(rel) {
   if (HOOKS_SOURCE_UNIT.has(rel)) return "packages/hooks/src/index.ts"
   if (MCP_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/mcp-client/src/supervisor.ts"
   if (PERSISTENCE_COORDINATOR_SOURCE_UNIT.has(rel)) return "packages/session-persistence/src/index.ts"
+  if (FILE_BACKED_QUERY_SOURCE_UNIT.has(rel)) return "packages/session-query/src/file-backed.ts"
   return rel
 }
 
@@ -1868,6 +1881,57 @@ SELF_TEST_CASES.push({
     ].map(([label, rel, test]) => {
       const files = persistenceCoordinatorRelocationFixtureFiles(true)
       files.push({ rel, test, text: "const use = (options: CoordinatorOptions) => options" })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function fileBackedQueryRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const names = ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"]
+  const declarations = names.map(name => `export interface ${name} { value: string }`).join("\n")
+  const reads = names.map(name => `const read${name} = (value: ${name}) => value`).join("\n")
+  const entry = file("packages/session-query/src/index.ts", `export type { ${names.join(", ")} } from "./file-backed.ts"`)
+  if (!split) return [entry, file("packages/session-query/src/file-backed.ts", `${declarations}\n${reads}`)]
+  return [
+    entry,
+    file("packages/session-query/src/file-backed.ts", `export type { ${names.join(", ")} } from "./file-backed/contracts.ts"\n${reads}`),
+    file("packages/session-query/src/file-backed/contracts.ts", `${declarations}\n${reads}`),
+    ...["database", "schema", "inspection", "index-refresh", "query"]
+      .map(name => file(`packages/session-query/src/file-backed/${name}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S10: non-entry file-backed query retains complete original findings across every extracted module",
+  expect: [false, true].flatMap(split => ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"].map(name => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/session-query#${name}`, evidence: "packages/session-query/src/index.ts",
+  } }))),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(fileBackedQueryRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S10: existing query and warning owners remain independent; test readers do not wire exports",
+  expect: ["entry=0", "warning=0", "tools=0", "future=0", "other-package=0", "outside=0", "test-only=3"],
+  run() {
+    return [
+      ["entry", "packages/session-query/src/index.ts", false],
+      ["warning", "packages/session-query/src/warning.ts", false],
+      ["tools", "packages/session-query/src/tools.ts", false],
+      ["future", "packages/session-query/src/file-backed/future.ts", false],
+      ["other-package", "packages/session-persistence/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/session-query/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = fileBackedQueryRelocationFixtureFiles(true)
+      const reads = ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"]
+        .map(name => `const read${name} = (value: ${name}) => value`).join("\n")
+      const existing = files.find(file => file.rel === rel)
+      if (existing) existing.text += `\n${reads}`
+      else files.push({ rel, test, text: reads })
       return `${label}=${scanUnusedExports(files).length}`
     })
   },
