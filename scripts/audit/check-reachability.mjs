@@ -496,9 +496,51 @@ const CORE_SESSION_SOURCE_UNIT = new Set([
   "packages/core-session/src/serialization/jsonl.ts",
 ])
 
+// S3 keeps the registry/catalogue and per-session runtime as SEPARATE logical
+// owners. These exact modules came from their package entries; imports between
+// them must not erase findings. Pre-existing file-runtime.ts and video-audio.ts
+// stay independent consumers, as do future unmapped modules.
+const PROVIDER_SOURCE_UNIT = new Set([
+  "packages/provider/src/index.ts",
+  "packages/provider/src/types.ts",
+  "packages/provider/src/values.ts",
+  "packages/provider/src/catalog/load.ts",
+  "packages/provider/src/catalog/resolve.ts",
+  "packages/provider/src/catalog/context.ts",
+  "packages/provider/src/probe/errors.ts",
+  "packages/provider/src/probe/http.ts",
+  "packages/provider/src/probe/normalization.ts",
+  "packages/provider/src/probe/registry.ts",
+  "packages/provider/src/clients/build.ts",
+  "packages/provider/src/clients/validation.ts",
+  "packages/provider/src/web-search/registry.ts",
+])
+const PROVIDER_RUNTIME_SOURCE_UNIT = new Set([
+  "packages/provider-runtime/src/index.ts",
+  "packages/provider-runtime/src/types.ts",
+  "packages/provider-runtime/src/directory/types.ts",
+  "packages/provider-runtime/src/directory/view.ts",
+  "packages/provider-runtime/src/directory/profile.ts",
+  "packages/provider-runtime/src/directory/merge.ts",
+  "packages/provider-runtime/src/configuration/store.ts",
+  "packages/provider-runtime/src/configuration/validation.ts",
+  "packages/provider-runtime/src/configuration/routes.ts",
+  "packages/provider-runtime/src/configuration/models.ts",
+  "packages/provider-runtime/src/configuration/credentials.ts",
+  "packages/provider-runtime/src/selection/choice.ts",
+  "packages/provider-runtime/src/selection/binding.ts",
+  "packages/provider-runtime/src/selection/resolve.ts",
+  "packages/provider-runtime/src/runtime/auth.ts",
+  "packages/provider-runtime/src/runtime/discovery.ts",
+  "packages/provider-runtime/src/runtime/media.ts",
+  "packages/provider-runtime/src/runtime/create-runtime.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
+  if (PROVIDER_SOURCE_UNIT.has(rel)) return "packages/provider/src/index.ts"
+  if (PROVIDER_RUNTIME_SOURCE_UNIT.has(rel)) return "packages/provider-runtime/src/index.ts"
   return rel
 }
 
@@ -1140,6 +1182,85 @@ SELF_TEST_CASES.push({
         rel, test: false,
         text: 'import { derivePruneSubstitutes, type RewindCut } from "@i-harness/core-session"\nconst read = (session, cut: RewindCut) => derivePruneSubstitutes(session)',
       }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function providerRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [
+    file("packages/provider/src/index.ts", [
+      "export interface ProviderModelContext { contextWindow?: number }",
+      "export interface ProbeRequest { signal?: AbortSignal }",
+      "const resolveContext = (context: ProviderModelContext) => context",
+      "const probe = (request: ProbeRequest) => request",
+    ].join("\n")),
+    file("packages/provider-runtime/src/index.ts", [
+      "export type ModelResolutionState = { status: string }",
+      "const resolve = (): ModelResolutionState => ({ status: 'ready' })",
+    ].join("\n")),
+  ]
+  return [
+    file("packages/provider/src/index.ts", 'export type { ProviderModelContext, ProbeRequest } from "./types.ts"'),
+    file("packages/provider/src/types.ts", [
+      "export interface ProviderModelContext { contextWindow?: number }",
+      "export interface ProbeRequest { signal?: AbortSignal }",
+    ].join("\n")),
+    file("packages/provider/src/catalog/context.ts", 'import type { ProviderModelContext } from "../types.ts"\nconst resolveContext = (context: ProviderModelContext) => context'),
+    file("packages/provider/src/probe/http.ts", 'import type { ProbeRequest } from "../types.ts"\nconst probe = (request: ProbeRequest) => request'),
+    file("packages/provider-runtime/src/index.ts", 'export type { ModelResolutionState } from "./types.ts"'),
+    file("packages/provider-runtime/src/types.ts", "export type ModelResolutionState = { status: string }"),
+    file("packages/provider-runtime/src/selection/choice.ts", 'import type { ModelResolutionState } from "../types.ts"\nconst resolve = (): ModelResolutionState => ({ status: "ready" })'),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S3: original provider/runtime findings survive internal imports with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/provider#ProviderModelContext\tpackages/provider/src/index.ts",
+    "before:unused-export\t@i-harness/provider#ProbeRequest\tpackages/provider/src/index.ts",
+    "before:unused-export\t@i-harness/provider-runtime#ModelResolutionState\tpackages/provider-runtime/src/index.ts",
+    "split:unused-export\t@i-harness/provider#ProviderModelContext\tpackages/provider/src/index.ts",
+    "split:unused-export\t@i-harness/provider#ProbeRequest\tpackages/provider/src/index.ts",
+    "split:unused-export\t@i-harness/provider-runtime#ModelResolutionState\tpackages/provider-runtime/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(providerRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S3: file host, media adapter and unmapped modules remain real consumers",
+  expect: ["file=0", "media=0", "provider-other=0", "runtime-other=0", "outside=0"],
+  run() {
+    return [
+      ["file", "packages/provider-runtime/src/file-runtime.ts"],
+      ["media", "packages/provider-runtime/src/video-audio.ts"],
+      ["provider-other", "packages/provider/src/other.ts"],
+      ["runtime-other", "packages/provider-runtime/src/other.ts"],
+      ["outside", "packages/provider-consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...providerRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import type { ProviderModelContext, ProbeRequest } from "@i-harness/provider"\nimport type { ModelResolutionState } from "@i-harness/provider-runtime"\nconst read = (context: ProviderModelContext, request: ProbeRequest, state: ModelResolutionState) => [context, request, state]',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S3: the registry and session runtime keep separate logical owners",
+  expect: ["provider-to-runtime=0", "runtime-to-provider=0"],
+  run() {
+    return [
+      ["provider-to-runtime", "provider-runtime", "packages/provider/src/clients/build.ts", "ModelResolutionState"],
+      ["runtime-to-provider", "provider", "packages/provider-runtime/src/selection/resolve.ts", "ProviderModelContext, ProbeRequest"],
+    ].map(([label, target, rel, names]) => {
+      const files = providerRelocationFixtureFiles(true).filter(file => file.rel.startsWith(`packages/${target}/`))
+      files.push({ rel, test: false, text: `import type { ${names} } from "@i-harness/${target}"` })
       return `${label}=${scanUnusedExports(files).length}`
     })
   },
