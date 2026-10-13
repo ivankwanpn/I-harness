@@ -711,6 +711,24 @@ const COMPACTION_SOURCE_UNIT = new Set([
   "packages/compaction/src/projection/window.ts",
 ])
 
+// S12 moves only the original Shell entry. Exact extraction paths share its
+// declaration boundary; unmapped future files remain independent consumers.
+const SHELL_SOURCE_UNIT = new Set([
+  "packages/shell/src/index.ts",
+  "packages/shell/src/types.ts",
+  "packages/shell/src/discovery/windows.ts",
+  "packages/shell/src/discovery/environment.ts",
+  "packages/shell/src/command/resolve.ts",
+  "packages/shell/src/command/argv.ts",
+  "packages/shell/src/command/identity.ts",
+  "packages/shell/src/tools/policy.ts",
+  "packages/shell/src/tools/background.ts",
+  "packages/shell/src/tools/retention.ts",
+  "packages/shell/src/tools/foreground.ts",
+  "packages/shell/src/tools/selected.ts",
+  "packages/shell/src/tools/registration.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -728,6 +746,7 @@ function declarationOwner(rel) {
   if (PERSISTENCE_COORDINATOR_SOURCE_UNIT.has(rel)) return "packages/session-persistence/src/index.ts"
   if (FILE_BACKED_QUERY_SOURCE_UNIT.has(rel)) return "packages/session-query/src/file-backed.ts"
   if (COMPACTION_SOURCE_UNIT.has(rel)) return "packages/compaction/src/index.ts"
+  if (SHELL_SOURCE_UNIT.has(rel)) return "packages/shell/src/index.ts"
   return rel
 }
 
@@ -1992,6 +2011,47 @@ SELF_TEST_CASES.push({
     ].map(([label, rel, test]) => {
       const files = compactionRelocationFixtureFiles(true)
       files.push({ rel, test, text: "const read = (engine: CompactionEngine) => engine" })
+      return label + "=" + scanUnusedExports(files).length
+    })
+  },
+})
+
+function shellRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface ShellToolDeps { cwd?: string }"
+  const reads = "const read = (deps: ShellToolDeps) => deps"
+  if (!split) return [file("packages/shell/src/index.ts", declaration + "\n" + reads)]
+  return [
+    file("packages/shell/src/index.ts", 'export type { ShellToolDeps } from "./types.ts"'),
+    file("packages/shell/src/types.ts", declaration),
+    ...["discovery/windows", "discovery/environment", "command/resolve", "command/argv", "command/identity", "tools/policy", "tools/background", "tools/retention", "tools/foreground", "tools/selected", "tools/registration"]
+      .map(path => file("packages/shell/src/" + path + ".ts", reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S12: Shell retains the complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/shell#ShellToolDeps", evidence: "packages/shell/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(shellRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S12: unmapped Shell and external readers remain independent; tests do not wire exports",
+  expect: ["future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["future", "packages/shell/src/discovery/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/shell/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = shellRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const read = (deps: ShellToolDeps) => deps" })
       return label + "=" + scanUnusedExports(files).length
     })
   },
