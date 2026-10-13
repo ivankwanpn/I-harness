@@ -580,6 +580,21 @@ const ANTHROPIC_SOURCE_UNIT = new Set([
   "packages/llm-anthropic/src/stream/usage.ts",
 ])
 
+// S4d relocates only the original Gemini entry. Internal reads preserve its
+// declaration owner; unmapped modules and other protocols remain consumers.
+const GEMINI_SOURCE_UNIT = new Set([
+  "packages/llm-gemini/src/index.ts",
+  "packages/llm-gemini/src/types.ts",
+  "packages/llm-gemini/src/client.ts",
+  "packages/llm-gemini/src/request/messages.ts",
+  "packages/llm-gemini/src/request/reasoning.ts",
+  "packages/llm-gemini/src/request/body.ts",
+  "packages/llm-gemini/src/request/headers.ts",
+  "packages/llm-gemini/src/stream/decode.ts",
+  "packages/llm-gemini/src/stream/fold.ts",
+  "packages/llm-gemini/src/stream/usage.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -588,6 +603,7 @@ function declarationOwner(rel) {
   if (OPENAI_RESPONSES_SOURCE_UNIT.has(rel)) return "packages/llm-openai/src/index.ts"
   if (OPENAI_COMPATIBLE_SOURCE_UNIT.has(rel)) return "packages/llm-openai-compatible/src/index.ts"
   if (ANTHROPIC_SOURCE_UNIT.has(rel)) return "packages/llm-anthropic/src/index.ts"
+  if (GEMINI_SOURCE_UNIT.has(rel)) return "packages/llm-gemini/src/index.ts"
   return rel
 }
 
@@ -1437,6 +1453,49 @@ SELF_TEST_CASES.push({
     ].map(([label, rel]) => {
       const files = [...anthropicRelocationFixtureFiles(true), {
         rel, test: false, text: 'import type { AnthropicConfig } from "@i-harness/llm-anthropic"\nconst read = (config: AnthropicConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function geminiRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-gemini/src/index.ts", [
+    "export interface GeminiConfig { model: string }",
+    "const createClient = (config: GeminiConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-gemini/src/index.ts", 'export type { GeminiConfig } from "./types.ts"'),
+    file("packages/llm-gemini/src/types.ts", "export interface GeminiConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-gemini/src/${path}`, 'import type { GeminiConfig } from "@i-harness/llm-gemini"\nconst read = (config: GeminiConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4d: Gemini config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-gemini#GeminiConfig\tpackages/llm-gemini/src/index.ts",
+    "split:unused-export\t@i-harness/llm-gemini#GeminiConfig\tpackages/llm-gemini/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(geminiRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4d: future Gemini modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-gemini/src/future.ts"],
+      ["other-protocol", "packages/llm-anthropic/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...geminiRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { GeminiConfig } from "@i-harness/llm-gemini"\nconst read = (config: GeminiConfig) => config',
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
