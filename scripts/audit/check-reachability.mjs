@@ -698,6 +698,19 @@ const FILE_BACKED_QUERY_SOURCE_UNIT = new Set([
   "packages/session-query/src/file-backed/query.ts",
 ])
 
+// S11 extracts only the original compaction entry. Existing config, region,
+// slices, summarizer and tokens retain independent declaration/reader owners.
+const COMPACTION_SOURCE_UNIT = new Set([
+  "packages/compaction/src/index.ts",
+  "packages/compaction/src/engine/contracts.ts",
+  "packages/compaction/src/engine/admission.ts",
+  "packages/compaction/src/engine/prune.ts",
+  "packages/compaction/src/engine/summary.ts",
+  "packages/compaction/src/engine/commit.ts",
+  "packages/compaction/src/projection/shadowed.ts",
+  "packages/compaction/src/projection/window.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -714,6 +727,7 @@ function declarationOwner(rel) {
   if (MCP_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/mcp-client/src/supervisor.ts"
   if (PERSISTENCE_COORDINATOR_SOURCE_UNIT.has(rel)) return "packages/session-persistence/src/index.ts"
   if (FILE_BACKED_QUERY_SOURCE_UNIT.has(rel)) return "packages/session-query/src/file-backed.ts"
+  if (COMPACTION_SOURCE_UNIT.has(rel)) return "packages/compaction/src/index.ts"
   return rel
 }
 
@@ -1933,6 +1947,52 @@ SELF_TEST_CASES.push({
       if (existing) existing.text += `\n${reads}`
       else files.push({ rel, test, text: reads })
       return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+
+function compactionRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface CompactionEngine { compact(): Promise<void> }"
+  const reads = "const read = (engine: CompactionEngine) => engine"
+  if (!split) return [file("packages/compaction/src/index.ts", declaration + "\n" + reads)]
+  return [
+    file("packages/compaction/src/index.ts", declaration),
+    ...["engine/contracts", "engine/admission", "engine/prune", "engine/summary", "engine/commit", "projection/shadowed", "projection/window"]
+      .map(path => file("packages/compaction/src/" + path + ".ts", reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S11: compaction keeps the complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/compaction#CompactionEngine", evidence: "packages/compaction/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(compactionRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S11: original compaction leaves remain independent; test-only readers do not wire exports",
+  expect: ["config=0", "region=0", "slices=0", "summarizer=0", "tokens=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["config", "packages/compaction/src/config.ts", false],
+      ["region", "packages/compaction/src/region.ts", false],
+      ["slices", "packages/compaction/src/slices.ts", false],
+      ["summarizer", "packages/compaction/src/summarizer.ts", false],
+      ["tokens", "packages/compaction/src/tokens.ts", false],
+      ["future", "packages/compaction/src/engine/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/compaction/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = compactionRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const read = (engine: CompactionEngine) => engine" })
+      return label + "=" + scanUnusedExports(files).length
     })
   },
 })
