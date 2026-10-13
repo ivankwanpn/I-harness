@@ -19,7 +19,7 @@ export {
 } from "./execute-tool-calls.ts"
 import { executeToolCalls, type BatchCall } from "./execute-tool-calls.ts"
 export { createSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "./executor.ts"
-export type { SessionExecutor, SessionExecutorDeps, SessionExecutorRegistry, AgentRunSurface, InputSubmit } from "./executor.ts"
+export type { SessionExecutor, SessionExecutorFailure, SessionExecutorDeps, SessionExecutorRegistry, AgentRunSurface, InputSubmit } from "./executor.ts"
 
 // M20 budget/overflow control (absorb codex token-budget): `contextWindow` is
 // the absolute context window; the agent budget is `contextWindow *

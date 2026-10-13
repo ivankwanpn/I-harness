@@ -23,6 +23,32 @@ export interface SessionExecutorDeps {
   signal?: AbortSignal
 }
 
+export interface SessionExecutorFailure extends Error {
+  /** Pending inputs at the failed turn's boundary; excludes the promoted input.
+   * A snapshot, not a live queue count (the lane clears its saved failure on success). */
+  readonly pendingCount: number
+}
+
+// WHY: service submit already forwards this rejection to its host
+// (packages/session-executor/src/service.ts:828-836). Non-enumerable metadata
+// makes the pause visible in-process without changing serialized error shapes
+// or writable Error identity/classification. Frozen/non-Error throws retain
+// their original value as cause instead of losing the pending count.
+function withPendingCount(error: unknown, pendingCount: number): SessionExecutorFailure {
+  if (error instanceof Error) {
+    try {
+      Object.defineProperty(error, "pendingCount", { value: pendingCount, configurable: true })
+      return error as SessionExecutorFailure
+    } catch {
+      // A frozen provider error cannot carry metadata; preserve it as cause.
+    }
+  }
+  const failure = new Error(error instanceof Error ? error.message : String(error), { cause: error })
+  if (error instanceof Error) failure.name = error.name
+  Object.defineProperty(failure, "pendingCount", { value: pendingCount, configurable: true })
+  return failure as SessionExecutorFailure
+}
+
 export interface SessionExecutor {
   /** Submit one input onto the serial lane. `inputId` (OPTIONAL, M49 Task 11)
    * lets a caller (session-executor service) retain its service row id
@@ -86,7 +112,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   // reach the last drain() caller, otherwise hosts (CLI exitCode) silently
   // report success on a failed turn. Captured; thrown by drain(); cleared when
   // a later turn succeeds.
-  let lastError: unknown
+  let lastError: SessionExecutorFailure | undefined
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
 
@@ -114,7 +140,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId)
           lastError = undefined
         } catch (err) {
-          lastError = err
+          lastError = withPendingCount(err, deps.inbox.pending().length)
           return // a failed turn stops this pump (its remaining pending stay
           // for a future pump); the error surfaces through drain()
         } finally {
