@@ -33,6 +33,17 @@ export function registerApprovalAnswerer(ctx: PluginContext, fn: ApprovalAnswere
 
 // ── questions seam (audit F05-5) ───────────────────────────────────────────
 
+/** The ONE sentinel a question provider resolves when the human DEFERS the
+ * question instead of answering it — "keep it, I will answer later".
+ *
+ * WHY a sentinel and not a richer return type: `QuestionProvider.ask` returns
+ * `Promise<string>`, and that seam is deliberately left unchanged. `ask_user_input`
+ * converts this exact value into a STRUCTURED result (`{ question, deferred: true }`,
+ * with no `answer` field) so a deferral can never reach the model as text the user
+ * is supposed to have said. The value is a NUL-delimited machine marker so it
+ * cannot be confused with prose a person would type. */
+export const USER_DEFERRED_QUESTION = "\u0000ih:user-deferred-question\u0000"
+
 export interface UserQuestion {
   id: string
   prompt: string
@@ -208,12 +219,12 @@ export function createAskUserInputTool(deps?: AskUserInputToolDeps): Tool {
     // human interaction and can block the question itself.
     isReadOnly: true,
     description:
-      "Ask the human user a structured question and wait for their answer. Use this for decisions that need the user's preference (not for approvals — approvals use the approval flow).",
+      "Ask the human user a structured question and wait for their answer. Use this for decisions that need the user's preference (not for approvals — approvals use the approval flow). The user may ignore `options` and answer in their own words, or DEFER the question: a deferral returns `{ question, deferred: true }` with no answer, meaning the user kept the question to answer later. A deferral is NOT a choice — do not invent one; state the assumption you proceed on, or stop and wait.",
     inputSchema: {
       type: "object",
       properties: {
         question: { type: "string", description: "The question to ask (should be self-contained)." },
-        options: { type: "array", items: { type: "string" }, maxItems: 10, description: "Suggested answers (the user may still answer freely)." },
+        options: { type: "array", items: { type: "string" }, maxItems: 10, description: "Suggested answers. The user may still answer freely in their own words, or defer the question." },
       },
       required: ["question"],
     },
@@ -226,6 +237,11 @@ export function createAskUserInputTool(deps?: AskUserInputToolDeps): Tool {
         prompt: args.question,
         ...(args.options !== undefined ? { options: args.options } : {}),
       })
+      // A deferral is the user saying "not now, keep it" — it must never be
+      // passed on as text the user said. `QuestionProvider.ask` returns a string,
+      // so it travels as the sentinel and becomes a STRUCTURED result with no
+      // `answer` at all.
+      if (answer === USER_DEFERRED_QUESTION) return { question: args.question, deferred: true as const }
       return { question: args.question, answer }
     },
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { registerApprovalAnswerer, registerQuestionProvider, type ApprovalRequest, type UserQuestion } from "@i-harness/interaction"
+import { registerApprovalAnswerer, registerQuestionProvider, USER_DEFERRED_QUESTION, type ApprovalRequest, type UserQuestion } from "@i-harness/interaction"
 import { makeNotification } from "@i-harness/sdk"
 import type { SessionAssembly } from "@i-harness/session-executor"
 import type { RpcNotification } from "@i-harness/sdk"
@@ -8,7 +8,13 @@ import type { ApprovalRulesAdapter, RememberApprovalOptions } from "./approval-r
 
 export type InteractionDecision =
   | { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions }
+  /** An answer the user gave. `deferred` is the user saying "keep this question,
+   * I will answer it later" — it settles the WAITING agent (nobody should stay
+   * blocked on a question the user has not answered) while the CARD STAYS and
+   * stays persisted, so the answer given later still reaches the session through
+   * the existing recovery path. Exactly one of `answer`/`deferred` is present. */
   | { kind: "question"; answer: string }
+  | { kind: "question"; deferred: true }
 
 export interface PendingInteraction {
   requestId: string
@@ -99,6 +105,31 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
     }
   }
 
+  /** The USER's "keep this question for me" transition — deliberately the same end
+   * state `finish(..., "closed")` produces (row kept, shown as `interrupted`, still
+   * answerable) but reachable on demand instead of only by a session close.
+   *
+   * The row is NOT removed: it stays in `waiting` and in the persisted snapshot, so
+   * it survives a restart and its later answer travels the existing recovery path
+   * (`options.recover` → a queued session input). What changes is only that the
+   * awaiting agent is released now, with a decision the tool renders as
+   * `{ deferred: true }` — no answer is invented on the user's behalf. */
+  function defer(row: WaitingRequest): void {
+    if (waiting.get(row.view.requestId) !== row) return
+    clearTimeout(row.timer)
+    const view: PendingInteraction = { ...structuredClone(row.view), state: "interrupted" }
+    const carried: WaitingRequest = { view, timer: undefined as unknown as ReturnType<typeof setTimeout> }
+    waiting.set(view.requestId, carried)
+    carried.timer = expiryTimer(carried)
+    options.persistence?.write(snapshot())
+    row.settle?.({ kind: "question", deferred: true }, "reply")
+    try {
+      emit(makeNotification("desktop/interaction/request", structuredClone(view)))
+    } catch {
+      // The decision has already settled; a broken client cannot un-defer it.
+    }
+  }
+
   function expiryTimer(row: WaitingRequest): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
       try { finish(row, undefined, "expired") }
@@ -169,7 +200,10 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
 
   function waitForAnswer(sessionId: string, question: UserQuestion): Promise<string> {
     return new Promise((resolve, reject) => enqueue(sessionId, "question", question, (decision, reason) => {
-      if (decision?.kind === "question") resolve(decision.answer)
+      // A deferral RESOLVES: the agent must not be left blocked on a question the
+      // user has chosen to answer later. It resolves the sentinel, which the tool
+      // turns into a structured `deferred: true` result — never a fabricated answer.
+      if (decision?.kind === "question") resolve("deferred" in decision ? USER_DEFERRED_QUESTION : decision.answer)
       else reject(new Error(`question ${reason} (NO_PROVIDER)`))
     }))
   }
@@ -197,8 +231,24 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       if (input.decision.kind === "approval" && typeof input.decision.approved !== "boolean") {
         throw new Error("approval decision must be boolean")
       }
-      if (input.decision.kind === "question" && typeof input.decision.answer !== "string") {
-        throw new Error("question answer must be text")
+      if (input.decision.kind === "question") {
+        const deferred = "deferred" in input.decision && input.decision.deferred === true
+        if (deferred) {
+          // Already deferred ⇒ no live resolver and nothing to change. Returning
+          // accepted here (rather than falling through) keeps a double-click from
+          // reaching the recovery path, where it would compose an answer text out
+          // of a decision that carries none.
+          if (row.view.state === "interrupted") return { accepted: true }
+          if ((row.view.expiresAt ?? row.view.openedAt + REQUEST_LIFETIME_MS) <= Date.now()) {
+            finish(row, undefined, "expired")
+            throw new Error("interaction request expired")
+          }
+          defer(row)
+          return { accepted: true }
+        }
+        if (typeof (input.decision as { answer?: unknown }).answer !== "string") {
+          throw new Error("question answer must be text")
+        }
       }
       if ((row.view.expiresAt ?? row.view.openedAt + REQUEST_LIFETIME_MS) <= Date.now()) {
         finish(row, undefined, "expired")
@@ -266,6 +316,11 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
 
 function recoveryText(request: PendingInteraction, decision: InteractionDecision): string {
   if (decision.kind === "question") {
+    // A DEFERRAL carries no answer to relay. It should never get here — `reply`
+    // returns early for an already-deferred row — so reaching this point means a
+    // caller skipped that guard. Fail loudly instead of interpolating the user's
+    // words out of a decision that has none.
+    if ("deferred" in decision) throw new Error("a deferred question carries no answer to relay")
     const payload = request.payload as { prompt?: unknown }
     const prompt = typeof payload?.prompt === "string" ? payload.prompt : "Interrupted question"
     return `The conversation stopped while waiting for my answer. Continue using this answer to the interrupted question.\nQuestion: ${prompt}\nMy answer: ${decision.answer}`

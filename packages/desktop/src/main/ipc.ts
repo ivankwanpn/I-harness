@@ -629,7 +629,11 @@ export async function dispatchDesktopRequest(
       const record = decision as Record<string, unknown>
       const approval = record.kind === "approval" && typeof record.approved === "boolean"
       const answer = record.kind === "question" && typeof record.answer === "string"
-      if (!approval && !answer) throw new Error("decision must be an approval or a question answer")
+      // A DEFERRED question carries no answer on purpose ("keep it, I will answer
+      // later"). It must pass this gate, or the user's only escape from a question
+      // stays STOP — which rejects the question and is what this exists to avoid.
+      const deferred = record.kind === "question" && record.deferred === true
+      if (!approval && !answer && !deferred) throw new Error("decision must be an approval, a question answer, or a deferred question")
       let remember: { scope: "session" | "workspace"; expiresAt: number } | undefined
       if (record.remember !== undefined) {
         const raw = requireRecord(record.remember)
@@ -641,7 +645,9 @@ export async function dispatchDesktopRequest(
         sessionId,
         decision: approval
           ? { kind: "approval", approved: record.approved as boolean, ...(remember ? { remember } : {}) }
-          : { kind: "question", answer: record.answer as string },
+          : deferred
+            ? { kind: "question", deferred: true }
+            : { kind: "question", answer: record.answer as string },
       })
     }
     case "desktop/review/file/save":

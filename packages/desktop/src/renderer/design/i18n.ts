@@ -310,6 +310,7 @@ const english = {
   "尚未回報結果": "Awaiting result", "已收到結果": "Result received", "執行失敗": "Execution failed", "工具詳情": "Tool details",
   "需要你的確認": "Your confirmation is needed", "選擇回覆": "Choose a response", "批准": "Allow", "拒絕": "Deny",
   "僅允許這一次": "Only this time", "不執行此操作": "Do not perform this action", "選擇後按確認送出": "Choose an option, then confirm",
+  "或自行輸入回答": "Or type your own answer", "選擇選項，或自行輸入後送出": "Choose an option, or type your own, then confirm", "保留問題，稍後回答": "Keep this question, answer later",
   "正在送出…": "Submitting…", "確認": "Confirm",
   "工作區記憶": "Workspace memory", "啟用工作區記憶": "Enable workspace memory",
   "筆記保存在此工作區，可供不同會話查找。目前不會自動生成記憶。": "Notes are stored in this workspace for recall across conversations. Automatic memory generation is not available.",
