@@ -70,9 +70,12 @@ export interface HandlerMatcher {
  * One handler. Execution: `cmd` `args…` spawned with NO shell, `cwd`
  * optional, stdin = one JSON HookContext, stdout = one JSON HookOutput,
  * killed after `timeoutMs` (default 1000).
- * Trust: `trust.script` + `trust.sha256` — `script` is the executed artifact
- * (resolved against the config dir when relative; the hash is recomputed on
- * EVERY run and must match; mismatch → trust failure → fail-closed deny).
+ * Native trust: file-content sha256 of the executed artifact, resolved against
+ * the config dir. Commands must execute that file without extra arguments, or
+ * invoke the host Node/Bash/Sh runtime with only that file as its argument.
+ * Other forms need a reviewed wrapper. Binding and content are rechecked before
+ * dispatch; mismatch → trust failure → fail-closed deny. Claude adapter commands
+ * instead derive from config bytes included in their approved plugin-tree hash.
  */
 export interface HookHandlerSpec {
   id: string
@@ -127,7 +130,7 @@ export class HookUnsupportedFormatError extends HookConfigError {
   }
 }
 
-/** sha256 of the handler script does not match the trusted value. */
+/** Handler content or executable binding does not match the trusted artifact. */
 export class HookTrustError extends Error {
   readonly code = "hook-trust-failed" as const
   constructor(

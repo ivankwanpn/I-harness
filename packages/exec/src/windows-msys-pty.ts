@@ -2,11 +2,10 @@ import { createHash } from "node:crypto"
 import { readFileSync, realpathSync, statSync } from "node:fs"
 import { win32 } from "node:path"
 import type { ExecutionFileIdentity, ProcessSpec } from "@i-harness/sandbox"
+import { auditedGitBashShimSha256s } from "./git-bash-shim-manifest.ts"
 
-// Audited Git for Windows compat-bash launcher. Recognition is by bytes plus
-// layout, never the name alone. Its source/resource and provenance are recorded
-// in the Windows PTY repair evidence; other versions retain their native path.
-const gitBashShimSha256 = "9aa00217a92def5fed1b15c6e2b34a7f89e3781af822ecc00960fe5340df093e"
+// Recognition is by audited bytes plus layout, never the name alone.
+// Other versions retain their native path.
 const sha = (data: Buffer) => createHash("sha256").update(data).digest("hex")
 function file(path: string): Readonly<ExecutionFileIdentity> {
   const actual = realpathSync.native(path)
@@ -88,20 +87,21 @@ export function resolveWindowsMsysPty(spec: ProcessSpec): ProcessSpec {
   try { original = realpathSync.native(spec.argv[0]!); bytes = readFileSync(original) } catch { return spec }
   let executable = original, env = spec.env
   let resolution: NonNullable<ProcessSpec["msysPty"]>["resolution"]
-  if (win32.basename(original).toLowerCase() === "bash.exe" && win32.basename(win32.dirname(original)).toLowerCase() === "bin" && sha(bytes) === gitBashShimSha256) {
+  if (win32.basename(original).toLowerCase() === "bash.exe" && win32.basename(win32.dirname(original)).toLowerCase() === "bin" && auditedGitBashShimSha256s.includes(sha(bytes))) {
     const root = win32.dirname(win32.dirname(original))
     if (!statSync(win32.join(root, "mingw64", "bin")).isDirectory()) throw new Error("Recognized Git Bash PTY launcher has an unsupported installation layout")
     const first = spec.argv[1] ?? ""
     if (/^--(?:no-cd|cd-to-home|cd=|(?:no-)?minimal-search-path|(?:no-)?needs-console|(?:no-)?hide|(?:no-)?append-quote|command=|app-id=)/.test(first) || first === "gui") {
       throw new Error(`Git Bash PTY launcher option ${first} cannot be normalized; invoke the actual usr/bin/bash.exe with its own Bash arguments`)
     }
+    const originalSha256 = sha(bytes)
     executable = realpathSync.native(win32.join(root, "usr", "bin", "bash.exe"))
     bytes = readFileSync(executable)
     if (!importsMsys(bytes)) throw new Error("Recognized Git Bash PTY launcher does not target an MSYS executable")
     const configurationPath = win32.join(root, "etc", "git-bash.config")
     let configuration: Buffer | undefined
     try { configuration = readFileSync(configurationPath) } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
-    resolution = { kind: "git-bash-shim", original: { path: original, sha256: gitBashShimSha256 },
+    resolution = { kind: "git-bash-shim", original: { path: original, sha256: originalSha256 },
       configuration: { path: configurationPath, sha256: configuration === undefined ? null : sha(configuration) } }
     env = wrapperEnvironment(root, original, spec.cwd, env, configuration)
   } else if (!importsMsys(bytes)) return spec

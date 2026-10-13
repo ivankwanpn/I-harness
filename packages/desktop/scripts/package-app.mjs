@@ -6,7 +6,7 @@
 // Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
 // sibling release folder when an earlier portable app is still open.
 // Assumes `electron-vite build` and `scripts/build-gateway.mjs` already ran.
-import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -64,13 +64,32 @@ for (const name of ["koffi", `@koromix/koffi-${process.platform}-${process.arch}
   copyRuntimePackage(runtimePackageRoot(name, join(gatewayDir, "cli")), join(resources, "app/node_modules", ...name.split("/")))
 }
 
+// Powershell quoting: a path is interpolated INTO a single-quoted PS string, so a
+// literal `'` in the path would terminate the string and inject the rest. Win32
+// paths may contain `'` (they are legal in a file name), so double each one —
+// that is PS's own escape inside a single-quoted literal.
+const psQuote = (value) => value.replaceAll("'", "''")
+
 const zipPath = join(releaseDir, `I-harness-${manifest.version}.zip`)
+// WHY the ErrorActionPreference AND the artifact check below — both are needed:
+// Compress-Archive reports failures as Write-Error, which is NON-terminating, so
+// the PowerShell process still exits 0. Measured: with a payload file locked by
+// a running Desktop/gateway, the archive failed outright (each file reported
+// `PermissionDenied` / `CompressArchiveUnauthorizedAccessError`), yet this script
+// printed `portable zip: <path>` and exited 0 — a success report for an artifact
+// that was never produced. Making errors terminating fixes the exit status; the
+// explicit existence/size check is still required because a PARTIAL archive is
+// also a wrong artifact (and a stale one from a previous run must not be
+// mistaken for this run's output).
 const zip = spawnSync("powershell.exe", [
   "-NoProfile",
   "-Command",
-  `Compress-Archive -Path (Join-Path '${appDir}' '*') -DestinationPath '${zipPath}' -Force`,
+  `$ErrorActionPreference='Stop'; Compress-Archive -Path (Join-Path '${psQuote(appDir)}' '*') -DestinationPath '${psQuote(zipPath)}' -Force`,
 ], { stdio: "inherit", windowsHide: true })
-if (zip.status !== 0) throw new Error("Compress-Archive failed")
+if (zip.status !== 0) throw new Error(`Compress-Archive failed (exit ${zip.status})`)
+if (!existsSync(zipPath)) throw new Error(`Compress-Archive reported success but produced no archive: ${zipPath}`)
+const zipBytes = statSync(zipPath).size
+if (zipBytes === 0) throw new Error(`portable zip is empty (0 bytes): ${zipPath}`)
 
 console.log(`packaged: ${join(appDir, `${appName}.exe`)}`)
-console.log(`portable zip: ${zipPath}`)
+console.log(`portable zip: ${zipPath} (${zipBytes} bytes)`)

@@ -616,7 +616,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           || typeof params.sessionId !== "string" || params.sessionId === ""
           || decision === undefined
           || !(decision.kind === "approval" && typeof decision.approved === "boolean"
-            || decision.kind === "question" && typeof decision.answer === "string")) {
+            || decision.kind === "question" && (typeof decision.answer === "string" || decision.deferred === true))) {
           send(makeFailure(message.id, INVALID_PARAMS, "invalid interaction reply"))
           return
         }
@@ -630,7 +630,9 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             sessionId: params.sessionId,
             decision: decision.kind === "approval"
               ? { kind: "approval", approved: decision.approved as boolean, ...(decision.remember === undefined ? {} : { remember: decision.remember as import("./approval-rules.ts").RememberApprovalOptions }) }
-              : { kind: "question", answer: decision.answer as string },
+              : decision.deferred === true
+                ? { kind: "question", deferred: true }
+                : { kind: "question", answer: decision.answer as string },
           })
           send(makeSuccess(message.id, reply))
         } catch (error) {

@@ -195,14 +195,14 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
           : <ul className="subagent-catalog">{catalog.agents.map((agent) => <li key={agent.sessionId} style={{ marginLeft: `${Math.min(ancestors(agent, catalog.agents, sessionId).length, 6) * 12}px` }}>
             <button type="button" className="subagent-catalog-card" aria-label={t("查看子代理 {name}", { name: agent.label })} onClick={() => setSelected(agent.sessionId)}>
               <Bot size={18} aria-hidden="true" />
-              <span className="subagent-card-content"><strong>{agent.label}</strong><span>{agent.roleName}{agent.path ? `${agent.roleName ? " · " : ""}${agent.path}` : ""}</span><small>{agent.modelLabel ?? t("繼承主會話模型")}</small>{agent.finalText ? <span className="subagent-result-preview">{agent.finalText.slice(0, 160)}</span> : null}</span>
+              <span className="subagent-card-content"><strong>{agent.label}</strong><span>{agent.roleName}{agent.path ? `${agent.roleName ? " · " : ""}${agent.path}` : ""}</span><small>{agent.modelLabel ?? t("模型未記錄")}</small>{agent.finalText ? <span className="subagent-result-preview">{agent.finalText.slice(0, 160)}</span> : null}</span>
               <span className="subagent-status" data-status={agent.status}>{t(STATUS_LABELS[agent.status])}</span><ChevronRight size={13} aria-hidden="true" />
             </button>
           </li>)}</ul>}
     </> : <div className="subagent-detail">
       <nav className="subagent-lineage" aria-label={t("子代理執行記錄")}><button type="button" onClick={() => setSelected(undefined)}>{parentTitle ?? t("主會話")}</button>{lineage.map((ancestor) => <span key={ancestor.sessionId}><ChevronRight size={12} aria-hidden="true" /><button type="button" onClick={() => setSelected(ancestor.sessionId)}>{ancestor.label}</button></span>)}<span><ChevronRight size={12} aria-hidden="true" />{selectedAgent?.label ?? selected}</span></nav>
       <div className="subagent-detail-heading"><button type="button" className="subagent-back" aria-label={t("返回子代理列表")} title={t("返回子代理列表")} onClick={() => setSelected(undefined)}><ArrowLeft size={16} aria-hidden="true" /></button><h3>{selectedAgent?.label ?? selected}</h3>{selectedAgent ? <span className="subagent-status" data-status={selectedAgent.status}>{t(STATUS_LABELS[selectedAgent.status])}</span> : null}</div>
-      <p className="subagent-detail-model">{selectedAgent ? selectedAgent.modelLabel ?? t("繼承主會話模型") : t("模型資訊未提供")}</p>
+      <p className="subagent-detail-model">{selectedAgent ? selectedAgent.modelLabel ?? t("模型未記錄") : t("模型資訊未提供")}</p>
       {selectedAgent?.live === false ? <p className="subagent-recorded">{t("已保存的子代理記錄")}</p> : null}
       {selectedAgent?.controlReason ? <p className="subagent-control-reason">{controlGuidance ? t(controlGuidance) : selectedAgent.controlReason}</p> : null}
       {selectedAgent?.error ? <p role="alert" className="notice error-text">{selectedAgent.error}</p> : null}

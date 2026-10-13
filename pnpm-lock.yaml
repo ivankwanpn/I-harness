@@ -1374,6 +1374,9 @@ importers:
 
   packages/settings:
     dependencies:
+      '@i-harness/fs-watch':
+        specifier: workspace:*
+        version: link:../fs-watch
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home

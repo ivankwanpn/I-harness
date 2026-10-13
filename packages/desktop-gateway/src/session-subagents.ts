@@ -156,7 +156,7 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
         for (const raw of doc?.tasks as unknown[] ?? []) {
           const task = object(raw)
           if (typeof task?.childSessionId !== "string" || typeof task.agentPath !== "string") continue
-          hints.set(task.childSessionId, { sessionId: task.childSessionId, path: task.agentPath, status: typeof task.outcome === "string" ? task.outcome : typeof task.status === "string" ? task.status : "unavailable", ...(typeof task.agent === "string" ? { roleName: task.agent } : {}), ...(typeof task.description === "string" ? { label: task.description } : {}), ...(typeof task.resultText === "string" ? { finalText: task.resultText } : {}), ...(typeof task.error === "string" ? { error: task.error } : {}) })
+          hints.set(task.childSessionId, { sessionId: task.childSessionId, path: task.agentPath, status: typeof task.outcome === "string" ? task.outcome : typeof task.status === "string" ? task.status : "unavailable", ...(typeof task.agent === "string" ? { roleName: task.agent } : {}), ...(typeof task.modelLabel === "string" ? { modelLabel: task.modelLabel } : {}), ...(typeof task.description === "string" ? { label: task.description } : {}), ...(typeof task.resultText === "string" ? { finalText: task.resultText } : {}), ...(typeof task.error === "string" ? { error: task.error } : {}) })
         }
         const ownerSession = await snapshot(ownerId)
         ownerSessions.set(ownerId, ownerSession)

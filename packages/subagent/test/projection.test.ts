@@ -28,8 +28,7 @@ interface FixtureAgent {
   role?: string
   status: ChildStatus
   jobId?: string
-  /** The model label the spawn RECORDED on the entry (absent = the child
-   * inherited the parent's client — see ChildAgentEntry.modelLabel). */
+  /** WHY: persist.ts:136 restores older entries without labels; absence cannot prove inheritance. */
   modelLabel?: string
 }
 
@@ -210,37 +209,99 @@ describe("projectAgentTaskDetail (detail payload, server-side)", () => {
     expect(typeof detail.transcriptAvailability).toBe("string")
   })
 
-  it("a role without a configured model reports inherited honestly; result/error ride the record", () => {
-    const state = fixtureState({
-      agents: [{ id: "root/helper", role: "helper", status: "running" }],
-      jobs: [{ id: "job-1", agentId: "root/helper", status: "running", prompt: "inspect code" }],
-    })
-    const row = projectAgentTasks(state)[0]!
-    const detail = projectAgentTaskDetail(state, row)!
-    // Task 6 re-specifies this one expectation: the payload used to OMIT
-    // `model` for the inherited case (it printed `role.model`, which was never
-    // set), which said nothing. An entry with no recorded label whose role
-    // declares no model ran on the parent's client, and the row now says so.
-    expect(detail.model).toBe("inherited from the session") // the helper role has no model — parent's is inherited
+  it("reports model not recorded when an entry has neither a label nor a role-declared model", () => {
+    const state = fixtureState({ agents: [{ id: "root/helper", role: "helper", status: "running" }] })
+    const detail = projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)!
+    expect(detail.model).toBe("model not recorded")
+    expect(detail.model).not.toContain("inherited")
   })
 
-  // Task 6: the row prints the model the spawn RECORDED, never a re-derivation
-  // of today's precedence — this payload has no settings getter to re-derive
-  // with, and for a running child today's settings are not what it runs on.
-  it("shows the model the role RESOLVED — and says so when it inherited instead", () => {
-    const withModel = fixtureState({
-      agents: [{ id: "root/helper", role: "general", status: "running", modelLabel: "gw:small" }],
-    })
-    const row = projectAgentTasks(withModel)[0]!
-    expect(projectAgentTaskDetail(withModel, row)?.model).toBe("gw:small")
-
-    // No recorded label and no declared model anywhere: the row states the
-    // inheritance outright rather than omitting the field (saying nothing).
-    const inherited = fixtureState({
-      agents: [{ id: "root/helper", role: "general", status: "running" }], // no modelLabel
-    })
-    expect(projectAgentTaskDetail(inherited, row)?.model).toBe("inherited from the session")
+  it("shows a recorded label instead of the role's declared model", () => {
+    const state = fixtureState({ agents: [{ id: "root/miner", role: "miner", status: "running", modelLabel: "gw:small" }] })
+    expect(projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)?.model).toBe("gw:small")
   })
+
+  it("does not claim inheritance for a completed legacy task without a live entry or model record", () => {
+    const state = fixtureState()
+    const task = state.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", agent: "helper", description: "helper", prompt: "inspect", delivery: "tool" })
+    state.tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: "done" })
+    expect(projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)?.model).toBe("model not recorded")
+  })
+
+  it("uses a task's recorded label when only the durable record remains", () => {
+    const state = fixtureState()
+    const task = state.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/miner", agent: "miner", description: "miner", prompt: "mine", delivery: "tool" })
+    const doc = { formatVersion: 1 as const, tasks: [{ ...task, modelLabel: "actual:recorded" }], notifications: [] }
+    const tasks = createTaskRegistry()
+    tasks.restore(doc)
+    const source = { ...state, tasks }
+    expect(projectAgentTaskDetail(source, projectAgentTasks(source)[0]!)?.model).toBe("actual:recorded")
+  })
+
+  it.each([undefined, "new:configured"])("binds a reused live path to its child session rather than an older task (model %s)", modelLabel => {
+    const state = fixtureState({ agents: [{ id: "root/helper", role: "helper", status: "running" }] })
+    state.table.get("root/helper")!.sessionId = "child-new"
+    const input = { identity: { parentSessionId: "parent" }, agentPath: "root/helper", agent: "helper", description: "helper", prompt: "old prompt", delivery: "tool" as const }
+    const old = state.tasks.submit(input)
+    state.tasks.claim(old.id, "child-old", "old:configured")
+    state.tasks.terminalize({ taskId: old.id, outcome: "completed", resultText: "old result" })
+    const current = state.tasks.submit({ ...input, prompt: "new prompt" })
+    state.tasks.claim(current.id, "child-new", modelLabel)
+
+    const detail = projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)!
+    expect(detail).toMatchObject({ model: modelLabel ?? "model not recorded", parentPrompt: "new prompt", transcriptAvailability: "durable child session (child-new)" })
+    expect(detail).not.toHaveProperty("result")
+  })
+
+  it("does not borrow a historical task while a new child has not been claimed", () => {
+    const state = fixtureState({ agents: [{ id: "root/helper", role: "helper", status: "running" }] })
+    state.table.get("root/helper")!.sessionId = "child-new"
+    const old = state.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", agent: "helper", description: "helper", prompt: "old prompt", delivery: "tool" })
+    state.tasks.claim(old.id, "child-old", "old:configured")
+    state.tasks.terminalize({ taskId: old.id, outcome: "completed" })
+
+    const detail = projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)!
+    expect(detail.model).toBe("model not recorded")
+    expect(detail).not.toHaveProperty("parentPrompt")
+  })
+
+  it("keeps closed task IDs distinct and withholds ambiguous reused-path evidence", () => {
+    const state = fixtureState()
+    const input = { identity: { parentSessionId: "parent" }, agentPath: "root/helper", agent: "helper", description: "helper", prompt: "old prompt", delivery: "tool" as const }
+    const old = state.tasks.submit(input)
+    state.tasks.claim(old.id, "child-old", "old:configured")
+    state.tasks.terminalize({ taskId: old.id, outcome: "completed", resultText: "old result" })
+    const current = state.tasks.submit({ ...input, prompt: "new prompt" })
+    state.tasks.claim(current.id, "child-new", "new:configured")
+    state.tasks.terminalize({ taskId: current.id, outcome: "completed", resultText: "new result" })
+
+    const rows = projectAgentTasks(state)
+    expect(projectAgentTaskDetail(state, rows.find(row => row.id === old.id)!)).toMatchObject({ model: "old:configured", parentPrompt: "old prompt", result: "old result" })
+    expect(projectAgentTaskDetail(state, rows.find(row => row.id === current.id)!)).toMatchObject({ model: "new:configured", parentPrompt: "new prompt", result: "new result" })
+    const ambiguous = projectAgentTaskDetail(state, { ...rows[0]!, id: "root/helper" })!
+    expect(ambiguous.model).toBe("model not recorded")
+    expect(ambiguous).not.toHaveProperty("parentPrompt")
+  })
+
+  it("does not attach ambiguous historical evidence to an in-memory child at a reused path", () => {
+    const state = fixtureState({ agents: [{ id: "root/helper", role: "helper", status: "running" }] })
+    const input = { identity: { parentSessionId: "parent" }, agentPath: "root/helper", agent: "helper", description: "helper", prompt: "old prompt", delivery: "tool" as const }
+    const old = state.tasks.submit(input)
+    state.tasks.claim(old.id, undefined, "old:configured")
+    state.tasks.terminalize({ taskId: old.id, outcome: "completed" })
+    state.tasks.submit({ ...input, prompt: "new prompt" })
+
+    const detail = projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)!
+    expect(detail.model).toBe("model not recorded")
+    expect(detail).not.toHaveProperty("parentPrompt")
+  })
+
+  it("keeps the role-declared fallback for a plugin task without a recorded label or live entry", () => {
+    const state = fixtureState()
+    state.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/miner", agent: "miner", description: "miner", prompt: "mine", delivery: "tool" })
+    expect(projectAgentTaskDetail(state, projectAgentTasks(state)[0]!)?.model).toBe("deepseek:deepseek-chat")
+  })
+
 })
 
 describe("projectStatus", () => {

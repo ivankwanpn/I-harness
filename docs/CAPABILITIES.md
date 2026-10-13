@@ -1,12 +1,12 @@
 # I-harness 能力盤點（2026-09-03，M32 → M34 全貌）
 
-> 66 包 + `apps/cli`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
+> 工作樹盤點（2026-10-13，`ls packages | wc -l`）：**80 包 + `apps/cli`**（80 個 packages 目錄各有 `package.json`；`ls apps` 只列 `cli`）。以下保留 M1–M25 後端完整（8/28）→ M26–M34 七輪擴展與審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）的**歷史敘述；本次未重驗日期、各輪完成度或審計鏈**。本文件主體以 M34 為準，M36 增量見下；里程碑歷史見 README §Development status。
 >
 > **⚠️ 範圍變更（M65，2026-09-17）：TUI 與 web 前端已移除。** `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts` 都已刪除——`git ls-files` 對前四個路徑各回 **0 個檔案**（工作目錄殘留的只有未追蹤的 `node_modules`，新 clone 沒有）。**下列區塊描述的東西已經不存在，一律以本註記為準**：**下方各條 TUI 增量註記（M36–M48）**、**§四 的 `web-host` 路由與宿主命令**、**§八 中引用 TUI 的實測記錄**、**§八¾ 的 Rewind UI**，以及 **§八¾½／§八¾¾／§八¾2 三節（Provider/模型 TUI 管理、TUI parity、鼠標五分面）**。產品立場是**後端必須在沒有界面附著時照常工作**、**前端應該純是前端**——**這是移除，不是廢棄**；重建是另一個里程碑（不在 M65 範圍內）。**裸啟動／未知子命令回到 M44 之前的行為**：用法印到 **stderr**、**exit 1**；宿主命令為 `run` / `sdk` / `acp` / `sessions`（無 `tui`、無 `web`）。
 >
 > **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 >
-> **▶ 2026-09-24（M80）：本文件的活宣稱已對齊當前樹**（66 包、telemetry **24** 碼、live discovery 已落地並有 CLI…）；**後端收線的判決與逐條殘餘在 [`docs/handoff/2026-09-24-m80-backend-readiness.md`](handoff/2026-09-24-m80-backend-readiness.md)**（逐條分類：`handoff/2026-09-24-m80-residual-audit.md`）。
+> **▶ 2026-09-24（M80）：當時的活宣稱對齊記錄**（當時記載 66 包；當前工作樹的 80 包見上方。telemetry **24** 碼、live discovery 與 CLI 為該輪記錄，本次未重驗）；**後端收線的判決與逐條殘餘在 [`docs/handoff/2026-09-24-m80-backend-readiness.md`](handoff/2026-09-24-m80-backend-readiness.md)**（逐條分類：`handoff/2026-09-24-m80-residual-audit.md`）。
 >
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
 >
@@ -25,9 +25,9 @@
 > M37b（tui）增量：**交互面收官**——permission/question/cancel-turn 覆蓋（approval seam 只讀接線 + 16ms batch + 30s fail-closed 超時、session jsonl 列舉）、todo/tasks/queue//btw 面板（§3.12 全規格）、slash/completion/history/file-search 下拉（§3.6）、session picker + welcome（適配）、keymap 全表（overlay/menu 路由）；PTY case-012（**真鍵面**：打字/Enter/歷史 Esc/Ctrl-C/Shift-Tab——writes-budget 13 次恰數）/ case-013（permission `1 (●)…` + j/k + 決策回寫斷言）。
 
 ## 一、引擎核心
-- **事件驅動 agent 循環**：log-driven（session log 為唯一真相）、並行 tool call 池（≤10）、maxTurns、AbortSignal、退出碼契約
-- **輸入分級**：`send/followup/steer/inject` 四層 + 持久化收件箱 + event-driven wake
-- **多 session 執行器**：每 session 串行 lane、跨 session 平行；`SessionExecutor` + registry
+- **agent 循環**：並行 tool call 池（≤10）、maxTurns、AbortSignal、退出碼契約
+- **輸入分級**：`send/followup/steer/inject` 四層 + 持久化收件箱；准入、delivery、併發與喚醒模型的唯一權威見 [併發與喚醒契約](concurrency-and-wake.md)
+- **多 session 執行器**：`SessionExecutor` + registry（lane 契約同上）
 - **統一 context window 解析**（M31）：settings userModel > modelContexts > profile > **model-catalog.json** > undefined；**每 session** 解析；budget 階梯與 compaction 窗口同源
 - **動態 system context** + AGENTS.md 指令載入（快照化）+ LLM 標題 / plan mode / `get_context_remaining` 儀表
 - **guardian 自動審批**：審查子代理 + 嚴格 JSON + fail-closed + 斷路器

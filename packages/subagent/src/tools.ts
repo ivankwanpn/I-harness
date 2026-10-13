@@ -236,7 +236,9 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
           })
         },
       })
-      deps.tasks.claim(task.id, executed.sessionId)
+      // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
+      // it in the task snapshot, so closing a live entry cannot erase the evidence.
+      deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel)
       const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
       if (args.background === false) {
         const settled = await deps.tasks.wait(task.id, deps.foregroundWaitMs ?? 300_000)

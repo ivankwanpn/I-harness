@@ -18,6 +18,8 @@ export interface TaskRecord {
   description: string
   prompt: string
   agent: string
+  /** WHY: child.ts:340 records the resolved spawn model; closed children lose their live entry. */
+  modelLabel?: string
   delivery: TaskDelivery
   status: TaskStatus
   outcome?: TaskOutcome
@@ -101,7 +103,7 @@ export interface TaskRegistry {
   list(): TaskRecord[]
   notifications(): TaskNotificationRecord[]
   updateNotification(id: string, patch: Partial<Omit<TaskNotificationRecord, "id" | "submissionId">>): boolean
-  claim(taskId: string, childSessionId?: string): boolean
+  claim(taskId: string, childSessionId?: string, modelLabel?: string): boolean
   terminalize(input: TaskTerminalizeInput): boolean
   cancelTree(taskId: string, error?: string): { taskIds: string[]; cancelled: number }
   runningCount(): number
@@ -141,7 +143,14 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   function snapshot(): TaskProtocolDocument {
-    return { formatVersion: 1, tasks: [...records.values()], notifications: [...notifs] }
+    return {
+      formatVersion: 1,
+      tasks: [...records.values()].map(({ modelLabel, ...task }) => ({
+        ...task,
+        ...(modelLabel !== undefined ? { modelLabel } : {}),
+      })),
+      notifications: [...notifs],
+    }
   }
 
   function save(): Promise<void> {
@@ -229,11 +238,12 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       void save()
       return true
     },
-    claim(taskId, childSessionId) {
+    claim(taskId, childSessionId, modelLabel) {
       const t = records.get(taskId)
       if (!t || t.status !== "accepted") return false
       t.status = "running"
       t.timeStarted = Date.now()
+      if (modelLabel !== undefined) t.modelLabel = modelLabel
       if (childSessionId !== undefined && t.childSessionId === undefined) {
         t.childSessionId = childSessionId
         byChild.set(childSessionId, t)

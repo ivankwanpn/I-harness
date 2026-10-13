@@ -24,7 +24,9 @@ function environment(source: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries([...values.values()].map(({ name, value }) => [name, value]))
 }
 
-function executable(command: string, cwd: string, env: Record<string, string>): string {
+/** Share dispatch lookup with the earlier command-to-content trust check. */
+export function resolveWindowsHookExecutable(command: string, cwd: string, source: NodeJS.ProcessEnv): string {
+  const env = environment(source)
   if (isAbsolute(command)) return command
   if (command.includes("/") || command.includes("\\")) return resolve(cwd, command)
   const field = (name: string) => Object.entries(env).find(([key]) => key.toLowerCase() === name)?.[1]
@@ -74,7 +76,7 @@ export async function runWindowsHook(input: WindowsHookInput): Promise<{ stdout:
       readable: "caller" as const, authorityRoots: Object.freeze([cwd]), writeRoots: Object.freeze([]),
       referenceRoots: Object.freeze([]), fingerprint,
     })
-    const prepared = await backend.prepare(Object.freeze({ argv: Object.freeze([executable(input.argv[0]!, cwd, env), ...input.argv.slice(1)]), cwd,
+    const prepared = await backend.prepare(Object.freeze({ argv: Object.freeze([resolveWindowsHookExecutable(input.argv[0]!, cwd, env), ...input.argv.slice(1)]), cwd,
       // Retain ownership after the launcher exits so normal descendant output
       // survives; this call still awaits the entire tree and never backgrounds.
       env: Object.freeze(env), owner, transport: "pipe" as const, lifetime: "retain-tree" as const, argumentEncoding: "crt" as const,

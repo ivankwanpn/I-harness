@@ -4,16 +4,21 @@ import type { InputDisplay } from "@i-harness/core-session"
 /**
  * R-A1 (A-plan) 輸入接納契約 —— 本計畫（R-D2）消費的單一輸入接納面。
  *
- * A 區已落地（core-agent `SessionExecutorRegistry` / `SessionExecutor.submit`），
- * 所以主機端（run.ts T8）以「薄 adapter」實現此介面：admit =
- * registry.get(sessionId).submit({ tier: "inject", text, description, scope: "turn" })
- * （inject → delivery steer + intent system + synthetic marker，模型經 step
- * boundary 立刻可見、隨身帶 description），wake = no-op —— A 的 executor 是
- * event-driven（任何 admission 在 idle 時都會啟動 idle drain），無需再喚醒。
+ * Authoritative admission / delivery / wake contract:
+ * docs/concurrency-and-wake.md (§1–2).
+ *
+ * This adapter seam is consumed by the notification drain below. CLI uses
+ * SessionExecutor.submit; the service host can admit durable inputs first
+ * and drive them separately. The contract records the current host mapping.
  * 未注入（undefined）= durable-only 交付（fail-closed，通知停 pending 不回退）。
  */
 export interface ParentInputAdmission {
   admit(input: { sessionId: string; text: string; description: string; display?: InputDisplay }): Promise<void>
+  /**
+   * Currently a no-op in the CLI adapter: admit already wakes via submit().
+   * Retained as a seam for a future executor needing a separate wake; the
+   * session-executor service already uses that seam. See docs/concurrency-and-wake.md.
+   */
   wake(sessionId: string): void
 }
 

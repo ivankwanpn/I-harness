@@ -23,6 +23,32 @@ export interface SessionExecutorDeps {
   signal?: AbortSignal
 }
 
+export interface SessionExecutorFailure extends Error {
+  /** Pending inputs at the failed turn's boundary; excludes the promoted input.
+   * A snapshot, not a live queue count (the lane clears its saved failure on success). */
+  readonly pendingCount: number
+}
+
+// WHY: service submit already forwards this rejection to its host
+// (packages/session-executor/src/service.ts:828-836). Non-enumerable metadata
+// makes the pause visible in-process without changing serialized error shapes
+// or writable Error identity/classification. Frozen/non-Error throws retain
+// their original value as cause instead of losing the pending count.
+function withPendingCount(error: unknown, pendingCount: number): SessionExecutorFailure {
+  if (error instanceof Error) {
+    try {
+      Object.defineProperty(error, "pendingCount", { value: pendingCount, configurable: true })
+      return error as SessionExecutorFailure
+    } catch {
+      // A frozen provider error cannot carry metadata; preserve it as cause.
+    }
+  }
+  const failure = new Error(error instanceof Error ? error.message : String(error), { cause: error })
+  if (error instanceof Error) failure.name = error.name
+  Object.defineProperty(failure, "pendingCount", { value: pendingCount, configurable: true })
+  return failure as SessionExecutorFailure
+}
+
 export interface SessionExecutor {
   /** Submit one input onto the serial lane. `inputId` (OPTIONAL, M49 Task 11)
    * lets a caller (session-executor service) retain its service row id
@@ -45,10 +71,10 @@ export interface SessionExecutor {
   dispose(): void
 }
 
-// R-A1 four-tier → durable admission mapping. The durable ladder has no "wake"
-// field (opencode Delivery = "steer" | "queue" only); the executor is
-// event-driven, so ANY admission while idle starts the idle drain and a queue
-// admission while a turn is active waits for the next turn boundary.
+// R-A1 four-tier → durable admission mapping.
+// Authoritative delivery / wake contract: docs/concurrency-and-wake.md (§1–2).
+// This helper constructs an admission; submit() below owns the push.
+// Keep cross-tier/idle/boundary semantics in that document.
 export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   switch (input.tier) {
     case "send":
@@ -67,14 +93,14 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   }
 }
 
-// R-A2: the per-session serial lane. Per-session serial: every submit appends
-// a pump onto ONE promise chain (driveFollowups precedent) — one turn at a time
-// per executor, no two turns on the same session ever overlap. Cross-session
-// parallel: nothing is shared between executors; the registry (below) is a
-// plain map, so N sessions run concurrently in one process. Each pump drains
-// the pending FIFO to empty, so a submission arriving mid-turn is picked up
-// either by the running pump's next loop iteration (queue tier, after the
-// current turn) or by the step-boundary seam (steer tier, Task 3).
+// R-A2: the per-executor serial lane (promise chain below).
+// Authoritative concurrency, wake and failure semantics:
+// docs/concurrency-and-wake.md (§2–3).
+// Hosts register one executor per session; the registry rejects duplicate
+// registrations but cannot police ad-hoc duplicate executors.
+// Local implementation: append drain work to chain, not a background re-pump.
+// Observer/error reporting does not change this lane's restart policy;
+// consult the contract before altering it.
 export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecutor {
   let chain: Promise<void> = Promise.resolve()
   let running = false
@@ -86,7 +112,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   // reach the last drain() caller, otherwise hosts (CLI exitCode) silently
   // report success on a failed turn. Captured; thrown by drain(); cleared when
   // a later turn succeeds.
-  let lastError: unknown
+  let lastError: SessionExecutorFailure | undefined
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
 
@@ -114,7 +140,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId)
           lastError = undefined
         } catch (err) {
-          lastError = err
+          lastError = withPendingCount(err, deps.inbox.pending().length)
           return // a failed turn stops this pump (its remaining pending stay
           // for a future pump); the error surfaces through drain()
         } finally {

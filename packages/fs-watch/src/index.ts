@@ -8,7 +8,7 @@
 //
 // Event semantics = deltas against a baseline snapshot taken synchronously at
 // create time (see baselineWalk): a file that already existed when the watcher
-// was created never emits an "add", while a file created right after
+// was created never emits an initial "add"; a file created right after
 // createFsWatcher — even before chokidar's scan finishes — DOES emit one
 // (chokidar's ignoreInitial would swallow that window; we use
 // ignoreInitial:false and filter the echoes instead). Change/unlink are never
@@ -16,25 +16,29 @@
 //
 // Ignore semantics: default-ignore node_modules / .git / .i-harness / dist by
 // path SEGMENT (any depth), plus caller-supplied entries (also segments — e.g.
-// "artifact-zone" matches a directory of that name at any depth).
+// "artifact-zone" matches a directory of that name at any depth). Explicit
+// roots are authoritative; only discovered paths are subject to ignore.
 // awaitWriteFinish stabilizes writes at 100ms (Plan spec).
 //
 // close() terminates the watcher; a pending or subsequent next() resolves
 // { done: true }.
 import { watch, type FSWatcher } from "chokidar"
+import { existsSync } from "node:fs"
 import { readdir } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 
 export type FsWatchEvent = { path: string; kind: "add" | "change" | "unlink" }
 
 export interface FsWatcherOptions {
-  /** Directories/files to watch (all watched independently). */
+  /** Directories/files to watch (all watched independently, even if ignored). */
   roots: string[]
   /** Extra path segments to ignore (in addition to the defaults). */
   ignore?: string[]
+  /** Keep the host process alive while watching (default true). */
+  persistent?: boolean
 }
 
-/** Default ignore list — never watch dependency/SCM/harness/build dirs. */
+/** Default ignore list for discovered dependency/SCM/harness/build paths. */
 export const DEFAULT_IGNORE = ["node_modules", ".git", ".i-harness", "dist"] as const
 
 export interface FsWatcher {
@@ -54,7 +58,10 @@ const toPosix = (p: string): string => p.replace(/\\/g, "/")
  * post-create writes during the initial scan window. */
 async function baselineWalk(roots: string[], isIgnored: (path: string) => boolean): Promise<Set<string>> {
   const baseline = new Set<string>()
-  for (const root of roots) baseline.add(toPosix(root)) // root addDir echoes are initial too
+  // WHY: a missing settings layer must emit its first add, not be mistaken
+  // for an initial echo (test/watch.test.ts:184). Existing roots remain
+  // authoritative even when their segments are ignored.
+  for (const root of roots) if (existsSync(root)) baseline.add(toPosix(root))
   const stack = [...roots.map((root) => ({ dir: root }))]
   while (stack.length > 0) {
     const { dir } = stack.pop() as { dir: string }
@@ -84,6 +91,11 @@ export function createFsWatcher(opts: FsWatcherOptions): FsWatcher {
     const segments = toPosix(path).split("/")
     return segments.some((segment) => segment !== "" && ignoreList.includes(segment))
   }
+
+  // WHY: settings selects explicit files inside .i-harness; ignore must not
+  // veto those roots (packages/settings/src/index.ts:1544), just as
+  // baselineWalk treats roots as authoritative (src/index.ts:62).
+  const rootSet = new Set(opts.roots.map((root) => toPosix(resolve(root))))
 
   const baseline: Promise<Set<string>> = baselineWalk(opts.roots, isIgnored)
 
@@ -129,11 +141,12 @@ export function createFsWatcher(opts: FsWatcherOptions): FsWatcher {
   }
 
   const watcher: FSWatcher = watch(opts.roots, {
+    persistent: opts.persistent ?? true,
     // ignoreInitial:false + baseline filter (see header comment) — closing the
     // create-before-scan race that would otherwise swallow early writes.
     ignoreInitial: false,
     awaitWriteFinish: { stabilityThreshold: WATCH_READINESS_MS },
-    ignored: isIgnored,
+    ignored: (path) => !rootSet.has(toPosix(resolve(path))) && isIgnored(path),
   })
 
   watcher.on("ready", () => {
@@ -147,8 +160,9 @@ export function createFsWatcher(opts: FsWatcherOptions): FsWatcher {
     if (kind !== "add" && kind !== "change" && kind !== "unlink") return
     if (kind === "add") {
       void baseline.then((known) => {
-        // initial-scan echoes of pre-existing files are not "changes from now"
-        if (known.has(toPosix(path))) return
+        // WHY: suppress only the initial echo, not a later re-creation of the
+        // same settings file (test/watch.test.ts:225).
+        if (known.delete(toPosix(path))) return
         push({ path, kind })
       })
       return

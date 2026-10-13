@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs"
+import { mkdirSync, readFileSync, realpathSync, symlinkSync } from "node:fs"
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { join, resolve, win32 } from "node:path"
 import { compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import type { ProcessSpec, TransportExecutionBackend } from "@i-harness/sandbox"
 import { createExecService } from "../src/index.ts"
+import { msysPtyPrerequisite } from "./msys-pty-prerequisite.ts"
 import { createTerminalService } from "../../terminal/src/service.ts"
 import { createTerminalTools } from "../../terminal/src/tool.ts"
 import { createWindowsUnrestrictedBackend } from "../../sandbox-windows-psec/src/index.ts"
@@ -62,7 +63,9 @@ function fixture(root: string, probeGate?: Promise<void>) {
   return { service, selected, prepared }
 }
 
-describe.skipIf(process.platform !== "win32" || !existsSync(installedShim))("pre-admission MSYS PTY identity", () => {
+const prerequisite = msysPtyPrerequisite(installedShim)
+if (prerequisite.skip) console.warn(`Skipping pre-admission MSYS PTY identity: ${prerequisite.reason}`)
+describe.skipIf(prerequisite.skip)("pre-admission MSYS PTY identity", () => {
   it.each([undefined, "MSYS=first\r\nignored=value\r\nMSYS=last\r\n"])("normalizes only the audited shim and preserves its actual environment/argv/cwd with config %s", async config => {
     const f = await layout(config), { service, selected } = fixture(f.root)
     const env = { PaTh: win32.dirname(process.execPath), HoMe: join(f.root, "home"), Plink_Protocol: "", mSyS: "caller", EMPTY: "", PAYLOAD: "雪 spaces", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }
@@ -77,7 +80,7 @@ describe.skipIf(process.platform !== "win32" || !existsSync(installedShim))("pre
       expect(spec.env).toMatchObject({ PaTh: expect.any(String), HoMe: env.HoMe, EMPTY: "", PAYLOAD: "雪 spaces" })
       expect(spec.msysPty).toEqual({ executable: { path: realpathSync.native(installedBash), sha256: sha(installedBash) },
         runtime: { path: realpathSync.native(win32.join(git, "usr", "bin", "msys-2.0.dll")), sha256: sha(win32.join(git, "usr", "bin", "msys-2.0.dll")) },
-        resolution: { kind: "git-bash-shim", original: { path: realpathSync.native(f.shim), sha256: "9aa00217a92def5fed1b15c6e2b34a7f89e3781af822ecc00960fe5340df093e" },
+        resolution: { kind: "git-bash-shim", original: { path: realpathSync.native(f.shim), sha256: sha(f.shim) },
           configuration: { path: f.configuration, sha256: config === undefined ? null : sha(f.configuration) } } })
       expect(spec.env.Plink_Protocol).toBe("")
       const native = await nativeControl([f.shim, ...tail], f.root, env)

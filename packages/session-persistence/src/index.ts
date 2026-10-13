@@ -267,6 +267,33 @@ registerEventType("tool/dispatch")
 // exists to keep — the same defect class as `rewind/point` above and
 // `sandbox/mode` before it.
 registerEventType("operator/run-end")
+// v0.1.11: the model-retry transition marker (core-session union member,
+// `packages/core-session/src/index.ts:35`; producer `packages/core-agent/src/
+// index.ts:588`). FOURTH instance of the same load-gate defect class as
+// `rewind/point`, `sandbox/mode` and `operator/run-end` above — and unlike
+// `sandbox/mode`, this one never had the excuse of a missing producer: the
+// producer shipped WITH the type, because v0.1.11's bounded-wait work is what
+// made retries reachable (`docs/releases/v0.1.11.md`: the first-response and
+// progress deadlines reuse the existing automatic model retry).
+//
+// `model/retry` is DURABLE (`append`, not `publishTransient`), so it lands in
+// the session log — its sibling `model/activity` is deliberately transient and
+// core-session:413 throws if anyone tries to append it durably, so the two must
+// NOT be treated symmetrically: only `model/retry` needs registration.
+//
+// MEASURED CONSEQUENCE BEFORE THIS REGISTRATION: any session whose log carried
+// a retry became unloadable with
+//   SessionFormatUnsupportedError: unknown event type 'model/retry' without ignorable marker
+// which is exactly what the child/subagent path reported as
+// "unknown event type 'model/retry' without ignorable marker" — a retry inside a
+// child session made that child's log unloadable, so delegation failed outright.
+// `--resume`, fork, restart and every `session/history` read over a session that
+// had retried failed the same way. Reproduced deterministically in
+// `test/model-retry-event.test.ts`.
+//
+// NOT `ignorable: true`: load() DROPS ignorable events, which would erase the
+// record of the retry a session actually went through. Registering keeps it.
+registerEventType("model/retry")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure

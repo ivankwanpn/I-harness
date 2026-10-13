@@ -89,6 +89,59 @@ describe("createFsWatcher", () => {
     }
   })
 
+  it("observes an explicit file root under an ignored segment without initial echoes", async () => {
+    const { dir, cleanup } = await makeTmp()
+    const file = join(dir, ".i-harness", "settings.json")
+    await mkdir(join(dir, ".i-harness"))
+    const control = join(dir, "settings.json")
+    await Promise.all([file, control].map((path) => writeFile(path, "{}")))
+    const w = createFsWatcher({ roots: [file, control] })
+    const events: Array<{ path: string; kind: string }> = []
+    const collecting = (async () => {
+      for await (const event of w.events) events.push(event)
+    })()
+    try {
+      await sleep(readinessMargin)
+      expect(events).toEqual([])
+      // WHY: settings explicitly selects this root; segment filtering must not
+      // veto it (packages/settings/src/index.ts:1544).
+      for (const fontSize of [15, 16]) {
+        await Promise.all([file, control].map((path) => writeFile(path, JSON.stringify({ fontSize }))))
+        await sleep(500)
+      }
+      expect(events.filter((event) => event.path === file)).toEqual([{ path: file, kind: "change" }, { path: file, kind: "change" }])
+      expect(events.filter((event) => event.path === control)).toEqual([{ path: control, kind: "change" }, { path: control, kind: "change" }])
+      expect(events).toHaveLength(4)
+    } finally {
+      await w.close()
+      await collecting
+      await cleanup()
+    }
+  })
+
+  it("still ignores a settings file discovered under .i-harness when only the workspace is a root", async () => {
+    const { dir, cleanup } = await makeTmp()
+    await mkdir(join(dir, ".i-harness"))
+    const ignored = join(dir, ".i-harness", "settings.json")
+    const seen = join(dir, "settings.json")
+    await Promise.all([ignored, seen].map((file) => writeFile(file, "{}")))
+    const w = createFsWatcher({ roots: [dir] })
+    const events: Array<{ path: string; kind: string }> = []
+    const collecting = (async () => {
+      for await (const event of w.events) events.push(event)
+    })()
+    try {
+      await sleep(readinessMargin)
+      await Promise.all([ignored, seen].map((file) => writeFile(file, JSON.stringify({ fontSize: 15 }))))
+      await sleep(500)
+      expect(events).toEqual([{ path: seen, kind: "change" }])
+    } finally {
+      await w.close()
+      await collecting
+      await cleanup()
+    }
+  })
+
   it("respects custom ignore entries", async () => {
     const { dir, cleanup } = await makeTmp()
     const w = createFsWatcher({ roots: [dir], ignore: ["artifact-zone"] })
@@ -102,6 +155,86 @@ describe("createFsWatcher", () => {
       const e = await withTimeout(it.next(), 8000, "add (post-custom-ignore)")
       expect(e.value.kind).toBe("add")
       expect(e.value.path).toBe(join(dir, "keep.md"))
+    } finally {
+      await w.close()
+      await cleanup()
+    }
+  })
+
+  it("observes an explicit root even when its segment is in the custom additive ignore list", async () => {
+    const { dir, cleanup } = await makeTmp()
+    const file = join(dir, "artifact-zone", "settings.json")
+    await mkdir(join(dir, "artifact-zone"))
+    await writeFile(file, "{}")
+    const w = createFsWatcher({ roots: [file], ignore: ["artifact-zone"] })
+    try {
+      const iterator = w.events[Symbol.asyncIterator]()
+      await sleep(readinessMargin)
+      await writeFile(file, '{"fontSize":15}')
+      const event = await withTimeout(iterator.next())
+      expect(event.value).toEqual({ path: file, kind: "change" })
+    } finally {
+      await w.close()
+      await cleanup()
+    }
+  })
+
+  // WHY: layered settings may select a not-yet-created file, or one later
+  // deleted/recreated; only initial echoes are baseline (packages/settings/src/index.ts:1544).
+  it("reports creation of a previously missing explicit file root", async () => {
+    const { dir, cleanup } = await makeTmp()
+    const file = join(dir, "settings.json")
+    const w = createFsWatcher({ roots: [file] })
+    try {
+      const iterator = w.events[Symbol.asyncIterator]()
+      await sleep(readinessMargin)
+      await writeFile(file, "{}")
+      const event = await withTimeout(iterator.next(), 2000, "missing-root add")
+      expect(event.value).toEqual({ path: file, kind: "add" })
+    } finally {
+      await w.close()
+      await cleanup()
+    }
+  })
+
+  it("reports deletion, recreation, and further changes to an explicit file root", async () => {
+    const { dir, cleanup } = await makeTmp()
+    const file = join(dir, "settings.json")
+    await writeFile(file, "{}")
+    const w = createFsWatcher({ roots: [file] })
+    try {
+      const iterator = w.events[Symbol.asyncIterator]()
+      await sleep(readinessMargin)
+      await unlink(file)
+      expect((await withTimeout(iterator.next())).value).toEqual({ path: file, kind: "unlink" })
+      await sleep(200) // leave chokidar's atomic-replacement window before recreating
+      await writeFile(file, '{"fontSize":15}')
+      const recreated = (await withTimeout(iterator.next(), 2000, "recreated-root event")).value
+      expect(recreated.path).toBe(file)
+      // WHY: chokidar supplies the delta kind; fs-watch preserves add/change
+      // (src/index.ts:156), and either reappearance delta must survive.
+      expect(["add", "change"]).toContain(recreated.kind)
+      await writeFile(file, '{"fontSize":16}')
+      expect((await withTimeout(iterator.next())).value).toEqual({ path: file, kind: "change" })
+    } finally {
+      await w.close()
+      await cleanup()
+    }
+  })
+
+  it("filters only the initial add echo of a discovered file, not its later re-creation", async () => {
+    const { dir, cleanup } = await makeTmp()
+    const file = join(dir, "settings.json")
+    await writeFile(file, "{}")
+    const w = createFsWatcher({ roots: [dir] })
+    try {
+      const iterator = w.events[Symbol.asyncIterator]()
+      await sleep(readinessMargin)
+      await unlink(file)
+      expect((await withTimeout(iterator.next())).value).toEqual({ path: file, kind: "unlink" })
+      await sleep(200)
+      await writeFile(file, '{"fontSize":15}')
+      expect((await withTimeout(iterator.next(), 2000, "discovered-file re-creation")).value).toEqual({ path: file, kind: "add" })
     } finally {
       await w.close()
       await cleanup()

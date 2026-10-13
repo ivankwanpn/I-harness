@@ -133,7 +133,7 @@ export type DesktopRequest =
       workspaceId: string
       requestId: string
       sessionId: string
-      decision: { kind: "approval"; approved: boolean; remember?: import("@i-harness/desktop-gateway/src/approval-rules.ts").RememberApprovalOptions } | { kind: "question"; answer: string }
+      decision: { kind: "approval"; approved: boolean; remember?: import("@i-harness/desktop-gateway/src/approval-rules.ts").RememberApprovalOptions } | { kind: "question"; answer: string } | { kind: "question"; deferred: true }
     }
   | { kind: "desktop/review/changes"; workspaceId: string }
   | { kind: "desktop/review/diff"; workspaceId: string; path: string; maxBytes?: number }

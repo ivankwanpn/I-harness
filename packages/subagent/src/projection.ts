@@ -65,9 +65,9 @@ export interface AgentTaskDetail {
   group: AgentTaskGroup
   /** The role the subagent was spawned with (subagent rows only). */
   role?: string
-  /** The model this child RAN on (subagent rows): the label RECORDED at spawn
-   * (`provider:model`), else the role's DECLARED model — a child spawned before
-   * labels were recorded — else the explicit inheritance statement. Never a
+  /** WHY: child.ts:340 records the model this child RAN on (`provider:model`).
+   * Prefer that label, then the role's DECLARED model for older children; with
+   * neither, make the missing record explicit. Never a
    * re-derivation from settings: a running child's settings can change under it,
    * and this payload has no settings getter to re-derive with anyway. */
   model?: string
@@ -158,23 +158,32 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
   switch (row.group) {
     case "subagent": {
       const entry = state.table.get(row.id)
-      const record = state.tasks.list().find((r) => r.agentPath === row.id)
-      const pool = record ?? state.tasks.get(row.id)
-      const roleName = entry?.roleName ?? record?.agent
+      // Paths can be reused after close. A current child must only borrow
+      // evidence from its own session; historical rows retain their task IDs.
+      let pool = state.tasks.get(row.id)
+      if (pool === undefined) {
+        if (entry?.sessionId !== undefined) {
+          pool = state.tasks.getByChildSession(entry.sessionId)
+        } else {
+          const matches = state.tasks.list().filter((task) => task.agentPath === row.id)
+          if (matches.length === 1 && (entry === undefined || matches[0]!.childSessionId === undefined)) pool = matches[0]
+        }
+      }
+      const roleName = entry?.roleName ?? pool?.agent
+      const modelLabel = entry?.modelLabel ?? pool?.modelLabel
       const role = roleName !== undefined ? state.roles.get(roleName) : undefined
       const detail: AgentTaskDetail = {
         id: row.id,
         group: row.group,
         ...(roleName !== undefined ? { role: roleName } : {}),
-        // The recorded label is the fact (what the child RAN on). The role's
-        // declared model is the fallback evidence for an entry spawned before
-        // labels were recorded — spelled through `modelLabelOf`, the ONE
-        // spelling of that pair; with neither, say the inheritance outright.
-        ...(entry?.modelLabel !== undefined
-          ? { model: entry.modelLabel }
+        // WHY: tools.ts:241 retains the spawn label on the task after a live
+        // entry closes. Older records can lack it; child.ts:329 also omits it for
+        // inheritance, so absence alone cannot prove which case occurred.
+        ...(modelLabel !== undefined
+          ? { model: modelLabel }
           : role?.model !== undefined
             ? { model: modelLabelOf(role.model) }
-            : { model: "inherited from the session" }),
+            : { model: "model not recorded" }),
         ...(pool?.prompt !== undefined ? { parentPrompt: pool.prompt } : {}),
         ...(pool?.resultText ?? entry?.finalText !== undefined ? { result: pool?.resultText ?? entry?.finalText } : {}),
         ...(pool?.error ?? entry?.error !== undefined ? { error: pool?.error ?? entry?.error } : {}),

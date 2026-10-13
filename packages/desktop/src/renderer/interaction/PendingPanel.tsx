@@ -9,7 +9,7 @@ import { interactionDrafts, interactionDraftKey } from "./interaction-drafts.ts"
 
 export type InteractionReply = {
   requestId: string
-  decision: { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions } | { kind: "question"; answer: string }
+  decision: { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions } | { kind: "question"; answer: string } | { kind: "question"; deferred: true }
 }
 
 export interface PendingPanelProps {
@@ -85,7 +85,7 @@ export function PendingPanel({ draftOwner, workspaceId, pending, onReply }: Pend
               const { prompt, options } = questionShape(row.payload, t("代理提出問題"))
               return (
                 <li key={row.requestId} className="task-row">
-                  <QuestionCard requestId={row.requestId} prompt={prompt} options={options} draft={store.get(key(row))} onDraftChange={patch => store.update(key(row), patch)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} />
+                  <QuestionCard requestId={row.requestId} prompt={prompt} options={options} draft={store.get(key(row))} onDraftChange={patch => store.update(key(row), patch)} busy={store.get(key(row)).busy} interrupted={row.state === "interrupted"} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} onDefer={() => { void reply(row, { kind: "question", deferred: true }) }} />
                   {store.get(key(row)).error ? <p role="alert" className="notice error-text">{store.get(key(row)).error}</p> : null}
                 </li>
               )
