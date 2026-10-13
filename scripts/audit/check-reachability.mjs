@@ -452,6 +452,32 @@ function withoutReExportStatements(text) {
  *      names (`tui-core` 31, `fs-lock` 2, `sandbox-policy` 2,
  *      `session-persistence` 2, `attachment` 1, `core-agent` 1), and 0 of the
  *      39 appears in the row set. */
+// S1 relocates one declaring source unit into these exact modules. Keep that
+// unit's original exclusion boundary: normalization and internal imports were
+// not external consumers before the move, and must not retire findings now.
+// sections.ts and context-subsystems.ts remain independent source owners.
+const SETTINGS_SOURCE_UNIT = new Set([
+  "packages/settings/src/index.ts",
+  "packages/settings/src/schema/types.ts",
+  "packages/settings/src/schema/defaults.ts",
+  "packages/settings/src/normalize/primitives.ts",
+  "packages/settings/src/normalize/providers.ts",
+  "packages/settings/src/normalize/execution.ts",
+  "packages/settings/src/normalize/tui.ts",
+  "packages/settings/src/normalize/settings.ts",
+  "packages/settings/src/storage/contracts.ts",
+  "packages/settings/src/storage/layers.ts",
+  "packages/settings/src/storage/revision.ts",
+  "packages/settings/src/storage/json-patch.ts",
+  "packages/settings/src/storage/single-store.ts",
+  "packages/settings/src/storage/layered-store.ts",
+  "packages/settings/src/observation/watch-settings.ts",
+])
+
+function declarationOwner(rel) {
+  return SETTINGS_SOURCE_UNIT.has(rel) ? "packages/settings/src/index.ts" : rel
+}
+
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
@@ -469,7 +495,8 @@ function scanUnusedExports(files) {
     const entryText = withoutReExportStatements(commentFree.get(entry.rel))
     for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.rel === entry.rel ? entryText : commentFree.get(f.rel)))
+      const owners = new Set([...origins].map(declarationOwner))
+      const used = prod.some((f) => !owners.has(declarationOwner(f.rel)) && word.test(f.rel === entry.rel ? entryText : commentFree.get(f.rel)))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -853,8 +880,8 @@ function scanUnconsultedSettings(files) {
     for (const key of keys) {
       const leaf = key.slice(key.lastIndexOf(".") + 1).replace(/[$]/g, "\\$")
       const prop = new RegExp(`\\.\\s*${leaf}\\b`)
-      const read = prod.some((f) => f !== decl && (f.text.includes(`"${key}"`) || f.text.includes(`'${key}'`) || prop.test(f.text)))
-      if (!read) findings.push({ kind: "unconsulted-setting", subject: key, evidence: decl.rel })
+      const read = prod.some((f) => declarationOwner(f.rel) !== declarationOwner(decl.rel) && (f.text.includes(`"${key}"`) || f.text.includes(`'${key}'`) || prop.test(f.text)))
+      if (!read) findings.push({ kind: "unconsulted-setting", subject: key, evidence: declarationOwner(decl.rel) })
     }
   }
   return findings
@@ -982,6 +1009,62 @@ SELF_TEST_CASES.push({
   name: "class 5: a settings key with a schema entry and no reader is a finding",
   expect: ["compaction.auto", "realKey", "ui.fontSizePx", "xiKey"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
+})
+
+// The same two findings must survive a source-only split. The normalized
+// property's read and the internal symbol import are deliberately present;
+// excluding only the physical declaring file would incorrectly retire both.
+function settingsRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/settings/src/index.ts", [
+    "export const UnusedSettingExport = 1",
+    "const SETTINGS_DEFAULTS = { fontSize: 14 }",
+    "const normalize = raw => ({ fontSize: raw.fontSize, hint: UnusedSettingExport })",
+  ].join("\n"))]
+  return [
+    file("packages/settings/src/index.ts", 'export { UnusedSettingExport } from "./schema/types.ts"'),
+    file("packages/settings/src/schema/types.ts", "export const UnusedSettingExport = 1"),
+    file("packages/settings/src/schema/defaults.ts", "const SETTINGS_DEFAULTS = { fontSize: 14 }"),
+    file("packages/settings/src/normalize/settings.ts", [
+      'import { UnusedSettingExport } from "../schema/types.ts"',
+      "const normalize = raw => ({ fontSize: raw.fontSize, hint: UnusedSettingExport })",
+    ].join("\n")),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S1: unused exports and unconsulted settings survive the source split with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/settings#UnusedSettingExport\tpackages/settings/src/index.ts",
+    "before:unconsulted-setting\tfontSize\tpackages/settings/src/index.ts",
+    "split:unused-export\t@i-harness/settings#UnusedSettingExport\tpackages/settings/src/index.ts",
+    "split:unconsulted-setting\tfontSize\tpackages/settings/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => {
+      const files = settingsRelocationFixtureFiles(split)
+      return [...scanUnusedExports(files), ...scanUnconsultedSettings(files)]
+        .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`)
+    })
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S1: outside readers and the two existing settings domains remain real consumers",
+  expect: ["outside=0", "sections=0", "context=0"],
+  run() {
+    return [
+      ["outside", "packages/settings-consumer/src/index.ts"],
+      ["sections", "packages/settings/src/sections.ts"],
+      ["context", "packages/settings/src/context-subsystems.ts"],
+    ].map(([label, rel]) => {
+      const files = [...settingsRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import { UnusedSettingExport } from "@i-harness/settings"\nconst read = settings => settings.fontSize + UnusedSettingExport',
+      }]
+      return `${label}=${scanUnusedExports(files).length + scanUnconsultedSettings(files).length}`
+    })
+  },
 })
 
 // The five cases below were added by M1's fix wave (final whole-branch review,
