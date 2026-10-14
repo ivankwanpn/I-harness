@@ -31,7 +31,7 @@ export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecy
   throw error
 }
 
-export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep) {
+export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, _request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
   const { stepUsage, refusedThisStep, truncatedThisStep, stepText, toolCallsThisStep, thinkingBlocks, providerContinuation } = step
   // Only the completed attempt calibrates context usage. The host captures
   // failed-attempt billing separately below the retry wrapper.
@@ -46,13 +46,12 @@ export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">
     ...(normalized ?? {}),
     ...(measuredCacheRead ? { cacheReadTokens: cacheRead } : {}),
   } })
-  if (abort?.aborted || refusedThisStep || truncatedThisStep) context.contextMeter.invalidate()
-  else context.contextMeter.record(request, stepUsage, requestRevision)
 
   // The provider's signed continuation belongs to its tool-use message.
   // Persist it before a tool can be refused, cancelled or fail to commit;
   // otherwise a resumed session has tool calls without their signatures.
   if (stepText || toolCallsThisStep === 0 || thinkingBlocks?.length || providerContinuation) append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
+  context.ownedBudget.record(measurement, stepUsage, requestRevision, !abort?.aborted && !refusedThisStep && !truncatedThisStep)
 
 }
 

@@ -7,6 +7,7 @@ import type { AgentContext } from "./context.ts"
 import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
 import { failTurn, completeModelStep, closeStep, finishTurn } from "./finalization.ts"
+import { createAdmission, stalePreparedInput } from "./admission.ts"
 
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
@@ -14,6 +15,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
   const getSteps = () => steps
   const modelLoop = createModelLoop(deps, context)
   const prepareRequest = createStepInput(deps, context)
+  const admit = createAdmission(deps, context, prepareRequest)
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
     const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
     const abort = signal ?? deps.signal
@@ -40,20 +42,33 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       const stepStartSeq = startStep(deps, lifecycle)
-      if (context.compactor && (deps.autoCompactionEnabled?.() ?? context.compactEnabled)) await context.compactor.maybeCompact(deps.session)
-      await context.enforceBudget()
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
-      const hookContext = drainHookContext(ctx, deps)
-      if (deps.modelOverheadTokens || hookContext.length > 0) await context.enforceBudget()
-      const { request, requestRevision } = prepareRequest(abort, requestScope, getSteps)
-      const streamStep = modelLoop.start(lifecycle, stepStartSeq, abort, getSteps)
-      try { for await (const ev of deps.model.stream(request)) streamStep.accept(ev) }
-      catch (error) { streamStep.fail(error) }
-      finally { streamStep.settle() }
+      drainHookContext(ctx, deps)
+      const candidateState = { staleRebuilds: 0, compacted: false }
+      let candidate: Awaited<ReturnType<typeof admit>>
+      let streamStep: ReturnType<typeof modelLoop.start>
+      while (true) {
+        candidate = await admit(abort, requestScope, getSteps, candidateState)
+        streamStep = modelLoop.start(lifecycle, stepStartSeq, abort, getSteps)
+        let physicalAttempts = 0, observed = false, rebuild = false
+        try {
+          for await (const ev of candidate.prepared.stream({ validateBeforeTransport: () => { candidate.validateBeforeTransport(); physicalAttempts++ } })) {
+            if (ev.type !== "activity" && ev.type !== "retry") observed = true
+            streamStep.accept(ev)
+          }
+        } catch (error) {
+          if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
+            if (++candidateState.staleRebuilds > 3) streamStep.fail(stalePreparedInput())
+            rebuild = true
+          } else streamStep.fail(error)
+        } finally { streamStep.settle() }
+        if (!rebuild) break
+      }
+      const { request, requestRevision, prepared } = candidate
       lifecycle.providerCompleted = true
       const step = streamStep.result()
-      completeModelStep(deps, context, request, requestRevision, abort, step)
+      completeModelStep(deps, context, request, requestRevision, abort, step, prepared.measurement)
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
         await executeToolCalls(ctx, deps.session, deps.tools, batch, {

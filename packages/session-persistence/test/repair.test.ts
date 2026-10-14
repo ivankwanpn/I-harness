@@ -268,7 +268,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-seq"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "turn/start", seq: 0 }),
         JSON.stringify({ type: "step/start", seq: 1 }),
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
@@ -291,7 +291,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-nonpos"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
@@ -316,7 +316,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-ignorable"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "turn/start", seq: 0 }),
         JSON.stringify({ type: "step/start", seq: 1 }),
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 2 }),
@@ -446,7 +446,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-seq-ref"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
@@ -468,7 +468,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
         JSON.stringify({
-          formatVersion: 1,
+          formatVersion: 2,
           sessionId,
           createdAt: "2026-09-06T00:00:00.000Z",
           extensionField: { keep: true },

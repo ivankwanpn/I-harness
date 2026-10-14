@@ -22,6 +22,15 @@ function makeTool(name: string): Tool {
 const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("fork.ts", () => {
+  it.each([1, Infinity])("filters parent operational context authority from an %s-turn child seed", n => {
+    const parent = createSession()
+    append(parent, { type: "turn/start" }); append(parent, { type: "user/message", text: "keep" })
+    append(parent, { type: "context/recovery", version: 1, ownerSessionId: "parent", recoveryId: "recovery", logicalStepSeq: 0, bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "b".repeat(64), state: "required" })
+    append(parent, { type: "turn/end" })
+    const seed = forkTurns(parent.events, n)
+    expect(seed.some(event => event.type === "context/recovery")).toBe(false)
+    expect(seed.find(event => event.type === "user/message")).toMatchObject({ text: "keep", seq: 1 })
+  })
   it("materializes an image when a last-turn seed excludes its earlier admission", () => {
     const parent = createSession()
     append(parent, { type: "turn/start" })
@@ -229,8 +238,8 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     },
     async append() {},
     enqueue(id, events) { enqueued.push({ id, events: [...events] }) },
-    async load() { return { session: { formatVersion: 1, events: [] } } },
-    async loadOwned() { return { session: { formatVersion: 1, events: [] } } },
+    async load() { return { session: { formatVersion: 2, events: [] } } },
+    async loadOwned() { return { session: { formatVersion: 2, events: [] } } },
     async list() { return [] },
     async flush(id) {
       flushed.push({
@@ -422,9 +431,10 @@ describe("spawnChild durable child sessions (M8)", () => {
     // …and by then the child's marker had been DRAINED through the coordinator,
     // under the child's own session id: the checkpoint is the child's, not the
     // parent's, and it covers the marker that recovery reads.
-    expect(drainsAtBody).toHaveLength(1)
+    expect(drainsAtBody).toHaveLength(2)
     expect(drainsAtBody![0]!.id).toBe(sessionId)
-    expect(drainsAtBody![0]!.types).toContain("tool/dispatch")
+    expect(drainsAtBody![0]!.types).toContain("context/budget")
+    expect(drainsAtBody![1]!.types).toContain("tool/dispatch")
   }, 10_000)
 
   // M24a (B1): delegationDepth recursion — a child of a depth-1 subagent is
@@ -596,26 +606,12 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
       const seedLines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("inherited seed"))
       expect(seedLines).toHaveLength(1)
       // …and the line says the CONSEQUENCE, not just the number: what the child
-      // will do about it (summarise), and what the ladder then does when it
-      // cannot — the pass fails soft, and the reset rescues the turn by
-      // DROPPING the inherited context WHEN the log has events beyond the
-      // retained tail (the outcome the M74 strict case measures: a
-      // `compaction/reset` whose `removedSeqs` carry the head, and no
-      // summary); when there are none, the turn fails closed — and THIS fixture
-      // IS that branch, as measured above (`error`, no `compaction/reset`).
-      // Naming only "fails soft" would leave the rescue, and its condition,
-      // unsaid.
+      // The advisory estimate names summary planning and the fail-closed
+      // result without promising a blind history reset.
       expect(seedLines[0]).toContain("summar")
-      expect(seedLines[0]).toMatch(/indivisible|fails soft/)
-      expect(seedLines[0]).toMatch(/reset/)
-      // …and the three above are presence-only, so the conditional clause — the
-      // thing two fix rounds put into this message — needs its own pin: they
-      // stay green if the message reverts to the unconditional wording, so long
-      // as the literal "reset" survives. MEASURED (final review fix wave):
-      // deleting the clause reddens this pin and nothing else in the file.
-      expect(seedLines[0]).toContain(
-        "when the log has events beyond the retained tail, and the turn fails closed when it does not",
-      )
+      expect(seedLines[0]).toContain("indivisible")
+      expect(seedLines[0]).not.toMatch(/reset/)
+      expect(seedLines[0]).toContain("fails closed and preserves the inherited history")
     } finally {
       warn.mockRestore()
     }
@@ -1439,7 +1435,7 @@ describe("the child's request carries the resolved budget", () => {
   // let that over-window request look harmless — they answer it, so the summary
   // path is what those cases measure; this one is what a real provider yields
   // for a region no piece can fit.
-  it("M74: on a strict provider the child still completes — the rejected summarizer hands off to the reset", async () => {
+  it("a strict provider blocks an indivisible inherited region and retains the child history", async () => {
     const f = spawnFixture()
     // The parent's head turn is what fills the window; the six small turns after
     // it are the tail the reset will keep. Both halves matter: without the head
@@ -1476,34 +1472,12 @@ describe("the child's request carries the resolved budget", () => {
       await new Promise((r) => setTimeout(r, 20))
     }
 
-    // the acceptance claim as it really is: a strict client does NOT turn this
-    // into a `prompt_too_long` — the child still finishes
-    expect(f.jobs.read(jobId).status).toBe("completed")
-    expect(f.jobs.read(jobId).output).toBe("child done")
-    // the mechanism, request by request: EVERY request the window stopped is a
-    // summarizer's (the directive rides the last message), and the ONE request
-    // that reached the model is the main one — 303 input + a clamped 1697 cap
-    // = the window exactly, and exactly one script step consumed.
-    expect(client.rejected.length).toBeGreaterThan(0)
-    expect(client.rejected.every((r) => typeof r.messages.at(-1)?.content === "string" && (r.messages.at(-1)!.content as string).includes("summar"))).toBe(true)
-    expect(client.served).toHaveLength(1)
-    expect(client.served[0]!.maxOutputTokens).toBeLessThan(4_242) // the clamp DID bite on the request that left
-    // …and the rescuer is the ladder's layer 2, not a summary: the reset marker
-    // removed the inherited head (seqs 1/2 are its two big messages), and no
-    // `compaction/summary` was ever appended. (M78: "the fail-soft pass appends
-    // nothing on failure" held before this unit; a failed pass now leaves its
-    // `compaction/prune` marker when it pruned — this fixture has no `tool/result`
-    // event at all, so nothing is prunable and no marker appears here.)
+    expect(f.jobs.read(jobId).status).toBe("error")
+    expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
+    expect(client.served).toHaveLength(0)
     const childSession = f.table.get(path)!.session
-    const reset = childSession.events.find((e) => e.type === "compaction/reset")
-    expect(reset).toBeDefined()
-    expect((reset as { removedSeqs: number[] }).removedSeqs).toEqual(expect.arrayContaining([1, 2]))
-    expect(childSession.events.some((e) => e.type === "compaction/summary")).toBe(false)
-    // the inherited head is GONE from the child's surface and the retained tail
-    // is what it continues on: dropped, not summarised.
-    const surface = deriveMessages(childSession).map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
-    expect(surface).not.toContain("INHERITED-HEAD-SENTINEL")
-    expect(surface).toContain("q5")
+    expect(childSession.events.some(event => event.type === "compaction/reset")).toBe(false)
+    expect(deriveMessages(childSession).map(message => String(message.content)).join("\n")).toContain("INHERITED-HEAD-SENTINEL")
   }, 15_000)
 
   // M75 (spec §2.1's child half). The case above and this one are a PAIR: same
@@ -1591,7 +1565,7 @@ describe("the child's request carries the resolved budget", () => {
     // MEASURED: 51 seqs — every non-marker event in the log (48 seed events,
     // plus the child's own turn/start, user/message and step/start). Nothing of
     // the inherited surface is left unaccounted for on the surface.
-    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(51)
+    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(52)
 
     // the mechanism, request by request: the summarizer's calls are the ones
     // whose last message is the directive, and there are several — the pieces
@@ -1738,7 +1712,7 @@ describe("the child's request carries the resolved budget", () => {
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
     // inherited turns the parent's own marker did NOT hide (see the fixture);
     // 16 is the marker and is NOT in the set (region.ts skips markers).
-    expect(marker.shadowedSeqs).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19])
+    expect(marker.shadowedSeqs).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")

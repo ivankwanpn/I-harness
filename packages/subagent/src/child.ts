@@ -31,7 +31,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
 
   let model = opts.parentModel
-  let reasoningEffort: ReasoningEffort | undefined
+  let reasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
+  let contextMetadata = opts.contextMetadata
   let contextWindow = opts.contextWindow
   let maxOutputTokens = opts.maxOutputTokens
   let modelLabel: string | undefined
@@ -44,6 +45,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     reasoningEffort = state.binding.reasoningEffort
     contextWindow = state.binding.contextWindow
     maxOutputTokens = state.binding.maxOutputTokens
+    contextMetadata = state.binding.contextMetadata
     modelLabel = modelLabelOf(declared)
   }
 
@@ -74,6 +76,6 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   warnInheritedSeed(childSession, contextWindow)
 
-  const { childReg, codeModeMount, controller, agent } = assembleChild(opts, childCtx, childSession, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens)
+  const { childReg, codeModeMount, controller, agent } = assembleChild(opts, childCtx, childSession, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, declared === undefined ? opts.inheritedBindingForStep : undefined)
   return publishChild(opts, childCtx, childSession, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel)
 }

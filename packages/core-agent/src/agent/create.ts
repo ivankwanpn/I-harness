@@ -24,6 +24,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   const context = createAgentContext(deps)
   const runTurn = createTurnRunner(ctx, deps, context, requestSessionId, maxTurns, maxParallel)
   return {
+    contextBudget: () => context.readBudget(),
     updateContext(config) {
       if (activeOperations > 0) throw new Error("agent is busy")
       context.update(config)

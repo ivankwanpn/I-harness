@@ -1,5 +1,6 @@
 import { CURRENT_FORMAT_VERSION } from "../events/types.ts"
 import type { Session, SessionEvent } from "../events/types.ts"
+import { isContextEventType, validContextEvent } from "../events/context.ts"
 
 export function toJSONL(session: Session): string {
   const lines: string[] = [JSON.stringify({ formatVersion: session.formatVersion })]
@@ -20,10 +21,11 @@ export function fromJSONL(text: string): Session {
   }
   const lines = text.trim().split("\n")
   const header = JSON.parse(lines[0]!) as { formatVersion?: number }
-  if (header.formatVersion !== CURRENT_FORMAT_VERSION) {
+  if (header.formatVersion !== 1 && header.formatVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error(`session format version ${header.formatVersion} not supported`)
   }
   const events = lines.slice(1).map((l) => JSON.parse(l) as SessionEvent)
+  for (const event of events) if (isContextEventType(event.type) && (header.formatVersion < 2 || !validContextEvent(event))) throw new Error("unsupported operational context payload or format")
   return { formatVersion: CURRENT_FORMAT_VERSION, events }
 }
 
@@ -31,5 +33,6 @@ export function migrate(session: Session, targetVersion: number): Session {
   if (targetVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error(`no migration path to format version ${targetVersion}`)
   }
-  return session // M1: only v1 exists; migrate-on-continue is a no-op placeholder for future versions
+  if (session.formatVersion !== 1 && session.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("unsupported source format version")
+  return { ...session, formatVersion: targetVersion }
 }

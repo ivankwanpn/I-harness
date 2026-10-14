@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import type { SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
 
@@ -12,8 +12,12 @@ import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./fo
 const BLANK_PROBE_MAX_BYTES = 1024
 
 async function replaceSessionFile(path: string, headerLine: string, events: SessionEvent[]): Promise<void> {
-  const tmp = `${path}.${randomUUID()}.tmp`
   const body = [headerLine, ...events.map((event) => JSON.stringify(event)), ""].join("\n")
+  await replaceRawSessionFile(path, body)
+}
+
+async function replaceRawSessionFile(path: string, body: string | Buffer): Promise<void> {
+  const tmp = `${path}.${randomUUID()}.tmp`
   const handle = await open(tmp, "wx")
   try {
     await handle.writeFile(body, { encoding: "utf-8" })
@@ -110,6 +114,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       await assertNotDeleted("session", sessionId)
+      if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")
       await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
       await writeFile(filePath(sessionId), serializeHeader(meta) + "\n", { flag: "wx" })
@@ -118,11 +123,16 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
+      const header = await readHeader(path)
+      if (events.some(event => isContextEventType(event.type) && (header.formatVersion !== CURRENT_FORMAT_VERSION || !validContextEvent(event)))) throw new Error("operational context append requires format 2 and valid facts")
       const handle = await open(path, "r+")
       let committedBytes = 0
       try {
         committedBytes = (await handle.stat()).size
-        const text = events.map((e) => JSON.stringify(e)).join("\n") + "\n"
+        const lastByte = Buffer.alloc(1)
+        if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
+        const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
+        const text = separator + events.map((e) => JSON.stringify(e)).join("\n") + "\n"
         await handle.write(text, committedBytes)
         await handle.sync()
       } catch (err) {
@@ -180,6 +190,22 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       await replaceSessionFile(path, headerLine, events)
     },
 
+    async upgradeSessionFormat(sessionId, expected, target) {
+      await assertNotDeleted("session", sessionId)
+      if (target !== CURRENT_FORMAT_VERSION || expected !== 1 && expected !== target) throw new Error("unexpected session format upgrade or downgrade")
+      const path = filePath(sessionId)
+      const raw = await readFile(path)
+      const end = raw.indexOf(0x0a)
+      if (end < 0) throw new Error("invalid session header")
+      const headerLine = raw.subarray(0, end).toString("utf8")
+      const meta = parseHeader(headerLine)
+      if (meta.formatVersion === target) return meta
+      if (meta.formatVersion !== expected) throw new Error("unexpected session format version")
+      const upgraded = { ...JSON.parse(headerLine), formatVersion: target }
+      await replaceRawSessionFile(path, Buffer.concat([Buffer.from(JSON.stringify(upgraded) + "\n"), raw.subarray(end + 1)]))
+      return { ...meta, formatVersion: target }
+    },
+
     async profile(sessionId) {
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
@@ -208,7 +234,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (lines.length === 0 || lines[0]!.trim() === "") {
         throw new Error(`empty session file: ${sessionId}`)
       }
-      const merged: SessionMeta = { ...parseHeader(lines[0]!), ...patch }
+      const previous = parseHeader(lines[0]!)
+      if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== previous.formatVersion) throw new Error("format changes require durable upgrade; downgrade refused")
+      const merged: SessionMeta = { ...previous, ...patch }
       const out = lines.slice()
       out[0] = serializeHeader(merged)
       const tmp = `${path}.${randomUUID()}.tmp`

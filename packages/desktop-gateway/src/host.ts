@@ -315,6 +315,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     }) },
     modelPolicy: "required",
     modelBindingFor,
+    modelMetadataFor: (_sessionId, meta) => runtime.describeModelBindingMetadata?.(meta?.modelSelection ? { sessionSelection: meta.modelSelection } : {}),
     afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
       if (!autoTitle.enabled()) return
       const { meta } = await coordinator.profile(sessionId)

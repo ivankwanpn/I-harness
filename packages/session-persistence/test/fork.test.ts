@@ -82,7 +82,7 @@ describe("forkSession", () => {
     await mkdir(root)
     const outsidePath = join(outer, "secret.jsonl")
     const outside = [
-      JSON.stringify({ formatVersion: 1, sessionId: "secret", createdAt: "x" }),
+      JSON.stringify({ formatVersion: 2, sessionId: "secret", createdAt: "x" }),
       JSON.stringify({ type: "turn/start", seq: 0 }),
       JSON.stringify({ type: "user/message", text: "outside secret", seq: 1 }),
       JSON.stringify({ type: "turn/end", seq: 2 }),

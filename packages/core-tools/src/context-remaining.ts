@@ -1,4 +1,4 @@
-import type { Session } from "@i-harness/core-session"
+import type { Session, BudgetRead } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { activeTokens } from "@i-harness/token-meter"
 import type { ToolRegistry } from "./index.ts"
@@ -10,6 +10,7 @@ import type { ToolRegistry } from "./index.ts"
 // contextWindow the tool is not in the catalog at all.
 
 export interface ContextRemainingOptions {
+  budgetRead?: () => BudgetRead
   /** Model context window (tokens; M15 provider-record knowledge). Absent →
    * NOT registered (fail-closed). */
   contextWindow?: number
@@ -20,7 +21,7 @@ export interface ContextRemainingOptions {
 
 export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistry, opts: ContextRemainingOptions = {}): void {
   const window = opts.contextWindow
-  if (window === undefined || window <= 0) return // fail-closed: no window knowledge → 不註冊
+  if (!opts.budgetRead && (window === undefined || window <= 0)) return
   const session = opts.session
   tools.register({
     name: "get_context_remaining",
@@ -29,13 +30,20 @@ export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistr
     // Pure read (session pricing) — auto-allow under the approval policy.
     isReadOnly: true,
     execute: async () => {
+      if (opts.budgetRead) {
+        const state = opts.budgetRead()
+        if (state.kind === "unavailable" || state.snapshot.admission === "unavailable" || state.snapshot.recoveryRequired) return { kind: "unavailable", reason: state.kind === "unavailable" ? state.reason : state.snapshot.reason, ...(state.kind === "ready" ? { window: state.snapshot.contextWindow, snapshot: state.snapshot } : {}) }
+        const snapshot = state.snapshot
+        return { kind: "ready", window: snapshot.contextWindow, used: snapshot.admissionInputTokens, remaining: snapshot.remainingInputBudget,
+          percentage: snapshot.contextWindow ? Math.round(snapshot.admissionInputTokens / snapshot.contextWindow * 100) : undefined, snapshot }
+      }
       const used = session === undefined ? 0 : activeTokens(session)
-      const remaining = Math.max(0, window - used)
+      const remaining = Math.max(0, window! - used)
       return {
         window,
         used,
         remaining,
-        percentage: Math.round((used / window) * 100),
+        percentage: Math.round((used / window!) * 100),
       }
     },
   })

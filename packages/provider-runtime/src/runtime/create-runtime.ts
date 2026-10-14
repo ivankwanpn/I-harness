@@ -41,5 +41,6 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     setVideoAudioModel: media.setVideoAudioModel,
     analyzeVideoAudio: media.analyzeVideoAudio,
     resolveModel: selection.resolveModel,
+    describeModelBindingMetadata: selection.describeModelBindingMetadata,
   }
 }

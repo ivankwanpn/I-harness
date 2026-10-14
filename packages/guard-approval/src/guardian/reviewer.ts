@@ -49,6 +49,10 @@ export interface GuardianReviewDeps {
    * spawn below, which is deliberate and not symmetric with the two fields
    * above. Absent → no key written. */
   contextWindow?: SpawnOptions["contextWindow"]
+  contextMetadata?: SpawnOptions["contextMetadata"]
+  reasoningEffort?: SpawnOptions["reasoningEffort"]
+  inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
+  autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
@@ -176,12 +180,14 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
     ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
     ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
+    ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     // M73: the session's numbers are the numbers of THE SESSION'S MODEL. When a
     // guardian model is configured, this child runs on a different endpoint
     // whose window we do not know here — passing the session's would be a
     // wrong number, which is worse than an absent one. So: inherited arms get
     // them, configured ones stay absent (and are recorded as a residual).
     ...(deps.model === undefined && deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+    ...(deps.model === undefined ? { contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort, inheritedBindingForStep: deps.inheritedBindingForStep } : {}),
     ...(deps.model === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,

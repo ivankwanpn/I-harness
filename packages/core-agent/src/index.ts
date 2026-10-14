@@ -1,6 +1,6 @@
 export { createAgent } from "./agent/create.ts"
 export { createAgentRegistry } from "./agent/registry.ts"
-export type { AgentBudgetConfig, AgentConfig, AgentDeps, AgentResult, Agent, AgentRegistry, ReasoningEffort } from "./agent/types.ts"
+export type { AgentBudgetConfig, AgentConfig, AgentDeps, AgentResult, Agent, AgentRegistry, ReasoningEffort, ModelContextBindingDescriptor } from "./agent/types.ts"
 export {
   executeToolCalls,
   TOOL_ABORTED_BEFORE_DISPATCH,

@@ -17,6 +17,9 @@ export type {
   Session,
 } from "./events/types.ts"
 export { createSession, append } from "./events/append.ts"
+export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead, ContextRecoveryFacts, ContextEvent } from "./events/context.ts"
+export { validContextCheckpoint, validContextEvent, isContextEventType } from "./events/context.ts"
+export { deriveContextBudget, deriveContextUsage, deriveContextRecovery } from "./projection/context.ts"
 export { subscribe, publishTransient } from "./events/subscription.ts"
 
 export { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES_PER_MESSAGE, validateImages } from "./images.ts"

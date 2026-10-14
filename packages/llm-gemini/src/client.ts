@@ -41,6 +41,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         // TCP / TLS / proxy. Surface the cause chain instead.
         const geminiUrl = `${baseUrl}/v1beta/models/${encodeURIComponent(capturedConfig.model)}:streamGenerateContent?alt=sse`
         let response: Response
+        request.validateBeforeTransport?.()
         try {
           response = await fetch(geminiUrl, {
             method: "POST",

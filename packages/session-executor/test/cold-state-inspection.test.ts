@@ -3,11 +3,22 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession } from "@i-harness/core-session"
-import { breakdown } from "@i-harness/token-meter"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { coldReaderFixture } from "./helpers/cold-reader.ts"
+
+it("a legacy live Agent without an owned reader is unavailable without recursive cold fallback", async () => {
+  let reads = 0
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", loadMeta: async () => { if (++reads > 1) throw new Error("recursive cold fallback"); return undefined } })
+  try {
+    const assembly = await service.assemblyFor("legacy")
+    assembly.agent = { run: async () => ({ finalText: "", turns: 0, reasoning: [] }), followup: async () => ({ finalText: "", turns: 0, reasoning: [] }) }
+    reads = 0
+    expect(await service.contextState("legacy")).toMatchObject({ kind: "unavailable" })
+    expect(reads).toBe(0)
+  } finally { await service.close() }
+})
 
 it.each([false, true])("keeps cold per-ID Context ownership when a static fallback also exists (snapshot=%s)", async snapshotAvailable => {
   const root = await mkdtemp(join(tmpdir(), "ih-context-owner-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
@@ -22,12 +33,11 @@ it.each([false, true])("keeps cold per-ID Context ownership when a static fallba
   const staticOnly = createSessionService({ workspace: root, session: staticSession, modelBindingFor })
   try {
     const context = await service.contextState("B")
-    if (snapshotAvailable) expect(context).toMatchObject({ kind: "ready", estimatedTokens: breakdown(targetSession).total })
-    else expect(context).toMatchObject({ kind: "unavailable" })
+    expect(context).toMatchObject({ kind: "unavailable" })
     expect(writer).not.toHaveBeenCalled()
     expect(service.hasAssembly("B")).toBe(false)
     expect(await readFile(file, "utf8")).toBe(before)
-    expect(await staticOnly.contextState("static")).toMatchObject({ kind: "ready", estimatedTokens: breakdown(staticSession).total })
+    expect(await staticOnly.contextState("static")).toMatchObject({ kind: "unavailable" })
   } finally { await service.close(); await staticOnly.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -36,11 +46,13 @@ it("keeps a cold Context inspection immutable when a live writer starts during i
   const reading = f.service.contextState(f.id)
   try {
     await f.entered; await f.startTurn()
-    const before = await f.contents(), live = f.service.liveSession(f.id)!
+    const before = await f.contents()
     f.releaseRead()
     const context = await reading
     expect(await f.contents()).toBe(before)
-    expect(context).toMatchObject({ kind: "ready", estimatedTokens: breakdown(live).total })
+    const owner = (await f.service.assemblyFor(f.id)).agent.contextBudget!()
+    expect(owner.kind).toBe("ready")
+    expect(context).toMatchObject({ kind: "ready", estimatedTokens: owner.kind === "ready" ? owner.snapshot.admissionInputTokens : undefined })
     const assembly = await f.service.assemblyFor(f.id)
     assembly.inbox.admit({ inputId: "owned-steer", text: "Owned steering", delivery: "steer", intent: "user" })
     await f.finishTurn()

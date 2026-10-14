@@ -144,7 +144,7 @@ describe("session log", () => {
 
   it("parses a legacy user/message without source and derives normally", () => {
     const oldLog =
-      JSON.stringify({ formatVersion: 1 }) + "\n" + JSON.stringify({ type: "user/message", text: "hi" }) + "\n"
+      JSON.stringify({ formatVersion: 2 }) + "\n" + JSON.stringify({ type: "user/message", text: "hi" }) + "\n"
     const s = fromJSONL(oldLog)
     expect(s.events[0]).toMatchObject({ type: "user/message", text: "hi" })
     expect(s.events[0]).not.toHaveProperty("source")
@@ -156,7 +156,7 @@ describe("session log", () => {
     append(s, { type: "user/message", text: "x" })
     const text = toJSONL(s)
     const s2 = fromJSONL(text)
-    expect(s2.formatVersion).toBe(1)
+    expect(s2.formatVersion).toBe(2)
     expect(s2.events.length).toBe(1)
   })
 
@@ -170,10 +170,10 @@ describe("session log", () => {
     expect(() => fromJSONL("   \n\t  ")).toThrow(/session log is empty/)
   })
 
-  it("migrate-on-continue upgrades v1 (no-op in M1) and refuses higher", () => {
+  it("the current writer uses v2 and an old exact-version reader refuses it", () => {
     const s = createSession()
-    expect(assertVersion(s, 1)).toBe(1)
-    expect(() => assertVersion(s, 2)).toThrow(/version/i)
+    expect(assertVersion(s, 2)).toBe(2)
+    expect(() => assertVersion(s, 1)).toThrow(/version/i)
   })
 
   it("M51/B2: folds a step's text into its tool-call message (M3 shape)", () => {
@@ -437,7 +437,7 @@ describe("compaction events", () => {
     append(s, { type: "user/message", text: "hi" })
     append(s, { type: "compaction/reset", removedSeqs: [] })
     // additive event type: format version must stay 1 (no bump)
-    expect(s.formatVersion).toBe(1)
+    expect(s.formatVersion).toBe(2)
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
     // removedSeqs survives persistence (recovery replays the log ⇒ nothing lost)

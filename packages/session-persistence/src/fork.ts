@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, rewindCuts, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, rewindCuts, isContextEventType, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "./index.ts"
 
 /** A turn-only fork can start after an image admission. In that child the
@@ -170,6 +170,7 @@ export function completedTurnPrefix(
     type === "compaction/summary" || type === "compaction/reset" || type === "compaction/prune"
   const kept = prefix.filter((event) =>
     event.type !== "rewind/point"
+    && !isContextEventType(event.type)
     && (isCompactionMarker(event.type) || event.seq === undefined || !hidden.has(event.seq)))
   if (kept.length === prefix.length) return materializeMissingImageAdmissions(events, prefix)
   const materialized = materializeMissingImageAdmissions(events, kept)

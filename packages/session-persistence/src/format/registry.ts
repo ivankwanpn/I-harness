@@ -12,6 +12,7 @@ export class SessionFormatUnsupportedError extends Error {
 // F01-1: stepwise upgrade chain — v(N) → v(N+1). Today only v1 exists, so the
 // chain is empty; the first format bump only needs registerUpgrade(1, fn).
 export const upgrades = new Map<number, (events: SessionEvent[]) => SessionEvent[]>()
+upgrades.set(1, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }
@@ -135,3 +136,6 @@ registerEventType("operator/run-end")
 // NOT `ignorable: true`: load() DROPS ignorable events, which would erase the
 // record of the retry a session actually went through. Registering keeps it.
 registerEventType("model/retry")
+registerEventType("context/budget")
+registerEventType("context/usage")
+registerEventType("context/recovery")

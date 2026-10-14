@@ -1053,6 +1053,9 @@ importers:
       '@i-harness/coding-plans':
         specifier: workspace:*
         version: link:../coding-plans
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials

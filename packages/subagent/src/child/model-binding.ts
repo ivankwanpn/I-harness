@@ -23,6 +23,7 @@ export interface RoleModelSelection {
  * and `RegisterSubagentOptions` all carry this shape, so it is written here
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
+  inheritedBindingForStep?: () => import("@i-harness/core-agent").ModelContextBindingDescriptor
   codeMode?: CodeModeConfig
   codeModeFactory?: CodeModeFactory
   /** Trusted parent context, rendered afresh for each child model request. */
@@ -44,6 +45,8 @@ export interface RoleModelHost {
    * DECLARED model — that binding resolves at spawn and carries its own
    * (RoleModelState's ready arm below). Absent → no key is written. */
   contextWindow?: number
+  contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
+  reasoningEffort?: ReasoningEffort
   maxOutputTokens?: number
 }
 
@@ -117,4 +120,4 @@ export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleM
 export type RoleModelState =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }

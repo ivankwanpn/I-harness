@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@i-harness/core-session"
+import { isContextEventType, type SessionEvent } from "@i-harness/core-session"
 import { materializeMissingImageAdmissions, remapSeedEvent } from "@i-harness/session-persistence"
 
 /** The last N parent turns as a child's SEED — in the CHILD's coordinates.
@@ -36,7 +36,7 @@ import { materializeMissingImageAdmissions, remapSeedEvent } from "@i-harness/se
  * events it hides can be in it), which is why the reference has to MOVE here
  * rather than vanish. */
 export function forkTurns(events: SessionEvent[], n: number): SessionEvent[] {
-  const seed = materializeMissingImageAdmissions(events, sliceTurns(events, n))
+  const seed = materializeMissingImageAdmissions(events, sliceTurns(events, n).filter(event => !isContextEventType(event.type)))
   // Every return path goes through the remap, including the untouched ones: for
   // a POSITIONAL whole-log seed (seq === index, what `append` writes) it is the
   // identity, and making it unconditional is what keeps the contract ("the output

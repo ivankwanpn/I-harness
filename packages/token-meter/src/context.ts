@@ -2,23 +2,10 @@ import { createHash } from "node:crypto"
 import type { LLMMessage } from "@i-harness/core-session"
 import { estimateContent } from "./estimate.ts"
 
-interface InputUsage {
-  inputTokens?: number
-  cacheReadTokens?: number
-  cacheCreationTokens?: number
-  inputTokenSemantics?: "includes-cache" | "excludes-cache"
-}
-
-/** Raw counters remain unchanged. This derived total is only for input sizing. */
-export function normalizeInputUsage(usage: InputUsage): { totalInputTokens: number; cacheReadRatio?: number } | undefined {
-  const valid = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-  if (!valid(usage.inputTokens) || !["includes-cache", "excludes-cache"].includes(usage.inputTokenSemantics ?? "")) return
-  for (const value of [usage.cacheReadTokens, usage.cacheCreationTokens]) if (value !== undefined && !valid(value)) return
-  const totalInputTokens = usage.inputTokenSemantics === "includes-cache" ? usage.inputTokens
-    : usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0)
-  if (!valid(totalInputTokens) || (usage.cacheReadTokens ?? 0) + (usage.cacheCreationTokens ?? 0) > totalInputTokens) return
-  return { totalInputTokens, ...(usage.cacheReadTokens === undefined || totalInputTokens === 0 ? {} : { cacheReadRatio: usage.cacheReadTokens / totalInputTokens }) }
-}
+import { normalizeInputUsage, type InputUsage } from "./calibration-usage.ts"
+import { createProjectionCalibration } from "./checkpoint.ts"
+import type { ContextUsageCheckpoint } from "@i-harness/core-session"
+export { normalizeInputUsage } from "./calibration-usage.ts"
 
 interface ContextRequest { messages: LLMMessage[]; systemPrompt: string; tools: unknown[]; model?: string; reasoningEffort?: string }
 type ContextEstimate = { tokens: number; source: "provider" | "estimate" }
@@ -28,7 +15,7 @@ const shape = (request: ContextRequest): string => fingerprint({ system: request
 /** One completed-request anchor, containing hashes only. No prompt body cache.
  * A prefix edit invalidates it permanently; a later identical body cannot revive
  * measurements from before a rewind, reset, prune, binding or catalog change. */
-export function createContextMeter() {
+function createLegacyContextMeter() {
   let anchor: { shape: string; messages: string[]; tokens: number; revision: number } | undefined
   return {
     invalidate(): void { anchor = undefined },
@@ -46,4 +33,12 @@ export function createContextMeter() {
         : { tokens: estimateContent(request.messages) + overhead, source: "estimate" }
     },
   }
+}
+
+/** Legacy no-argument API remains compatible. Owned mode calibrates actual
+ * protocol projection facts and persists only a scalar prefix checkpoint. */
+export function createContextMeter(): ReturnType<typeof createLegacyContextMeter>
+export function createContextMeter(options: { ownerSessionId: string; restored?: ContextUsageCheckpoint }): ReturnType<typeof createProjectionCalibration>
+export function createContextMeter(options?: { ownerSessionId: string; restored?: ContextUsageCheckpoint }) {
+  return options ? createProjectionCalibration(options.ownerSessionId, options.restored) : createLegacyContextMeter()
 }

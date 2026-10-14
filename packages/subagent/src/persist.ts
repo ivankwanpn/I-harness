@@ -1,5 +1,5 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { append, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { JobRegistry, JobStatus, JobSnapshot } from "./jobs.ts"
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { RoleRegistry, SubagentRole } from "./roles.ts"
@@ -166,7 +166,7 @@ export function restoreState(
 function createSessionFromEmpty() {
   // Minimal Session shape (formatVersion + events); callers only need a
   // non-null session object on restored entries.
-  return { formatVersion: 1, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
+  return { formatVersion: CURRENT_FORMAT_VERSION, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
 }
 
 // Task 4.4: a real transition observer — called with the post-change snapshot

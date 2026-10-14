@@ -339,6 +339,8 @@ export interface LLMRequestScope {
 }
 
 export interface LLMRequest {
+  /** Internal owner guard; wrappers forward it to each physical transport boundary. */
+  validateBeforeTransport?: () => void
   /** Host-only conversation scope; never serialize into a provider body. */
   requestScope?: LLMRequestScope
   /** Host-only fallback for an error body that outlives a guard deadline. */

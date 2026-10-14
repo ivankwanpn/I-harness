@@ -1,23 +1,18 @@
 import type { CompactionConfig, CompactionResult } from "@i-harness/compaction"
-import type { ImageInput, Session } from "@i-harness/core-session"
+import type { ImageInput, Session, BudgetRead, ContextBindingMetadata } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { Telemetry } from "@i-harness/telemetry"
 
-// M20 budget/overflow control (absorb codex token-budget): `contextWindow` is
-// the absolute context window; the agent budget is `contextWindow *
-// reserveRatio` (default 0.9). Overflow at a step boundary triggers the
-// three-layer ladder: layer 1 compact (M11 summary) → layer 2 pure reset
-// (compaction.resetWindow, only when enabled) → layer 3 `prompt_too_long`
-// fail-closed throw.
+// Prepared admission reserves output and headroom under the owned model window.
+// Legacy reset fields remain source compatible; admission does not blindly cut history.
 export interface AgentBudgetConfig {
   contextWindow: number // REQUIRED: total window the budget is computed against
   reserveRatio?: number // default 0.9; budget = contextWindow * reserveRatio
-  resetWindow?: boolean // default true (allow layer 2 pure reset; false → straight to fail-closed)
-  resetRetainLast?: number // default 20 (resetWindow keeps the last N events)
-  // M33 §3.1: the host-known charge the session log does NOT carry (system
-  // prompt + tool schemas) — added to the checkBudget measurement at every
-  // boundary. 0 (default) = pre-M33 measurement.
+  resetWindow?: boolean // legacy compatibility only; owned admission preserves history
+  resetRetainLast?: number // legacy compatibility only; no automatic tail reset
+  /** Legacy estimate compatibility. Actual prepared system/schema components
+   * are counted directly and never charged again as an arbitrary overhead. */
   overheadTokens?: number
 }
 
@@ -41,6 +36,11 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  /** Pure inherited host descriptor. Each Agent copies its own limits and calibration. */
+  bindingForStep?: () => ModelContextBindingDescriptor
+  /** Current concrete binding behind a stable host handle. Read only, never resolves a client. */
+  modelBindingIdentity?: () => object
+  contextMetadata?: ContextBindingMetadata | (() => ContextBindingMetadata | undefined)
   session: Session
   tools: ToolRegistry
   model: ModelClient
@@ -83,6 +83,14 @@ export interface AgentDeps {
   maxOutputTokens?: number
 }
 
+export interface ModelContextBindingDescriptor {
+  identity: object
+  contextMetadata?: ContextBindingMetadata
+  contextWindow?: number
+  maxOutputTokens?: number
+  reasoningEffort?: ReasoningEffort
+}
+
 // M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — import
 // for local use and re-export (G1 TEMPORARY declaration reconciled at merge).
 export type { ReasoningEffort }
@@ -94,6 +102,7 @@ export interface AgentResult {
 }
 
 export interface Agent {
+  contextBudget?(): BudgetRead
   run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal): Promise<AgentResult>
   // M11: explicit manual compaction. Optional because a registry may hold
@@ -102,7 +111,7 @@ export interface Agent {
   // M33 §5: optional `instructions` are threaded to the summarizer (the
   // session-compact command surface).
   compact?(instructions?: string): Promise<CompactionResult>
-  updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number }): void
+  updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata }): void
 }
 
 export interface AgentRegistry {

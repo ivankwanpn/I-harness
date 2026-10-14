@@ -334,7 +334,7 @@ describe("ensureResidentAgent", () => {
       },
     }
     const rebuilt: SubagentToolDeps = {
-      ...deps,
+      ...deps, autoCompactionEnabled: () => false,
       allowSubagentModelSelection: true,
       roleSelectionFor: () => ({ provider: "gw", model: "big" }),
       // The SESSION's window rides beside the binding's — a different model's,
@@ -377,7 +377,7 @@ describe("ensureResidentAgent", () => {
       },
     }
     const rebuilt: SubagentToolDeps = {
-      ...deps, parentModel: parentClient,
+      ...deps, autoCompactionEnabled: () => false, parentModel: parentClient,
       contextWindow: 1_000, maxOutputTokens: 4_242,
     }
 
@@ -623,7 +623,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
 
   it("registerSubagent rebuilds the hooked child mirror after restore (G1a) — append enqueues durably", async () => {
     const loadedSession = {
-      formatVersion: 1,
+      formatVersion: 2,
       events: [{ type: "user/message", text: "old", seq: 0 }] as unknown[],
       header: { origin: "subagent", parentSession: "main" },
     }
@@ -753,13 +753,13 @@ describe("M26-D1 recovery classification on cold restore", () => {
       },
       load: async (sid: string) => {
         if (sid === "child-done") {
-          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+          return { session: { formatVersion: 2, header: { seedLength: 0 }, events: [
             { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
             { type: "assistant/message", text: "final answer", seq: 2 }, { type: "turn/end", seq: 3 },
           ] } }
         }
         if (sid === "child-ambiguous") {
-          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+          return { session: { formatVersion: 2, header: { seedLength: 0 }, events: [
             { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
           ] } }
         }

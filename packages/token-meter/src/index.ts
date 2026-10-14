@@ -16,3 +16,4 @@ export type { ComponentFacts, InputComponent, ProjectedInputFacts, PreparedReque
 export { ProjectionCounter } from "./projection/measure.ts"
 export { projectionFingerprint } from "./projection/fingerprint.ts"
 export { priceProjectedText } from "./projection/pricing.ts"
+export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead } from "@i-harness/core-session"

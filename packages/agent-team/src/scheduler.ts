@@ -59,6 +59,9 @@ export interface TeamSubagentDeps {
    * window and cap — the roster's spawn and the spawn_agent tool must not
    * disagree about what the same session's budget is. Absent → no key written. */
   contextWindow?: SpawnOptions["contextWindow"]
+  contextMetadata?: SpawnOptions["contextMetadata"]
+  reasoningEffort?: SpawnOptions["reasoningEffort"]
+  inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   // M8 durable child sessions: coordinator + parent session id. When present,
   // spawned teammates get durable child-<uuid> sessions (lineage header) and

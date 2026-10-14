@@ -1,7 +1,23 @@
 import { afterEach, expect, it, vi } from "vitest"
+import { systemFetch } from "@i-harness/http-transport"
+vi.mock("@i-harness/http-transport", () => ({ systemFetch: vi.fn(async () => new Response("")) }))
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it("validates owned input after held subscription auth and before transport, including cap derivatives", async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let current = true, checked = 0
+  const client = createOpenAIClient({ apiKey: "", model: "fixture", codexSubscription: true, resolveCodexAuth: async () => { entered.resolve(); await release.promise; return { accessToken: "controlled", accountId: "fixture" } } })
+  const prepared = await client.prepare!({ systemPrompt: "p", messages: [], tools: [] })
+  const execute = async () => { for await (const _event of prepared.withOutputCap(4096).stream({ validateBeforeTransport: () => { checked++; if (!current) throw Object.assign(new Error("stale before send"), { code: "CONTEXT_INPUT_STALE" }) } })) {} }
+  const run = execute()
+  await entered.promise
+  expect(checked).toBe(0)
+  current = false; release.resolve()
+  await expect(run).rejects.toThrow("stale before send")
+  expect(checked).toBe(1)
+  expect(systemFetch).not.toHaveBeenCalled()
+})
 it.each(["system", "developer"])("prices raw Responses %s string and block policies as fixed system input", async role => {
   const request: LLMRequest = { systemPrompt: "", tools: [], messages: [] }
   const options = { input: [

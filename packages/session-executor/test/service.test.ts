@@ -774,7 +774,7 @@ describe("createSessionService", () => {
       approveAll: true,
       ...effortSeam,
       loadMeta: async () => ({
-        formatVersion: 1, sessionId: "s1", createdAt: "",
+        formatVersion: 2, sessionId: "s1", createdAt: "",
         modelSelection: { provider: "p", model: "m", reasoningEffort: "high" },
       }),
       modelBuilder: async () => ({
@@ -793,7 +793,7 @@ describe("createSessionService", () => {
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
-      loadMeta: async () => ({ formatVersion: 1, sessionId: "s1", createdAt: "" }),
+      loadMeta: async () => ({ formatVersion: 2, sessionId: "s1", createdAt: "" }),
       modelBuilder: async () => ({
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)

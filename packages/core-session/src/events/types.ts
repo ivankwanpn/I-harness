@@ -193,6 +193,7 @@ export type SessionEvent =
     // branch keeps it model-invisible and deriveSearchText would return ""
     // (unindexed). Additive; format version stays 1.
     | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "session" | "mount" | "shutdown"; error?: string; seq?: number }
+    | import("./context.ts").ContextEvent
   )
   & { ignorable?: true }
 
@@ -243,4 +244,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 1
+export const CURRENT_FORMAT_VERSION = 2

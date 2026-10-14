@@ -1,13 +1,16 @@
 import { createCompactionEngine, type CompactionConfig } from "@i-harness/compaction"
-import { deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
-import { checkBudget, createContextMeter } from "@i-harness/token-meter"
+import { deriveProjectionRewrite, type ContextBindingMetadata } from "@i-harness/core-session"
 import { mapModelRequest } from "@i-harness/llm-seam"
 import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent } from "./types.ts"
+import { createOwnedBudget } from "./budget.ts"
+import { randomUUID } from "node:crypto"
+import { projectionFingerprint } from "@i-harness/token-meter"
+import { snapshotModelData } from "@i-harness/llm-seam"
 
 function validateBudget(budget: AgentBudgetConfig | undefined): void {
   if (budget !== undefined) {
     const { contextWindow, resetRetainLast, overheadTokens, reserveRatio } = budget
-    if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
+    if (!(Number.isSafeInteger(contextWindow) && contextWindow > 0)) {
       throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
     }
     if (reserveRatio !== undefined && !(reserveRatio > 0 && reserveRatio <= 1)) throw new Error(`reserveRatio must be in (0, 1] (got ${reserveRatio})`)
@@ -24,15 +27,17 @@ function validateBudget(budget: AgentBudgetConfig | undefined): void {
 
 export function createAgentContext(deps: AgentDeps & AgentConfig) {
   validateBudget(deps.budget)
-  const contextMeter = createContextMeter()
   const projectionRevision = (): number => deriveProjectionRewrite(deps.session).markers
     + deps.session.events.filter(event => event.type === "compaction/prune").length
-  const currentShape = () => ({
-    systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
-    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
-    reasoningEffort: deps.reasoningEffort,
-  })
-  const contextEstimate = (overhead = 0) => contextMeter.estimate({ ...currentShape(), messages: deriveMessages(deps.session) }, overhead, projectionRevision())
+  let inherited = deps.bindingForStep?.()
+  const scalarIdentity = (binding: NonNullable<typeof inherited>) => projectionFingerprint({ contextMetadata: binding.contextMetadata, contextWindow: binding.contextWindow, maxOutputTokens: binding.maxOutputTokens, reasoningEffort: binding.reasoningEffort })
+  let inheritedScalars = inherited && scalarIdentity(inherited)
+  if (inherited) inherited = { ...inherited, contextMetadata: snapshotModelData(inherited.contextMetadata) }
+  let hasMetadataOverride = false
+  let metadataOverride: ContextBindingMetadata | undefined
+  const metadata = () => inherited ? inherited.contextMetadata : hasMetadataOverride ? metadataOverride : typeof deps.contextMetadata === "function" ? deps.contextMetadata() : deps.contextMetadata
+  const ownedBudget = createOwnedBudget(deps.session, deps.sessionId ?? `anonymous-${randomUUID()}`, metadata, projectionRevision)
+  const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
   // M5/D2: the agent is the only layer that knows the shape the model sees, so
@@ -41,7 +46,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   // summarizer falls back to its text form and the whole conversation is re-read
   // at full price; with it, the call is a byte-prefix of the main request and the
   // provider's cache serves it.
-  function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined) {
+  function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined, binding = metadata()) {
     return compact
     ? createCompactionEngine({
         model: deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId })),
@@ -55,7 +60,9 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
         // resolved (compaction's own `contextWindow`, above).
         ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
         ...(deps.modelOverheadTokens ? { overheadTokens: deps.modelOverheadTokens } : {}),
-        contextTokens: () => contextEstimate(deps.modelOverheadTokens?.() ?? compact.overheadTokens ?? 0).tokens,
+        contextTokens: () => ownedBudget.pressure() ?? 0,
+        ...(binding?.providerId ? { provider: binding.providerId } : {}),
+        ...(binding?.modelId ? { modelId: binding.modelId } : {}),
         requestShape: () => ({
           systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
           tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
@@ -63,53 +70,34 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
       })
     : undefined
   }
-  let compactor = buildCompactor(deps.compact, deps.maxOutputTokens)
-  let outputCap = deps.maxOutputTokens
+  const inheritedCompact = () => inherited?.contextWindow === undefined ? undefined : { ...(deps.compact ?? {}), contextWindow: inherited.contextWindow }
+  let compactor = buildCompactor(inherited ? inheritedCompact() : deps.compact, inherited ? inherited.maxOutputTokens : deps.maxOutputTokens)
+  let outputCap = inherited ? inherited.maxOutputTokens : deps.maxOutputTokens
   let compactEnabled = deps.compact?.auto ?? true
   // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
   // at creation above); the default matches the engine convention.
-  let budgetCfg = deps.budget
-
-  // M20: absolute-budget enforcement, called at every step boundary after
-  // maybeCompact (pressure check) and before the model sees the derived
-  // surface. Three layers:
-  //  1. M11 compact (shadow-projection + summary) — fail-soft, never throws,
-  //     falls through to layer 2 when compacted:false or still overflow.
-  //  2. pure reset (absorption of codex token-budget) — ONLY when enabled
-  //     (`budget.resetWindow !== false`); keeps the last resetRetainLast
-  //     events visible, no summary. Fix round 1 (Ruling 4): append-only —
-  //     the durable log is never truncated; checkBudget sees the post-reset
-  //     surface because activeTokens prices exactly deriveMessages, which
-  //     shadows the reset marker's removedSeqs (M11 shadow mechanism).
-  //  3. fail-closed: throw `prompt_too_long` — the session cannot be brought
-  //     under budget. No budget config → no-op (pre-M20 behavior).
-  async function enforceBudget(): Promise<void> {
-    if (budgetCfg === undefined) return
-    const resetAllowed = budgetCfg.resetWindow ?? true
-    const resetRetainLast = budgetCfg.resetRetainLast ?? 20
-    // M33 §3.1: the host-known charge the session log does not carry (system
-    // prompt + tool schemas) is added to EVERY boundary measurement.
-    const overhead = deps.modelOverheadTokens?.() ?? budgetCfg.overheadTokens ?? 0
-    if (!Number.isInteger(overhead) || overhead < 0) throw new Error("model overhead must be a non-negative integer")
-    const check = () => checkBudget(deps.session, budgetCfg!.contextWindow, budgetCfg!.reserveRatio, overhead, contextEstimate(overhead).tokens)
-    const before = check()
-    if (before.state === "ok") return
-    // Layer 1: M11 compact (shadow-projection + summary).
-    if (compactor) {
-      await compactor.compact(deps.session)
-      if (check().state === "ok") return
-    }
-    // Layer 2: pure reset (absorb codex token-budget) — keep the recent tail.
-    if (compactor && resetAllowed) {
-      await compactor.resetWindow(deps.session, resetRetainLast)
-      if (check().state === "ok") return
-    }
-    // Layer 3: fail-closed.
-    throw new Error(`prompt_too_long: context budget exceeded (${before.tokens} tokens > ${before.budget} budget)`)
+  let budgetCfg = inherited ? inherited.contextWindow === undefined ? undefined : { ...deps.budget, contextWindow: inherited.contextWindow } : deps.budget
+  const bindingIsCurrent = () => {
+    const current = deps.bindingForStep?.()
+    return !current || !!inherited && current.identity === inherited.identity && scalarIdentity(current) === inheritedScalars
+  }
+  function refreshBinding() {
+    const current = deps.bindingForStep?.()
+    if (!current || bindingIsCurrent()) return
+    validateBudget(current.contextWindow === undefined ? undefined : { contextWindow: current.contextWindow })
+    inheritedScalars = scalarIdentity(current)
+    inherited = { ...current, contextMetadata: snapshotModelData(current.contextMetadata) }
+    ownedBudget.invalidate()
+    budgetCfg = inherited.contextWindow === undefined ? undefined : { ...deps.budget, contextWindow: inherited.contextWindow }
+    outputCap = inherited.maxOutputTokens
+    compactor = buildCompactor(inheritedCompact(), outputCap)
   }
 
   return {
-    contextMeter, projectionRevision, contextEstimate, enforceBudget,
+    contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent,
+    readBudget: () => bindingIsCurrent() ? ownedBudget.read() : { kind: "unavailable" as const, reason: "Inherited model binding changed before the next logical step" },
+    get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? deps.compact?.contextWindow },
+    get reasoningEffort() { return inherited ? inherited.reasoningEffort : deps.reasoningEffort },
     get compactor() { return compactor },
     get compactEnabled() { return compactEnabled },
     get budgetCfg() { return budgetCfg },
@@ -117,8 +105,13 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
     update(config: Parameters<NonNullable<Agent["updateContext"]>>[0]) {
       validateBudget(config.budget)
       contextMeter.invalidate()
+      ownedBudget.invalidate()
       if (config.maxOutputTokens !== undefined && (!Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens < 1)) throw new Error("invalid output cap")
-      const next = buildCompactor(config.compact, config.maxOutputTokens)
+      const next = buildCompactor(config.compact, config.maxOutputTokens, "contextMetadata" in config ? config.contextMetadata : metadata())
+      if ("contextMetadata" in config) {
+        hasMetadataOverride = true
+        metadataOverride = snapshotModelData(config.contextMetadata)
+      }
       compactor = next
       budgetCfg = config.budget
       outputCap = config.maxOutputTokens

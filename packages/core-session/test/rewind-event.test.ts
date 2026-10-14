@@ -188,7 +188,7 @@ describe("rewind/point shadow projection", () => {
     append(s, { type: "user/message", text: "pre-rewind" })
     append(s, { type: "rewind/point", version: 1, targetTurn: 3, anchorSeq: 0, mode: "all", fileOps: [{ path: "a/b.txt", op: "delete" }, { path: "c.ts", op: "restore" }] })
     append(s, { type: "user/message", text: "post-rewind" })
-    expect(s.formatVersion).toBe(1) // additive event type: no format bump
+    expect(s.formatVersion).toBe(2) // additive event type: no format bump
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events[1]).toMatchObject({
       type: "rewind/point",

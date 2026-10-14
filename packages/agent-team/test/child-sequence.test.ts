@@ -54,7 +54,7 @@ it("keeps concurrent normal and teammate child logs positional through live chec
     for (const id of ids) {
       await coordinator.flush(id)
       const { session } = await coordinator.snapshot!(id)
-      expect(session.events.map((event) => event.type)).toEqual(["turn/start", "user/message", "step/start"])
+      expect(session.events.map((event) => event.type)).toEqual(["turn/start", "user/message", "step/start", "context/budget"])
       expectDense(session.events)
     }
     release()

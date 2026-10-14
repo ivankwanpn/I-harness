@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { createSession } from "@i-harness/core-session"
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SpawnOptions } from "./types.ts"
@@ -11,6 +11,8 @@ export function assembleChild(
   opts: SpawnOptions, childCtx: PluginContext, childSession: ReturnType<typeof createSession>,
   sessionId: string | undefined, childPath: string, model: ModelClient,
   reasoningEffort: ReasoningEffort | undefined, contextWindow: number | undefined, maxOutputTokens: number | undefined,
+  contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata,
+  inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"],
 ) {
   // child registry: register the role's allowed tools (resolved from the parent).
   // A declared tool the host does not mount is reported, never dropped silently.
@@ -41,6 +43,7 @@ export function assembleChild(
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    ...(inheritedBindingForStep ? { bindingForStep: inheritedBindingForStep } : {}),
     isSubagent: true,
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
@@ -48,6 +51,7 @@ export function assembleChild(
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),
     model,
+    contextMetadata,
     // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
     // delegation/changed-files+test reporting/result delivery). Human and
     // project instructions remain higher priority (the contract says so).
@@ -117,5 +121,9 @@ export function assembleChild(
       ? { flush: (): Promise<void> => opts.childSessions!.coordinator.flush(sessionId!) }
       : {}),
   })
+  if (childReg.get("get_context_remaining")) {
+    childReg.unregister("get_context_remaining")
+    registerContextRemaining(childCtx, childReg, { contextWindow, budgetRead: () => agent.contextBudget!() })
+  }
   return { childReg, codeModeMount, controller, agent }
 }

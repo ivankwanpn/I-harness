@@ -3,6 +3,7 @@ import type { Session, SessionEvent } from "./types.ts"
 import { appendHooks, subscribers } from "./state.ts"
 import { validateImages } from "../images.ts"
 import type { ImageInput, ImageSummary } from "../images.ts"
+import { isContextEventType, validContextEvent } from "./context.ts"
 
 export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [] }
@@ -11,6 +12,7 @@ export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
 }
 
 export function append(session: Session, event: SessionEvent): void {
+  if (isContextEventType(event.type) && (session.formatVersion !== CURRENT_FORMAT_VERSION || !validContextEvent({ ...event, seq: session.events.length }))) throw new Error("invalid operational context event or session format")
   if (event.type === "model/activity") throw new Error("model/activity must be published as a transient event")
   if (event.type === "reasoning/chunk") throw new Error("reasoning/chunk must be published as a transient event")
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {

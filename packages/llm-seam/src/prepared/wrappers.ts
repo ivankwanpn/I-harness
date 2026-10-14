@@ -22,6 +22,7 @@ export function snapshotModelData<T>(value: T, exclude: readonly string[] = []):
 }
 export function preparedControls(request: PreparedStreamControl, control?: PreparedStreamControl): PreparedStreamControl {
   return {
+    validateBeforeTransport: control?.validateBeforeTransport ?? request.validateBeforeTransport,
     signal: control?.signal ?? request.signal,
     onStreamActivity: control?.onStreamActivity ?? request.onStreamActivity,
     onTerminalResponse: control?.onTerminalResponse ?? request.onTerminalResponse,

@@ -120,7 +120,7 @@ export class ModelUnavailableError extends Error {
 type RoleModelResolution =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }
 
 /** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
  * holds, and what subagent's own `RoleModelSelection` is: named here so the
@@ -257,6 +257,7 @@ export interface AssemblyOptions {
    * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
    * get_context_remaining is NOT registered (fail-closed). */
   contextWindow?: number
+  contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   /** M72 Ⅱ: the resolved output cap for this session's model (the binding's
    * `maxOutputTokens`). Moved VERBATIM — nothing here defaults or clamps it;
    * the single clamp lives where the request is assembled (core-agent), which
@@ -370,7 +371,7 @@ export interface SessionAssembly {
    * `SessionService.rebindModel`, not by this call. Identity of `model` does NOT
    * change, which is deliberate: a rebind is one assignment, never a re-wiring. */
   setModel(client: ModelClient): void
-  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort }, compact?: CompactionRequest): void
+  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata }, compact?: CompactionRequest): void
   /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
    * `setModel` rather than an optional second parameter on it, deliberately:
    * `undefined` here means "the new selection names no effort — clear it", and
@@ -950,7 +951,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   // M27-R-A8: context budget tool — registered against the live session (the
   // M15 projection source) only when the composition supplied a window.
-  registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session })
+  let budgetRead: NonNullable<Agent["contextBudget"]> = () => ({ kind: "unavailable", reason: "Agent context is not initialized" })
+  if (opts.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: opts.contextWindow, session, budgetRead: () => budgetRead() })
 
   // M40 A1/B8: session-scoped tools — todo_write (M21 whole-list snapshot,
   // model-visible via todo/write events) + read_image (M14 multimodal read:
@@ -1227,6 +1229,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // subagentDeps → tools.ts's spawn_agent), so the values are only ever as
       // present as the host made them.
       get contextWindow() { return opts.contextWindow },
+      get contextMetadata() { return opts.contextMetadata },
+      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      get reasoningEffort() { return currentReasoningEffort },
       get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
       parentModel: model,
@@ -1335,6 +1340,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
         subagents: {
           roles: subagent.roles,
@@ -1357,6 +1363,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // session's numbers describe the model this review will run on. It
         // passes them on the INHERITED arm alone.
         get contextWindow() { return opts.contextWindow },
+      get contextMetadata() { return opts.contextMetadata },
+      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      get reasoningEffort() { return currentReasoningEffort },
         get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
@@ -1403,6 +1412,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // field) — a teammate that inherits runs on the session's own model
           // and must carry its window and cap.
           get contextWindow() { return opts.contextWindow },
+      get contextMetadata() { return opts.contextMetadata },
+      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      get reasoningEffort() { return currentReasoningEffort },
           get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
@@ -1509,6 +1521,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
 
     const agent = createAgent(ctx, {
+      modelBindingIdentity: () => currentModel,
+      contextMetadata: () => opts.contextMetadata,
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       session, tools, model,
       modelToolSchemas,
@@ -1560,6 +1574,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
       stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
     })
+    budgetRead = () => agent.contextBudget!()
 
     const backgroundOutput = (stdout: string, stderr: string) => {
       const first = stdout.slice(0, 131072)
@@ -1586,6 +1601,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         overheadOverride = compact?.overheadTokens
         const overhead = estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
         agent.updateContext!({
+          contextMetadata: binding.contextMetadata,
           ...(binding.contextWindow === undefined ? {} : {
             budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
             ...(compact === undefined ? {} : { compact: { ...compact, contextWindow: binding.contextWindow, overheadTokens: compact.overheadTokens ?? overhead } }),
@@ -1597,8 +1613,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         currentReasoningEffort = binding.reasoningEffort
         opts.contextWindow = binding.contextWindow
         opts.maxOutputTokens = binding.maxOutputTokens
+        opts.contextMetadata = binding.contextMetadata
         tools.unregister("get_context_remaining")
-        registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session })
+        if (binding.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session, budgetRead })
       },
       // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
       // in these types forces the two calls to happen together. A rebind that

@@ -352,7 +352,7 @@ describe("createSessionAssembly", () => {
         { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
         { role: "assistant", text: "second done" },
       ]),
-      compact: { contextWindow: 100, auto: true }, autoCompactionEnabled: () => enabled,
+      compact: { contextWindow: 20000, thresholdRatio: .01, auto: true }, autoCompactionEnabled: () => enabled,
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -380,7 +380,7 @@ describe("createSessionAssembly", () => {
       ]),
       // No `contextWindow` here — the window arrives ONLY in the config, which is
       // exactly how the CLI now supplies it.
-      compact: { contextWindow: 100, auto: true },
+      compact: { contextWindow: 20000, thresholdRatio: .01, auto: true },
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -734,7 +734,8 @@ function memoryCoordinator(): SessionCoordinator {
       list.push(...evs)
       events.set(sessionId, list)
     },
-    load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(events.get(sessionId) ?? [])] } }),
+    load: async (sessionId: string) => ({ session: { formatVersion: 2, events: [...(events.get(sessionId) ?? [])] } }),
+    snapshot: async (sessionId: string) => ({ session: { formatVersion: 2, events: [...(events.get(sessionId) ?? [])] } }),
     list: async () => [...events.keys()],
     flush: async () => {},
     close: async () => {},
@@ -930,6 +931,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
       // subject is the TEAMMATE's request — only a teammate turn carries the
       // teammate role's prompt.
       await assembly.agent.run("use the team")
+      expect(assembly.session.events.find(event => event.type === "tool/result" && event.name === "spawn_teammate")).not.toMatchObject({ isError: true })
       await waitFor(() => second.requests.some((r) => r.systemPrompt.includes("You are a teammate in an agent team.")))
       expect(first.requests).toHaveLength(0)
     } finally {
@@ -1550,7 +1552,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
       sessionId: "s1",
       approveAll: true,
       model,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
     })
     try {
@@ -1654,7 +1656,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
 // 3619 and not 4_242), while the `opts.compact?.contextWindow` form is what
 // nothing above can see: the fixture passes the SAME window to both keys
 // (`:144-145`). Hence the DECOY PAIR in
-// every fixture below: `contextWindow: 8_000` sits beside
+// every fixture below: `contextWindow: 12_000` sits beside
 // `maxOutputTokens: 100_000`, and each assertion reads the number the WINDOW
 // half carried, so a swap MOVES it. The two fixtures whose sites can also swap
 // to `opts.compact?.contextWindow` carry a THIRD, again distinct decoy
@@ -1736,9 +1738,10 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
     const assembly = await createSessionAssembly({
       workspace: dir,
       model: client,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       guardian: {}, // no `model` → the reviewer inherits → the gate's TRUE arm
     })
     try {
@@ -1757,7 +1760,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // `opts.maxOutputTokens`, or `opts.compact?.contextWindow` — puts a
       // different number here and reds. At the M73 fixtures' 200 000 window
       // this assertion could not tell the two keys apart at all.
-      expect(reviewed[0]!.budget?.contextWindow).toBe(8_000)
+      expect(reviewed[0]!.budget?.contextWindow).toBe(12_000)
       // Secondary, the wire half: the cap the reviewer's OWN request carries is
       // that 100_000 clamped against the window, so the request is a second
       // witness that the window reached this child (with no window it would be
@@ -1821,9 +1824,10 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       model,
       approveAll: true,
       team: {},
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       // The team's spawn path REQUIRES durable child sessions (roster.ts), which
       // the assembly wires only when BOTH are present — holder 5c's shape (:854).
       sessionId: "lead-1",
@@ -1837,7 +1841,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // The decoy set again: a swap at EITHER hop (the assembly's literal, or
       // the scheduler's) makes this read 100_000, and one to the compact
       // config's window reads 4_000.
-      expect(teammates[0]!.budget?.contextWindow).toBe(8_000)
+      expect(teammates[0]!.budget?.contextWindow).toBe(12_000)
       // …and the observed child is one that really RAN: its own request carries
       // the cap clamped against that window (100_000 reaches the wire verbatim
       // only where the window is wide enough for it).

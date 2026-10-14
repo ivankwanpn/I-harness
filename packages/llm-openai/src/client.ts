@@ -68,6 +68,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
+        request.validateBeforeTransport?.()
         const routing = affinity?.prepare(scope, accountId!, body.prompt_cache_key, cacheMode === "off", scopeIdentity)
         try {
           response = await (codexSubscription ? systemFetch : fetch)(endpoint, {

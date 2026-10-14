@@ -1,12 +1,13 @@
 import { CURRENT_FORMAT_VERSION, type SessionEvent } from "@i-harness/core-session"
 import { repairTurnTail } from "../repair.ts"
-import { assertVersionSupported, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
+import { preflightSessionFormat, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
+import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 
 export function createLoads(
-  backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "id">,
+  backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "id" | "upgradeSessionFormat">,
   { withSessionOperation, borrowOwnership, releaseOwnershipUnlocked }:
     Pick<Ownership, "withSessionOperation" | "borrowOwnership" | "releaseOwnershipUnlocked">,
   { assertWritable, pendingWriteBehind }: Pick<Mutations, "assertWritable" | "pendingWriteBehind">,
@@ -14,7 +15,7 @@ export function createLoads(
   return {
     async snapshot(sessionId: string) {
       const { version, events, meta } = await backend.read(sessionId)
-      assertVersionSupported(version)
+      preflightSessionFormat(version, events)
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
         events: await migrate(version, guardIgnorable(events)),
@@ -24,15 +25,20 @@ export function createLoads(
     async load(sessionId: string) {
       return withSessionOperation(sessionId, async () => {
         const peeked = await backend.read(sessionId)
-        assertVersionSupported(peeked.version)
+        preflightSessionFormat(peeked.version, peeked.events)
+        await migrate(peeked.version, guardIgnorable(peeked.events, true))
         const borrowed = await borrowOwnership(sessionId)
         let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
         try {
+          const owned = await backend.read(sessionId)
+          preflightSessionFormat(owned.version, owned.events)
+          await migrate(owned.version, guardIgnorable(owned.events, true))
           repaired = await backend.repair(sessionId)
         } finally {
           if (borrowed) await releaseOwnershipUnlocked(sessionId)
         }
         const { version, events, meta } = repaired
+        preflightSessionFormat(version, events)
         const guarded = guardIgnorable(events)
         const migrated = await migrate(version, guarded)
         const repairedTail = repairTurnTail(migrated)
@@ -79,8 +85,15 @@ export function createLoads(
         const acquired = await borrowOwnership(sessionId)
         try {
           const peeked = await backend.read(sessionId)
-          assertVersionSupported(peeked.version)
+          preflightSessionFormat(peeked.version, peeked.events)
+          assertUpgradeCapability(backend, peeked.version)
+          if (backend.replaceEvents === undefined && repairTurnTail(peeked.events).some((event, index) => event.seq !== index || JSON.stringify(event) !== JSON.stringify(peeked.events[index]))) throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+          const checked = await backend.read(sessionId)
+          preflightSessionFormat(checked.version, checked.events)
+          await migrate(checked.version, guardIgnorable(checked.events, true))
+          assertUpgradeCapability(backend, checked.version)
           const repaired = await backend.repair(sessionId)
+          preflightSessionFormat(repaired.version, repaired.events)
           const guarded = guardIgnorable(repaired.events, true)
           const migrated = await migrate(repaired.version, guarded)
           const semantic = repairTurnTail(migrated)
@@ -98,6 +111,7 @@ export function createLoads(
             }
             await backend.replaceEvents(sessionId, canonical)
           }
+          await ensureWritableFormatUnlocked(backend, sessionId)
           return { session: buildSession(repaired.meta, canonical) }
         } catch (error) {
           if (acquired) {

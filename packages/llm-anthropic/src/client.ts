@@ -35,6 +35,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
+        request.validateBeforeTransport?.()
         try {
           response = await fetch(`${baseUrl}/v1/messages`, {
             method: "POST",

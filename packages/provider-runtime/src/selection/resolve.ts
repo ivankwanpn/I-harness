@@ -9,14 +9,16 @@ import { validateChatGptRoute } from "../configuration/validation.ts"
 import { selectModel, normalizeReasoningEffort, invalidState, errorMessage, PROTOCOL_CHOICES, REASONING_EFFORTS_BY_PROTOCOL } from "./choice.ts"
 import { createBindingClient } from "./binding.ts"
 import type { ProviderRuntime } from "../types.ts"
+import { describeSelection } from "./metadata.ts"
 
 export function createModelResolver(
   options: Pick<CreateProviderRuntimeOptions, "settings" | "codex" | "readModelWait" | "readModelRetryLimit">,
   auth: ProviderAuthResolver,
   buildClient: typeof buildModelClient,
   provider: (id: string) => ProviderView | undefined,
-): Pick<ProviderRuntime, "resolveModel"> {
+): Pick<ProviderRuntime, "resolveModel" | "describeModelBindingMetadata"> {
   return {
+    describeModelBindingMetadata: input => describeSelection(options.settings, provider, input)?.metadata,
     async resolveModel(input) {
       const selection = selectModel(input, options.settings.get().llm.defaultModel)
       if ("state" in selection) return selection.state
@@ -60,6 +62,8 @@ export function createModelResolver(
           modelId,
         )
       }
+
+      const described = describeSelection(options.settings, provider, input)
 
       try { validateChatGptRoute(view.user ?? {}, selection.protocol ?? view.user?.models?.find(model => model.id === modelId)?.protocol) }
       catch (error) { return invalidState(errorMessage(error), providerId, modelId) }
@@ -113,7 +117,7 @@ export function createModelResolver(
       // then the model row, then the route — see runtimeProfile.
       const listedModel = view.models.find((model) => model.id === modelId)
       const modelModalities = userModel?.inputModalities ?? listedModel?.inputModalities ?? (listedModel ? view.inputModalities : undefined)
-      const profile = runtimeProfile(
+      const profile = described ? { ...described.profile, ...(apiKey !== undefined ? { apiKey } : {}) } : runtimeProfile(
         view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol, options.settings.get().modelRetryLimit,
       )
       if (profile && ref.kind === "oauth-account-ref" && options.codex) {
@@ -130,7 +134,7 @@ export function createModelResolver(
           modelId,
         )
       }
-      const effective = resolveEffectiveModelContext({
+      const effective = described?.metadata ?? resolveEffectiveModelContext({
         profile,
         modelId,
         ...(userModel !== undefined ? { userModel } : {}),
@@ -157,6 +161,7 @@ export function createModelResolver(
         return {
           status: "ready",
           binding: {
+            ...(described ? { contextMetadata: described.metadata } : {}),
             client,
             providerId,
             modelId,

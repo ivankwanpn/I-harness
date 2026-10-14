@@ -139,6 +139,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         // which is the failure mode hardest to see: the precedence is right and
         // both numbers are empty. Absent stays absent (no key written).
         ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+        contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort,
+        inheritedBindingForStep: deps.inheritedBindingForStep,
         ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         jobs: deps.jobs,
         table: deps.table,

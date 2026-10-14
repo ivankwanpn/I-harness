@@ -42,6 +42,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
         // kill a parked Converse call, not wait for the first event.
         let output: ConverseStreamCommandOutput
+        request.validateBeforeTransport?.()
         try {
           output = await client.send(
             new ConverseStreamCommand(actualBody),

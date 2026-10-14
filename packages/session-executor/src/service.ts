@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { append, subscribe, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
+import { append, subscribe, validateImages, deriveContextBudget, deriveContextRecovery, deriveProjectionRewrite, deriveMessages, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
@@ -30,7 +30,7 @@ import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/s
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
-import { breakdown } from "@i-harness/token-meter"
+import { projectionFingerprint } from "@i-harness/token-meter"
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
 // `session`: the message is about THIS session's resolved model binding (a
@@ -54,6 +54,7 @@ export type SessionModelBindingResult =
   | {
       status: "ready"
       binding: {
+        contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
         model: ModelClient
         providerId: string
         modelId: string
@@ -101,6 +102,8 @@ type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Loaded settings only; never resolves authentication or constructs a model client. */
+  modelMetadataFor?: (sessionId: string, meta: SessionMeta | undefined) => import("@i-harness/core-session").ContextBindingMetadata | undefined | Promise<import("@i-harness/core-session").ContextBindingMetadata | undefined>
   /** Host structural management shares this admission boundary with all writers. */
   sessionOperation?: { run<T>(id: string, operation: () => Promise<T>): Promise<T>; assertOpen(id: string): void }
   /** Bind the session once; its returned getter follows current membership. */
@@ -181,7 +184,7 @@ export interface SessionService {
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
   /** Estimated active transcript size; no provider request is made. */
-  contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }>
+  contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number }; snapshot?: import("@i-harness/core-session").RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -447,28 +450,32 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     }
   }
 
-  async function contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }> {
+  async function contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number }; snapshot?: import("@i-harness/core-session").RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }> {
     if (closed) throw new Error("session service closed")
-    const model = await bindingFor(sessionId)
-    if (model.status !== "ready") return { kind: "unavailable", reason: model.reason }
-    const window = model.binding.contextWindow
-    if (window === undefined) return { kind: "unavailable", reason: "This model has no configured context window" }
-    // A per-ID writer overrides the static session for assembly construction.
-    // Cold readers preserve that identity without invoking the writer loader.
-    let session = assemblies.get(sessionId)?.session ?? (opts.sessionFor === undefined ? opts.session : undefined)
-    if (session === undefined && opts.coordinator !== undefined) {
-      if (!opts.coordinator.snapshot) return { kind: "unavailable", reason: "Read-only session snapshots are unavailable" }
-      const saved = (await opts.coordinator.snapshot(sessionId)).session
-      // A cold inspection can overlap assembly startup. The owned sessionFor
-      // loader belongs to writers; prefer a live session published while this
-      // immutable read was awaiting its durable prefix.
-      session = assemblies.get(sessionId)?.session ?? saved
+    if (assemblies.has(sessionId) && !assemblies.get(sessionId)!.agent.contextBudget) return { kind: "unavailable", reason: "Live Agent context budget reader is unavailable" }
+    const live = assemblies.get(sessionId)?.agent.contextBudget?.()
+    if (live) {
+      if (live.kind === "unavailable") return live
+      const snapshot = live.snapshot
+      if (snapshot.admission === "unavailable" || snapshot.recoveryRequired || snapshot.contextWindow === undefined) return { kind: "unavailable", reason: snapshot.reason ?? "Prepared context is unavailable" }
+      return { kind: "ready", estimatedTokens: snapshot.admissionInputTokens, contextWindow: snapshot.contextWindow, roleTokens: snapshot.roleTokens, snapshot }
     }
-    if (session === undefined) return { kind: "unavailable", reason: "Session history is unavailable" }
-    const measured = breakdown(session)
-    const roleTokens = { user: 0, assistant: 0, tool: 0 }
-    for (const message of measured.perMessage) roleTokens[message.role] += message.tokens
-    return { kind: "ready", estimatedTokens: measured.total, contextWindow: window, roleTokens }
+    const meta = await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined)
+    let session = opts.sessionFor === undefined ? opts.session : undefined
+    if (opts.coordinator?.snapshot) session = (await opts.coordinator.snapshot(sessionId)).session
+    if (assemblies.has(sessionId)) return contextState(sessionId)
+    if (!opts.modelMetadataFor) return { kind: "unavailable", reason: "Read-only model binding metadata is unavailable" }
+    const metadata = await opts.modelMetadataFor(sessionId, meta)
+    if (!metadata || metadata.identityCoverage !== "complete" || !metadata.bindingConfigFingerprint) return { kind: "unavailable", reason: "Complete model binding identity is unavailable" }
+    const saved = session && deriveContextBudget(session, sessionId)
+    if (!saved || saved.identityCoverage !== "complete" || saved.bindingConfigFingerprint !== metadata.bindingConfigFingerprint
+      || saved.modelId !== metadata.modelId || saved.protocol !== metadata.protocol || saved.contextWindow !== metadata.contextWindow
+      || saved.projectionRevision !== deriveProjectionRewrite(session!).markers + session!.events.filter(event => event.type === "compaction/prune").length
+      || saved.neutralFingerprint !== projectionFingerprint(deriveMessages(session!))) return { kind: "unavailable", reason: "Saved prepared budget is missing or stale" }
+    const recovery = deriveContextRecovery(session!, sessionId)
+    if (recovery && recovery.state !== "resolved") return { kind: "unavailable", reason: "Provider context recovery remains required" }
+    if (saved.admission === "unavailable" || saved.recoveryRequired || saved.contextWindow === undefined) return { kind: "unavailable", reason: saved.reason ?? "Saved prepared budget is unavailable" }
+    return { kind: "ready", estimatedTokens: saved.admissionInputTokens, contextWindow: saved.contextWindow, roleTokens: saved.roleTokens, snapshot: saved }
   }
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
@@ -543,6 +550,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           && (liveAssembly(sessionId) === assembly || mountingAssemblies.get(sessionId) === assembly)
         let sandboxAtBuild: SandboxMode | undefined
         if (opts.modelBindingFor !== undefined) {
+          // Durable writable acquisition (including the format barrier) precedes
+          // executable model resolution; a held/refused upgrade has no model side effect.
+          const resolvedSession = await writableSessionFor(sessionId)
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
           const binding = result.binding
@@ -563,7 +573,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
                 "The binding is authoritative — a window from the config is not used to override its absence.",
             )
           }
-          const resolvedSession = await writableSessionFor(sessionId)
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
             ...opts,
@@ -582,6 +591,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             modelLabel: binding.label,
             contextWindow: binding.contextWindow,
             maxOutputTokens: binding.maxOutputTokens,
+            contextMetadata: binding.contextMetadata,
             reasoningEffort: binding.reasoningEffort,
             compact,
           })

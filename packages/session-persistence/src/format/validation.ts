@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionMeta } from "../coordinator/types.ts"
 import { upgrades, isKnownEventType, SessionFormatUnsupportedError } from "./registry.ts"
 
@@ -14,6 +14,7 @@ export async function migrate(version: number, events: SessionEvent[]): Promise<
   if (v > CURRENT_FORMAT_VERSION) {
     throw new SessionFormatUnsupportedError(`format version ${v} is newer than this build (upgrade the harness)`)
   }
+  preflightSessionFormat(CURRENT_FORMAT_VERSION, result)
   return result
 }
 
@@ -22,6 +23,7 @@ export async function migrate(version: number, events: SessionEvent[]): Promise<
 // non-destructive (torn-tail tolerant, never mutates); repair may truncate
 // + rewrite, so it is only reached once the version gate has passed.
 export function assertVersionSupported(version: number): void {
+  if (!Number.isSafeInteger(version) || version < 0) throw new SessionFormatUnsupportedError("invalid session format version")
   if (version > CURRENT_FORMAT_VERSION) {
     throw new SessionFormatUnsupportedError(`format version ${version} is newer than this build (upgrade the harness)`)
   }
@@ -31,6 +33,17 @@ export function assertVersionSupported(version: number): void {
       throw new SessionFormatUnsupportedError(`no upgrade path from format version ${v} to ${CURRENT_FORMAT_VERSION}`)
     }
     v += 1
+  }
+}
+
+/** Validate the committed prefix before any structural repair, and again under ownership. */
+export function preflightSessionFormat(version: number, events: SessionEvent[]): void {
+  assertVersionSupported(version)
+  guardIgnorable(events, true)
+  for (const event of events) {
+    if (isContextEventType(event.type) && (version < 2 || !validContextEvent(event))) {
+      throw new SessionFormatUnsupportedError(`unsupported operational payload or format for '${event.type}'`)
+    }
   }
 }
 

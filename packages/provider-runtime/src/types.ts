@@ -38,6 +38,7 @@ export interface ProviderPatch {
 }
 
 export interface SessionModelBinding {
+  contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   client: ModelClient
   providerId: string
   modelId: string
@@ -95,6 +96,7 @@ export interface ProviderRuntimeEntry {
 }
 
 export interface ProviderRuntime {
+  describeModelBindingMetadata?(input: Parameters<ProviderRuntime["resolveModel"]>[0]): import("@i-harness/core-session").ContextBindingMetadata | undefined | Promise<import("@i-harness/core-session").ContextBindingMetadata | undefined>
   setVideoAudioModel?(selection: { provider: string; model: string } | null): Promise<void>
   analyzeVideoAudio?(input: VideoAudioInput): Promise<VideoAudioResult>
   directory(): Promise<ProviderRuntimeEntry[]>

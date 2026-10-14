@@ -47,6 +47,8 @@ export interface PersistenceBackend {
    * Optional because read-only/custom backends may not support writable crash
    * recovery; loadOwned fails closed when a rewrite is required. */
   replaceEvents?(sessionId: string, events: SessionEvent[]): Promise<void>
+  /** Durable header barrier preserving raw body and metadata; called directly under the operation gate. */
+  upgradeSessionFormat?(sessionId: string, expected: number, target: number): Promise<SessionMeta>
   capabilities: { seekableRead: boolean; rawArtifacts: boolean }
   // Generic non-session document store (M6): arbitrary keyed state such as
   // the subagent registry snapshot. Session-event semantics unchanged.

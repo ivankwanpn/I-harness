@@ -2,9 +2,11 @@ import { CURRENT_FORMAT_VERSION, type SessionEvent } from "@i-harness/core-sessi
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
+import { ensureWritableFormatUnlocked } from "./writable-format.ts"
+import { preflightSessionFormat } from "../format/validation.ts"
 
 export function createMutations(
-  backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta">,
+  backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta" | "read" | "id" | "upgradeSessionFormat">,
   { lockEnabled, ownerOf, withSessionOperation, ensureOwnership, releaseOwnershipUnlocked }:
     Pick<Ownership, "lockEnabled" | "ownerOf" | "withSessionOperation" | "ensureOwnership" | "releaseOwnershipUnlocked">,
   maxDelayMs: number,
@@ -26,6 +28,8 @@ export function createMutations(
         write: async (events) => {
           await withSessionOperation(sessionId, async () => {
             await ensureOwnership(sessionId)
+            await ensureWritableFormatUnlocked(backend, sessionId)
+            preflightSessionFormat(CURRENT_FORMAT_VERSION, events)
             await backend.append(sessionId, events)
           })
         },
@@ -44,6 +48,7 @@ export function createMutations(
     flushWriteBehinds: () => [...writeBehinds.values()].map((wb) => wb.flush()),
     cancelAutomaticWaits() { for (const wb of writeBehinds.values()) wb.cancelAutomaticWait() },
     async create(meta?: Partial<SessionMeta>) {
+      if (meta?.formatVersion !== undefined && meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("cannot create a downgraded session format")
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       assertWritable(id)
       return withSessionOperation(id, async () => {
@@ -53,10 +58,10 @@ export function createMutations(
         const acquired = lockEnabled && !ownerOf(id)
         await ensureOwnership(id)
         const fullMeta: SessionMeta = {
-          formatVersion: CURRENT_FORMAT_VERSION,
           sessionId: id,
           createdAt: new Date().toISOString(),
           ...meta,
+          formatVersion: CURRENT_FORMAT_VERSION,
         }
         try {
           await backend.create(id, fullMeta)
@@ -73,6 +78,8 @@ export function createMutations(
       assertWritable(sessionId)
       await withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId) // acquire-at-first-use (M23)
+        await ensureWritableFormatUnlocked(backend, sessionId)
+        preflightSessionFormat(CURRENT_FORMAT_VERSION, events)
         await backend.append(sessionId, events)
       })
     },
@@ -83,10 +90,12 @@ export function createMutations(
     },
     async updateMeta(sessionId: string, patch: Partial<SessionMeta>) {
       assertWritable(sessionId)
+      if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("cannot downgrade session format")
       // Mutating path (M23 discipline, same as append): the rewrite must be
       // serialized with appends/write-behind flushes on the same session.
       return withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId)
+        await ensureWritableFormatUnlocked(backend, sessionId)
         return backend.updateMeta(sessionId, patch)
       })
     },
@@ -98,7 +107,14 @@ export function createMutations(
       assertWritable(sessionId)
       // CLI resume path: after a successful load(), hold the lease until
       // close(). Conflict → SessionLockConflictError (fail-closed).
-      await withSessionOperation(sessionId, () => ensureOwnership(sessionId))
+      const pending = writeBehinds.get(sessionId)
+      if (pending) await pending.flush()
+      await withSessionOperation(sessionId, async () => {
+        const acquired = lockEnabled && !ownerOf(sessionId)
+        await ensureOwnership(sessionId)
+        try { await ensureWritableFormatUnlocked(backend, sessionId) }
+        catch (error) { if (acquired) await releaseOwnershipUnlocked(sessionId).catch(() => {}); throw error }
+      })
     },
     async releaseOwnership(sessionId: string) {
       await withSessionOperation(sessionId, () => releaseOwnershipUnlocked(sessionId))

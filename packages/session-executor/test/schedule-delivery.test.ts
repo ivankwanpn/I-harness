@@ -91,7 +91,7 @@ function batchCoordinator(failFirstFlush = false): BatchCoordinator {
         pending = []
       }
     },
-    load: async () => ({ session: { formatVersion: 1, events: [...written] } }),
+    load: async () => ({ session: { formatVersion: 2, events: [...written] } }),
     list: async () => ["s"],
     close: async () => {},
     putDocument: async () => {},

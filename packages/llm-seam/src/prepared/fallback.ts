@@ -36,7 +36,13 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
         packet: { sizeKind: "neutral-envelope-estimate" as const, sdkCommandBytesEstimate: Buffer.byteLength(JSON.stringify({ system: captured.systemPrompt, tools: captured.tools, messages: captured.messages })), inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: 0, signatureBytes: 0 }
       }),
       withOutputCap: derive,
-      stream: (control?: PreparedStreamControl) => client.stream({ ...snapshotModelData(captured), maxOutputTokens: cap, ...preparedControls(captured, control) }),
+      stream: (control?: PreparedStreamControl) => {
+        const actual = preparedControls(captured, control)
+        actual.validateBeforeTransport?.()
+        const { validateBeforeTransport: _guard, ...executionControl } = actual
+        const { validateBeforeTransport: _capturedGuard, maxOutputTokens: _previousCap, ...data } = snapshotModelData(captured)
+        return client.stream({ ...data, ...(cap !== undefined ? { maxOutputTokens: cap } : {}), ...executionControl })
+      },
     })
   }
   return derive(captured.maxOutputTokens)

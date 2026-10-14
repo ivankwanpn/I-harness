@@ -81,7 +81,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the child sessionId link", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "completed", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "completed", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc",
     })
     const snap = snapshotState(s)
@@ -94,7 +94,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the child roleName", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "research",
     })
     const snap = snapshotState(s)
@@ -107,7 +107,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the recorded model label", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "general", modelLabel: "gw:small",
     })
     const snap = snapshotState(s)
@@ -121,7 +121,7 @@ describe("subagent state snapshot", () => {
   it("snapshotState/restoreState round-trip the inbox consumption cursor (lastInboxSeq)", () => {
     const s = makeState()
     s.table.add("root/helper", {
-      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 2, events: [] as never[] }; return x })(),
       controller: new AbortController(), mailbox: [], sessionId: "child-abc", lastInboxSeq: 6,
     })
     const snap = snapshotState(s)
@@ -168,8 +168,8 @@ describe("subagent state snapshot", () => {
       formatVersion: 1,
       jobs: [],
       agentTable: [
-        { path: "root/wait", status: "waiting", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c1" },
-        { path: "root/run", status: "running", session: { formatVersion: 1, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c2" },
+        { path: "root/wait", status: "waiting", session: { formatVersion: 2, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c1" },
+        { path: "root/run", status: "running", session: { formatVersion: 2, events: [] }, controller: new AbortController(), mailbox: [], sessionId: "c2" },
       ],
       roles: [],
     }
@@ -199,7 +199,7 @@ describe("persistent wrappers", () => {
     const table = createAgentTable()
     const save = vi.fn(async () => {})
     const wrapped = persistentAgentTable(table, save)
-    wrapped.add("root/helper", { path: "root/helper", status: "running", session: (() => { const s = { formatVersion: 1, events: [] as never[] }; return s })(), controller: new AbortController(), mailbox: [] })
+    wrapped.add("root/helper", { path: "root/helper", status: "running", session: (() => { const s = { formatVersion: 2, events: [] as never[] }; return s })(), controller: new AbortController(), mailbox: [] })
     expect(save).toHaveBeenCalledTimes(1)
     wrapped.remove("root/helper")
     expect(save).toHaveBeenCalledTimes(2)

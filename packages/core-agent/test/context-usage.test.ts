@@ -45,7 +45,7 @@ it("reports component bytes and a measured cache ratio separately from raw provi
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
   await createAgent(ctx, { session, tools, model, systemPrompt: "中文", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
-  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "estimate" })
+  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "neutral-only" })
   expect(events.find(event => event.type as string === "provider/cache")?.data).toEqual({ cacheReadReported: true, totalInputTokens: 1000, cacheReadTokens: 900, cacheReadRatio: .9 })
   expect(events.find(event => event.type === "provider/usage")?.data).toMatchObject({ inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80 })
 })

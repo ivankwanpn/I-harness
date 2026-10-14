@@ -182,6 +182,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // deps object is what createSubagentTools reads, so a value not copied
     // onto it does not exist for the tool. Absent stays absent.
     get contextWindow() { return opts.contextWindow },
+    inheritedBindingForStep: opts.inheritedBindingForStep,
+      get contextMetadata() { return opts.contextMetadata },
+      get reasoningEffort() { return opts.reasoningEffort },
     get maxOutputTokens() { return opts.maxOutputTokens },
     tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the

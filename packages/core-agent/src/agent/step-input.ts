@@ -2,7 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
-import { assertMessagesFromLog, clampOutputCap, type LLMRequest } from "@i-harness/llm-seam"
+import { assertMessagesFromLog, type LLMRequest } from "@i-harness/llm-seam"
 import type { AgentDeps, AgentConfig, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 
@@ -97,24 +97,16 @@ export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentCon
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
       ...(deps.sessionId === undefined ? {} : { promptCache: { key: `ih_${createHash("sha256").update(deps.sessionId).digest("hex").slice(0, 48)}` } }),
-      // M72 Ⅱ: the cap the host resolved for this model, CLAMPED here because
-      // this is the only place that holds all three inputs at once: the value
-      // (deps), the window (context.budgetCfg) and the input we are about to send.
-      // Estimated with the same meter the budget check uses, plus the same
-      // overhead it charges — so the clamp and the compaction ladder agree on
-      // what "the input" costs. Absent deps value → absent field.
+      // Preserve the host ceiling until the adapter has prepared actual input.
+      // Admission derives the numeric cap on that same frozen capability.
       ...(context.outputCap !== undefined
         ? {
-            maxOutputTokens: clampOutputCap(
-              context.outputCap,
-              context.budgetCfg?.contextWindow,
-              context.contextEstimate(deps.modelOverheadTokens?.() ?? context.budgetCfg?.overheadTokens ?? 0).tokens,
-            ),
+            maxOutputTokens: context.outputCap,
           }
         : {}),
       // M32 T3: verbatim effort passthrough (absent → the field is never set;
       // the adapter's translateReasoning owns the wire vocabulary).
-      ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
+      ...(context.reasoningEffort !== undefined ? { reasoningEffort: context.reasoningEffort } : {}),
       // M61: the turn's abort signal rides the request so cancel reaches the
       // transport — the loop only checks `aborted` when an event ARRIVES, so
       // a provider parked on a silent socket could not be stopped.
@@ -168,16 +160,6 @@ export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentCon
         ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
       },
     })
-    if (deps.telemetry) {
-      const estimate = context.contextMeter.estimate(request, deps.modelOverheadTokens?.() ?? context.budgetCfg?.overheadTokens ?? 0, requestRevision)
-      deps.telemetry.emit({ type: "provider/context", ts: Date.now(), data: {
-        systemBytes: Buffer.byteLength(request.systemPrompt),
-        schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)),
-        historyBytes: Buffer.byteLength(JSON.stringify(request.messages)),
-        toolResultBytes: request.messages.filter(message => message.role === "tool").reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message.content)), 0),
-        estimatedInputTokens: estimate.tokens, estimateSource: estimate.source,
-      } })
-    }
 
     return { request, requestRevision }
   }

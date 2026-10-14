@@ -1,4 +1,4 @@
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SubagentToolDeps } from "../tools/types.ts"
@@ -41,7 +41,8 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // reason it does at spawn: a rebuild that kept only the client would run the
   // same model at the adapter default.
   let model = deps.parentModel
-  let reasoningEffort: ReasoningEffort | undefined
+  let reasoningEffort: ReasoningEffort | undefined = deps.reasoningEffort
+  let contextMetadata = deps.contextMetadata
   // M73: the same two numbers spawnChild carries, from the same two sources —
   // a rebuild is a spawn with a restored log, and a budget that appeared only
   // on the first one would vanish on every resume.
@@ -54,6 +55,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     reasoningEffort = state.binding.reasoningEffort
     contextWindow = state.binding.contextWindow
     maxOutputTokens = state.binding.maxOutputTokens
+    contextMetadata = state.binding.contextMetadata
   }
   if (entry.closing || deps.table.get(entry.path) !== entry) {
     await childCtx.scope.unmount()
@@ -103,9 +105,11 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    ...(declared === undefined && deps.inheritedBindingForStep ? { bindingForStep: deps.inheritedBindingForStep } : {}),
     isSubagent: true,
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
+    contextMetadata,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),
     systemPrompt, signal: controller.signal,
@@ -133,6 +137,10 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     // team member via the durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
   })
+  if (childReg.get("get_context_remaining")) {
+    childReg.unregister("get_context_remaining")
+    registerContextRemaining(childCtx, childReg, { contextWindow, budgetRead: () => agent.contextBudget!() })
+  }
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
   deps.table.update(entry.path, entry, {
     status: "waiting", closing: false, controller, toolRegistry: childReg, modelLabel,

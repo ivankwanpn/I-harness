@@ -1,6 +1,8 @@
 import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import type { LLMRequest, LLMStreamEvent } from "../index.ts"
 export interface PreparedStreamControl {
+  /** Owned synchronous validation after execution-time awaits, immediately before send. */
+  validateBeforeTransport?: () => void
   signal?: AbortSignal
   onStreamActivity?: LLMRequest['onStreamActivity']
   onTerminalResponse?: LLMRequest['onTerminalResponse']

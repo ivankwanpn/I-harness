@@ -35,6 +35,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
+        request.validateBeforeTransport?.()
         try {
           response = await (capturedConfig.fetch ?? globalThis.fetch)(`${baseUrl}/v1/chat/completions`, {
             method: "POST",
