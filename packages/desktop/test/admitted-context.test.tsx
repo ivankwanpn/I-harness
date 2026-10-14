@@ -65,5 +65,3 @@ it("rejects invalid or cross-owner snapshots while preserving legacy gateway rea
   expect(readSessionContextState(state, "other").kind).toBe("unavailable")
   expect(readSessionContextState({ kind: "ready", estimatedTokens: 12, contextWindow: 100 })).toEqual({ kind: "ready", estimatedTokens: 12, contextWindow: 100 })
 })
-
-

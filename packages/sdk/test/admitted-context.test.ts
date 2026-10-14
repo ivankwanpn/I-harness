@@ -121,6 +121,3 @@ it("preserves actual image uncertainty through the shared SDK contract without i
     expect(fetch).not.toHaveBeenCalled()
   } finally { fetch.mockRestore() }
 })
-
-
-
