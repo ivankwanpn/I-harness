@@ -1,6 +1,6 @@
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, deriveMessages, deriveContextRecovery, fromJSONL, toJSONL } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, deriveContextRecovery, fromJSONL, toJSONL } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { wrapPreparedRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
@@ -229,6 +229,29 @@ it("an explicit different known provider gets fresh actual admission and retains
   expect((await agent.followup("continue")).finalText).toBe("accepted")
   expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
   expect(deriveContextRecovery(f.session, "owned", metadata("first-provider"))).toMatchObject({ recoveryId: previous.recoveryId, state: "blocked" })
+})
+
+it.each(["ambiguous", "known-b"] as const)("%s identity preserves consumed A while known B keeps its own actual retry", async identity => {
+  const f = fixture({ repeat: true }); await f.seed.run("original task ".repeat(1500))
+  const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
+  await expect(createAgent(f.ctx, { ...f.deps, contextMetadata: metadata("provider-a") }).followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
+  expect(f.attempts).toHaveLength(2)
+  const consumedA = deriveContextRecovery(f.session, "owned", metadata("provider-a"))!
+  expect(consumedA.retryConsumed).toBe(true)
+  const initial = f.session.events.find(event => event.type === "context/recovery" && event.state === "required")!
+  if (initial.type !== "context/recovery") throw new Error("controlled rejected measurement missing")
+  // Controlled persisted B rejection uses the real adapter's larger rejected
+  // input measurements. Current summarized input qualifies as reduced for B.
+  append(f.session, { type: "context/recovery", version: 1, ownerSessionId: "owned", recoveryId: "unconsumed-provider-b", logicalStepSeq: initial.logicalStepSeq,
+    bindingFingerprint: initial.bindingFingerprint, rejectedInputFingerprint: initial.rejectedInputFingerprint, shapeFingerprint: initial.shapeFingerprint,
+    inputCost: initial.inputCost, inputBytes: initial.inputBytes, modelId: "fixture", protocol: "openai-compatible", providerId: "provider-b", state: "blocked", retryConsumed: false })
+  const restored = fromJSONL(toJSONL(f.session))
+  expect(deriveContextRecovery(restored, "owned", metadata("provider-b"))).toMatchObject({ recoveryId: "unconsumed-provider-b", retryConsumed: false })
+  const agent = createAgent(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: identity === "known-b" ? metadata("provider-b") : undefined })
+  await expect(agent.followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
+  expect(f.attempts).toHaveLength(identity === "known-b" ? 3 : 2)
+  expect(deriveContextRecovery(restored, "owned", metadata("provider-a"))).toMatchObject({ recoveryId: consumedA.recoveryId, retryConsumed: true })
+  expect(f.effects).toBe(1)
 })
 
 it.each(["length", "content_filter"])("fences an entire explicitly %s tool batch with complete-looking arguments", async reason => {

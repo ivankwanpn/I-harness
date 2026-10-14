@@ -57,3 +57,20 @@ it("unknown provider identity cannot let a different provider's resolution hide 
   expect(deriveContextRecovery(restored, "s", { providerId: "second-provider", modelId: "m", protocol: "p" })).toMatchObject({ recoveryId: "second", state: "resolved" })
   expect(deriveContextRecovery(restored, "s")?.state).toBe("resolved")
 })
+
+it.each([
+  ["provider-a", "provider-b", undefined],
+  [undefined, "provider-b", "provider-b"],
+  ["provider-a", undefined, "provider-a"],
+] as const)("applicable consumed %s cannot be weakened by newer unconsumed %s under provider %s", (providerA, providerB, selectedProvider) => {
+  const session = createSession()
+  const base = { version: 1 as const, ownerSessionId: "s", logicalStepSeq: 7, bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "b".repeat(64), modelId: "m", protocol: "p" }
+  append(session, { type: "context/recovery", ...base, recoveryId: "consumed-a", providerId: providerA, state: "blocked", retryConsumed: true })
+  append(session, { type: "context/recovery", ...base, recoveryId: "unconsumed-b", providerId: providerB, state: "blocked", retryConsumed: false })
+  const restored = fromJSONL(toJSONL(session))
+  expect(deriveContextRecovery(restored, "s", { modelId: "m", protocol: "p", providerId: selectedProvider })).toMatchObject({ recoveryId: "consumed-a", state: "blocked", retryConsumed: true })
+  if (providerA && providerB) {
+    expect(deriveContextRecovery(restored, "s", { modelId: "m", protocol: "p", providerId: providerB })).toMatchObject({ recoveryId: "unconsumed-b", retryConsumed: false })
+  }
+  expect(deriveContextRecovery(restored, "s")).toMatchObject({ recoveryId: "unconsumed-b", retryConsumed: false })
+})

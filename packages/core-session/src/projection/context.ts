@@ -16,6 +16,7 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
   }
   if (!binding) return current
   current = undefined
+  const restriction = (facts: ContextRecoveryFacts) => facts.state === "resolved" ? 0 : facts.retryConsumed || facts.state === "retry-started" ? 2 : 1
   for (const folded of recoveries.values()) {
     // Legacy facts lacking a model tuple remain conservative. Ambiguous edits
     // to settings of the same tuple cannot clear known provider rejection.
@@ -26,8 +27,9 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
       if (folded.modelId !== binding.modelId || folded.protocol !== binding.protocol || providerChanged) continue
     }
     // Unknown provider identity can make several concrete lanes applicable.
-    // A different recovery's success cannot settle their known rejection.
-    if (current && current.state !== "resolved" && folded.state === "resolved") continue
+    // Preserve the strongest applicable restriction: consumed unresolved,
+    // unconsumed unresolved, then resolved. Recency only breaks equal ranks.
+    if (current && restriction(current) > restriction(folded)) continue
     current = folded
   }
   return current
