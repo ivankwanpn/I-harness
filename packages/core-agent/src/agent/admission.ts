@@ -8,8 +8,7 @@ import type { createStepInput } from "./step-input.ts"
 export function stalePreparedInput(): Error { return Object.assign(new Error("Model-visible input remained unstable during prepared admission"), { code: "CONTEXT_INPUT_STALE" }) }
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
 export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>) {
-  const revision = () => projectionFingerprint({ messages: deriveMessages(deps.session), system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
-    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: context.reasoningEffort, binding: context.metadata(), rewrite: context.projectionRevision() })
+  const revision = () => projectionFingerprint({ messages: deriveMessages(deps.session), surface: context.requestSurfaceFingerprint() })
   return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state = { staleRebuilds: 0, compacted: false }) {
     while (true) {
       abort?.throwIfAborted()

@@ -19,6 +19,30 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it.each(["success", "refusal"] as const)("fences the legacy model builder behind held writable acquisition (%s)", async outcome => {
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const builder = vi.fn(async () => createMockClient([]))
+    const service = createSessionService({ workspace: process.cwd(), modelBuilder: builder, sessionFor: async () => {
+      entered.resolve(); await release.promise
+      if (outcome === "refusal") throw new Error("writable format barrier refused")
+      return createSession()
+    } })
+    const pending = service.assemblyFor("legacy-barrier").then(value => ({ value }), error => ({ error }))
+    try {
+      await entered.promise
+      expect(builder).not.toHaveBeenCalled()
+      release.resolve()
+      const result = await pending
+      if (outcome === "success") {
+        expect(result).toHaveProperty("value.sessionId", "legacy-barrier")
+        expect(builder).toHaveBeenCalledTimes(1)
+      } else {
+        expect(result).toHaveProperty("error.message", "writable format barrier refused")
+        expect(builder).not.toHaveBeenCalled()
+      }
+    } finally { release.resolve(); await pending; await service.close() }
+  })
+
   it("optionally attaches existing assemblies, keeps default future-only, and detaches after unsubscribe", async () => {
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
     try {

@@ -36,7 +36,13 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   let hasMetadataOverride = false
   let metadataOverride: ContextBindingMetadata | undefined
   const metadata = () => inherited ? inherited.contextMetadata : hasMetadataOverride ? metadataOverride : typeof deps.contextMetadata === "function" ? deps.contextMetadata() : deps.contextMetadata
-  const ownedBudget = createOwnedBudget(deps.session, deps.sessionId ?? `anonymous-${randomUUID()}`, metadata, projectionRevision)
+  const reasoningEffort = () => inherited ? inherited.reasoningEffort : deps.reasoningEffort
+  // Pure live request surface, shared by admission and scalar freshness. History
+  // has its own accepted fingerprint so output does not require a shadow prepare.
+  const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), rewrite: projectionRevision() })
+  const ownedBudget = createOwnedBudget(deps.session, deps.sessionId ?? `anonymous-${randomUUID()}`, metadata, projectionRevision,
+    () => ({ surface: requestSurfaceFingerprint(), model: deps.model, bindingIdentity: deps.modelBindingIdentity?.() }))
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
@@ -94,10 +100,10 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   }
 
   return {
-    contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent,
+    contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint,
     readBudget: () => bindingIsCurrent() ? ownedBudget.read() : { kind: "unavailable" as const, reason: "Inherited model binding changed before the next logical step" },
     get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? deps.compact?.contextWindow },
-    get reasoningEffort() { return inherited ? inherited.reasoningEffort : deps.reasoningEffort },
+    get reasoningEffort() { return reasoningEffort() },
     get compactor() { return compactor },
     get compactEnabled() { return compactEnabled },
     get budgetCfg() { return budgetCfg },

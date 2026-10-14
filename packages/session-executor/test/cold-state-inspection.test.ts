@@ -20,6 +20,32 @@ it("a legacy live Agent without an owned reader is unavailable without recursive
   } finally { await service.close() }
 })
 
+it("prefers the live owner published while cold metadata inspection is held", async () => {
+  const entered = Promise.withResolvers<void>(), releaseMetadata = Promise.withResolvers<void>()
+  const streaming = Promise.withResolvers<void>(), releaseModel = Promise.withResolvers<void>()
+  const inspect = vi.fn(async () => { entered.resolve(); await releaseMetadata.promise; return undefined })
+  const service = createSessionService({ workspace: process.cwd(), session: createSession(), contextWindow: 100_000,
+    modelMetadataFor: inspect, model: { async *stream() {
+      streaming.resolve(); await releaseModel.promise
+      yield { type: "text/chunk", text: "done" }; yield { type: "end" }
+    } } })
+  const reading = service.contextState("metadata-race")
+  let turn: Promise<void> | undefined
+  try {
+    await entered.promise
+    turn = service.submit("metadata-race", "live prompt", new AbortController().signal)
+    await streaming.promise
+    const owner = (await service.assemblyFor("metadata-race")).agent.contextBudget!()
+    expect(owner.kind === "ready" && owner.snapshot.admission).toBe("fit")
+    releaseMetadata.resolve()
+    expect(await reading).toMatchObject({ kind: "ready", estimatedTokens: owner.kind === "ready" ? owner.snapshot.admissionInputTokens : undefined })
+    expect(inspect).toHaveBeenCalledTimes(1)
+  } finally {
+    releaseMetadata.resolve(); releaseModel.resolve()
+    await reading.catch(() => {}); await turn?.catch(() => {}); await service.close()
+  }
+})
+
 it.each([false, true])("keeps cold per-ID Context ownership when a static fallback also exists (snapshot=%s)", async snapshotAvailable => {
   const root = await mkdtemp(join(tmpdir(), "ih-context-owner-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
   const staticSession = createSession(), targetSession = createSession()

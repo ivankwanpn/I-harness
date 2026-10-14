@@ -1,10 +1,50 @@
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, fromJSONL, toJSONL } from "@i-harness/core-session"
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { wrapPreparedRequest, type PreparedModelRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
-import { createAgent } from "../src/index.ts"
+import { createAgent, type AgentDeps, type AgentConfig } from "../src/index.ts"
+
+it.each(["prompt", "schema", "effort", "concrete-binding", "client"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let prompt = "original", identity: object = {}, preparations = 0, transports = 0, hooks = 0, claims = 0
+  ctx.on("agent/pre-step", () => { hooks++ })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const client = (): ModelClient => ({ async *stream() { throw new Error("unprepared") }, async prepare(request) {
+    const index = ++preparations, candidate = await actual.prepare!(request)
+    return wrapPreparedRequest(candidate, (_stream, control) => (async function*() {
+      if (index === 1) { entered.resolve(); await release.promise }
+      control?.validateBeforeTransport?.(); transports++
+      yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
+    })())
+  } })
+  const deps: AgentDeps & AgentConfig = { session, tools, model: client(), systemPrompt: () => prompt, reasoningEffort: "high",
+    modelBindingIdentity: () => identity, budget: { contextWindow: 200000 }, maxOutputTokens: 2048,
+    stepInputs: { claimAtStepBoundary() { claims++ } } }
+  const agent = createAgent(ctx, deps)
+  registerContextRemaining(ctx, tools, { budgetRead: () => agent.contextBudget!() })
+  const run = agent.run("first")
+  try {
+    await entered.promise
+    const before = agent.contextBudget!()
+    expect(before.kind === "ready" && before.snapshot.admission).toBe("fit")
+    expect((await tools.execute({ name: "get_context_remaining", args: {} })).output).toMatchObject({ kind: "ready", percentage: expect.any(Number) })
+    if (mutation === "prompt") prompt = "changed system"
+    if (mutation === "schema") tools.register({ name: "new_catalogue_tool", description: "changed catalogue", inputSchema: { type: "object" }, isReadOnly: true, async execute() { return "ok" } })
+    if (mutation === "effort") deps.reasoningEffort = "off"
+    if (mutation === "concrete-binding") identity = {}
+    if (mutation === "client") deps.model = client()
+    expect(agent.contextBudget!()).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/surface|binding/) })
+    const output = (await tools.execute({ name: "get_context_remaining", args: {} })).output
+    expect(output).toMatchObject({ kind: "unavailable" })
+    expect(output).not.toHaveProperty("percentage")
+    expect(preparations).toBe(1); expect(transports).toBe(0)
+    release.resolve(); await run
+    expect(preparations).toBe(2); expect(transports).toBe(1); expect(hooks).toBe(1); expect(claims).toBe(1)
+  } finally { release.resolve(); await run.catch(() => {}) }
+})
 
 it.each(["prepare", "execution"] as const)("refreshes inherited limits after a held %s retarget without replaying hooks", async boundary => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)

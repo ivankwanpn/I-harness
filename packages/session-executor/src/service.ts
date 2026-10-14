@@ -466,6 +466,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (assemblies.has(sessionId)) return contextState(sessionId)
     if (!opts.modelMetadataFor) return { kind: "unavailable", reason: "Read-only model binding metadata is unavailable" }
     const metadata = await opts.modelMetadataFor(sessionId, meta)
+    if (assemblies.has(sessionId)) return contextState(sessionId)
     if (!metadata || metadata.identityCoverage !== "complete" || !metadata.bindingConfigFingerprint) return { kind: "unavailable", reason: "Complete model binding identity is unavailable" }
     const saved = session && deriveContextBudget(session, sessionId)
     if (!saved || saved.identityCoverage !== "complete" || saved.bindingConfigFingerprint !== metadata.bindingConfigFingerprint
@@ -598,9 +599,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         } else {
           // Legacy path retained for explicit embedders; production apps use
           // modelBindingFor so state and construction share one resolution.
+          const resolvedSession = await writableSessionFor(sessionId)
           const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
           const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
-          const resolvedSession = await writableSessionFor(sessionId)
           // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
           // decides even when it resolves to undefined (fail-closed).
           const contextWindow = opts.contextWindowFor === undefined

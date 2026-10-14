@@ -3,11 +3,13 @@ import { checkBudget, createContextMeter, projectionFingerprint, type PreparedRe
 import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
-export function createOwnedBudget(session: Session, ownerSessionId: string, metadata: () => ContextBindingMetadata | undefined, revision: () => number) {
+export function createOwnedBudget(session: Session, ownerSessionId: string, metadata: () => ContextBindingMetadata | undefined, revision: () => number,
+  freshness: () => { surface: string; model: object; bindingIdentity?: object }) {
   const calibration = createContextMeter({ ownerSessionId, restored: deriveContextUsage(session, ownerSessionId) })
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
   let bindingRevision = 0
   let acceptedFingerprint: string | undefined
+  let capturedFreshness: ReturnType<typeof freshness> | undefined
   const neutralFingerprint = () => projectionFingerprint(deriveMessages(session))
   return {
     invalidateCalibration() { calibration.invalidate() },
@@ -16,6 +18,11 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, meta
       if (latest.kind === "ready" && acceptedFingerprint !== undefined && neutralFingerprint() !== acceptedFingerprint) return { kind: "unavailable", reason: "Model-visible history changed since the prepared budget" }
       if (latest.kind === "ready" && latest.snapshot.projectionRevision !== revision()) return { kind: "unavailable", reason: "Projection revision changed since the prepared budget" }
       if (latest.kind === "ready" && latest.snapshot.bindingConfigFingerprint !== metadata()?.bindingConfigFingerprint) return { kind: "unavailable", reason: "Model configuration identity changed since the prepared budget" }
+      if (latest.kind === "ready" && capturedFreshness) {
+        const current = freshness()
+        if (current.model !== capturedFreshness.model || current.bindingIdentity !== capturedFreshness.bindingIdentity) return { kind: "unavailable", reason: "Concrete model binding changed since the prepared budget" }
+        if (current.surface !== capturedFreshness.surface) return { kind: "unavailable", reason: "Model request surface changed since the prepared budget" }
+      }
       if (latest.kind === "ready") {
         const recovery = deriveContextRecovery(session, ownerSessionId)
         const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
@@ -57,6 +64,7 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, meta
         ...(available !== undefined ? { remainingInputBudget: Math.max(0, available - outputReserve) } : {}), admission: unavailable ? "unavailable" as const : fits ? "fit" as const : "compact" as const,
         recoveryRequired, fullByProvider, ...(unavailable ? { reason: incomplete ? "Prepared input includes unpriced fixed provider references" : "This model has no configured context window" } : recoveryRequired ? { reason: "Provider context recovery remains required" } : {}) }
       latest = { kind: "ready", snapshot: freezePreparedFacts(snapshot) }
+      capturedFreshness = freshness()
       acceptedFingerprint = snapshot.neutralFingerprint
       return { prepared: candidate, snapshot }
     },
