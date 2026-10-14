@@ -1,6 +1,6 @@
 import { prepareModelRequest, modelFailureFacts } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
-import { deriveMessagesUpTo, type Session } from "@i-harness/core-session"
+import { deriveMessages, type Session } from "@i-harness/core-session"
 import { sliceMessages } from "./slices.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
@@ -222,7 +222,12 @@ export async function summarizeWithModel(
   type Piece = { messages: LLMMessage[]; text: string; shrinks: number; rejectedTokens?: number }
   let whole = prefix?.messages ?? []
   if (!prefix && region) {
-    try { whole = deriveMessagesUpTo(region.session, Math.max(...region.shadowedSeqs)) }
+    // Distinct text splits must incorporate the same selected events/anchor
+    // that the commit will replace, never a broader historical prefix. Keep
+    // invisible substitutions and admissions needed to materialize their data.
+    const selected = new Set(region.shadowedSeqs)
+    try { whole = deriveMessages({ ...region.session, events: region.session.events.filter(event =>
+      event.type === "compaction/prune" || event.type === "agent/input/admitted" || event.seq !== undefined && selected.has(event.seq)) }) }
     catch { whole = [{ role: "user", content: replayText }] } // malformed legacy images remain descriptor text
   }
   const pending: Piece[] = [{ messages: whole, text: replayText, shrinks: 0 }]
