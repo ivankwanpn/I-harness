@@ -25,8 +25,8 @@ The plugin fix changes only the common root parser: an own `mcpServers` property
 Root is the sole remote/build actor. Normal non-force pushes backed up reviewed a1216088, then936267ae, to `origin/codex/v0.1.13-development` at `https://github.com/ivankwanpn/I-harness.git`.
 
 - Draft PR: [#17](https://github.com/ivankwanpn/I-harness/pull/17), attached to this task.
-- Draft prerelease: [v0.1.13-rc.1 preparation](https://github.com/ivankwanpn/I-harness/releases/tag/untagged-603945805a255cafe083).
-- The draft initially targeted a1216088; Root updates its target/body after final checkpoint push. It has **no assets and is not published**. Preparing a draft does not make source0.1.12 an rc.1 build.
+- Draft prerelease: [v0.1.13-rc.1 preparation](https://github.com/ivankwanpn/I-harness/releases/tag/untagged-6ac5e8fa4cc2ecd2e22b).
+- Root pushed the docs checkpoint ccbdec5a and updated the draft target to that commit. GitHub changed the draft URL when the target changed; the link above is the updated address. It has **no assets and is not published**. Preparing a draft does not make source0.1.12 an rc.1 build. The subsequent link-only checkpoint does not change candidate product code or the draft target.
 - Local draft bodies: `.tmp/long-session-repair/release-prep/github-pr.md` and `github-release.md`.
 
 No actual portable/installer build, real install/uninstall or installed-profile change was performed. Formal publication/merge is not authorized by this preparation checkpoint.
