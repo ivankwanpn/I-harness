@@ -121,7 +121,7 @@ it("preserves SDK next rejection cleanup and aborted-read throw behavior", async
   expect(runtime.send.mock.calls[0]?.[1]).toEqual({ abortSignal: controller.signal })
 })
 
-it("keeps injected construction lazy and reads config/callbacks at original boundaries", async () => {
+it("keeps injected construction lazy and freezes input config/callbacks at preparation", async () => {
   const reads: string[] = []
   let model = "anthropic.claude-sonnet-4-6", providerId = "initial"
   const config: BedrockConfig = {
@@ -146,16 +146,16 @@ it("keeps injected construction lazy and reads config/callbacks at original boun
   expect(reads).toEqual([])
   observer = kind => { activities.push(`current:${kind}`) }
   await iterator.next()
-  expect(reads).toEqual(["modalities", "model:anthropic.claude-sonnet-4-6", "model:anthropic.claude-sonnet-4-6", "options", "options", "callback"])
+  expect(reads).toEqual(["callback", "model:anthropic.claude-sonnet-4-6", "provider:initial", "modalities", "options"])
   expect(activities).toEqual(["current:response-start"])
   const command = runtime.send.mock.calls[0]?.[0] as unknown as { input: Record<string, unknown> }
   expect(command.input.modelId).toBe("anthropic.claude-sonnet-4-6")
   expect(command.input).not.toHaveProperty("onStreamActivity")
   model = "terminal-model"; providerId = "terminal-route"
   expect((await iterator.next()).value).toEqual({ type: "end", providerContinuation: {
-    kind: "bedrock", model: "terminal-model", providerId: "terminal-route", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }],
+    kind: "bedrock", model: "anthropic.claude-sonnet-4-6", providerId: "initial", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }],
   } })
-  expect(reads.slice(-3)).toEqual(["model:terminal-model", "provider:terminal-route", "provider:terminal-route"])
+  expect(reads).toHaveLength(5)
   await iterator.next()
 })
 

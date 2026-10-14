@@ -228,7 +228,7 @@ export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): n
 
 // Retry only the model request. Consumers must explicitly opt into discarding
 // output; tools and earlier committed steps never belong to this boundary.
-export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
+function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
   async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     const requestId = randomUUID()
     let attemptNo = 0
@@ -382,6 +382,7 @@ export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, in
 
 export interface ModelClient {
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
+  prepare?(request: LLMRequest): Promise<import("./prepared/types.ts").PreparedModelRequest>
 }
 
 export { createWaitingGuard, reportStreamActivity, type ModelWaitPolicy, type StreamActivity, type TerminalResponseHint } from "./waiting-guard.ts"
@@ -603,4 +604,16 @@ export function clampOutputCap(value: number, contextWindow: number | undefined,
   if (!(hardRoom >= 1)) return value
   const room = hardRoom - OUTPUT_CAP_SAFETY_MARGIN
   return Math.min(value, room >= 1 ? room : hardRoom)
+}
+
+export type { PreparedModelRequest, PreparedStreamControl } from "./prepared/types.ts"
+export type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness/token-meter"
+export { prepareModelRequest } from "./prepared/fallback.ts"
+export { wrapPreparedRequest, withPreparedRequests, mapModelRequest, snapshotModelData, preparedControls, freezePreparedFacts, invalidPreparedRequest, validateOutputCap } from "./prepared/wrappers.ts"
+export { createPreparedPayload } from "./prepared/payload.ts"
+export { preparedModelClient } from "./prepared/wrappers.ts"
+
+import { withPreparedRequests } from "./prepared/wrappers.ts"
+export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
+  return withPreparedRequests(client, inner => createRetryingExecution(inner, policy, metadata))
 }

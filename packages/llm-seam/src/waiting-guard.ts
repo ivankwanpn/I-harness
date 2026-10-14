@@ -13,7 +13,7 @@ export function reportStreamActivity(request: LLMRequest, kind: StreamActivity):
 }
 
 /** A physical-attempt boundary, inside capture and the single retry wrapper. */
-export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
+function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
   const { firstResponseMs, progressMs } = policy
   for (const value of [firstResponseMs, progressMs]) {
     if (!Number.isFinite(value) || value < 0) throw new Error("Model wait deadlines must be non-negative finite milliseconds")
@@ -136,4 +136,20 @@ export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy)
     }
     while (queued.length) yield queued.shift()!
   } }
+}
+
+import { withPreparedRequests, preparedModelClient } from "./prepared/wrappers.ts"
+export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
+  const capturedPolicy = { firstResponseMs: policy.firstResponseMs, progressMs: policy.progressMs }
+  for (const value of [capturedPolicy.firstResponseMs, capturedPolicy.progressMs]) {
+    if (!Number.isFinite(value) || value < 0) throw new Error("Model wait deadlines must be non-negative finite milliseconds")
+  }
+  const wrapped = withPreparedRequests(client, inner => createWaitingExecution(inner, capturedPolicy))
+  return preparedModelClient(async request => {
+    try { return await wrapped.prepare!(request) }
+    catch (error) {
+      if (request.signal?.aborted) throw Object.assign(new Error("Model request aborted"), { name: "AbortError", code: "ABORTED" })
+      throw error
+    }
+  })
 }

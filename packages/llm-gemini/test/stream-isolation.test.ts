@@ -91,7 +91,7 @@ it("releases on corrupt frames without end and rethrows an aborted body read", a
   expect(stream.locked).toBe(false)
 })
 
-it("captures baseUrl once and reads dispatch and continuation config at their original boundaries", async () => {
+it("captures baseUrl once and freezes dispatch and continuation identity at preparation", async () => {
   const reads: string[] = []
   let model = "initial", providerId = "first", baseUrl = "https://fixture.invalid"
   let bodyController: ReadableStreamDefaultController<Uint8Array>
@@ -115,14 +115,14 @@ it("captures baseUrl once and reads dispatch and continuation config at their or
   const pending = iterator.next()
   await vi.waitFor(() => expect(stream.locked).toBe(true))
   expect(dispatchedUrl).toBe("https://fixture.invalid/v1beta/models/initial:streamGenerateContent?alt=sse")
-  expect(reads).toEqual(["baseUrl", "inputModalities", "options", "model:initial", "promptCache", "model:initial", "headers", "apiKey"])
+  expect(reads).toEqual(["baseUrl", "inputModalities", "options", "promptCache", "model:initial", "headers", "apiKey", "providerId:first"])
   model = "terminal"; providerId = "last"
   bodyController!.enqueue(bytes({ candidates: [{ content: { parts: [{ thought: true, text: "plan", thoughtSignature: "signed" }] } }] }))
   expect(await pending).toEqual({ done: false, value: { type: "reasoning", blockId: "0", text: "plan" } })
   bodyController!.close()
   const end = await iterator.next()
   expect(stream.locked).toBe(false)
-  expect(end.value).toMatchObject({ type: "end", providerContinuation: { model: "terminal", providerId: "last" } })
-  expect(reads.slice(8)).toEqual(["model:terminal", "providerId:last", "providerId:last"])
+  expect(end.value).toMatchObject({ type: "end", providerContinuation: { model: "initial", providerId: "first" } })
+  expect(reads).toHaveLength(8)
   await iterator.return?.()
 })

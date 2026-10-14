@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { createRetryingClient, resolveRetryPolicy, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
+import { createRetryingClient, resolveRetryPolicy, mapModelRequest, withPreparedRequests, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import type { buildModelClient } from "@i-harness/provider"
 import type { UsageRecord } from "@i-harness/usage-stats"
 
@@ -25,14 +25,20 @@ export function createUsageCapture(options: {
   return {
     warnings,
     bind(client: ModelClient, sessionId: string): ModelClient {
-      return { stream: request => client.stream({ ...request, sessionId: request.sessionId ?? sessionId }) }
+      return mapModelRequest(client, request => ({ ...request, sessionId: request.sessionId ?? sessionId }))
     },
     buildClient(build: typeof buildModelClient): typeof buildModelClient {
       return (profile, model, extra) => {
+        // Attribution belongs to the same resolved profile that built the
+        // protocol client, even if a caller later replaces its profile fields.
+        profile = { ...profile }
         // The provider builder ordinarily installs retries. Move that one layer
         // outside capture so usage from failed attempts is not discarded by it.
         const client = build({ ...profile, retryPolicy: undefined }, model, extra)
-        const capture: ModelClient = {
+        const capture = withPreparedRequests(mapModelRequest(client, request => {
+          const { sessionId: _sessionId, ...providerRequest } = request
+          return providerRequest
+        }), inner => ({
           async *stream(request) {
             request.signal?.throwIfAborted()
             const { sessionId, ...providerRequest } = request
@@ -47,7 +53,7 @@ export function createUsageCapture(options: {
             let status: UsageRecord["status"] = "cancelled"
             const usage: LLMUsage = {}
             try {
-              for await (const event of client.stream(providerRequest)) {
+              for await (const event of inner.stream(providerRequest)) {
                 if (event.type === "usage") {
                   for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
                     const value = event.usage[key]
@@ -85,7 +91,7 @@ export function createUsageCapture(options: {
               try { await options.record(record) } catch { failedWrites++; notifyWarning() }
             }
           },
-        }
+        }))
         return profile.retryPolicy === undefined ? capture : createRetryingClient(capture, resolveRetryPolicy(profile.retryPolicy), { providerId: profile.name, modelId: model ?? profile.defaultModel })
       }
     },

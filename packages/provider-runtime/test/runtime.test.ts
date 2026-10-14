@@ -1733,3 +1733,15 @@ it("refreshes wait settings on existing binding independently of explicit retry 
  expect(f.builds.at(-1)?.profile.modelWait).toEqual({ firstResponseMs: 0, progressMs: 30000 })
  expect(f.builds.at(-1)?.profile.retryPolicy).toEqual({ mode: "normal", maxRetries: 0 })
 })
+it("prepared binding refreshes live policy once and cap derivatives retain selected execution",async()=>{
+ const f=await fixture({providers:{route:{protocol:"openai-completions",apiKeyEnv:"KEY",models:[{id:"m"}]}},credentials:{KEY:"fixture"}})
+ const ready=await f.runtime.resolveModel({sessionSelection:{provider:"route",model:"m"}})
+ if(ready.status!=="ready")throw new Error("unavailable")
+ await f.settings.set({modelWait:{firstResponseSeconds:0,progressSeconds:30},modelRetryLimit:2})
+ const prepared=await ready.binding.client.prepare!({messages:[],tools:[],systemPrompt:"frozen"})
+ expect(f.builds.at(-1)?.profile.modelWait).toEqual({firstResponseMs:0,progressMs:30000})
+ expect(f.builds.at(-1)?.profile.retryPolicy).toEqual({mode:"normal",maxRetries:2})
+ const builds=f.builds.length
+ for await(const _event of prepared.withOutputCap(4096).stream()){}
+ expect(f.builds).toHaveLength(builds)
+})

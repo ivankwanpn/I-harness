@@ -615,8 +615,8 @@ describe("M72 Ⅰ request-level failures (bedrock)", () => {
       Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
     )
     const controller = new AbortController()
-    controller.abort()
     const client = createBedrockClient({ model: "m" }, fake)
+    controller.abort()
     const events: { type: string }[] = []
     const drain = async (): Promise<void> => {
       for await (const ev of client.stream({
@@ -684,11 +684,13 @@ describe("M72 Ⅰ mid-stream failures (bedrock)", () => {
       Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
     )
     const controller = new AbortController()
-    controller.abort()
     const client = createBedrockClient({ model: "m", region: "us-east-1" }, runtimeWithStream(stream))
     const events: { type: string }[] = []
     const drain = async (): Promise<void> => {
-      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) {
+        events.push(ev)
+        controller.abort()
+      }
     }
     await expect(drain()).rejects.toThrow("aborted")
     // The pre-abort delta was already delivered; NO error event follows it.

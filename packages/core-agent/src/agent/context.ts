@@ -1,6 +1,7 @@
 import { createCompactionEngine, type CompactionConfig } from "@i-harness/compaction"
 import { deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import { checkBudget, createContextMeter } from "@i-harness/token-meter"
+import { mapModelRequest } from "@i-harness/llm-seam"
 import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent } from "./types.ts"
 
 function validateBudget(budget: AgentBudgetConfig | undefined): void {
@@ -43,9 +44,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined) {
     return compact
     ? createCompactionEngine({
-        model: deps.sessionId === undefined ? deps.model : {
-          stream: request => deps.model.stream({ ...request, sessionId: request.sessionId ?? deps.sessionId }),
-        },
+        model: deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId })),
         config: compact,
         ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
         // M73: compaction builds and sends its OWN model request, so it never

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createOpenAICompatibleClient } from "../src/index.ts"
 import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
@@ -71,6 +71,9 @@ describe("Chat stream ownership", () => {
       const client = createOpenAICompatibleClient({ apiKey: "k", model: "m", fetch: async () => new Response(body) })
       const iterator = client.stream({ ...request(), signal: signal.signal })[Symbol.asyncIterator]()
       const next = iterator.next()
+      // This case tests an aborted body read, after preparation has completed.
+      // Cancellation during preparation has its own no-transport contract.
+      await vi.waitFor(() => expect(body.locked).toBe(true))
       if (mode === "read-error" || mode === "abort") {
         if (mode === "abort") signal.abort()
         controller.error(new Error("read failure"))

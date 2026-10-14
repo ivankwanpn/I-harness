@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@i-harness/image-validation": "workspace:*",
-    "@i-harness/core-session": "workspace:*"
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   }
 }

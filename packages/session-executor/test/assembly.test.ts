@@ -580,6 +580,22 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 // assignment reaches THOSE six: they already hold this same object, so none of
 // them is ever re-wired.
 describe("createSessionAssembly — the model handle (R-B1)", () => {
+  it("a preparation keeps its selected client after the stable handle rebinds",async()=>{
+    const first=capturingModel(),second=capturingModel()
+    const dir=mkdtempSync(join(tmpdir(),"ih-prepared-handle-"))
+    const assembly=await createSessionAssembly({workspace:dir,model:first})
+    try {
+      const prepared=await assembly.model.prepare!({systemPrompt:"frozen",messages:[],tools:[]})
+      assembly.setModel(second)
+      for await(const _event of prepared.withOutputCap(4096).stream()){}
+      expect(first.requests).toHaveLength(1)
+      expect(first.requests[0]).toMatchObject({systemPrompt:"frozen",maxOutputTokens:4096})
+      expect(second.requests).toHaveLength(0)
+      const rebound=await assembly.model.prepare!({systemPrompt:"next",messages:[],tools:[]})
+      for await(const _event of rebound.stream()){}
+      expect(second.requests).toHaveLength(1)
+    }finally{await assembly.dispose()}
+  })
   it("a rebound model reaches the handle, and the turn loop reads through it", async () => {
     // The design said "two consumers, one change covers both"; measured, the
     // grouping is in the block header above. This test pins the handle itself

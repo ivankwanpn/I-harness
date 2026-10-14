@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime, type FileProviderRuntimeOptions } from "@i-harness/provider-runtime/file"
 import { buildModelClient } from "@i-harness/provider"
+import { prepareModelRequest, wrapPreparedRequest, preparedControls, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
 import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
@@ -182,16 +183,24 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       : { sessionSelection: meta.modelSelection })
     if (state.status !== "ready") return state
     const { client, ...binding } = state.binding
-    return { status: "ready", binding: { ...binding, model: {
-      stream(request) {
+    const mapRequest = (request: LLMRequest): LLMRequest => {
         const compactSignal = compactionSignals.get(sessionId)
         const signal = compactSignal && request.signal
           ? AbortSignal.any([compactSignal, request.signal])
           : compactSignal ?? request.signal
         signal?.throwIfAborted()
-        return client.stream({ ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) })
+        return { ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) }
+    }
+    const model: ModelClient = {
+      stream: request => client.stream(mapRequest(request)),
+      async prepare(request) {
+        const captured = snapshotModelData(request)
+        const prepared = await prepareModelRequest(client, mapRequest(captured))
+        return wrapPreparedRequest(prepared, (stream, control) =>
+          stream(mapRequest({ ...captured, ...preparedControls(captured, control) })))
       },
-    } } }
+    }
+    return { status: "ready", binding: { ...binding, model } }
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.

@@ -17,7 +17,7 @@ import { createToolRegistry, registerContextRemaining, type PreparedApprovalInpu
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { prepareModelRequest, type ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { agentShellPrompt, registerShell, resolveWslAgentShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
@@ -539,6 +539,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   const model: ModelClient = {
     stream: (request) => currentModel.stream(request),
+    prepare: (request) => {
+      const selected = currentModel
+      return prepareModelRequest(selected, request)
+    },
   }
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx)
