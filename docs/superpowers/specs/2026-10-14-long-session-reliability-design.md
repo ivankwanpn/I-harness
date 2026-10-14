@@ -56,6 +56,10 @@ Full fallback pricing counts all actually projected input components using a doc
 
 Persist compact, owned scalar budget/usage facts and an optional prefix checkpoint: input prefix hash/unit count, shape/binding hashes, normalized reported input/output and heuristic prefix charge. Ephemeral unit vectors/payloads are never persisted. Restore a checkpoint only after owner, binding and prepared-prefix validation. Anonymous memory-only clients remain nonrecoverable. Parent operational facts in fork seeds do not become child facts; seed remapping/filtering is explicit.
 
+The prepared bindingFingerprint certifies only its protocol/provider/model tuple. Add owned bindingConfigFingerprint and identityCoverage from a pure ContextBindingMetadata producer shared by executable binding resolution and metadata inspection. It hashes effective non-secret endpoint/request-affecting configuration, selected capabilities/limits and relevant settings content/revision; a revision counter alone is insufficient for manual/template changes. Secrets and sensitive opaque configuration are not persisted or hashed as equality evidence. Partial identity cannot restore calibration, and it cannot erase recovery-required facts. Every child and explicit summary binding uses its own metadata. SessionService modelMetadataFor reads loaded data without authentication or client creation; an absent metadata inspector returns unavailable for cold inspection.
+
+New writable sessions use Session format2, with identity migration/backward cold import of format1; Desktop/package versions remain unchanged. Unsupported complete event types and operational payload versions are preflighted before any mutating repair, then reread/rechecked under ownership. Owned v1 acquisition upgrades its header durably before exposing a writable session. Add optional backend upgradeSessionFormat(id, expected, target) capability; JSONL uses synced atomic replacement preserving raw body bytes/metadata. Unsupported upgrade capability permits old read-only snapshots and refuses writable upgrade before repair. Fence create/meta downgrade, direct append and write-behind against operational-v1 writes. Flush outside the non-reentrant operation gate, call backend upgrade directly inside it, and preserve failed batch retention. Old v1 coordinator readers refuse a v2 header before their repair; arbitrary old direct-backend callers are outside that guarantee. Windows directory sync retains its actual best-effort limit.
+
 ```ts
 type BudgetRead =
   | { kind:'ready'; snapshot: RequestBudgetSnapshot }
@@ -157,12 +161,14 @@ type PreparedRequestMeasurement = {
 }
 type ContextUsageCheckpoint = {
   version:1;ownerSessionId:string;bindingFingerprint:string;shapeFingerprint:string
+  bindingConfigFingerprint?:string;identityCoverage:'complete'|'partial'
   inputPrefixFingerprint:string;inputUnitCount:number;heuristicPrefixTokens:number
   reportedInputTokens:number;reportedOutputTokens?:number;projectionRevision:number
 }
 type RequestBudgetSnapshot = {
   version:1;ownerSessionId:string;providerId?:string;modelId:string;protocol:string
   bindingFingerprint:string;bindingRevision:number;projectionRevision:number;neutralFingerprint:string
+  bindingConfigFingerprint?:string;identityCoverage:'complete'|'partial'
   estimatedInputTokens:number;admissionInputTokens:number;contextWindow?:number
   estimateSource:'projected-heuristic'|'provider-anchor-plus-projection'|'neutral-only'
   coverage:ProjectedInputFacts['coverage'];confidence:'estimated'|'calibrated-mixed'|'unknown-components'
@@ -170,6 +176,11 @@ type RequestBudgetSnapshot = {
   outputReserve:number;effectiveOutputCap?:number;capSupport:'supported'|'unsupported'|'unknown'
   safetyMargin:number;remainingInputBudget?:number;admission:'fit'|'compact'|'unavailable'
   recoveryRequired:boolean;fullByProvider:boolean;reason?:string
+}
+type ContextBindingMetadata = {
+  version:1;providerId?:string;modelId:string;protocol:string
+  contextWindow?:number;maxOutputTokens?:number;reasoningEffort?:string
+  bindingConfigFingerprint?:string;identityCoverage:'complete'|'partial'
 }
 ```
 

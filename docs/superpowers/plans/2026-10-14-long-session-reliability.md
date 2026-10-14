@@ -77,9 +77,11 @@ expect(prepared.measurement.packet.bodyBytes).toBe(Buffer.byteLength(originalBod
 
 ## Task 3: Install one owned Session budget and admission pipeline
 
-**Files:** Create core-session `events/context.ts`, projection budget/checkpoint folds and persistence known event registrations; token-meter checkpoint/calibration modules; core-agent `agent/{context,budget,step-input,turn,finalization}.ts`; assembly and subagent child/resident binding/budget wiring. Preserve existing facades and role grants.
+**Files:** Create core-session `events/context.ts`, projection budget/checkpoint folds and persistence known event registrations; token-meter checkpoint/calibration modules; core-agent `agent/{context,budget,step-input,turn,finalization}.ts`; assembly and subagent child/resident binding/budget wiring; persistence format/load/writer/header upgrade plus JSONL capability; provider-runtime pure binding metadata and SessionService modelMetadataFor. Preserve existing facades and role grants.
 
 **Interfaces:** `Agent.contextBudget?():BudgetRead`, owned RequestBudgetSnapshot, scalar prefix ContextUsageCheckpoint; metadata events version1. Snapshot reader never prepares/streams/authenticates. Actual binding fields forwarded to compactor/model policies and child context.
+
+**Load-bearing compatibility contract:** ContextBindingMetadata is the spec data-only type; bindingConfigFingerprint/identityCoverage supplement the prepared protocol tuple for restore/rebind, using effective non-secret config+content/revision. Pure describeModelBindingMetadata and modelMetadataFor serve cold reads without executable resolver/auth/client creation. Session format2 new writers plus owned durable v1→v2 upgrade protect older v1 coordinator version gates; event payloads remain version1 and Desktop/package versions unchanged. Optional upgradeSessionFormat(id,expected,target) backend capability preserves raw body/metadata, rejects downgrade/unexpected version, and precedes operational appends. Read/type/payload preflight occurs before mutating repair and again under lease. Cold v1 import stays read-only; unsupported upgrade backend withholds writable v1 acquisition before repair. No coordinator flush/updateMeta inside operation gate; failed queued batches retain exactly-once ownership.
 
 - [ ] RED controlled real agent + actual prepared Anthropic input: 40K signed thinking tail is counted in next admission and snapshot; cache-inclusive/exclusive calibration; prefix/binding/rewrite invalidation; restored scalar prefix checkpoint without payload/vector storage.
 
@@ -94,8 +96,10 @@ expect(state.kind==='ready' && state.snapshot.estimateSource).not.toBe('provider
 - [ ] Prepare after all claimed inputs/hooks/context/catalogue updates. Admit from same facts, output reserve/floor/headroom, derivative cap and final revision check; max3 local stale rebuilds, no hook/inbox replays. Held/rejected budget checkpoint means zero transport.
 - [ ] Per-agent authority for root/no-fork/all-fork/finite-fork/resident children, independent binding/window/effort; inherited parent checkpoint/rejection cannot become child state. Existing role tool grants remain; replace a copied context tool with child reader only where granted.
 - [ ] Old logs load; malformed facts and unsupported operational readers fail nondestructively; no unknown windows invented. UI-visible stale/unavailable facts don't get a healthy percentage.
+- [ ] RED/GREEN real JSONL old/new-format fixture: unsupported event/payload plus torn/open tail stays byte-identical with zero repair/replace; old v1-gate reader refuses v2 first; cold v1 read unchanged; owned synced upgrade preserves body/seq/meta and header-before-event ordering. Hold/reject upgrade/pending flush: no writable assembly/model sideeffect, no deadlock, no lost/duplicate batch. Missing capability refuses before repair, create/meta cannot downgrade.
+- [ ] Pure metadata tests: endpoint/options/manual/template/catalog changes invalidate restored checkpoints; sensitive opaque config remains partial; UI metadata calls no auth/client builder. Snapshot/checkpoint config identity is owned separately from adapter tuple, and incomplete identity preserves required recovery.
 - [ ] Only accepted nontruncated/nonrefused main responses can establish successful calibration/checkpoints; an output-limited batch is not a successful main response.
-- [ ] Run token-meter/core-session/agent/budget/binding/child/fork persistence covering tests/types; commit `fix: unify owned model context admission`; fresh review.
+- [ ] Run token-meter/core-session/agent/budget/binding/child/fork persistence/JSONL/pure-import covering tests/types; commit `fix: unify owned model context admission`; fresh review.
 
 ## Task 4: Make compaction bounded, cancellable and projection-correct
 
