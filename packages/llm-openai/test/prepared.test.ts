@@ -2,6 +2,40 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it.each(["system", "developer"])("prices raw Responses %s string and block policies as fixed system input", async role => {
+  const request: LLMRequest = { systemPrompt: "", tools: [], messages: [] }
+  const options = { input: [
+    { role, content: "fixed policy A" },
+    { role, content: [{ type: "input_text", text: "block policy" }] },
+    { role: "user", content: "hello" },
+    { role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+  ] }
+  let sent: Record<string, unknown> = {}
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return new Response("") })
+  const client = createOpenAIClient({ apiKey: "test", model: "fixture", options })
+  const prepared = await client.prepare!(request)
+  expect(prepared.measurement.input.components.system.textUtf8Bytes).toBe(26)
+  expect(prepared.measurement.input.components.visibleText.textUtf8Bytes).toBe(11)
+  expect(prepared.measurement.input.units.map(unit => unit.role)).toEqual(["user", "assistant"])
+  const originalShape = prepared.measurement.input.shapeFingerprint
+  options.input[0]!.content = "fixed policy B"
+  const stringChanged = await client.prepare!(request)
+  expect(stringChanged.measurement.input.shapeFingerprint).not.toBe(originalShape)
+  options.input[1]!.content = [{ type: "input_text", text: "changed block policy" }]
+  const blockChanged = await client.prepare!(request)
+  expect(blockChanged.measurement.input.shapeFingerprint).not.toBe(stringChanged.measurement.input.shapeFingerprint)
+  options.input[2]!.content = "different user"
+  const historyChanged = await client.prepare!(request)
+  expect(historyChanged.measurement.input.shapeFingerprint).toBe(blockChanged.measurement.input.shapeFingerprint)
+  expect(historyChanged.measurement.input.inputFingerprint).not.toBe(blockChanged.measurement.input.inputFingerprint)
+  for await (const _event of prepared.withOutputCap(4096).stream()) {}
+  expect(sent.input).toEqual([
+    { role, content: "fixed policy A" },
+    { role, content: [{ type: "input_text", text: "block policy" }] },
+    { role: "user", content: "hello" },
+    { role: "assistant", content: [{ type: "output_text", text: "answer" }] },
+  ])
+})
 it("captures nested image data and options before image validation suspends preparation", async () => {
   const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   const imageInput = { mediaType: "image/png" as const, dataBase64: image }

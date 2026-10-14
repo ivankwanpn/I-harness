@@ -2,6 +2,27 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createGeminiClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it.each([1.5, Infinity, -Infinity, NaN, "4096", null, true, {}, -2, Number.MAX_SAFE_INTEGER + 1])("rejects malformed raw thinking budget %s before publishing facts or transport", async budget => {
+  let sends = 0
+  vi.stubGlobal("fetch", async () => { sends++; return new Response("") })
+  const client = createGeminiClient({ apiKey: "test", model: "gemini-2.5-flash", options: { generationConfig: { thinkingConfig: { thinkingBudget: budget } } } })
+  await expect(client.prepare!({ systemPrompt: "", tools: [], messages: [] })).rejects.toMatchObject({
+    code: "INVALID_ARGUMENT",
+    modelFailure: { code: "INVALID_ARGUMENT", reason: "output-limit" },
+  })
+  expect(sends).toBe(0)
+})
+it.each([-1, 0, 4096])("preserves the raw automatic/disabled/numeric thinking budget %s on every derivative", async budget => {
+  let sent: Record<string, any> = {}
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return new Response("") })
+  const prepared = await createGeminiClient({ apiKey: "test", model: "gemini-2.5-flash", options: { thinkingConfig: { thinkingBudget: budget } } }).prepare!({ systemPrompt: "", tools: [], messages: [] })
+  const capped = prepared.withOutputCap(4096)
+  expect(prepared.measurement.output.reasoningBudget).toBe(budget === -1 ? undefined : budget)
+  expect(capped.measurement.output.reasoningBudget).toBe(budget === -1 ? undefined : budget)
+  for await (const _event of capped.stream()) {}
+  expect(sent.generationConfig.thinkingConfig.thinkingBudget).toBe(budget)
+  expect(capped.measurement.packet.bodyBytes).toBe(Buffer.byteLength(JSON.stringify(sent)))
+})
 it("captures nested image data and options before image validation suspends preparation", async () => {
   const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   const imageInput = { mediaType: "image/png" as const, dataBase64: image }

@@ -51,11 +51,18 @@ export function outputFacts(body: Record<string, unknown>, request: LLMRequest, 
   const generation = body.generationConfig as {
     maxOutputTokens?: number
     thinkingConfig?: {
-      thinkingBudget?: number
+      thinkingBudget?: unknown
     }
   } | undefined
   const raw = config.options?.generationConfig as {
     maxOutputTokens?: number
   } | undefined
-  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? raw?.maxOutputTokens, effectiveCap: generation?.maxOutputTokens, minimumCap: 1, reasoningBudget: generation?.thinkingConfig?.thinkingBudget !== undefined && generation.thinkingConfig.thinkingBudget >= 0 ? generation.thinkingConfig.thinkingBudget : undefined, source: request.maxOutputTokens !== undefined ? "request" as const : raw?.maxOutputTokens !== undefined ? "route" as const : "provider-default" as const }
+  const budget = generation?.thinkingConfig?.thinkingBudget
+  // -1 is the provider's automatic-thinking sentinel; zero preserves the
+  // existing disabled route setting. Only concrete nonnegative budgets enter
+  // scalar facts, and malformed values must not serialize to different values.
+  if (budget !== undefined && (typeof budget !== "number" || !Number.isSafeInteger(budget) || budget < -1))
+    throw invalidPreparedRequest("Gemini thinking budget must be a safe integer of -1 or greater")
+  const reasoningBudget = typeof budget === "number" && budget >= 0 ? budget : undefined
+  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? raw?.maxOutputTokens, effectiveCap: generation?.maxOutputTokens, minimumCap: 1, reasoningBudget, source: request.maxOutputTokens !== undefined ? "request" as const : raw?.maxOutputTokens !== undefined ? "route" as const : "provider-default" as const }
 }

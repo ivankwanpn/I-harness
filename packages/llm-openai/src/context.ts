@@ -11,7 +11,7 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICon
     counter.uncertainties.add("route-output-floor-unverified")
   counter.text("system", body.instructions)
   counter.structured("toolSchemas", body.tools)
-  function block(value: unknown): void {
+  function block(value: unknown, textComponent: "system" | "visibleText" = "visibleText"): void {
     if (!value || typeof value !== "object") {
       counter.text("otherInput", value)
       return
@@ -60,17 +60,24 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICon
     }
     else if (Array.isArray(item.content))
       for (const part of item.content)
-        block(part)
+        block(part, textComponent)
     else if (typeof item.content === "string")
-      counter.text("visibleText", item.content)
+      counter.text(textComponent, item.content)
     else if (item.text !== undefined)
-      counter.text("visibleText", item.text)
+      counter.text(textComponent, item.text)
     else
       counter.structured("otherInput", item)
   }
+  const fixedInput: unknown[] = []
   if (Array.isArray(body.input))
     for (const item of body.input) {
       const node = item as Record<string, unknown>
+      if (node.role === "system" || node.role === "developer") {
+        fixedInput.push(item)
+        counter.structured("framing", { role: node.role })
+        block(item, "system")
+        continue
+      }
       const role = node.role === "assistant" || node.type === "reasoning" || node.type === "function_call" ? "assistant" : node.type === "function_call_output" ? "tool" : "user"
       counter.unit(item, role, () => block(item))
     }
@@ -87,7 +94,7 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICon
     for (const [wire, field] of [["model", "model"], ["instructions", "system"], ["input", "messages"], ["tools", "tools"]] as const)
       if (Object.hasOwn(config.options ?? {}, wire))
         overrides.push(field)
-  const input = counter.finish({ protocol: subscription ? "openai-responses-subscription" : "openai-responses", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { instructions: body.instructions, input: body.input, tools: body.tools, other, previous_response_id: body.previous_response_id, conversation: body.conversation, prompt: body.prompt }, { instructions: body.instructions, tools: body.tools, subscription }, overrides, references ? "incomplete" : "complete")
+  const input = counter.finish({ protocol: subscription ? "openai-responses-subscription" : "openai-responses", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { instructions: body.instructions, input: body.input, tools: body.tools, other, previous_response_id: body.previous_response_id, conversation: body.conversation, prompt: body.prompt }, { instructions: body.instructions, tools: body.tools, subscription, ...(fixedInput.length ? { fixedInput } : {}) }, overrides, references ? "incomplete" : "complete")
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: OpenAIConfig, subscription: boolean) {
