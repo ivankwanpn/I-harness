@@ -56,6 +56,77 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it("recovery reads live parent admission after the target flush and acknowledges before tool publication", async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), parentSession = createSession()
+    parentSession.events.push({ type: "team/message/queued", version: 1, teamId: "lead-order", message: {
+      id: "msg-order", senderId: "child-helper", senderName: "helper", targetId: "lead-order", delivery: "quiet", content: "recovered",
+    } })
+    const flushed = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), order: string[] = []
+    let flushes = 0
+    const coordinator = { async flush() {
+      order.push(++flushes === 1 ? "target-flush" : "ack-flush")
+      expect(parentSession.events.some(event => event.type === "subagent/inbox")).toBe(true)
+      expect(tools.get("send_message")).toBeUndefined()
+      if (flushes === 1) { flushed.resolve(); await release.promise }
+      else expect(parentSession.events.some(event => event.type === "team/message/delivered")).toBe(true)
+    } } as unknown as SessionCoordinator
+    const oldAdmission = { admit: vi.fn(async () => {}), wake: vi.fn() }
+    const currentAdmission = {
+      async admit(input: { text: string }) {
+        expect(this).toBe(currentAdmission)
+        expect(input.text).toBe("Team message <msg-order> from <helper>:\nrecovered")
+        expect(parentSession.events.some(event => event.type === "team/message/delivered")).toBe(false)
+        order.push("admit")
+      },
+      wake() { expect(this).toBe(currentAdmission); order.push("wake") },
+    }
+    const deps = makeDeps({ parentSession, parentNotify: oldAdmission })
+    deps.subagents.childSessions = { coordinator, parentSessionId: "parent" }
+    const mounting = mountAgentTeams(ctx, tools, deps)
+    await flushed.promise
+    deps.parentNotify = currentAdmission
+    release.resolve()
+    const handle = await mounting
+    try {
+      expect(order).toEqual(["target-flush", "admit", "wake", "ack-flush"])
+      expect(oldAdmission.admit).not.toHaveBeenCalled()
+      expect(tools.get("send_message")).toBeDefined()
+      await handle.drainLeadMessages!()
+      expect(order).toHaveLength(4)
+    } finally { release.resolve(); await handle.unmount() }
+  })
+
+  it("unmount releases waiters while child disposal is blocked and restores tools after disposal settles", async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const release = Promise.withResolvers<void>(), disposing = Promise.withResolvers<void>(), order: string[] = []
+    const previous = { name: "wait_agent", description: "original", inputSchema: { type: "object" }, execute: async () => "original" }
+    tools.register(previous)
+    deps.parentSession.events.push(
+      { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
+      { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "child" } },
+    )
+    const controller = new AbortController()
+    deps.subagents.table.add("lead/helper", { path: "lead/helper", status: "running", session: createSession(), controller, mailbox: [],
+      async dispose() { order.push("dispose"); disposing.resolve(); await release.promise; order.push("disposed") },
+    })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    const teamWait = tools.get("wait_agent")!
+    const waiting = teamWait.execute({ timeout_ms: 30_000 }, {}).then(result => { order.push("wait-released"); return result })
+    const closing = handle.unmount()
+    try {
+      expect(await waiting).toMatchObject({ timedOut: false })
+      await disposing.promise
+      expect(order).toEqual(["dispose", "wait-released"])
+      expect(controller.signal.aborted).toBe(true)
+      expect(tools.get("wait_agent")).toBe(teamWait)
+      expect(deps.subagents.roles.get("teammate")).toBeDefined()
+      release.resolve(); await closing
+      expect(order).toEqual(["dispose", "wait-released", "disposed"])
+      expect(tools.get("wait_agent")).toBe(previous)
+      expect(deps.subagents.roles.get("teammate")).toBeUndefined()
+    } finally { release.resolve(); await closing }
+  })
+
   it("publishes a closing barrier before draining a teammate and preserves a replacement", async () => {
     const deps = makeDeps(), ctx = createContext(), release = Promise.withResolvers<void>()
     const table = deps.subagents.table
