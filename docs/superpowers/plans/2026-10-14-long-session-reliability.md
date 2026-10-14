@@ -69,6 +69,7 @@ expect(prepared.measurement.packet.bodyBytes).toBe(Buffer.byteLength(originalBod
 ```
 
 - [ ] Count final actual components, including only eligible reasoning and real raw-option replacements, no duplicated continuation backups. Complete conservative multilingual pricing has explicit uncertainty, exact HTTP bytes vs SDK estimate and no raw payload diagnostics.
+- [ ] Server-referenced input (public Responses previous_response_id/conversation and Gemini cachedContent) is explicit incomplete coverage without verified matching context evidence; small reference bytes never imply complete low input. Preserve routing/options without introducing a transport redesign.
 - [ ] RED/GREEN wrapper chain: logical retry/waiting signal/activity, usage attribution, runtime policy refresh, stable client selection and manual-compaction signal remain present on all cap derivatives. No raw inner stream bypass, duplicate preparation or OAuth refresh during measurement.
 - [ ] Restore compatible custom-client fallback with neutral-only status; validate reasoning floors and subscription unsupported cap; update real manifests/lockfile without version bump.
 - [ ] Run adapter/prepare/wrapper/cache/usage contracts and affected types, normal reachability; commit `feat: prepare protocol-owned request context`; fresh review.
@@ -155,9 +156,11 @@ expect(readOnlyInspectionTransportCount).toBe(0)
 
 ## Task 7: Bound repeated reports while preserving owned full results
 
-**Files:** subagent result-preview, tools status/wait/job output, task-protocol/task-notification/register and existing result persistence; session-persistence document strict seam; assembly production report policy/Team compatible callsites.
+**Files:** subagent result-preview, tools status/wait/job output, task-protocol/task-notification/register and existing result persistence; session-persistence document strict seam; assembly production report policy/Team compatible callsites; fs range-read/policy and output-retention synthetic partial projection at existing seams.
 
 **Interfaces:** `putDocumentStrict(key,data):Promise<void>` on existing chain/lease, legacy putDocument unchanged. Injectable report policy; default shipping2048byte per-child preview/16384aggregate, UTF8-safe cursor/digest/paged output. Full store remains existing task/job owner, no new registry/outbox/drain.
+
+**Narrow additions from user-requested reference comparison:** Inject a production file-read policy with64,000UTF8-byte final JSON budget including framing/metadata, offset_bytes/max_output_bytes, digest guard and monotonic UTF8-safe next_offset_bytes. Preserve path authorization, small-file behavior and legacy path-only full read without policy. Use existing retention for bounded synthetic failure partial/data text under64,000, preserving canonical top-level verdict/outcome and meaningful reason; large reason gets an explicit bounded preview/reference, real images and actual temp retention limits remain. No tool replay, universal code-value exemption or second result store.
 
 - [ ] RED many long completed children list/wait/parent admission remain inside aggregate bound and advertise authorized full-result references. New followup changes digest; matching cursor avoids repeated text; metadata/framing charge inside bound.
 - [ ] RED full-result durability failure suppresses durable ref/wake, retains true sideeffect/outcome and fails visibly without relaunch. Strict document operation rejects its own failure but normalizes chain tail so later save works; legacy callers retain behavior.
@@ -171,7 +174,8 @@ await expect(output.execute({task_ids:[foreignTask]})).rejects.toThrow()
 ```
 
 - [ ] Full retrieval pages use stable digest/UTF8 boundaries and existing ownership; stale digest refuses mixed generations. Missing policy keeps legacy package behavior; shipping model registrations/main/child/notification text use bounded policy, UI full display separate.
-- [ ] Run subagent/task/persistence/Team/assembly contracts/types; commit `fix: bound model-facing reports with durable retrieval`; fresh review.
+- [ ] RED/GREEN actual production main/child file read of a large multilingual file: default bounded page, nonrepeating full reconstruction by pages, stale digest refusal, Stop/ownership and unchanged legacy full read. Oversized timeout partial/error and an ordinary object whose code equals a failure constant cannot bypass the production bound; verdict/image/retrieval semantics survive.
+- [ ] Run subagent/task/persistence/Team/assembly plus affected fs/output-retention/guard-timeout contracts/types; commit `fix: bound model-facing reports with durable retrieval`; fresh review.
 
 ## Task 8: Combined reliability verification and stop
 
