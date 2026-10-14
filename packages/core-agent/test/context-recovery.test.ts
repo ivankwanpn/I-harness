@@ -194,6 +194,43 @@ it("an explicit different model tuple gets a fresh owned window even with partia
   expect(f.effects).toBe(1)
 })
 
+it.each([
+  ["known-to-unknown", false], ["known-to-unknown", true],
+  ["unknown-to-known", false], ["unknown-to-known", true],
+] as const)("%s provider metadata cannot renew actual main admission (consumed=%s)", async (direction, consumed) => {
+  const f = fixture({ repeat: true }); await f.seed.run("original task ".repeat(1500))
+  const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
+  const initialMetadata = direction === "known-to-unknown" ? metadata("configured-provider") : undefined
+  const finalMetadata = direction === "unknown-to-known" ? metadata("configured-provider") : undefined
+  const agent = createAgent(f.ctx, { ...f.deps, compact: consumed ? f.deps.compact : undefined, contextMetadata: initialMetadata })
+  await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  const previous = deriveContextRecovery(f.session, "owned")!
+  expect(previous.retryConsumed).toBe(consumed)
+  const attempts = f.attempts.length
+  agent.updateContext!({ budget: f.deps.budget, maxOutputTokens: f.deps.maxOutputTokens, contextMetadata: finalMetadata })
+  await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  expect(f.attempts).toHaveLength(attempts)
+  expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { recoveryRequired: true, fullByProvider: true } })
+  expect(deriveContextRecovery(f.session, "owned", { modelId: "fixture", protocol: "openai-compatible", providerId: finalMetadata?.providerId })).toMatchObject({ recoveryId: previous.recoveryId, retryConsumed: consumed })
+  const restored = fromJSONL(toJSONL(f.session))
+  await expect(createAgent(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: finalMetadata }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  expect(f.attempts).toHaveLength(attempts)
+  expect(new Set(f.session.events.filter(event => event.type === "context/recovery").map(event => event.recoveryId)).size).toBe(1)
+  expect(f.effects).toBe(1)
+})
+
+it("an explicit different known provider gets fresh actual admission and retains the old rejection", async () => {
+  const f = fixture(); await f.seed.run("original task")
+  const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
+  const agent = createAgent(f.ctx, { ...f.deps, compact: undefined, contextMetadata: metadata("first-provider") })
+  await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  const previous = deriveContextRecovery(f.session, "owned", metadata("first-provider"))!
+  agent.updateContext!({ budget: f.deps.budget, maxOutputTokens: f.deps.maxOutputTokens, contextMetadata: metadata("different-provider") })
+  expect((await agent.followup("continue")).finalText).toBe("accepted")
+  expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
+  expect(deriveContextRecovery(f.session, "owned", metadata("first-provider"))).toMatchObject({ recoveryId: previous.recoveryId, state: "blocked" })
+})
+
 it.each(["length", "content_filter"])("fences an entire explicitly %s tool batch with complete-looking arguments", async reason => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx); let effects = 0
   tools.register({ name: "write", description: "effect", inputSchema: {}, execute: async () => { effects++; return "done" } })

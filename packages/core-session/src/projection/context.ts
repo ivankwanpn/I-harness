@@ -9,10 +9,25 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
     const folded = previous
       ? { ...previous, ...event, retryConsumed: previous.retryConsumed === true || previous.state === "retry-started" || event.retryConsumed === true || event.state === "retry-started" }
       : event
+    // Keep the latest transition order when selecting among applicable lanes.
+    recoveries.delete(event.recoveryId)
     recoveries.set(event.recoveryId, folded)
+    current = folded
+  }
+  if (!binding) return current
+  current = undefined
+  for (const folded of recoveries.values()) {
     // Legacy facts lacking a model tuple remain conservative. Ambiguous edits
     // to settings of the same tuple cannot clear known provider rejection.
-    if (binding && folded.modelId && folded.protocol && (folded.modelId !== binding.modelId || folded.protocol !== binding.protocol || folded.providerId !== binding.providerId)) continue
+    if (folded.modelId && folded.protocol) {
+      // Losing or discovering provider metadata is ambiguous for the same
+      // model/protocol. Only two known unequal providers establish a change.
+      const providerChanged = !!folded.providerId && !!binding.providerId && folded.providerId !== binding.providerId
+      if (folded.modelId !== binding.modelId || folded.protocol !== binding.protocol || providerChanged) continue
+    }
+    // Unknown provider identity can make several concrete lanes applicable.
+    // A different recovery's success cannot settle their known rejection.
+    if (current && current.state !== "resolved" && folded.state === "resolved") continue
     current = folded
   }
   return current
