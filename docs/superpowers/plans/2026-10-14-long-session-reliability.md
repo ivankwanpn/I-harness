@@ -70,6 +70,7 @@ expect(prepared.measurement.packet.bodyBytes).toBe(Buffer.byteLength(originalBod
 
 - [ ] Count final actual components, including only eligible reasoning and real raw-option replacements, no duplicated continuation backups. Complete conservative multilingual pricing has explicit uncertainty, exact HTTP bytes vs SDK estimate and no raw payload diagnostics.
 - [ ] Server-referenced input (public Responses previous_response_id/conversation and Gemini cachedContent) is explicit incomplete coverage without verified matching context evidence; small reference bytes never imply complete low input. Preserve routing/options without introducing a transport redesign.
+- [ ] Official public OpenAI Responses route minimum16 is represented/validated, custom-compatible route constraints remain explicit rather than inherited blindly, and subscription cap stays unsupported. Saved prompt and remote input-file references also require incomplete context facts without verified evidence.
 - [ ] RED/GREEN wrapper chain: logical retry/waiting signal/activity, usage attribution, runtime policy refresh, stable client selection and manual-compaction signal remain present on all cap derivatives. No raw inner stream bypass, duplicate preparation or OAuth refresh during measurement.
 - [ ] Restore compatible custom-client fallback with neutral-only status; validate reasoning floors and subscription unsupported cap; update real manifests/lockfile without version bump.
 - [ ] Run adapter/prepare/wrapper/cache/usage contracts and affected types, normal reachability; commit `feat: prepare protocol-owned request context`; fresh review.
@@ -93,6 +94,7 @@ expect(state.kind==='ready' && state.snapshot.estimateSource).not.toBe('provider
 - [ ] Prepare after all claimed inputs/hooks/context/catalogue updates. Admit from same facts, output reserve/floor/headroom, derivative cap and final revision check; max3 local stale rebuilds, no hook/inbox replays. Held/rejected budget checkpoint means zero transport.
 - [ ] Per-agent authority for root/no-fork/all-fork/finite-fork/resident children, independent binding/window/effort; inherited parent checkpoint/rejection cannot become child state. Existing role tool grants remain; replace a copied context tool with child reader only where granted.
 - [ ] Old logs load; malformed facts and unsupported operational readers fail nondestructively; no unknown windows invented. UI-visible stale/unavailable facts don't get a healthy percentage.
+- [ ] Only accepted nontruncated/nonrefused main responses can establish successful calibration/checkpoints; an output-limited batch is not a successful main response.
 - [ ] Run token-meter/core-session/agent/budget/binding/child/fork persistence covering tests/types; commit `fix: unify owned model context admission`; fresh review.
 
 ## Task 4: Make compaction bounded, cancellable and projection-correct
@@ -133,6 +135,7 @@ expect(priorToolEffects).toBe(1)
 ```
 
 - [ ] Generic400/auth/quota/schema/413 controls do not compact/reset. Confirmation state survives meter invalidation/reload; same rejected context plus another continue isn't resent unchanged. Explicit model change receives fresh own admission; only accepted main success resolves.
+- [ ] Explicit truncated/refused main response fences its entire tool batch before dispatch, preserves audit/not-dispatched pairs and original prior effects, and closes with output/refusal diagnosis. No context retry/resolution merely because a capped output ended; all five native finish-reason mappings are tested.
 - [ ] Hold/reject required/projection/retry checkpoints and Stop/summary awaits: no retry transport after failure/Stop. Crash after retry-started does not grant second automatic retry; second overflow is blocked and inspectable. Ordinary failures leave parked background children and same service usable.
 - [ ] Run targeted agent/recovery/core-session/fork/service/child tests/types; commit `fix: recover model context overflow without replay`; fresh review.
 
