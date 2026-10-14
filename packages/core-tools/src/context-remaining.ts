@@ -1,13 +1,12 @@
 import type { Session, BudgetRead } from "@i-harness/core-session"
+import { contextStateFromBudget } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { activeTokens } from "@i-harness/token-meter"
 import type { ToolRegistry } from "./index.ts"
 
 // M27-R-A8 (codex get_context_remaining parity): the model can ask how much
-// context it has left. `used` follows the M15 single projection rule — only
-// deriveMessages(session) is ever seen by a model, so tokens are counted on
-// that exact output (activeTokens). Registering is FAIL-CLOSED: without a
-// contextWindow the tool is not in the catalog at all.
+// context it has left. Shipping assemblies supply their actual budget owner.
+// Direct legacy embedders retain a marked neutral-only history estimate.
 
 export interface ContextRemainingOptions {
   budgetRead?: () => BudgetRead
@@ -31,15 +30,19 @@ export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistr
     isReadOnly: true,
     execute: async () => {
       if (opts.budgetRead) {
-        const state = opts.budgetRead()
-        if (state.kind === "unavailable" || state.snapshot.admission === "unavailable" || state.snapshot.recoveryRequired) return { kind: "unavailable", reason: state.kind === "unavailable" ? state.reason : state.snapshot.reason, ...(state.kind === "ready" ? { window: state.snapshot.contextWindow, snapshot: state.snapshot } : {}) }
+        const state = contextStateFromBudget(opts.budgetRead())
         const snapshot = state.snapshot
-        return { kind: "ready", window: snapshot.contextWindow, used: snapshot.admissionInputTokens, remaining: snapshot.remainingInputBudget,
-          percentage: snapshot.contextWindow ? Math.round(snapshot.admissionInputTokens / snapshot.contextWindow * 100) : undefined, snapshot }
+        const facts = snapshot ? { window: snapshot.contextWindow, source: snapshot.estimateSource, confidence: snapshot.confidence, coverage: snapshot.coverage,
+          outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport, effectiveOutputCap: snapshot.effectiveOutputCap,
+          recoveryRequired: snapshot.recoveryRequired, fullByProvider: snapshot.fullByProvider } : {}
+        if (state.kind === "unavailable") return { ...state, ...facts }
+        return { ...state, ...facts, window: state.contextWindow, used: state.estimatedTokens, remaining: snapshot?.remainingInputBudget,
+          percentage: Math.round(state.estimatedTokens / state.contextWindow * 100) }
       }
       const used = session === undefined ? 0 : activeTokens(session)
       const remaining = Math.max(0, window! - used)
       return {
+        source: "neutral-only", confidence: "estimated", coverage: "neutral-only",
         window,
         used,
         remaining,

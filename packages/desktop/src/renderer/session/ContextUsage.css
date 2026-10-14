@@ -22,6 +22,8 @@
 }
 
 .context-usage-gauge-track { stroke: var(--ih-divider); }
+.context-usage-popover { max-height: calc(100vh - 32px); overflow-y: auto; overflow-wrap: anywhere; }
+.context-usage-facts { margin-top: 10px; border-top: 1px solid var(--ih-divider); padding-top: 4px; line-height: 1.6; }
 .context-usage-gauge-fill { stroke: currentColor; stroke-linecap: round; }
 .context-usage-reading {
   position: absolute;

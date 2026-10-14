@@ -1,3 +1,4 @@
+import { readSessionContextState } from "@i-harness/core-session"
 // M27 R-C4: SDK client — low-level JSON-RPC exchange over an NDJSON line
 // transport (in-process or a spawned `i-harness sdk` subprocess) plus the
 // high-level run(session) surface. Zero new dependencies (node:child_process
@@ -214,7 +215,7 @@ export class HarnessClient {
   }
 
   async contextState(sessionId: string): Promise<SessionContextState> {
-    return await this.request("session/context", { sessionId }) as SessionContextState
+    return readSessionContextState(await this.request("session/context", { sessionId }), sessionId)
   }
 
   async setSessionModel(

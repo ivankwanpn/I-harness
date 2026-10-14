@@ -1,13 +1,14 @@
 import { randomUUID } from "node:crypto"
 import { createRetryingClient, resolveRetryPolicy, mapModelRequest, withPreparedRequests, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import type { buildModelClient } from "@i-harness/provider"
-import type { UsageRecord } from "@i-harness/usage-stats"
+import { validateRequestMetrics, type UsageRecord } from "@i-harness/usage-stats"
 
 /** Captures provider attempts, below retries and above protocol adapters. The
  * only durable data is the explicit UsageRecord allowlist. */
 export function createUsageCapture(options: {
   workspace: string
   record: (record: UsageRecord) => Promise<void>
+  onRequestFacts?: (record: Pick<UsageRecord, "id" | "projectId" | "sessionId" | "providerId" | "modelId" | "requestMetrics" | "status">) => void
   projectFor?: (sessionId: string) => Promise<string | undefined>
   onWarning?: (warnings: string[]) => void
   now?: () => number
@@ -38,7 +39,7 @@ export function createUsageCapture(options: {
         const capture = withPreparedRequests(mapModelRequest(client, request => {
           const { sessionId: _sessionId, ...providerRequest } = request
           return providerRequest
-        }), inner => ({
+        }), (inner, measurement) => ({
           async *stream(request) {
             request.signal?.throwIfAborted()
             const { sessionId, ...providerRequest } = request
@@ -86,6 +87,17 @@ export function createUsageCapture(options: {
                 providerId: profile.name, modelId: model ?? profile.defaultModel ?? "unknown",
                 billing: profile.codexSubscription ? "subscription" : "api", status, ...(contradictory ? {} : usage),
               }
+              // Only the derivative's bounded scalar allowlist reaches storage.
+              // Invalid optional metrics cannot discard an already billed attempt.
+              try {
+                const { input, packet, output } = measurement
+                record.requestMetrics = validateRequestMetrics({ version: 1, coverage: input.coverage, ...packet,
+                  systemTokens: input.components.system.heuristicTokens, schemaTokens: input.components.toolSchemas.heuristicTokens,
+                  reasoningTokens: input.components.replayedReasoning.heuristicTokens, imageCount: input.components.images.imageCount,
+                  capSupport: output.capSupport, configuredOutputCap: output.configuredCap, effectiveOutputCap: output.effectiveCap,
+                  minimumOutputCap: output.minimumCap, reasoningBudget: output.reasoningBudget })
+              } catch { /* Optional diagnostics cannot fail inference or billing capture. */ }
+              try { options.onRequestFacts?.({ id: record.id, projectId: record.projectId, sessionId: record.sessionId, providerId: record.providerId, modelId: record.modelId, requestMetrics: record.requestMetrics, status: record.status }) } catch { /* Observer isolation. */ }
               // Waiting ensures host drain includes writes. A write failure must
               // never reach retries and repeat an already billed model request.
               try { await options.record(record) } catch { failedWrites++; notifyWarning() }

@@ -37,7 +37,7 @@ it("shares the until-success breaker across engines without resetting the count 
     await first.maybeCompact(session)
     expect(calls).toBe(7) // manual success resets the shared count, so both auto failures run
     expect(warn).toHaveBeenCalledTimes(6)
-    expect(warn).toHaveBeenLastCalledWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): shared breaker fixture")
+    expect(warn).toHaveBeenLastCalledWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): Summary request failed.")
   } finally { warn.mockRestore() }
 })
 
@@ -128,7 +128,7 @@ it("keeps shape failures outside the summary catch and does not charge legacy ov
     expect(warn).not.toHaveBeenCalled()
     const inside = createCompactionEngine({ model, config, overheadTokens() { throw new Error("overhead fixture") } })
     expect(await inside.compact(session)).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
-    expect(warn).toHaveBeenCalledExactlyOnceWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): must not call model")
+    expect(warn).toHaveBeenCalledExactlyOnceWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): Summary request failed.")
     expect(session.events).toHaveLength(1)
   } finally { warn.mockRestore() }
 })

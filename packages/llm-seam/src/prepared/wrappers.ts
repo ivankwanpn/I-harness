@@ -1,5 +1,6 @@
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "../index.ts"
 import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
+import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { prepareModelRequest } from "./fallback.ts"
 /** Copy data without cloning abort signals, callbacks, transport functions or
  * the original affinity-scope identity. Buffer copies remain SDK bytes. */
@@ -28,21 +29,21 @@ export function preparedControls(request: PreparedStreamControl, control?: Prepa
     onTerminalResponse: control?.onTerminalResponse ?? request.onTerminalResponse,
   }
 }
-export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>): PreparedModelRequest {
+export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control: PreparedStreamControl | undefined, measurement: PreparedRequestMeasurement) => AsyncIterable<LLMStreamEvent>): PreparedModelRequest {
   return Object.freeze({
     measurement: prepared.measurement,
     withOutputCap: (cap: number | undefined) => wrapPreparedRequest(prepared.withOutputCap(cap), wrap),
-    stream: (control?: PreparedStreamControl) => wrap(next => prepared.stream(next), control),
+    stream: (control?: PreparedStreamControl) => wrap(next => prepared.stream(next), control, prepared.measurement),
   })
 }
 /** Reuse an owner's existing execution wrapper against a frozen send capability.
  * Derivatives re-enter the owner; no inner raw stream can escape. */
-export function withPreparedRequests(client: ModelClient, wrap: (inner: ModelClient) => ModelClient): ModelClient {
+export function withPreparedRequests(client: ModelClient, wrap: (inner: ModelClient, measurement: PreparedRequestMeasurement) => ModelClient): ModelClient {
   return preparedModelClient(async (request) => {
     const captured = snapshotModelData(request)
     const prepared = await prepareModelRequest(client, captured)
     captured.signal?.throwIfAborted()
-    return wrapPreparedRequest(prepared, (stream, control) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) })
+    return wrapPreparedRequest(prepared, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
       .stream({ ...captured, ...preparedControls(captured, control) }))
   })
 }

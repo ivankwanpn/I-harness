@@ -41,7 +41,7 @@ it.each([true, false])("honors Desktop auto-compaction setting %s with the confi
     const created = frames.find(f => "id" in f && f.id === 2)
     if (!isRpcSuccess(created)) throw new Error("session creation failed")
     const { sessionId } = created.result as { sessionId: string }
-    await request(3, "session/prompt", { sessionId, prompt: "context evidence ".repeat(19000) })
+    await request(3, "session/prompt", { sessionId, prompt: "context evidence ".repeat(12500) })
     await request(4, "session/history", { sessionId, afterSeq: 0, limit: 200 })
     const history = frames.find(f => "id" in f && f.id === 4)
     if (!isRpcSuccess(history)) throw new Error("history unavailable")

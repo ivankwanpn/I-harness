@@ -7,6 +7,7 @@ import { buildModelClient } from "@i-harness/provider"
 import { prepareModelRequest, wrapPreparedRequest, preparedControls, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
@@ -132,6 +133,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await settings.load()
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageCapture = createUsageCapture({ workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+    onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
   const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
     async query(query) {
@@ -258,6 +260,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
   const service: SessionService = createSessionService({
+    telemetry: { close() {}, emit(event) {
+      if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return
+      const compaction = safeCompactionDiagnostic({ ...event.data, operation: event.type === "compaction/attempt" ? "attempt" : "summary" })
+      if (compaction) { try { options.onWrite(makeNotification("desktop/context/diagnostic", { sessionId: event.data.sessionId, compaction })) } catch { /* Observer isolation. */ } }
+    } },
     videoAudioAnalyzer: input => runtime.analyzeVideoAudio?.(input) ?? Promise.resolve({ status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." }),
     sessionOperation: fence,
     projectContextFor: async id => { const getter = await projects.forSession(id); projectContexts.set(id, getter); return getter },

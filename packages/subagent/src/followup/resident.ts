@@ -144,7 +144,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
   deps.table.update(entry.path, entry, {
     status: "waiting", closing: false, controller, toolRegistry: childReg, modelLabel,
-    factoryTools: codeModeMount ? ["code_exec", "code_wait"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }) : [],
+    factoryTools: [...(codeModeMount ? ["code_exec", "code_wait"] : []), "get_context_remaining"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }),
     unmount: () => childCtx.scope.unmount(),
     cancel: codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined,
     dispose: async () => {

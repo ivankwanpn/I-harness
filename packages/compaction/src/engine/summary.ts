@@ -49,7 +49,7 @@ export function requestSummary(
     metadata: binding, reasoningEffort: inherited ? deps.reasoningEffort : config.summaryReasoningEffort ?? deps.summaryReasoningEffort,
     signal, maxSummaryCalls: options?.maxSummaryCalls, beforeTransport: deps.flush ? () => deps.flush!() : undefined,
     validateBeforeTransport: prepared.validateBeforeTransport,
-    onMeasurement: facts => deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: { operation: "summary", ...facts } }),
+    onMeasurement: facts => deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: { operation: "summary", providerId: binding?.providerId, modelId: binding?.modelId, ...facts } }),
     onUsage: usage => deps.telemetry?.emit({ type: "compaction/usage", ts: Date.now(), data: { ...usage } }),
   }, { session, shadowedSeqs })
 }

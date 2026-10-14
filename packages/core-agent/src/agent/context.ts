@@ -58,7 +58,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
     return createCompactionEngine({
         model: attributedModel,
         config: compact.summarizationModel === deps.model ? { ...compact, summarizationModel: attributedModel } : compact,
-        ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
+        ...(deps.telemetry ? { telemetry: { close() {}, emit(event) { deps.telemetry!.emit({ ...event, data: { ...event.data, sessionId: deps.sessionId } }) } } } : {}),
         // The main binding's output limit bounds only inherited summaries.
         // Preferred summary output, retention, metadata and effort have their
         // own producer/consumer contract at this factory boundary.

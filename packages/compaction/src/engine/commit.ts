@@ -61,8 +61,9 @@ export async function runCompactionPass(
     check()
     if (error instanceof SummaryCheckpointError) throw error.failure
     if (["ABORTED", "CONTEXT_INPUT_STALE"].includes(modelFailureFacts(error)?.code ?? "") || error instanceof Error && error.name === "AbortError") throw error
-    d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${error instanceof Error ? error.message : String(error)}`)
-    emit("failure", { attempts: attemptsTracker.count })
+    const safeReason = error instanceof SummaryBlockedError ? error.message : modelFailureFacts(error)?.message ?? "Summary request failed."
+    d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${safeReason}`)
+    emit("failure", { attempts: attemptsTracker.count, ...(error instanceof SummaryBlockedError ? { blockedReason: safeReason } : {}) })
     return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed", ...(error instanceof SummaryBlockedError ? { blockedReason: error.message } : {}) }
   }
   check()

@@ -398,6 +398,8 @@ export interface SessionAssembly {
   subagentState(): SubagentStateSnapshot
   /** Exact current child Session owned by this assembly; never mounts or restores it. */
   liveChildSession?(childSessionId: string): Session | undefined
+  /** Scalar read over an existing active child owner; never mounts or restores it. */
+  liveChildBudget?(childSessionId: string): import("@i-harness/core-session").BudgetRead | undefined
   /** Durable child events and registry lifecycle invalidations, local to this assembly. */
   onSubagentsChanged?(listener: (change: { kind: "changed" | "closed" }) => void): () => void
   /** Host-only read seam over an exact live child caller; no registry escapes. */
@@ -1261,9 +1263,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           if (entry.session.header?.parentSession !== opts.sessionId || input.registry !== registry || registry.get(input.call.name) !== input.tool || input.validateBinding?.() !== true) return false
           const role = subagent.roles.get(entry.roleName)
           if (!role) return false
-          // Child-local Code Mode wrappers already own the restricted registry;
-          // inherited tools must still be the current parent's exact binding.
-          const localWrapper = entry.factoryTools?.includes(input.tool) === true
+          // Exact child-local factory bindings own their restricted registry.
+          // The context reader additionally retains the current role/parent grant;
+          // other inherited tools remain the parent's exact binding.
+          const localWrapper = entry.factoryTools?.includes(input.tool) === true && (input.call.name !== "get_context_remaining" || role.tools.includes(input.call.name) && tools.get(input.call.name) !== undefined)
           return localWrapper || role.tools.includes(input.call.name) && tools.get(input.call.name) === input.tool
         }
         if (!valid()) return undefined
@@ -1649,6 +1652,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
       liveChildSession: childObservation.liveSession,
+      liveChildBudget: childSessionId => {
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ["running", "waiting"].includes(row.status))
+        if (!entry) return undefined
+        if (disposing || entry.closing || entry.controller.signal.aborted) return { kind: "unavailable", reason: "Live child context owner is closing" }
+        return subagent.agents.get(childSessionId)?.contextBudget?.() ?? { kind: "unavailable", reason: "Live child context budget reader is unavailable" }
+      },
       onSubagentsChanged: childObservation.subscribe,
       ownedToolCaller,
       liveResources: (terminalOwnerSessionId = opts.sessionId) => {

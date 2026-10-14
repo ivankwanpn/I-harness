@@ -14,6 +14,7 @@ it("repeated model 400 failures preserve facts, the same service and parked work
   const root = await mkdtemp(join(tmpdir(), "desktop-model-failure-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
   await coordinator.create({ sessionId: "s" })
+  await coordinator.create({ sessionId: "ordinary" })
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   let calls = 0, effects = 0, aborted = 0, cellId = ""
@@ -35,7 +36,8 @@ it("repeated model 400 failures preserve facts, the same service and parked work
     const parked = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec") as { output: { cell_id: string; status: string } }
     expect(parked.output.status).toBe("running"); cellId = parked.output.cell_id
     await vi.waitFor(() => expect(effects).toBe(1), { timeout: 5000 })
-    for (const text of ["ordinary again", "context", "unknown"]) { await input.admit("s", { text, delivery: "queue" }); await input.drain() }
+    for (const text of ["ordinary again", "context"]) { await input.admit("s", { text, delivery: "queue" }); await input.drain() }
+    await input.admit("ordinary", { text: "unknown", delivery: "queue" }); await input.drain()
     const failures = onStatus.mock.calls.filter(row => row[1] === false && row[2])
     expect(failures).toHaveLength(4)
     for (const row of failures.slice(0, 3)) expect(row[3] as ModelFailureFacts).toMatchObject({ httpStatus: 400, requestId: "req-input-123" })
@@ -45,9 +47,11 @@ it("repeated model 400 failures preserve facts, the same service and parked work
     expect(JSON.stringify(failures.slice(0, 3))).not.toContain("private prompt")
     expect(service.liveAssembly("s")).toBe(assembly)
     expect(effects).toBe(1); expect(aborted).toBe(0)
+    const beforeBlockedRetry = calls
+    await input.admit("s", { text: "blocked retry", delivery: "queue" }); await input.drain()
+    expect(calls).toBe(beforeBlockedRetry)
     release()
-    await input.admit("s", { text: "retrieve", delivery: "queue" }); await input.drain()
-    const completed = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_wait") as { output: unknown }
+    const completed = await assembly.tools.execute({ name: "code_wait", args: { cell_id: cellId, yield_time_ms: 5000 } })
     expect(JSON.stringify(completed.output)).toContain("full original result")
     expect(effects).toBe(1); expect(aborted).toBe(0)
   } finally { release(); await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }

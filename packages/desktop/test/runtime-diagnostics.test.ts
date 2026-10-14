@@ -15,6 +15,19 @@ const status = (state: string, error?: string, sessionId = "s"): DesktopEvent =>
 const retry = { requestId: "req-1", phase: "waiting", attempt: 1, maxRetries: 5, delayMs: 500, code: "http_503", httpStatus: 503, providerId: "local", modelId: "model" }
 
 describe("native runtime diagnostics", () => {
+  it("journals only scalar request/compaction/close facts from the existing notification owners", async () => {
+    const service = createRuntimeDiagnostics(await root())
+    service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "desktop/context/diagnostic", params: { sessionId: "s", compaction: {
+      operation: "summary", inputTokens: 500, contextWindow: 10000, minimumCap: 1025, defaultFloorAdjusted: true,
+      providerId: "controlled", modelId: "fixture", body: "private prompt sk-secret", uncertainties: ["private"] } } } as DesktopEvent)
+    service.observe({ kind: "sdk/disconnected", workspaceId: "ws", message: "private upstream", close: { generation: 2, reason: "scope-changed" } } as DesktopEvent)
+    const rows = (await service.list()).entries
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "context/compaction", sessionId: "s", compaction: { operation: "summary", inputTokens: 500, contextWindow: 10000, minimumCap: 1025, defaultFloorAdjusted: true, providerId: "controlled", modelId: "fixture" } }),
+      expect.objectContaining({ kind: "gateway/disconnected", close: { generation: 2, reason: "scope-changed" } }),
+    ]))
+    expect(JSON.stringify(rows)).not.toMatch(/private|sk-secret|body|uncertainties/)
+  })
   it("retains safe model facts from status and SDK rejection through disk, copy and export", async () => {
     const dir = await root(), output = join(dir, "safe.json")
     let copied = ""

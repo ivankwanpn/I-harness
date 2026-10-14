@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto"
 import { modelFailureFacts, safeModelFailureFacts } from "@i-harness/sdk"
+import { validateRequestMetrics } from "@i-harness/usage-stats"
+import { safeCompactionDiagnostic } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
+import { validBudgetSnapshot } from "../../../core-session/src/events/context.ts"
 import { mkdir, lstat, open, rename, unlink, appendFile, writeFile, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createRedactor } from "../../../diagnostics/src/redactor.ts"
@@ -15,7 +18,17 @@ const storageFailure = "Diagnostic log storage is unavailable. Live diagnostics 
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
 const identifier = (value: unknown): value is string => typeof value === "string" && (value === "[REDACTED]" || /^[a-zA-Z0-9._:/-]{1,128}$/.test(value))
 const integer = (value: unknown, min: number, max: number): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max
-const kinds: RuntimeDiagnosticKind[] = ["model/retry", "model/recovered", "model/connecting", "model/quiet", "model/settled", "session/error", "session/cancelled", "gateway/disconnected", "runtime/error"]
+function safeContextBudget(value: unknown): RuntimeDiagnosticEntry["contextBudget"] {
+  if (!record(value)) return
+  for (const key of ["estimatedInputTokens", "outputReserve", "safetyMargin"]) if (!integer(value[key], 0, Number.MAX_SAFE_INTEGER)) return
+  for (const key of ["contextWindow", "effectiveOutputCap"]) if (value[key] !== undefined && !integer(value[key], 0, Number.MAX_SAFE_INTEGER)) return
+  if (["coverage", "estimateSource", "capSupport", "admission"].some(key => typeof value[key] !== "string")) return
+  if (!["complete", "neutral-only", "incomplete"].includes(String(value.coverage)) || !["projected-heuristic", "provider-anchor-plus-projection", "neutral-only"].includes(String(value.estimateSource))
+    || !["supported", "unsupported", "unknown"].includes(String(value.capSupport)) || !["fit", "compact", "unavailable"].includes(String(value.admission))
+    || typeof value.recoveryRequired !== "boolean" || typeof value.fullByProvider !== "boolean") return
+  return Object.fromEntries(["estimatedInputTokens", "outputReserve", "contextWindow", "effectiveOutputCap", "safetyMargin", "coverage", "estimateSource", "capSupport", "admission", "recoveryRequired", "fullByProvider"].map(key => [key, value[key]])) as RuntimeDiagnosticEntry["contextBudget"]
+}
+const kinds: RuntimeDiagnosticKind[] = ["model/retry", "model/recovered", "model/connecting", "model/quiet", "model/settled", "session/error", "session/cancelled", "gateway/disconnected", "runtime/error", "context/budget", "context/request", "context/compaction"]
 const codes = new Set(["http_400", "http_401", "http_402", "http_403", "http_408", "http_413", "http_429", "http_500", "http_502", "http_503", "http_504", "network", "timeout", "authentication", "quota", "context_limit", "invalid_arguments", "cancelled", "model_error", "gateway_disconnected", "runtime_error", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN"])
 for (const code of ["UNKNOWN", "ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS", "RATE_LIMIT", "TIMEOUT", "TRANSPORT", "SERVER", "CAPACITY"]) codes.add(code)
 
@@ -88,6 +101,12 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const retry = safeRetry(value.retry)
     const httpStatus = integer(value.httpStatus, 100, 599) ? value.httpStatus : undefined
     const modelFailure = safeModelFailureFacts(value.modelFailure)
+    let requestMetrics: RuntimeDiagnosticEntry["requestMetrics"]
+    try { if (value.requestMetrics !== undefined) requestMetrics = validateRequestMetrics(value.requestMetrics) } catch { /* Reject optional facts. */ }
+    const compaction = safeCompactionDiagnostic(value.compaction)
+    const close = record(value.close) && integer(value.close.generation, 0, Number.MAX_SAFE_INTEGER) && typeof value.close.reason === "string" && ["scope-changed", "subprocess-exited", "manager-closed"].includes(value.close.reason)
+      ? { generation: value.close.generation, reason: value.close.reason as NonNullable<RuntimeDiagnosticEntry["close"]>["reason"] } : undefined
+    const contextBudget = safeContextBudget(value.contextBudget)
     const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
     const outcome = kind === "model/settled" && ["completed", "failed", "cancelled"].includes(String(value.outcome)) ? value.outcome as ModelActivityInfo["outcome"] : undefined
@@ -99,12 +118,21 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : kind === "session/cancelled" ? "User work cancelled."
       : kind === "gateway/disconnected" ? "Local gateway disconnected. Reconnect to continue."
       : kind === "runtime/error" ? "Runtime request could not start."
+      : kind === "context/request" ? "Prepared physical request facts."
+      : kind === "context/compaction" ? "Context compaction facts."
+      : kind === "context/budget" ? "Prepared context admission facts."
       : modelFailure && modelFailure.reason !== "unknown" ? `${modelFailure.message}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`
       : `${code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model request failed${httpStatus ? ` (HTTP ${httpStatus})` : code ? ` (${code})` : ""}.`
-    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") ? "info" : "error", message,
+    return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") || kind.startsWith("context/") ? "info" : "error", message,
       ...(safeId(value.workspaceId) ? { workspaceId: safeId(value.workspaceId) } : {}), ...(safeId(value.sessionId) ? { sessionId: safeId(value.sessionId) } : {}),
+      ...(safeId(value.projectId) ? { projectId: safeId(value.projectId) } : {}), ...(safeId(value.providerId) ? { providerId: safeId(value.providerId) } : {}), ...(safeId(value.modelId) ? { modelId: safeId(value.modelId) } : {}),
+      ...(integer(value.runtimeGeneration, 0, Number.MAX_SAFE_INTEGER) ? { runtimeGeneration: value.runtimeGeneration } : {}),
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
       ...(modelFailure ? { modelFailure } : {}),
+      ...(requestMetrics ? { requestMetrics } : {}), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}),
+      ...(contextBudget ? { contextBudget: { estimatedInputTokens: contextBudget.estimatedInputTokens, outputReserve: contextBudget.outputReserve, contextWindow: contextBudget.contextWindow,
+        effectiveOutputCap: contextBudget.effectiveOutputCap, safetyMargin: contextBudget.safetyMargin, coverage: contextBudget.coverage, estimateSource: contextBudget.estimateSource,
+        capSupport: contextBudget.capSupport, admission: contextBudget.admission, recoveryRequired: contextBudget.recoveryRequired, fullByProvider: contextBudget.fullByProvider } } : {}),
       ...((kind === "session/error" || kind === "session/cancelled") && value.executionUncorrelated === true ? { executionUncorrelated: true as const } : {}),
       ...(waitingFor ? { waitingFor } : {}), ...(outcome ? { outcome } : {}) }
   }
@@ -217,7 +245,19 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
         for (const key of activeAttempts.keys()) if (JSON.parse(key)[0] === event.workspaceId) closeAttempt(key)
         for (const key of executionStates.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.delete(key)
         const state = scope(event.workspaceId)
-        add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected" }, JSON.stringify([event.workspaceId, state.turn, "disconnect"]))
+        add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected", ...(event.close ? { close: event.close } : {}) }, JSON.stringify([event.workspaceId, state.turn, "disconnect"]))
+        return
+      }
+      if (event.kind === "sdk/notification" && event.method === "desktop/context/diagnostic" && record(event.params)) {
+        const params = event.params
+        const scope = { workspaceId: event.workspaceId, ...(identifier(params.sessionId) ? { sessionId: params.sessionId } : {}),
+          ...(identifier(params.projectId) ? { projectId: params.projectId } : {}), ...(identifier(params.providerId) ? { providerId: params.providerId } : {}),
+          ...(identifier(params.modelId) ? { modelId: params.modelId } : {}), ...(integer(params.runtimeGeneration, 0, Number.MAX_SAFE_INTEGER) ? { runtimeGeneration: params.runtimeGeneration } : {}) }
+        const compaction = safeCompactionDiagnostic(event.params.compaction)
+        if (compaction) add({ kind: "context/compaction", ...scope, compaction }, randomUUID())
+        try {
+          if (event.params.requestMetrics !== undefined) add({ kind: "context/request", ...scope, requestMetrics: validateRequestMetrics(event.params.requestMetrics) }, JSON.stringify([event.workspaceId, params.runtimeGeneration, safeId(params.id) ?? randomUUID()]))
+        } catch { /* Optional diagnostics never affect model execution. */ }
         return
       }
       if (event.kind !== "sdk/notification" || !record(event.params) || !identifier(event.params.sessionId)) return
@@ -225,7 +265,9 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       const state = scope(event.workspaceId, sessionId)
       if (event.method === "session/event" && record(event.params.event)) {
         const item = event.params.event
-        if (item.type === "turn/start") {
+        if (item.type === "context/budget" && item.version === 1 && validBudgetSnapshot(item.snapshot) && item.snapshot.ownerSessionId === sessionId) {
+          add({ kind: "context/budget", workspaceId: event.workspaceId, sessionId, contextBudget: item.snapshot }, JSON.stringify([event.workspaceId, sessionId, "budget", item.seq]))
+        } else if (item.type === "turn/start") {
           if (integer(item.seq, 0, Number.MAX_SAFE_INTEGER) && state.lastStart === item.seq) return
           state.turn = randomUUID(); state.lastStart = integer(item.seq, 0, Number.MAX_SAFE_INTEGER) ? item.seq : undefined; state.requestId = undefined; state.status = "running"
           closeAttempt(JSON.stringify([event.workspaceId, sessionId]))

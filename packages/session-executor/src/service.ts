@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { append, subscribe, validateImages, deriveContextBudget, deriveContextRecovery, deriveProjectionRewrite, deriveMessages, type ImageInput, type Session } from "@i-harness/core-session"
+import { append, subscribe, validateImages, contextStateFromBudget, type SessionContextState, deriveContextBudget, deriveContextRecovery, deriveProjectionRewrite, deriveMessages, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
@@ -183,8 +183,8 @@ export interface SessionService {
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
-  /** Estimated active transcript size; no provider request is made. */
-  contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number }; snapshot?: import("@i-harness/core-session").RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }>
+  /** Actual owned prepared budget or validated saved facts; no provider request. */
+  contextState(sessionId: string): Promise<SessionContextState>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -450,23 +450,30 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     }
   }
 
-  async function contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number }; snapshot?: import("@i-harness/core-session").RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }> {
-    if (closed) throw new Error("session service closed")
-    if (assemblies.has(sessionId) && !assemblies.get(sessionId)!.agent.contextBudget) return { kind: "unavailable", reason: "Live Agent context budget reader is unavailable" }
-    const live = assemblies.get(sessionId)?.agent.contextBudget?.()
-    if (live) {
-      if (live.kind === "unavailable") return live
-      const snapshot = live.snapshot
-      if (snapshot.admission === "unavailable" || snapshot.recoveryRequired || snapshot.contextWindow === undefined) return { kind: "unavailable", reason: snapshot.reason ?? "Prepared context is unavailable" }
-      return { kind: "ready", estimatedTokens: snapshot.admissionInputTokens, contextWindow: snapshot.contextWindow, roleTokens: snapshot.roleTokens, snapshot }
+  function liveContextState(sessionId: string): SessionContextState | undefined {
+    const assembly = assemblies.get(sessionId)
+    if (assembly) return contextStateFromBudget(assembly.agent.contextBudget?.() ?? { kind: "unavailable", reason: "Live Agent context budget reader is unavailable" })
+    for (const parent of assemblies.values()) {
+      const read = parent.liveChildBudget?.(sessionId)
+      if (read) return contextStateFromBudget(read)
     }
+    return undefined
+  }
+  async function contextState(sessionId: string): Promise<SessionContextState> {
+    if (closed) throw new Error("session service closed")
+    let live = liveContextState(sessionId)
+    if (live) return live
     const meta = await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined)
+    live = liveContextState(sessionId)
+    if (live) return live
     let session = opts.sessionFor === undefined ? opts.session : undefined
     if (opts.coordinator?.snapshot) session = (await opts.coordinator.snapshot(sessionId)).session
-    if (assemblies.has(sessionId)) return contextState(sessionId)
+    live = liveContextState(sessionId)
+    if (live) return live
     if (!opts.modelMetadataFor) return { kind: "unavailable", reason: "Read-only model binding metadata is unavailable" }
     const metadata = await opts.modelMetadataFor(sessionId, meta)
-    if (assemblies.has(sessionId)) return contextState(sessionId)
+    live = liveContextState(sessionId)
+    if (live) return live
     if (!metadata || metadata.identityCoverage !== "complete" || !metadata.bindingConfigFingerprint) return { kind: "unavailable", reason: "Complete model binding identity is unavailable" }
     const saved = session && deriveContextBudget(session, sessionId)
     if (!saved || saved.identityCoverage !== "complete" || saved.bindingConfigFingerprint !== metadata.bindingConfigFingerprint
@@ -474,9 +481,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       || saved.projectionRevision !== deriveProjectionRewrite(session!).markers + session!.events.filter(event => event.type === "compaction/prune").length
       || saved.neutralFingerprint !== projectionFingerprint(deriveMessages(session!))) return { kind: "unavailable", reason: "Saved prepared budget is missing or stale" }
     const recovery = deriveContextRecovery(session!, sessionId)
-    if (recovery && recovery.state !== "resolved") return { kind: "unavailable", reason: "Provider context recovery remains required" }
-    if (saved.admission === "unavailable" || saved.recoveryRequired || saved.contextWindow === undefined) return { kind: "unavailable", reason: saved.reason ?? "Saved prepared budget is unavailable" }
-    return { kind: "ready", estimatedTokens: saved.admissionInputTokens, contextWindow: saved.contextWindow, roleTokens: saved.roleTokens, snapshot: saved }
+    return contextStateFromBudget({ kind: "ready", snapshot: recovery && recovery.state !== "resolved"
+      ? { ...saved, recoveryRequired: true, fullByProvider: true, admission: "compact", reason: "Provider context recovery remains required" } : saved })
   }
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
