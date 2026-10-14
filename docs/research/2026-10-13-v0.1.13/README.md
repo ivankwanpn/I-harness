@@ -74,6 +74,7 @@ IH已能讀兩種檔名，這次是修正完整性而非新增重複loader。重
 - [Runtime／完成喚醒](runtime-events.md)：actualowners、保存與恢復風險、sourcefile/line、Codex及OpenCode局部比較。
 - [UI／gateway／watcher](surface-events.md)：8週期實作／10消費面、terminalcursor、Gitworktree、reconnect與authority。
 - [指令檔](instruction-files.md)：currentloader、child/runtimecontext、native-targetreplan及來源差異。
+- [指令變更與批次預檢](instruction-mutation-preflight.md)：2026-10-14 固定來源分析，補足混合指令／程式碼修改、Code Mode replan 收尾與可觀察競態界線；採用結果見[指令變更驗收條件](../../refactoring/v0.1.13-instruction-mutation-gates.md)。這是待實作約束，沒有新增行為測試通過的宣稱。
 - [大型檔案](large-files.md)與[產品候選JSON](census.json)：43產品檔、32組、consumers、tests。
 - [Timer原始文字掃描](timer-census.txt)：142筆文字命中，含型別／註解／deadline等，**不是142個pollingloop**；分類以兩份事件報告為準。
 
