@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development in the current session. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Repair the complete long-session request-budget, diagnostic and recovery flow across IH's supported protocols, then stop on the current version.
+**Goal:** Complete the multi-protocol long-session repair plus the user-added Official plugin compatibility, existing-IH context styling and v0.1.13-rc.1 candidate preparation. Original event-driven/instruction/decomposition plans remain paused and are reported separately.
 
 **Architecture:** Protocol adapters prepare one immutable input and expose payload-free measurement through the existing wrappers. One per-agent budget owner provides admission, compaction, persisted facts and UI/tool reads; typed confirmed-overflow recovery changes durable effective history before a single rebuilt request.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Desktop version remains0.1.12; general v0.1.13 decomposition/E/I plans remain paused. No merge/release/installed app/profile changes.
+- Tasks1–7 retain their historical Desktop/gateway0.1.12 state. Latest human steering selects final candidate0.1.13-rc.1 in independent7b, authorizes Root-only reviewed GitHub branch push and draft/prerelease preparation, and adds7a plugin/7u style units. No formal publication, merge, installed app/profile or live model API changes. General v0.1.13 decomposition/E/I plans remain paused.
 - All delegated roles GPT6.1Sol fork none/high, no recursive agents; one product writer and fresh scoped review per task plus final repair-range review.
 - Preserve protocol-specific cache/usage/signature/image/order/namespace and raw option precedence. Public Responses and Codex subscription are distinct cap capabilities.
 - Preserve original Session/tool effects and owner authority. Bare400/413 never triggers destructive recovery; Stop/persistence errors remain authoritative.
@@ -184,6 +184,41 @@ await expect(output.execute({task_ids:[foreignTask]})).rejects.toThrow()
 - [ ] RED/GREEN actual production main/child file read of a large multilingual file: default bounded page, nonrepeating full reconstruction by pages, stale digest refusal, Stop/ownership and unchanged legacy full read. Oversized timeout partial/error and an ordinary object whose code equals a failure constant cannot bypass the production bound; verdict/image/retrieval semantics survive.
 - [ ] Run subagent/task/persistence/Team/assembly plus affected fs/output-retention/guard-timeout contracts/types; commit `fix: bound model-facing reports with durable retrieval`; fresh review.
 
+## Task 7a: Repair Official Playwright MCP configuration compatibility
+
+**Files:** existing plugin-registry common install/read/rekey parser and focused install/runtime contract tests; tracked `docs/research/2026-10-15-official-plugin-compatibility.md`; approved current-plan/spec scope updates. No new provider platform.
+
+**Requirements:** normative supplemental Official plugin compatibility section and exact bounded research draft. Current official six-line direct map has server `playwright`, command `npx`, args `['@playwright/mcp@latest']`. Preserve this source fixture byte-for-byte; execute no configured command.
+
+- [ ] Obtain actual behavioral RED through the existing synthetic public install → staged rekey → async read → sync/runtime read chain. Root research/source reasoning is not an executed test or API-absence RED.
+- [ ] Normalize direct and wrapped server maps in the common parser. An own `mcpServers` field always selects wrapped validation, with no malformed fallback; only absence selects direct. Preserve per-entry strict fields/types, arrays rejection, existing wrapped extra-field rule, unsupported SSE skip, 64-character namespacing/key handling and external source immutability. Never merge mixed dialects; document reserved literal `mcpServers` server-name ambiguity.
+- [ ] Test accepted direct/wrapped forms, async/sync/runtime parity, namespaced install output, malformed wrapper/array controls, unsupported SSE behavior, previous-install preservation and candidate cleanup/atomic rollback on invalid replacement. Use isolated synthetic fixture directories and injected runners only; no live clone/npm/plugin installation, `npx`, account or profile.
+- [ ] Save bounded DSH comparison with exact inspected paths/limits and future source/version/status/loader/diagnostic suggestions. Distinguish Cordis/NPM runtime provider bundles from IH files/skills/hooks/MCP marketplace; no bundle/manifest/native-provider feature expansion.
+- [ ] Run affected plugin-registry/consumer contracts and types sequentially, retain actual RED/GREEN/exits, staged and exact-range whitespace checks, local commit and fresh scoped spec+quality review. Report Task7a in this plan's workspace. After PASS send Root true current progress and clean committed HEAD for the authorized branch checkpoint push.
+
+## Task 7u: Match ContextUsage to IH's existing style
+
+**Files:** existing ContextUsage presentation/CSS and necessary locale-preserving fixture/tests. Reuse existing vendor Button without edits; no data-flow, design-system or package changes.
+
+**Requirements:** normative ContextUsage style supplement supplied by Root after explicit user authorization. Retain actual owner facts, no fake percentages, scalar refresh/zero extra preparation, zh/en copy, authority and epoch/focus/hover/Escape behavior.
+
+- [ ] Present diagnostic facts in existing IH label/value rows and modest groups, with clearer primary capacity/remaining hierarchy and muted readable source/confidence text. Retain all facts; no new details interaction.
+- [ ] Reuse IH popover tokens/metrics and existing secondary/ghost small Button. No new palette, vendor edits or copied button implementation.
+- [ ] Reuse meaningful existing DTO/interaction checks; avoid CSS-mirroring tests. Actual production component/styles en/zh390/900 and short-viewport access evidence, without a large test heading mistaken for app content; preserve old visuals and state fixture/non-native limits.
+- [ ] Affected checks/types, actual screenshots/receipts, local commit and fresh scoped spec/quality review. Then release7b/final8 continue; no further UI polish beyond this bounded request.
+
+## Task 7b: Support and identify v0.1.13-rc.1 release candidate
+
+**Files:** Desktop/gateway release version owners, existing installer builder/NSIS version metadata, small optional gateway-source packaging seam and focused existing installer/build safety tests. No release framework or actual installation.
+
+**Requirements:** normative candidate compatibility section. Application/display/ownership semver is `0.1.13-rc.1`; Windows numeric PE version is independently validated `0.1.13.0`. Root exclusively owns GitHub writes and actual portable/installer builds.
+
+- [ ] Actual RED using existing installer-builder fixtures shows valid prerelease rejected and numeric NSIS field needs separation. Support validated stable/prerelease versions, preserving full rc in ProductVersion/FileVersion strings, markerVersion, Uninstall DisplayVersion and uninstaller equality. Reject malformed/unsafe/unrepresentable numeric versions before packaging.
+- [ ] Bump Desktop and gateway release manifests together; preserve existing root/CLI/SDK/private package version rules, Session2/contextEvents1/taskDocs1 and payload/gateway/path-safety validation. No blanket unrelated version replacement.
+- [ ] Add optional `IH_DESKTOP_GATEWAY_DIR` read-only input reuse to `package-app.mjs`. Absence retains `.gateway-dist`. Explicit canonical existing repository-contained runtime is validated; reject input/output overlap before cleanup and preserve existing release-label/default behavior. No mutation of the qualified runtime/default bundle.
+- [ ] Meaningful RED/GREEN and affected installer fixture/lifecycle/destination/safety contracts verify display versus numeric version, valid stable behavior, malformed/unsafe controls, ownership equality and packaging source/path validation. Do not execute a real installed-app lifecycle or add a new packaging dependency.
+- [ ] Affected checks/types, actual receipts, local commit and fresh scoped spec+quality review. Then Task8 asserts candidate versions and qualifies the fixed tree. Root's actual fresh-label portable/installer build uses a coordinated single runner and the same qualified runtime.
+
 ## Task 8: Combined reliability verification and stop
 
 **Files:** controlled synthetic long-history e2e and packaged smoke, lasting docs/research/README/context help, checkpoint only. Existing private transcript is never committed as a test fixture.
@@ -191,4 +226,16 @@ await expect(output.execute({task_ids:[foreignTask]})).rejects.toThrow()
 - [ ] Exercise one actual request pipeline per protocol and Responses public/subscription variants: measured final payload, classification, independent summary cap, bounded recovery/Stop/restore, source counters and previews. Use mock fetch/SDK transport and actual Session/coordinator, not only event spies.
 - [ ] One real long-history service/SDK/gateway scenario repeats continue after overflow, rejects unknown/schema failures distinctly, preserves child/result ownership and restores saved recovery state. Assert tool effects and main logical attempts, no hidden retry loops.
 - [ ] Fresh final repair-range review against1332a465 after task gates, one scoped fix wave if needed. Final fixed-tree affected tests/types, repository verify:all/reachability and isolated packaged CLI/SDK/Desktop gateway Responses/Anthropic smoke. Inspect actual populations/exits/platform limitations, do not infer native qualification from JS tests.
-- [ ] Verify every version file stays0.1.12 where currently0.1.12; save local commits/review/test/source evidence. No release/merge or S20/E/I continuation. Mark this repair complete only when all required cases pass, update pause checkpoint and stop.
+- [ ] Verify Desktop/gateway candidate0.1.13-rc.1 and independent Windows numeric0.1.13.0 after7b; preserve other package/Session2/events1/taskdocs1 rules. Save local commits/review/test/source and Root-only authorized push/draft/build evidence. No formal publication/merge or S20/E/I continuation. Mark this repair complete only when all original and added unit gates pass; report original paused progress separately.
+
+## Task 8 supplemental completion requirements
+
+All three supplemental unit gates join all original eight units in the final `1332a465..HEAD` repair review and report. Final candidate version is v0.1.13-rc.1, with independent Windows numeric metadata 0.1.13.0; prior 0.1.12 unit states remain historical evidence. Root owns authorized GitHub push and draft/prerelease preparation; no automatic formal publication.
+
+The same final review also receives the complete fixed `460a2aee9395dafe196eb31425dcc2c3fcdc259e..HEAD` candidate manifest/stat/commit list and bounded prior S0–S19 review evidence/limits. It explicitly assesses combined coupling/packaging/regression risk while reusing completed old reviews; a detailed repair-range review is never described as a whole-branch line-by-line review. Historical S14 native39pass/4unsupported is not fresh qualification.
+
+Final affected checks, complete recursive verify:all population, types, E2E `**/*.e2e.ts`, reachability and isolated packaged Responses/Anthropic CLI/SDK/Desktop-gateway smoke remain required. Gemini/Bedrock controlled contracts require no live keys. Root and Task8 reserve one qualification/build runner at a time; reuse the same fresh qualified repository-contained runtime for the actual candidate build.
+
+Separately report original paused event-runtime (E1–E9 implementation pending; E8a feasibility done), instruction-context (I1–I7 pending) and product decomposition (S0–S19 reviewed, 27/43 original candidates reviewed, 16 remaining, 13 review units; S20 baseline not run) from Root's bounded historical evidence. Do not count current repair modules as original-plan continuation.
+
+Preserve all evidence, localized visuals, review packages and every ledger ruling with its cost in durable `.tmp/long-session-repair/verification` plus the tracked final research report before this plan's workspace cleanup. Root reviews final record and authorizes only this plan's cleanup. No other plan workspace is read, rewritten or removed.
