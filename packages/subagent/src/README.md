@@ -71,3 +71,14 @@ sources. Source reconstruction additionally checks complete statement bodies,
 getter/receiver/argument evaluation, allocation/callback placement and public
 exports. Actual reachability retains all 419 complete ordered findings and its
 digest without changing scanner, baseline or allowlist.
+
+Run these commands from the repository root, sequentially in the order shown:
+
+```powershell
+pnpm --filter @i-harness/subagent exec vitest run --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/subagent typecheck
+pnpm --filter @i-harness/session-executor exec vitest run test/child-observation.test.ts test/code-mode-children.test.ts test/assembly.test.ts --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/session-executor typecheck
+pnpm --filter @i-harness/agent-team exec vitest run test/child-sequence.test.ts test/completion-delivery.test.ts test/lifecycle.test.ts --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/agent-team typecheck
+```
