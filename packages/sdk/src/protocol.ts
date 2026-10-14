@@ -1,3 +1,4 @@
+import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 // M27 R-C4: NDJSON JSON-RPC 2.0 line framing for @i-harness/sdk.
 //
 // The wire contract: ONE JSON-RPC 2.0 message per line (JSON.stringify +
@@ -560,12 +561,14 @@ export interface RewindExecuteResponse {
 export class RpcError extends Error {
   readonly code: number
   readonly data: unknown
+  readonly modelFailure: ModelFailureFacts | undefined
 
   constructor(code: number, message: string, data?: unknown) {
     super(message)
     this.name = "RpcError"
     this.code = code
     this.data = data
+    this.modelFailure = safeModelFailureFacts(data !== null && typeof data === "object" ? (data as { modelFailure?: unknown }).modelFailure : undefined)
   }
 }
 

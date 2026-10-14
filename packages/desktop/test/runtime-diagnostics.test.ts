@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import { RpcError, SdkRunError } from "@i-harness/sdk"
+import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -14,6 +15,24 @@ const status = (state: string, error?: string, sessionId = "s"): DesktopEvent =>
 const retry = { requestId: "req-1", phase: "waiting", attempt: 1, maxRetries: 5, delayMs: 500, code: "http_503", httpStatus: 503, providerId: "local", modelId: "model" }
 
 describe("native runtime diagnostics", () => {
+  it("retains safe model facts from status and SDK rejection through disk, copy and export", async () => {
+    const dir = await root(), output = join(dir, "safe.json")
+    let copied = ""
+    const service = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+    const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "prompt is too long: 210000 tokens > 200000 maximum private prompt", input_tokens: 210000, context_limit: 200000, param: "messages" } }), { status: 400, headers: { "request-id": "req-desktop-123" } }))
+    const safe = modelFailureFacts(upstream)
+    service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: upstream.message, modelFailure: { ...safe, message: "private prompt sk-private-key", parameter: "private prompt" } } })
+    service.beginRequest("ws", "other")
+    service.recordRequestFailure("ws", "other", new SdkRunError(upstream.message, -32603, { modelFailure: safe }, []))
+    await service.flush()
+    const restored = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+    const rows = (await restored.list()).entries
+    expect(rows).toHaveLength(2)
+    expect(rows.every(row => row.message === "Model input exceeds the context window. (HTTP 400)")).toBe(true)
+    for (const row of rows) expect(row).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", httpStatus: 400, modelFailure: { reason: "context-limit", inputTokens: 210000, contextLimit: 200000, requestId: "req-desktop-123", message: "Model input exceeds the context window." } })
+    await restored.copy(rows[0]!.id); await restored.export()
+    expect(copied + await readFile(output, "utf8") + await readFile(join(dir, "runtime-diagnostics.0.jsonl"), "utf8")).not.toMatch(/private prompt|sk-private-key/)
+  })
   it.each(["failed", "cancelled", "completed"])("does not attribute delayed %s status to a busy replacement retry", async terminal => {
     const service = createRuntimeDiagnostics(await root())
     const phases: string[] = []

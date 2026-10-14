@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
 import { createBedrockClient, resolveBedrockRegion, translateReasoning, type BedrockRuntimeFace } from "../src/index.ts"
 import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import { modelFailureFacts, retryErrorCode } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -32,6 +33,26 @@ afterEach(() => {
 })
 
 describe("llm-bedrock protocol (Converse wire)", () => {
+  it.each([
+    ["ValidationException", "The input length exceeds the maximum context length. private prompt", "CONTEXT_WINDOW_EXCEEDED"],
+    ["ValidationException", 'Invalid tool arguments: "context_length_exceeded" private prompt', "INVALID_ARGUMENT"],
+    ["AccessDeniedException", "context_length_exceeded private prompt", "AUTH"],
+    ["ServiceQuotaExceededException", "context_length_exceeded private prompt", "QUOTA"],
+  ])("preserves classified SDK %s failure facts with the original send receiver and cause", async (name, message, code) => {
+    const upstream = Object.assign(new Error(message), { name, $metadata: { httpStatusCode: 400, requestId: "aws-123" } })
+    let receiver: unknown
+    const fake = { async send() { receiver = this; throw upstream }, destroy() {} } as unknown as BedrockRuntimeFace
+    const events: LLMStreamEvent[] = []
+    for await (const event of createBedrockClient({ model: "fixture" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(receiver).toBe(fake)
+    expect(events).toHaveLength(1)
+    const event = events[0]!
+    if (event.type !== "error") throw new Error("missing error")
+    expect(event.error.cause).toBe(upstream)
+    expect(retryErrorCode(event.error)).toBe(code)
+    expect(modelFailureFacts(event.error)).toMatchObject({ code, providerType: name, httpStatus: 400, requestId: "aws-123" })
+    expect(JSON.stringify(modelFailureFacts(event.error))).not.toContain("private prompt")
+  })
   it("keeps request cache intent out of the Converse payload", async () => {
     const { fake } = fakeRuntime([])
     const client = createBedrockClient({ model: "fixture" }, fake)

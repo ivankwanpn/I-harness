@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { createOpenAIClient } from "../src/index.ts"
-import { retryErrorCode } from "@i-harness/llm-seam"
+import { retryErrorCode, modelFailureFacts } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
-it.each([[400, '{"error":{"code":"context_length_exceeded","message":"private context"}}', "CONTEXT_WINDOW_EXCEEDED"], [503, "private body", "SERVER"], [429, '{"error":{"code":"insufficient_quota","message":"private billing"}}', "QUOTA"], [401, "private token", "AUTH"]] as const)("HTTP %s retains safe metadata and Retry-After without response body", async (status, body, code) => {
-  vi.stubGlobal("fetch", async () => new Response(body, { status, headers: { "retry-after": "2" } }))
+it.each([[400, '{"error":{"type":"invalid_request_error","message":"context_length_exceeded private context"}}', "CONTEXT_WINDOW_EXCEEDED"], [400, '{"error":{"code":"CONTEXT_TOO_LONG","message":"private prompt"}}', "CONTEXT_WINDOW_EXCEEDED"], [400, '{"error":{"code":"context_length_exceeded","message":"private context"}}', "CONTEXT_WINDOW_EXCEEDED"], [503, "private body", "SERVER"], [429, '{"error":{"code":"insufficient_quota","message":"private billing"}}', "QUOTA"], [401, "private token", "AUTH"]] as const)("HTTP %s retains safe metadata and Retry-After without response body", async (status, body, code) => {
+  vi.stubGlobal("fetch", async () => new Response(body, { status, headers: { "retry-after": "2", "x-request-id": "req-adapter-123" } }))
   const start = Date.now()
   const hints: unknown[] = []
   const events = []
@@ -17,4 +17,6 @@ it.each([[400, '{"error":{"code":"context_length_exceeded","message":"private co
   expect(event.error).toMatchObject({ code, httpStatus: status, retryAfterAt: expect.any(Number) })
   expect((event.error as Error & { retryAfterAt: number }).retryAfterAt).toBeGreaterThanOrEqual(start + 2000)
   expect(event.error.message).not.toContain("private")
+  expect(modelFailureFacts(event.error)).toMatchObject({ code, httpStatus: status, requestId: "req-adapter-123" })
+  expect(JSON.stringify(modelFailureFacts(event.error))).not.toContain("private")
 })

@@ -8,6 +8,50 @@ import { createSessionService, createDurableSessionLoader } from "@i-harness/ses
 type ModelClient = NonNullable<Parameters<typeof createSessionService>[0]["model"]>
 type LLMRequest = Parameters<ModelClient["stream"]>[0]
 import { createDesktopInput } from "../src/input.ts"
+import { describeHttpError, type ModelFailureFacts } from "@i-harness/llm-seam"
+
+it("repeated model 400 failures preserve facts, the same service and parked work; legacy errors retain three status arguments", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-model-failure-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  await coordinator.create({ sessionId: "s" })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let calls = 0, effects = 0, aborted = 0, cellId = ""
+  const onStatus = vi.fn()
+  const model: ModelClient = { async *stream() {
+    calls++
+    if (calls === 1) yield { type: "tool_call", call: { name: "code_exec", args: { code: "text(await tools.held_work({}));", yield_time_ms: 1 } } }
+    else if (calls <= 4) yield { type: "error", error: await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: calls === 4 ? "context_length_exceeded private prompt" : "Invalid schema: private prompt" } }), { status: 400, headers: { "request-id": "req-input-123" } })) }
+    else if (calls === 5) yield { type: "error", error: new Error("unknown failure") }
+    else if (calls === 6) yield { type: "tool_call", call: { name: "code_wait", args: { cell_id: cellId, yield_time_ms: 5000 } } }
+    else yield { type: "text/chunk", text: "accepted again" }
+    yield { type: "end" }
+  } }
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, sandbox: "danger-full-access", approveAll: true, codeMode: { mode: "mixed" }, additionalTools: [{ name: "held_work", description: "Parked independent work", inputSchema: { type: "object", properties: {} }, isReadOnly: true, execute: async (_args: unknown, exec) => { effects++; let done = false; exec.abortSignal?.addEventListener("abort", () => { if (!done) aborted++ }, { once: true }); await held; done = true; return "full original result" } }] })
+  const input = createDesktopInput(coordinator, service, { onStatus })
+  try {
+    const assembly = await service.assemblyFor("s")
+    await input.admit("s", { text: "start", delivery: "queue" }); await input.drain()
+    const parked = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec") as { output: { cell_id: string; status: string } }
+    expect(parked.output.status).toBe("running"); cellId = parked.output.cell_id
+    await vi.waitFor(() => expect(effects).toBe(1), { timeout: 5000 })
+    for (const text of ["ordinary again", "context", "unknown"]) { await input.admit("s", { text, delivery: "queue" }); await input.drain() }
+    const failures = onStatus.mock.calls.filter(row => row[1] === false && row[2])
+    expect(failures).toHaveLength(4)
+    for (const row of failures.slice(0, 3)) expect(row[3] as ModelFailureFacts).toMatchObject({ httpStatus: 400, requestId: "req-input-123" })
+    expect(failures[0]![3]).toMatchObject({ code: "INVALID_ARGUMENT", reason: "schema" })
+    expect(failures[2]![3]).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", reason: "context-limit" })
+    expect(failures[3]).toHaveLength(3)
+    expect(JSON.stringify(failures.slice(0, 3))).not.toContain("private prompt")
+    expect(service.liveAssembly("s")).toBe(assembly)
+    expect(effects).toBe(1); expect(aborted).toBe(0)
+    release()
+    await input.admit("s", { text: "retrieve", delivery: "queue" }); await input.drain()
+    const completed = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_wait") as { output: unknown }
+    expect(JSON.stringify(completed.output)).toContain("full original result")
+    expect(effects).toBe(1); expect(aborted).toBe(0)
+  } finally { release(); await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 15_000)
 
 it("Desktop input wakes only its exact live Session's human observer and a later prompt retrieves the same cell", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-input-steer-"))

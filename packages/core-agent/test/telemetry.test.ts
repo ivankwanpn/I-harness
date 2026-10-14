@@ -4,7 +4,7 @@ import { createSession } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
 
 // M25: telemetry is an independent HOST event stream (separate from the session
@@ -34,6 +34,19 @@ function makeTools(ctx: ReturnType<typeof createContext>): Tool[] {
 }
 
 describe("core-agent telemetry emit (M25)", () => {
+  it("preserves model facts through the agent cause while telemetry only records a canonical explanation", async () => {
+    const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+    const { telemetry, events } = spyTelemetry()
+    const upstream = Object.assign(new Error("The input length exceeds the maximum context length. private prompt sk-private-key"), { name: "ValidationException", $metadata: { httpStatusCode: 400, requestId: "aws-123" } })
+    const model: ModelClient = { async *stream() { yield { type: "error", error: upstream } } }
+    const error = await createAgent(ctx, { session, tools, model, systemPrompt: "", telemetry }).run("fixture").catch(error => error)
+    expect(error.cause).toBe(upstream)
+    expect(error.message).toContain(upstream.message)
+    expect(modelFailureFacts(error)).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", providerType: "ValidationException", httpStatus: 400 })
+    const providerError = events.find(event => event.type === "provider/error")
+    expect(providerError?.data).toMatchObject({ error: "Model input exceeds the context window.", modelFailure: { code: "CONTEXT_WINDOW_EXCEEDED" } })
+    expect(JSON.stringify(providerError)).not.toMatch(/private prompt|sk-private-key/)
+  })
   it("emits turn/provider/tool/token events around the loop", async () => {
     const ctx = createContext()
     const session = createSession()
@@ -137,7 +150,7 @@ describe("core-agent telemetry emit (M25)", () => {
     })
     await expect(agent.run("read a.txt")).rejects.toThrow(/model stream error: boom/)
     expect(events.map((e) => e.type)).toEqual(["turn/start", "provider/call", "provider/context", "provider/error"])
-    expect(events[3]!.data).toMatchObject({ error: "boom" })
+    expect(events[3]!.data).toMatchObject({ error: "Model request failed." })
   })
 
   it("absent telemetry → no events, behavior unchanged (backward compat)", async () => {

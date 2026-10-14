@@ -5,6 +5,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
 import type { SessionEvent } from "@i-harness/core-session"
+import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import {
   JsonRpcLineTransport,
   makeNotification,
@@ -63,6 +64,7 @@ export class SdkRunError extends Error {
   readonly code: number
   readonly data: unknown
   readonly events: SessionEvent[]
+  readonly modelFailure: ModelFailureFacts | undefined
 
   constructor(message: string, code: number, data: unknown, events: SessionEvent[]) {
     super(message)
@@ -70,6 +72,7 @@ export class SdkRunError extends Error {
     this.code = code
     this.data = data
     this.events = events
+    this.modelFailure = safeModelFailureFacts(data !== null && typeof data === "object" ? (data as { modelFailure?: unknown }).modelFailure : undefined)
   }
 }
 

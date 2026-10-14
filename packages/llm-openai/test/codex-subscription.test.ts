@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { modelFailureFacts, retryErrorCode } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "../src/index.ts"
 
 const request: LLMRequest = { messages: [{ role: "user", content: "hi" }], systemPrompt: "Help", tools: [{ name: "read", description: "Read a file", inputSchema: { type: "object" } }] }
@@ -14,6 +15,17 @@ const plan = (extra = {}) => createOpenAIClient({ apiKey: "unused-key", model: "
 afterEach(() => vi.unstubAllGlobals())
 
 describe("Codex subscription Responses contract", () => {
+  it("uses the shared safe context classifier on the distinct subscription HTTP route", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: { type: "invalid_request_error", code: "CONTEXT_TOO_LONG", message: "private subscription prompt" } }), { status: 400, headers: { "x-request-id": "req-subscription-123" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const events = await collect(plan())
+    expect(fetchMock.mock.calls).toHaveLength(1)
+    const error = events[0]
+    if (error?.type !== "error") throw new Error("missing error")
+    expect(retryErrorCode(error.error)).toBe("CONTEXT_WINDOW_EXCEEDED")
+    expect(modelFailureFacts(error.error)).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", providerCode: "CONTEXT_TOO_LONG", providerType: "invalid_request_error", requestId: "req-subscription-123" })
+    expect(JSON.stringify(modelFailureFacts(error.error))).not.toContain("private subscription prompt")
+  })
   it("resolves the account token on every stream with the current abort signal", async () => {
     let rotation = 0
     const signals: (AbortSignal | undefined)[] = []

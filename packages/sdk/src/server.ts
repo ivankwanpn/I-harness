@@ -1,3 +1,4 @@
+import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 // M27 R-C4b: the SessionService-backed SDK server — in-process JSON-RPC
 // handler over the C-region SessionService. The CLI wires it to stdio
 // (`i-harness sdk`); an embedder can wire it to any duplex.
@@ -279,8 +280,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
   })
 
-  const statusNotify = (sessionId: string, status: string, error?: string): void => {
-    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }))
+  const statusNotify = (sessionId: string, status: string, error?: string, modelFailure?: ModelFailureFacts): void => {
+    emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) }))
   }
   const offExecutionState = service.onExecutionState?.(state => {
     if (!closed) emitMessage(makeNotification("session/execution-state", state))
@@ -833,10 +834,12 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeSuccess(id, { sessionId, ok: true })
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          statusNotify(sessionId, "error", message)
+          const modelFailure = modelFailureFacts(error)
+          statusNotify(sessionId, "error", message, modelFailure)
           return makeFailure(id, INTERNAL_ERROR, message, {
             sessionId,
             events: liveEventsFor(service, sessionId),
+            ...(modelFailure ? { modelFailure } : {}),
           })
         } finally {
           submissions.delete(submission)

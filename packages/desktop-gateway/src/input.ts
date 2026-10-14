@@ -4,6 +4,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
 import { Inbox, validateImages } from "@i-harness/core-session"
+import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
 export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-input-tokens-${createHash("sha256").update(sessionId).digest("hex")}`
@@ -14,7 +15,7 @@ const MAX_TOKEN_RECEIPTS = 4096
 /** Durable admission owns acceptance; each execution is scheduled separately. */
 export function createDesktopInput(coordinator: SessionCoordinator, service: SessionService, options: {
   prepare?: (sessionId: string, text: string) => Promise<string>
-  onStatus?: (sessionId: string, running: boolean, error?: string) => void
+  onStatus?: (sessionId: string, running: boolean, error?: string, modelFailure?: ModelFailureFacts) => void
 } = {}) {
   const load = createDurableSessionLoader(coordinator)
   const gates = new Map<string, Promise<unknown>>()
@@ -41,7 +42,12 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     const controller = new AbortController()
     controllers.add(controller)
     const job = service.submit(id, text, controller.signal, { admittedInputId: inputId })
-      .then(() => { options.onStatus?.(id, service.queueState(id).running) }, (error) => { options.onStatus?.(id, false, error instanceof Error ? error.message : String(error)) })
+      .then(() => { options.onStatus?.(id, service.queueState(id).running) }, (error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        const facts = modelFailureFacts(error)
+        if (facts) options.onStatus?.(id, false, message, facts)
+        else options.onStatus?.(id, false, message)
+      })
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)
   }

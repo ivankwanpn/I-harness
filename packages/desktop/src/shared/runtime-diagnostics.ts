@@ -1,4 +1,5 @@
 import type { ModelRetryInfo, ModelActivityInfo } from "../../../core-session/src/index.ts"
+import type { ModelFailureFacts } from "@i-harness/sdk"
 
 export type RuntimeDiagnosticLevel = "info" | "warning" | "error"
 export type RuntimeDiagnosticKind = "model/retry" | "model/recovered" | "model/connecting" | "model/quiet" | "model/settled" | "session/error" | "session/cancelled" | "gateway/disconnected" | "runtime/error"
@@ -18,6 +19,7 @@ export interface RuntimeDiagnosticEntry {
   executionUncorrelated?: true
   code?: string
   httpStatus?: number
+  modelFailure?: ModelFailureFacts
   retry?: ModelRetryInfo
   waitingFor?: ModelActivityInfo["waitingFor"]
   outcome?: ModelActivityInfo["outcome"]

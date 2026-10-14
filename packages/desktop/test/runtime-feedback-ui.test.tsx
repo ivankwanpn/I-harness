@@ -28,6 +28,18 @@ function fixture() {
   return { bridge, emit, entry, status }
 }
 
+it("shows the canonical context diagnosis and keeps safe facts in the error details", async () => {
+  const f = fixture()
+  const row: RuntimeDiagnosticEntry = { id: "context", timestamp: Date.now(), workspaceId: "w", sessionId: "a", kind: "session/error", level: "error", message: "Model input exceeds the context window. (HTTP 400)", modelFailure: { code: "CONTEXT_WINDOW_EXCEEDED", reason: "context-limit", message: "Model input exceeds the context window.", contextLimit: 200000 } }
+  vi.mocked(f.bridge.request).mockResolvedValue({ entries: [row] })
+  render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  f.entry({ ...row, retry: undefined })
+  expect(screen.getByRole("alert").textContent).toContain("Model input exceeds the context window.")
+  fireEvent.click(screen.getByText("詳細資料"))
+  await screen.findByText(/200000/)
+  expect(screen.getByRole("dialog").textContent).toContain("200000")
+})
+
 it.each(["failed", "cancelled", "completed"])("retains current quiet and retry feedback after an uncorrelated old %s status", terminal => {
   const f = fixture(); const props = { bridge: f.bridge, workspaceId: "w", sessionId: "a", onOpenLog() {} }
   const view = render(<RuntimeFeedback {...props} />)

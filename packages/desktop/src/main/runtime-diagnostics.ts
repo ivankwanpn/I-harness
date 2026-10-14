@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { modelFailureFacts, safeModelFailureFacts } from "@i-harness/sdk"
 import { mkdir, lstat, open, rename, unlink, appendFile, writeFile, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createRedactor } from "../../../diagnostics/src/redactor.ts"
@@ -86,6 +87,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const kind = value.kind as RuntimeDiagnosticKind
     const retry = safeRetry(value.retry)
     const httpStatus = integer(value.httpStatus, 100, 599) ? value.httpStatus : undefined
+    const modelFailure = safeModelFailureFacts(value.modelFailure)
     const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
     const outcome = kind === "model/settled" && ["completed", "failed", "cancelled"].includes(String(value.outcome)) ? value.outcome as ModelActivityInfo["outcome"] : undefined
@@ -97,10 +99,12 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       : kind === "session/cancelled" ? "User work cancelled."
       : kind === "gateway/disconnected" ? "Local gateway disconnected. Reconnect to continue."
       : kind === "runtime/error" ? "Runtime request could not start."
+      : modelFailure && modelFailure.reason !== "unknown" ? `${modelFailure.message}${httpStatus ? ` (HTTP ${httpStatus})` : ""}`
       : `${code === "CAPACITY" ? "Model temporarily at capacity. " : ""}Model request failed${httpStatus ? ` (HTTP ${httpStatus})` : code ? ` (${code})` : ""}.`
     return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") ? "info" : "error", message,
       ...(safeId(value.workspaceId) ? { workspaceId: safeId(value.workspaceId) } : {}), ...(safeId(value.sessionId) ? { sessionId: safeId(value.sessionId) } : {}),
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
+      ...(modelFailure ? { modelFailure } : {}),
       ...((kind === "session/error" || kind === "session/cancelled") && value.executionUncorrelated === true ? { executionUncorrelated: true as const } : {}),
       ...(waitingFor ? { waitingFor } : {}), ...(outcome ? { outcome } : {}) }
   }
@@ -167,7 +171,14 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     }
     // Only inspect facts; the original string never enters an entry.
     const text = error instanceof Error ? `${error.name}: ${error.message}` : typeof error === "string" ? error : ""
-    const facts = error !== null && typeof error === "object" ? error as { code?: unknown; httpStatus?: unknown; name?: unknown } : {}
+    const detectedFailure = modelFailureFacts(error)
+    // Keep the exact legacy message-only diagnosis when no structured facts
+    // crossed the boundary; a regex-derived SERVER must not replace CAPACITY
+    // or turn a capacity phrase quoted in unrelated payload into that reason.
+    const structuredFailure = record(error) && (typeof error.code === "string" || safeModelFailureFacts(error.modelFailure)
+      || record(error.data) && safeModelFailureFacts(error.data.modelFailure))
+    const modelFailure = detectedFailure && (structuredFailure || detectedFailure.httpStatus !== undefined || detectedFailure.providerType || detectedFailure.providerCode) ? detectedFailure : undefined
+    const facts: { code?: unknown; httpStatus?: unknown; name?: unknown } = modelFailure ?? (error !== null && typeof error === "object" ? error : {})
     // Owned agent cancellation is forwarded as the exact message by status,
     // and as Error/RpcError/SdkRunError by request/run rejection. Anchor the
     // entire phrase so an upstream response containing it remains a failure.
@@ -186,7 +197,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       || /^Selected model is at capacity\.(?: Please try a different model\.)?$/.test(streamMessage)
     const ownedTimeout = /^(?:(?:Error|RpcError|SdkRunError):\s*)?Model request timed out waiting for (?:first response|progress)$/.test(text)
     const code = cancelled ? "cancelled" : typeof facts.code === "string" && codes.has(facts.code) ? facts.code : ownedTimeout ? "TIMEOUT" : capacity ? "CAPACITY" : integer(status, 100, 599) ? (codes.has(`http_${status}`) ? `http_${status}` : "model_error") : "model_error"
-    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), ...(uncorrelated ? { executionUncorrelated: true as const } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId !== undefined ? "admission" : uncorrelated ? "uncorrelated" : "terminal"]))
+    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), ...(uncorrelated ? { executionUncorrelated: true as const } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}), ...(modelFailure ? { modelFailure } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId !== undefined ? "admission" : uncorrelated ? "uncorrelated" : "terminal"]))
     state.status = cancelled ? "cancelled" : "failed"
     if (admissionId === undefined && !uncorrelated && sessionId && kind === "session/error") closeAttempt(JSON.stringify([workspaceId, sessionId]))
   }
@@ -247,7 +258,10 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
           if (state.status && !["running", "queued"].includes(state.status)) { state.turn = randomUUID(); state.requestId = undefined }
           state.status = status
           const workspace = scope(event.workspaceId); workspace.turn = state.turn
-        } else if (status === "failed" || status === "error") failure(event.workspaceId, sessionId, event.params.error)
+        } else if (status === "failed" || status === "error") {
+          const modelFailure = safeModelFailureFacts(event.params.modelFailure)
+          failure(event.workspaceId, sessionId, modelFailure ? { message: event.params.error, modelFailure } : event.params.error)
+        }
         else if (status === "cancelled" || status === "canceled") failure(event.workspaceId, sessionId, "cancelled")
         else if (status === "completed" && !executionBusy(event.workspaceId, sessionId)) { state.status = status; closeAttempt(JSON.stringify([event.workspaceId, sessionId])) }
       } else if (event.method === "session/execution-state") {

@@ -1,5 +1,6 @@
 import { append, publishTransient, type ModelActivityInfo } from "@i-harness/core-session"
 import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
+import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
@@ -81,12 +82,15 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           }
           if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
           break
-        case "error":
-          deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: ev.error.message } })
+        case "error": {
+          const modelFailure = modelFailureFacts(ev.error)
+          deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: modelFailure?.message ?? "Model request failed.", ...(modelFailure ? { modelFailure } : {}) } })
           throw Object.assign(new Error(`model stream error: ${ev.error.message}`, { cause: ev.error }), {
             code: (ev.error as Error & { code?: string }).code,
             httpStatus: (ev.error as Error & { httpStatus?: number }).httpStatus,
+            ...(modelFailure ? { modelFailure } : {}),
           })
+        }
         case "end":
           thinkingBlocks = ev.thinkingBlocks
           providerContinuation = ev.providerContinuation

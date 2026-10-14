@@ -792,7 +792,18 @@ const TEAM_SCHEDULER_SOURCE_UNIT = new Set([
   "packages/agent-team/src/scheduler/recovery.ts",
 ])
 
+// The reliability repair extracts only the original llm-seam error owner.
+// Unlisted/future seam modules and every adapter remain independent readers.
+const LLM_SEAM_ERROR_SOURCE_UNIT = new Set([
+  "packages/llm-seam/src/index.ts",
+  "packages/llm-seam/src/provider-error/types.ts",
+  "packages/llm-seam/src/provider-error/classify.ts",
+  "packages/llm-seam/src/provider-error/facts.ts",
+  "packages/llm-seam/src/provider-error/http.ts",
+])
+
 function declarationOwner(rel) {
+  if (LLM_SEAM_ERROR_SOURCE_UNIT.has(rel)) return "packages/llm-seam/src/index.ts"
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
   if (PROVIDER_SOURCE_UNIT.has(rel)) return "packages/provider/src/index.ts"
@@ -2242,6 +2253,37 @@ SELF_TEST_CASES.push({
       })
     })
   },
+})
+
+function llmSeamErrorFixture(split) {
+  const name = "SeamOwnedValue", reads = `const read = (value: ${name}) => value`
+  const declaration = `export interface ${name} { value: string }`
+  const entry = "packages/llm-seam/src/index.ts"
+  return split ? [
+    { rel: entry, test: false, text: `export type { ${name} } from "./provider-error/types.ts"` },
+    { rel: "packages/llm-seam/src/provider-error/types.ts", test: false, text: declaration },
+    ...[...LLM_SEAM_ERROR_SOURCE_UNIT].filter(rel => rel !== entry && !rel.endsWith("types.ts")).map(rel => ({ rel, test: false, text: reads })),
+  ] : [{ rel: entry, test: false, text: declaration + "\n" + reads }]
+}
+SELF_TEST_CASES.push({
+  name: "reliability: llm-seam internal error reads preserve the original finding across extraction",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: { kind: "unused-export", subject: "@i-harness/llm-seam#SeamOwnedValue", evidence: "packages/llm-seam/src/index.ts" } })),
+  run() { return [false, true].flatMap(split => scanUnusedExports(llmSeamErrorFixture(split)).map(finding => JSON.stringify({ split, finding }))) },
+})
+SELF_TEST_CASES.push({
+  name: "reliability: exact llm-seam error descendants retain their original owner",
+  expect: [...LLM_SEAM_ERROR_SOURCE_UNIT].map(rel => `${rel}:packages/llm-seam/src/index.ts`),
+  run() { return [...LLM_SEAM_ERROR_SOURCE_UNIT].map(rel => `${rel}:${declarationOwner(rel)}`) },
+})
+SELF_TEST_CASES.push({
+  name: "reliability: future seam modules and adapters remain consumers, tests cannot retire a finding",
+  expect: ["future=0", "adapter=0", "outside=0", "test-only=1"],
+  run() { return [
+    ["future", "packages/llm-seam/src/provider-error/future.ts", false],
+    ["adapter", "packages/llm-bedrock/src/client.ts", false],
+    ["outside", "packages/core-agent/src/index.ts", false],
+    ["test-only", "packages/llm-seam/test/reader.test.ts", true],
+  ].map(([label, rel, test]) => `${label}=` + scanUnusedExports([...llmSeamErrorFixture(true), { rel, test, text: "const read = (value: SeamOwnedValue) => value" }]).length) },
 })
 
 function teamSchedulerRelocationFixtureFiles(split) {

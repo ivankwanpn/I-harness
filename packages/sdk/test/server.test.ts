@@ -11,6 +11,7 @@ import { append, createSession, type Session, type SessionEvent } from "@i-harne
 import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { HarnessClient } from "../src/client.ts"
+import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
   decodeFrame,
@@ -107,6 +108,31 @@ function makeStubService(): SessionService {
 }
 
 describe("createSdkServer", () => {
+  it("preserves safe model failure facts in status and RPC errors without replacing numeric codes", async () => {
+    const service = makeStubService()
+    const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "context_length_exceeded private prompt", param: "messages" } }), { status: 400, headers: { "request-id": "req-sdk-123" } }))
+    vi.mocked(service.submit).mockRejectedValue(upstream)
+    const server = createSdkServer(service)
+    const input = new PassThrough(), output = new PassThrough()
+    const client = new HarnessClient(output, input)
+    const lines = createInterface({ input })
+    lines.on("line", line => { void server.handleLine(line).then(reply => { if (reply) output.write(reply + "\n") }) })
+    server.onNotify(message => { output.write(encodeFrame(message) + "\n") })
+    const notifications: RpcMessage[] = []
+    client.onNotification(message => notifications.push(message))
+    try {
+      await client.initialize()
+      const error = await client.run({ sessionId: "s", prompt: "task" }).catch(error => error)
+      expect(error.code).toBe(INTERNAL_ERROR)
+      expect(error.message).toBe(upstream.message)
+      expect(modelFailureFacts(error)).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", httpStatus: 400, parameter: "messages", requestId: "req-sdk-123" })
+      expect(notifications.find(message => "method" in message && message.method === "session/status" && (message.params as { status?: string }).status === "error")).toMatchObject({ params: { error: upstream.message, modelFailure: modelFailureFacts(upstream) } })
+      expect(JSON.stringify(error.data)).not.toContain("private prompt")
+      vi.mocked(service.submit).mockResolvedValue(undefined)
+      await expect(client.run({ sessionId: "s", prompt: "next" })).resolves.toMatchObject({ sessionId: "s" })
+      expect(service.closeSession).not.toHaveBeenCalled()
+    } finally { client.close(); lines.close(); input.destroy(); output.destroy(); await server.close() }
+  })
   it("does not submit a prompt whose preparation finishes after close starts", async () => {
     const service = makeStubService()
     let release!: () => void

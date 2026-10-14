@@ -1149,6 +1149,9 @@ importers:
       '@i-harness/diagnostics':
         specifier: workspace:*
         version: link:../diagnostics
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor
