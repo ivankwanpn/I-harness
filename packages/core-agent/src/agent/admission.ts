@@ -4,12 +4,13 @@ import { prepareModelRequest, type LLMRequest } from "@i-harness/llm-seam"
 import type { AgentConfig, AgentDeps } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import type { createStepInput } from "./step-input.ts"
+import type { createRecovery, RecoveryAdmissionState } from "./recovery.ts"
 
 export function stalePreparedInput(): Error { return Object.assign(new Error("Model-visible input remained unstable during prepared admission"), { code: "CONTEXT_INPUT_STALE" }) }
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
-export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>) {
+export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>, recovery: ReturnType<typeof createRecovery>) {
   const revision = () => projectionFingerprint({ messages: deriveMessages(deps.session), surface: context.requestSurfaceFingerprint() })
-  return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state = { staleRebuilds: 0, compacted: false }) {
+  return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false }) {
     while (true) {
       abort?.throwIfAborted()
       context.refreshBinding()
@@ -20,7 +21,12 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const initial = await prepareModelRequest(selected, request)
       abort?.throwIfAborted()
       if (!bindingUnchanged() || before !== revision()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
-      const { prepared, snapshot } = context.ownedBudget.assess(initial, context.contextWindow, context.outputCap, context.budgetCfg?.reserveRatio)
+      const assessed = context.ownedBudget.assess(initial, context.contextWindow, context.outputCap, context.budgetCfg?.reserveRatio)
+      const recoveryAdmission = await recovery.admit(initial.measurement, state, abort)
+      if (recoveryAdmission === "rebuild") { state.compacted = true; continue }
+      if (!bindingUnchanged() || before !== revision()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+      const { prepared, snapshot } = recoveryAdmission === "authorized"
+        ? context.ownedBudget.assess(initial, context.contextWindow, context.outputCap, context.budgetCfg?.reserveRatio, true) : assessed
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
         systemBytes: initial.measurement.input.components.system.textUtf8Bytes,
         schemaBytes: initial.measurement.input.components.toolSchemas.structuredBytes,
@@ -36,7 +42,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         checkpointed = true
       }
       const automatic = deps.autoCompactionEnabled?.() ?? context.compactEnabled
-      if (context.compactor && !state.compacted && (snapshot.admission === "compact" || automatic)) {
+      if (context.compactor && !state.compacted && recoveryAdmission !== "authorized" && (snapshot.admission === "compact" || automatic)) {
         // This pass may invoke a summary model. Its preceding budget fact must
         // have passed the same durable barrier as a main transport.
         await checkpoint()
@@ -63,6 +69,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const validateBeforeTransport = () => {
         abort?.throwIfAborted()
         if (!bindingUnchanged() || before !== revision()) throw stalePreparedInput()
+        recovery.validate(prepared.measurement, state)
         const stateNow = context.ownedBudget.read()
         if (stateNow.kind === "ready" && stateNow.snapshot.recoveryRequired && !snapshot.recoveryRequired) throw new Error("prompt_too_long: provider context recovery became required before transport")
       }

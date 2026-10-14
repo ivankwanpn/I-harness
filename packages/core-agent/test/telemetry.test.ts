@@ -40,8 +40,8 @@ describe("core-agent telemetry emit (M25)", () => {
     const upstream = Object.assign(new Error("The input length exceeds the maximum context length. private prompt sk-private-key"), { name: "ValidationException", $metadata: { httpStatusCode: 400, requestId: "aws-123" } })
     const model: ModelClient = { async *stream() { yield { type: "error", error: upstream } } }
     const error = await createAgent(ctx, { session, tools, model, systemPrompt: "", telemetry }).run("fixture").catch(error => error)
-    expect(error.cause).toBe(upstream)
-    expect(error.message).toContain(upstream.message)
+    expect(error.cause.cause).toBe(upstream)
+    expect(error.message).toMatch(/prompt_too_long/)
     expect(modelFailureFacts(error)).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", providerType: "ValidationException", httpStatus: 400 })
     const providerError = events.find(event => event.type === "provider/error")
     expect(providerError?.data).toMatchObject({ error: "Model input exceeds the context window.", modelFailure: { code: "CONTEXT_WINDOW_EXCEEDED" } })

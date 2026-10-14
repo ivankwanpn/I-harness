@@ -8,6 +8,8 @@ import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime
 import { createModelLoop } from "./model-loop.ts"
 import { failTurn, completeModelStep, closeStep, finishTurn } from "./finalization.ts"
 import { createAdmission, stalePreparedInput } from "./admission.ts"
+import { createRecovery } from "./recovery.ts"
+import { modelFailureFacts } from "@i-harness/llm-seam"
 
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
@@ -15,7 +17,8 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
   const getSteps = () => steps
   const modelLoop = createModelLoop(deps, context)
   const prepareRequest = createStepInput(deps, context)
-  const admit = createAdmission(deps, context, prepareRequest)
+  const recovery = createRecovery(deps, context)
+  const admit = createAdmission(deps, context, prepareRequest, recovery)
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
     const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
     const abort = signal ?? deps.signal
@@ -42,6 +45,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       const stepStartSeq = startStep(deps, lifecycle)
+      let physicalStepStartSeq = stepStartSeq
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       drainHookContext(ctx, deps)
@@ -50,7 +54,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       let streamStep: ReturnType<typeof modelLoop.start>
       while (true) {
         candidate = await admit(abort, requestScope, getSteps, candidateState)
-        streamStep = modelLoop.start(lifecycle, stepStartSeq, abort, getSteps)
+        streamStep = modelLoop.start(lifecycle, physicalStepStartSeq, abort, getSteps)
         let physicalAttempts = 0, observed = false, rebuild = false
         try {
           for await (const ev of candidate.prepared.stream({ validateBeforeTransport: () => { candidate.validateBeforeTransport(); physicalAttempts++ } })) {
@@ -58,8 +62,18 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
             streamStep.accept(ev)
           }
         } catch (error) {
+          const failure = modelFailureFacts(error)
           if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
             if (++candidateState.staleRebuilds > 3) streamStep.fail(stalePreparedInput())
+            rebuild = true
+          } else if (!streamStep.result().providerEnded && failure?.code === "CONTEXT_WINDOW_EXCEEDED" && failure.reason === "context-limit") {
+            streamStep.discard()
+            append(deps.session, { type: "step/end" }); lifecycle.stepOpen = false
+            await recovery.require(error, candidate.prepared.measurement, stepStartSeq, abort)
+            // Reopen only the physical model boundary. Hooks, admitted inputs
+            // and prior accepted tool effects belong to the logical step.
+            physicalStepStartSeq = deps.session.events.length
+            append(deps.session, { type: "step/start" }); lifecycle.stepOpen = true; lifecycle.stepFailed = false
             rebuild = true
           } else streamStep.fail(error)
         } finally { streamStep.settle() }
@@ -68,7 +82,13 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       const { request, requestRevision, prepared } = candidate
       lifecycle.providerCompleted = true
       const step = streamStep.result()
+      if (step.truncatedThisStep || step.refusedThisStep) {
+        streamStep.discard()
+        closeStep(deps, lifecycle, getSteps, step)
+        throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
+      }
       completeModelStep(deps, context, request, requestRevision, abort, step, prepared.measurement)
+      await recovery.resolve(prepared.measurement, abort)
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
         await executeToolCalls(ctx, deps.session, deps.tools, batch, {

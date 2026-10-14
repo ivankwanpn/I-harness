@@ -98,7 +98,7 @@ it.each(["truncated", "refused", "error"] as const)("reads the live shared step 
   } finally { release.resolve() }
   const outcomes = await settled
   expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([2, 2])
-  expect(outcomes.map(outcome => outcome.status)).toEqual(ending === "error" ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(["rejected", "rejected"])
 })
 
 it.each(["stop", "flush"] as const)("reads the live shared step count after a held final %s and overlapping followup", async (boundary) => {
@@ -780,7 +780,7 @@ describe("M72 II: a truncated ending reaches the durable log and telemetry", () 
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate:
     // the payload is exactly the step it happened on — a `step` field that were
@@ -840,7 +840,7 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    const result = await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate
     // (the M72 Ⅱ block's reason): the payload is exactly the step it happened
@@ -854,7 +854,6 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
     const messages = deps.session.events.filter((e) => e.type === "assistant/message")
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({ text: "" })
-    expect(result.finalText).toBe("")
   })
 
   it("M77: a clean step writes no refused field", async () => {
@@ -885,7 +884,7 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     // Neither bit is the other's `else`: both land on the one `step/end`.
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true, refused: true })
     expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(1)
@@ -977,7 +976,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
       },
     }
     const refusedAgent = createAgent(refused, { ...refusedDeps, systemPrompt: "p", maxTurns: 1, telemetry: refusedSpy.telemetry })
-    await refusedAgent.run("hi")
+    await expect(refusedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(refusedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
@@ -991,7 +990,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
       },
     }
     const truncatedAgent = createAgent(truncated, { ...truncatedDeps, systemPrompt: "p", maxTurns: 1, telemetry: truncatedSpy.telemetry })
-    await truncatedAgent.run("hi")
+    await expect(truncatedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(truncatedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)

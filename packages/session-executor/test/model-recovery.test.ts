@@ -24,8 +24,13 @@ it.each(["context", "unknown"] as const)("actual submit keeps %s SDK error text 
     const assembly = await service.assemblyFor("s")
     const error = await service.submit("s", "fixture", new AbortController().signal).catch(error => error)
     expect(error).toBeInstanceOf(Error)
-    expect(error.message).toContain(privateText)
-    expect(error.cause.cause).toBe(upstream)
+    if (kind === "context") {
+      expect(error.message).toMatch(/prompt_too_long/)
+      expect(error.cause.cause.cause).toBe(upstream)
+    } else {
+      expect(error.message).toContain(privateText)
+      expect(error.cause.cause).toBe(upstream)
+    }
     const failures = events.filter(event => event.type === "error" || event.type.endsWith("/error"))
     expect(failures.map(event => event.type)).toEqual(["provider/error", "session/error"])
     expect(JSON.stringify(failures) + lines.join("")).not.toMatch(/private-provider-prompt-9182|sensitive-provider-credential-9182/)
@@ -39,6 +44,12 @@ it.each(["context", "unknown"] as const)("actual submit keeps %s SDK error text 
     }
     expect(lines.map(line => JSON.parse(line)).filter(event => event.type === "session/error")).toEqual([sessionError])
     expect(service.liveAssembly("s")).toBe(assembly)
+    if (kind === "context") {
+      await expect(service.submit("s", "next", new AbortController().signal)).rejects.toThrow(/prompt_too_long/)
+      expect(runtime.send).toHaveBeenCalledTimes(1)
+      const different = createBedrockClient({ model: "different", region: "us-east-1" }, runtime as unknown as BedrockRuntimeFace)
+      expect(service.rebindModel("s", { model: different, providerId: "fixture", modelId: "different", label: "different" })).toBe(true)
+    }
     await expect(service.submit("s", "next", new AbortController().signal)).resolves.toBeUndefined()
     expect(runtime.send).toHaveBeenCalledTimes(2)
     expect(service.liveAssembly("s")).toBe(assembly)

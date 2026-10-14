@@ -30,6 +30,11 @@ export interface ContextRecoveryFacts {
   bindingFingerprint: string; rejectedInputFingerprint: string
   state: "required" | "retry-started" | "resolved" | "blocked"
   inputTokens?: number; contextLimit?: number; reason?: string
+  providerId?: string; modelId?: string; protocol?: string
+  shapeFingerprint?: string; bindingConfigFingerprint?: string
+  identityCoverage?: "complete" | "partial"
+  inputCost?: number; inputBytes?: number; retryConsumed?: boolean
+  retryInputFingerprint?: string
 }
 export type ContextEvent =
   | { type: "context/budget"; version: 1; snapshot: RequestBudgetSnapshot; seq?: number }
@@ -66,5 +71,7 @@ export function validContextEvent(value: unknown): value is ContextEvent {
   const envelope = { version: one, seq: integer }
   if (value.type === "context/budget") return fields(value, { type: enumOf("context/budget"), version: one, snapshot: validBudgetSnapshot }, { seq: integer })
   if (value.type === "context/usage") return fields(value, { type: enumOf("context/usage"), version: one, checkpoint: validContextCheckpoint }, { seq: integer })
-  return fields(value, { type: enumOf("context/recovery"), version: one, ownerSessionId: string, recoveryId: string, logicalStepSeq: integer, bindingFingerprint: digest, rejectedInputFingerprint: digest, state: enumOf("required", "retry-started", "resolved", "blocked") }, { seq: envelope.seq, inputTokens: integer, contextLimit: integer, reason: string })
+  return fields(value, { type: enumOf("context/recovery"), version: one, ownerSessionId: string, recoveryId: string, logicalStepSeq: integer, bindingFingerprint: digest, rejectedInputFingerprint: digest, state: enumOf("required", "retry-started", "resolved", "blocked") }, { seq: envelope.seq, inputTokens: integer, contextLimit: integer, reason: string,
+    providerId: string, modelId: string, protocol: string, shapeFingerprint: digest, bindingConfigFingerprint: digest,
+    identityCoverage: enumOf("complete", "partial"), inputCost: integer, inputBytes: integer, retryConsumed: v => typeof v === "boolean", retryInputFingerprint: digest })
 }

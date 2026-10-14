@@ -5,6 +5,7 @@ import type { BatchCall } from "../execute-tool-calls.ts"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { createStepReasoning } from "./reasoning.ts"
+import { TOOL_ABORTED_BEFORE_DISPATCH } from "@i-harness/core-tools"
 
 export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
@@ -23,7 +24,27 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
   const stepReasoning = createStepReasoning(deps, reasoning, abort, () => stepStartSeq)
   let modelActivity: ModelActivityInfo | undefined
   let modelFailed = false
+  let providerEnded = false
+  function discard(notDispatched: boolean) {
+    modelFailed = true
+    context.contextMeter.invalidate()
+    stepReasoning.flush()
+    if (stepText || thinkingBlocks?.length || providerContinuation || truncatedThisStep || refusedThisStep) {
+      append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
+    }
+    if (notDispatched) for (const call of batch) {
+      // This batch never entered the scheduler. Do not synthesize outcomes for
+      // any earlier/unknown dispatched work.
+      append(deps.session, { type: "tool/result", callId: call.callId, name: call.name, isError: true,
+        output: { code: TOOL_ABORTED_BEFORE_DISPATCH, error: "Model attempt was not accepted; tool call was not dispatched" } })
+    }
+    stepText = ""
+    reasoning.length = reasoningStart
+    append(deps.session, { type: "step/failed" })
+    lifecycle.stepFailed = true
+  }
   return {
+    discard() { discard(true) },
     accept(ev: LLMStreamEvent) {
       stepReasoning.checkPublication()
       if (abort?.aborted) throw new Error("agent aborted")
@@ -52,6 +73,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             refusedThisStep = false
             thinkingBlocks = undefined
             providerContinuation = undefined
+            providerEnded = false
             context.contextMeter.invalidate()
             stepStartSeq = deps.session.events.length
             append(deps.session, { type: "step/start" })
@@ -92,6 +114,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           })
         }
         case "end":
+          providerEnded = true
           thinkingBlocks = ev.thinkingBlocks
           providerContinuation = ev.providerContinuation
           // Report ending bits to telemetry here and to the durable step end
@@ -108,15 +131,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
       }
     },
     fail(error: unknown): never {
-      modelFailed = true
-      context.contextMeter.invalidate()
-      stepReasoning.flush()
-      if (stepText) {
-        append(deps.session, { type: "assistant/message", text: stepText })
-        stepText = ""
-      }
-      append(deps.session, { type: "step/failed" })
-      lifecycle.stepFailed = true
+      discard(false)
       throw error
     },
     settle() {
@@ -125,7 +140,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
       }
       stepReasoning.flush()
     },
-    result() { return { stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation } },
+    result() { return { stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded } },
   }
 }
 
