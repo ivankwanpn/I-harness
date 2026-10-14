@@ -87,6 +87,12 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
           }
           try {
             if (opts.reportPolicy) await opts.tasks.retainResult(n.submissionId)
+            // Retention may wait on storage while the parent delegation is
+            // cancelled. Its completed child's result cannot authorize a wake.
+            if (isCancelled(n.parentSessionId)) {
+              opts.tasks.updateNotification(n.id, { status: "suppressed", error: "parent session cancelled before notification delivery", timeWoken: Date.now() })
+              continue
+            }
             const task = opts.tasks.get(n.submissionId)
             const reference = `get_task_output({task_ids:[${JSON.stringify(n.submissionId)}]}) (${task?.retention ?? "memory"})`
             await opts.admit.admit({

@@ -9,7 +9,7 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { registerExec } from "@i-harness/exec"
-import { registerSubagent, SHIPPING_REPORT_POLICY, createTaskRegistry, createNotificationDrain } from "../src/index.ts"
+import { registerSubagent, SHIPPING_REPORT_POLICY, createTaskRegistry, createNotificationDrain, isSessionCancelledChain } from "../src/index.ts"
 
 it("bounds aggregate reports and reconstructs owned multilingual results with digest cursors", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
@@ -195,4 +195,66 @@ it("a real completed child tool is never replayed when its full task document re
     expect((await coordinator.load(task.childSessionId!)).session.events.some(event => event.type === "tool/result" && (event.output as any).committed === true)).toBe(true)
     expect(sideeffects).toBe(1)
   } finally { await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it("cancellation during strict result retention suppresses admission without replaying the completed child effect", async () => {
+  const root = await mkdtemp(join(tmpdir(), "child-retention-cancellation-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  await coordinator.create({ sessionId: "parent" })
+  let release!: () => void, entered!: () => void, checked!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const retaining = new Promise<void>(resolve => { entered = resolve })
+  const preRetentionCheck = new Promise<void>(resolve => { checked = resolve })
+  const strict = coordinator.putDocumentStrict!.bind(coordinator)
+  coordinator.putDocumentStrict = async (key, data) => {
+    if (key === "task-parent" && (data as any).tasks.some((task: any) => task.resultText === "completed child effect")) {
+      entered()
+      await held
+    }
+    return strict(key, data)
+  }
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  let sideeffects = 0, modelCalls = 0
+  tools.register({ name: "effect", description: "controlled effect", inputSchema: {}, execute: async () => { sideeffects++; return { committed: true } } })
+  const model = { async *stream() {
+    modelCalls++
+    if (modelCalls === 1) yield { type: "tool_call" as const, call: { id: "effect-before-cancel", name: "effect", args: {} } }
+    else yield { type: "text/chunk" as const, text: "completed child effect" }
+    yield { type: "end" as const }
+  } }
+  const sub = registerSubagent(ctx, tools, { parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
+  try {
+    await sub.ready
+    const parent = sub.tasks.submit({ identity: { parentSessionId: "root", callEventSeq: 1 }, agentPath: "root", description: "parent", prompt: "p", agent: "general", delivery: "tool" })
+    sub.tasks.claim(parent.id, "parent")
+    sub.roles.register({ name: "effect-worker", description: "controlled worker", systemPrompt: "Use effect then report", tools: ["effect"] })
+    const spawned = (await tools.execute({ name: "spawn_agent", args: { message: "go", task_name: "effect", agent_type: "effect-worker" } })).output as any
+    await retaining
+    const admit = vi.fn(async () => {}), wake = vi.fn()
+    const drain = createNotificationDrain({ tasks: sub.tasks, reportPolicy: SHIPPING_REPORT_POLICY,
+      isSessionCancelled: sessionId => {
+        const cancelled = isSessionCancelledChain(sub.tasks, sessionId)
+        if (!cancelled) checked()
+        return cancelled
+      }, admit: { admit, wake },
+    })
+    const delivery = drain.drain()
+    await preRetentionCheck
+    expect(sub.tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "completed child effect", retention: "pending" })
+    sub.tasks.cancelTree(parent.id)
+    expect(isSessionCancelledChain(sub.tasks, "parent")).toBe(true)
+    release()
+    expect(await delivery).toBe(0)
+    expect(admit).not.toHaveBeenCalled()
+    expect(wake).not.toHaveBeenCalled()
+    expect(sub.tasks.notifications().find(n => n.submissionId === spawned.task_id)).toMatchObject({ status: "suppressed", text: "completed child effect" })
+    expect(sub.tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "completed child effect", retention: "durable" })
+    expect(sub.jobs.read(spawned.job_id)).toMatchObject({ status: "completed", output: "completed child effect" })
+    const task = sub.tasks.get(spawned.task_id)!
+    await coordinator.flush(task.childSessionId!)
+    expect((await coordinator.load(task.childSessionId!)).session.events.some(event => event.type === "tool/result" && (event.output as any).committed === true)).toBe(true)
+    expect(sideeffects).toBe(1)
+    expect(modelCalls).toBe(2)
+    expect(await drain.drain()).toBe(0)
+  } finally { release(); await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

@@ -57,7 +57,9 @@ export function createListTool(deps: SubagentToolDeps): Tool {
 export function createJobOutputTool(deps: SubagentToolDeps): Tool {
   const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string; yielded?: true; yield_reason?: "user-steer" }> = {
     name: "job_output",
-    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true; new user input can yield the wait while the same job continues. Every response ends with [status: ...].",
+    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true; new user input can yield the wait while the same job continues. " + (deps.reportPolicy
+      ? "Returns a bounded text preview with structured status and digest/offset metadata for paging."
+      : "Every response ends with [status: ...]."),
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
     isReadOnly: true,
     execute: async (args, exec) => {
