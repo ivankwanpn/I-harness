@@ -54,7 +54,7 @@ Paths below are proposed relative to each current package `src/` unless a comple
 | **Compaction** — `compaction/src/index.ts` | `engine/{admission,prune,summary,commit}.ts`, `projection/{shadowed,window}.ts`; `index.ts` facade. Keep compaction as one transaction that owns projection mutation. | Assembly, core-agent, CLI run. Gate `compaction/test/{engine,prune,slices,summarizer,summarizer-prefix}.test.ts`; context/prefix/rewrite invariants, not merely output shape. |
 | **Persistence coordinator** — `session-persistence/src/index.ts` | `coordinator/{types,load,ownership,documents,mutations,lifecycle}.ts`, `format/{registry,validation}.ts`; `index.ts` facade. Preserve write-behind/lock owner and public coordinator behavior. | Session assembly/service, SDK, CLI. Gate `session-persistence/test/{persistence,ownership,repair,fork,write-behind}.test.ts`; additionally service close-retry coverage. |
 | **Session query index** — `session-query/src/file-backed.ts` | `file-backed/{database,schema,inspection,index-refresh,query}.ts`; `file-backed.ts` facade and existing package index exports. Preserve single connection ownership and locked inspection semantics. | `session-query/src/index.ts` exports query implementation. Gate `session-query/test/{filebacked,query,warning,tools}.test.ts`; corruption/foreign index warnings and output ordering unchanged. |
-| **Subagent tools/child creation** — `subagent/src/tools.ts`, `subagent/src/child.ts` | `tools/{spawn,followup,wait,cancel,status,team}.ts`, `child/{prompt,role-tools,model-binding,assembly,lifecycle}.ts`, `followup/{resident,drive,inbox}.ts`; package `index.ts` sole public facade, factory facades in existing files. Preserve durable parent-child identities and one admission/cancellation owner. | `subagent/src/index.ts`, tools, projection, session executor. Gate `subagent/test/{child,tools,resume,persist,projection}.test.ts` plus session-executor child-observation, code-mode-children and role-model wiring. |
+| **Subagent tools/child creation — S18 implemented, fresh review pending** — `subagent/src/tools.ts`, `subagent/src/child.ts` | Facades 916 → 29 / 601 → 79; factories 557 → 16 / 328 → 64. `tools/{types,spawn,followup,wait,cancel,status}.ts`, `child/{types,prompt,role-tools,model-binding,assembly,lifecycle,diagnostics}.ts`, `followup/{resident,drive,inbox}.ts`; `index.ts` sole public entry. Existing team tools remain in agent-team. One original entry/chain and actual child session/tool authority; original live/captured callbacks, conditional model resolution, inherited ownership, publication, restore, close and Stop boundaries remain. | Full subagent273/18, session-executor child-observation/code-mode-children/assembly52/3 and agent-team child-sequence/completion-delivery/lifecycle28/3, all types exit0. Two new lifetime cases pass original/split; 97 complete source/API/owner/evaluation checks. Actual before/raw/after ordered419 finding objects/digest equal; scanner/baseline/allowlist unchanged, no owner adaptation needed; self-test76/76 and gate0. Evidence: `task-S18-report.md` in the SDD directory. |
 | **Team scheduling** — `agent-team/src/scheduler.ts` | `scheduler/{admission,teammate-lifecycle,task-delivery,completion,recovery}.ts`; `scheduler.ts` mount facade, package index unchanged. Extract status/role helpers first and retain the same roster/board ownership. | `agent-team/src/index.ts`. Gate `agent-team/test/{lifecycle,completion-delivery,roster,mailbox,task-board}.test.ts`; preserve message/durable-completion ordering. |
 | **Session assembly/service** — `session-executor/src/{assembly,service}.ts` | Assembly: `assembly/{types,context,models,tools,plugins,hooks,subagents,execution,cleanup}.ts`. Service: `service/{types,assembly-cache,input-admission,turn-queue,execution-state,session-controls,shutdown}.ts`. `index.ts` public facade; existing create factories remain narrow internal facades. Start with contracts/pure formatting then capability mount functions; centralize disposal registration once. Service queue and admission state move only after focused tests preserve ordering. | Service imports assembly; `session-executor/src/index.ts` exposes factories to CLI/SDK/gateway. Gates `assembly/service/assembly-import/execution-state/event-driven-steering/admitted-input/native-context-lifecycle/project-context/scoped-exec` tests plus existing sandbox per-call tests. This is not a reason to share all mutable factory locals through a giant context object. |
 | **Core agent/tool batch — S17 implemented + Fix1, fresh scoped review pending** — `core-agent/src/{index,execute-tool-calls}.ts` | Facades 863 → 21 / 584 → 4; `createAgent` 658 → 30, `executeTurn` 478 → 81, batch controller 506 → 63. Actual owners: `agent/{types,create,registry,context,turn,step-input,model-loop,model-step,reasoning,finalization}.ts` and `tool-batch/{types,prepare,dispatch,join,record,cancel}.ts`. Keep cross-followup state, synchronous step folds, original awaits and one finalization authority; existing executor remains independent. | Core-agent 205 pass + 1 existing model-policy skip / 25 files; prior prescribed subagent 123 / 3 and session-executor 56 / 3 retained; fresh core types exit 0. Two initial characterizations and six review regressions (RED/original/GREEN), 89 AST/API/state/audit checks; exact separate original source-owner mappings restore the identical actual 419 finding objects/order/digest. Full evidence: `task-S17-report.md` in the SDD evidence directory. |
@@ -252,6 +252,60 @@ boundary is rejected by self-test controls. The baseline and allowlist remain
 unchanged. Per-model compaction-policy IDs remain an existing source gap with
 one explicit skip; the inherited commit-cursor limitation after an observation
 throw is preserved for later completion work. No E/I semantics were added.
+
+### S18 actual module inventory and ownership rationale
+
+The tools and child facades now measure 29/79 physical lines, and their original
+factories measure 16/64 lines. Existing package `index.ts`, exports and the
+agent-table/jobs/roles/fork/task-protocol/task-notification/persist/projection
+owners remain unchanged. The original options/dependency reference remains live
+through each extracted owner; no additional mutable owner bag is introduced.
+
+| Private source | Physical lines | Responsibility |
+| --- | ---: | --- |
+| `tools/types.ts` | 56 | Original host dependency contract |
+| `tools/spawn.ts` | 207 | Revisioned catalogue/schema cache, spawn admission/task settlement/foreground observation |
+| `tools/followup.ts` | 92 | Inbox send/wakeup and explicit resume |
+| `tools/wait.ts` | 117 | Child and durable task observation |
+| `tools/cancel.ts` | 116 | Interrupt, close, job kill and original subtree Stop |
+| `tools/status.ts` | 117 | Live rows and subagent/exec/workflow job views |
+| `child/types.ts` | 40 | Original spawn contract |
+| `child/prompt.ts` | 49 | Child identity/contract and overhead |
+| `child/role-tools.ts` | 51 | Exact child capability resolution/promotion |
+| `child/model-binding.ts` | 120 | Role/settings precedence, gate, label and binding types |
+| `child/assembly.ts` | 121 | Registry/Code Mode/prompt/controller/agent assembly |
+| `child/lifecycle.ts` | 138 | Seed warning, publication/settlement/disposal |
+| `child/diagnostics.ts` | 9 | Original run-phase handle |
+| `followup/resident.ts` | 159 | Durable resident rebuild and its existing stale-entry gate |
+| `followup/drive.ts` | 69 | Single per-entry serialized inbox chain |
+| `followup/inbox.ts` | 48 | Waiting-only cold-resume sweep |
+
+`createSpawnTool` (192 lines) and `ensureResidentAgent` (136 lines) exceed the
+120-line review trigger. They retain two cohesive original boundaries: catalogue
+cache plus durable spawn settlement in one tool, and restored construction plus
+publication in one resident owner. The 557-line original tools factory is split
+across actual tool/observation/cancellation/restore/drive responsibilities.
+Child assembly (112 lines), publication (65) and serialized drive (47) remain
+separate. Additional numeric splitting with async wrappers would obscure original
+await and callback timing. Team tool/scheduler ownership stays in agent-team;
+no artificial subagent `tools/team.ts` module was created.
+
+The spawn facade preserves scope/seed/depth initialization and conditional model
+resolution before durable creation. Synchronous assembly/publication receive
+already-resolved locals at their original positions. Child prompt and checkpoint
+closures retain the same original captured/live reads; resident rebuild and the
+initial run share only their existing agent/table/job identities and one inbox
+chain. Known scope-unmount, factory rollback and context lifecycle defects remain
+for I4/E2; no semantic event/instruction changes are bundled into S18.
+
+Two characterization cases pass on both original and split sources; 97 complete
+AST leaf-token/API/parameter/owner/evaluation checks reconstruct both original
+factory bodies and validate every new boundary. Full subagent273/18, executor52/3
+and team28/3 plus all three types pass sequentially. Actual before/raw/after audit
+retains the complete ordered419 finding objects and digest
+`aed42cc9b74088fb5482c9b0077780c68f16adbe86cf5a474dbb56e7fac1fcaf`; no owner adapter is
+necessary, and scanner/baseline/allowlist remain byte-identical. Self-test76/76 and
+gate exit0. Details: `task-S18-report.md` in the SDD evidence directory.
 
 ### Measurement-only excluded test AST spans and compressed test containers
 

@@ -62,6 +62,27 @@ function restoredEntry(sessionId: string, roleName: string | undefined): ChildAg
 }
 
 describe("ensureResidentAgent", () => {
+  it("S18: resident prompts read the current host callback with the restored child session on every turn", async () => {
+    const { deps, table, agents } = setup(), entry = restoredEntry("live-prompt", "general")
+    const prompts: string[] = [], sessions: ReturnType<typeof createSession>[] = []
+    deps.parentModel = { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+    deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context one" }
+    table.add(entry.path, entry)
+    try {
+      expect(await ensureResidentAgent(deps, entry)).toBe(true)
+      const resident = agents.get(entry.sessionId!)!
+      await resident.followup("first")
+      deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context two" }
+      await resident.followup("second")
+      expect(prompts).toHaveLength(2)
+      expect(prompts[0]).toContain("restored context one")
+      expect(prompts[1]).toContain("restored context two")
+      expect(prompts[1]).not.toContain("restored context one")
+      expect(sessions.length).toBeGreaterThanOrEqual(2)
+      expect(sessions.every(session => session === entry.session)).toBe(true)
+    } finally { await entry.dispose?.(); await deps.parentCtx.scope.unmount() }
+  })
+
   it("rejects a stale rebuild after model resolution without publishing or registering it", async () => {
     const { deps, table, agents } = setup(), original = restoredEntry("old-child", "general")
     const replacement = restoredEntry("new-child", "general")

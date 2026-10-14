@@ -250,6 +250,67 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
 }
 
 describe("spawnChild durable child sessions (M8)", () => {
+  it("S18: waits for inherited ownership before mounting tools and keeps host prompt callbacks live", async () => {
+    const parentCtx = createContext(), parentRegistry = createToolRegistry(parentCtx)
+    parentRegistry.register(makeTool("read"))
+    const parentSession = createSession(), coordinator = fakeCoordinator()
+    append(parentSession, { type: "turn/start" })
+    append(parentSession, { type: "user/message", text: "inherited seed" })
+    append(parentSession, { type: "turn/end" })
+    const inherited = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const order: string[] = [], prompts: string[] = []
+    const table = createAgentTable(), agents = createAgentRegistry(), jobs = createJobRegistry()
+    let childSession: ReturnType<typeof createSession> | undefined
+    parentCtx.on("session/inherited", async (payload) => {
+      childSession = (payload as { session: ReturnType<typeof createSession> }).session
+      order.push("inherited")
+      inherited.resolve()
+      await release.promise
+      order.push("owned")
+    })
+    const opts: SpawnOptions = {
+      taskName: "ordering", message: "initial", parentPath: "root", parentCtx, parentRegistry, parentSession,
+      role: { name: "probe", description: "probe", systemPrompt: "role prompt", tools: ["read"] },
+      parentModel: { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } },
+      resolveModel: noRoleModel, table, agents, jobs, forkTurns: "all",
+      childSessions: { coordinator, parentSessionId: "parent" },
+      inheritedSystemContext: () => { throw new Error("callback must be read after inherited ownership") },
+      codeModeFactory: (ctx, registry, options) => {
+        order.push("tools")
+        expect(ctx).not.toBe(parentCtx)
+        expect(options.session).toBe(childSession)
+        expect(options.sessionId).toBe(coordinator.created[0]!.sessionId)
+        expect(registry.get("read")).toBe(parentRegistry.get("read"))
+        expect(order).toEqual(["inherited", "owned", "tools"])
+        return { schemas: () => registry.schemas(), cancel: async () => {}, dispose: async () => {} }
+      },
+    }
+    const spawning = spawnChild(opts)
+    try {
+      await inherited.promise
+      expect(table.entries().size).toBe(0)
+      expect(jobs.listAll()).toEqual([])
+      expect(order).toEqual(["inherited"])
+      opts.inheritedSystemContext = (session) => { expect(session).toBe(childSession); return "context one" }
+      release.resolve()
+      const spawned = await spawning, entry = table.get(spawned.path)!
+      await entry.followupChain
+      expect(prompts).toHaveLength(1)
+      expect(prompts[0]).toContain("context one")
+      opts.inheritedSystemContext = (session) => { expect(session).toBe(childSession); return "context two" }
+      await agents.get(spawned.sessionId!)!.followup("again")
+      expect(prompts).toHaveLength(2)
+      expect(prompts[1]).toContain("context two")
+      expect(prompts[1]).not.toContain("context one")
+      expect(entry.session.header).toMatchObject({ parentSession: "parent", seedLength: 3, delegationDepth: 1 })
+    } finally {
+      release.resolve()
+      await spawning
+      for (const entry of table.entries().values()) await entry.dispose?.()
+      await parentCtx.scope.unmount()
+    }
+  })
+
   it("with childSessions: creates a child-<uuid> session, mirrors seed + events, records sessionId", async () => {
     const coordinator = fakeCoordinator()
     const jobs = createJobRegistry()
