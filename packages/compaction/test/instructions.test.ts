@@ -46,7 +46,7 @@ describe("compact instructions threading", () => {
     const seen: { content?: string } = {}
     const engine = createCompactionEngine({
       model: recordingModel(seen),
-      config: { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0 },
+      config: { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0 },
     })
     expect((await engine.maybeCompact(s)).compacted).toBe(true)
     expect(seen.content).not.toContain("User instructions")

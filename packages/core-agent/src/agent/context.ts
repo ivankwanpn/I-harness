@@ -53,18 +53,28 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   // at full price; with it, the call is a byte-prefix of the main request and the
   // provider's cache serves it.
   function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined, binding = metadata()) {
-    return compact
-    ? createCompactionEngine({
-        model: deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId })),
-        config: compact,
+    if (!compact) return undefined
+    const attributedModel = deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId }))
+    return createCompactionEngine({
+        model: attributedModel,
+        config: compact.summarizationModel === deps.model ? { ...compact, summarizationModel: attributedModel } : compact,
         ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
-        // M73: compaction builds and sends its OWN model request, so it never
-        // met the clamp the session's requests go through — on an anthropic
-        // route that left the adapter's 128k fallback unclamped on the call
-        // that runs BECAUSE the context is nearly full. The resolved cap is
-        // handed down here; the engine clamps it against the window it
-        // resolved (compaction's own `contextWindow`, above).
+        // The main binding's output limit bounds only inherited summaries.
+        // Preferred summary output, retention, metadata and effort have their
+        // own producer/consumer contract at this factory boundary.
         ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
+        contextMetadata: binding,
+        reasoningEffort: reasoningEffort(),
+        signal: deps.signal,
+        flush: deps.flush,
+        summaryInputGuard: inheritSummary => {
+          const model = deps.model, identity = deps.modelBindingIdentity?.(), surface = requestSurfaceFingerprint()
+          return () => {
+            if (inheritSummary && (deps.model !== model || deps.modelBindingIdentity?.() !== identity || !bindingIsCurrent() || requestSurfaceFingerprint() !== surface)) {
+              throw Object.assign(new Error("Owned summary binding or request surface changed"), { code: "CONTEXT_INPUT_STALE" })
+            }
+          }
+        },
         ...(deps.modelOverheadTokens ? { overheadTokens: deps.modelOverheadTokens } : {}),
         contextTokens: () => ownedBudget.pressure() ?? 0,
         ...(binding?.providerId ? { provider: binding.providerId } : {}),
@@ -74,7 +84,6 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
           tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
         }),
       })
-    : undefined
   }
   const inheritedCompact = () => inherited?.contextWindow === undefined ? undefined : { ...(deps.compact ?? {}), contextWindow: inherited.contextWindow }
   let compactor = buildCompactor(inherited ? inheritedCompact() : deps.compact, inherited ? inherited.maxOutputTokens : deps.maxOutputTokens)

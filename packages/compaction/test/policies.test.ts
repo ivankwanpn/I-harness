@@ -56,8 +56,8 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
     expect(activeTokens(s)).toBeGreaterThanOrEqual(700) // sanity: the fixture is ≥ 500 tokens
     expect(activeTokens(s)).toBeLessThan(800) // but below the global 0.8 × 1000 threshold
     const config: CompactionConfig = {
-      ...BASE,
-      modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.5, retainTokens: 400 } },
+      ...BASE, contextWindow: 10000, thresholdRatio: 0.08, maxTokens: 200,
+      modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.05, retainTokens: 400 } },
     }
     const engine = createCompactionEngine({
       model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config, // ≥ 500 chars (M34 ⑦c floor)

@@ -42,8 +42,16 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         await checkpoint()
         if (!bindingUnchanged() || before !== revision()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
         state.compacted = true
-        const result = snapshot.admission === "compact" ? await context.compactor.compact(deps.session)
-          : automatic ? await context.compactor.maybeCompact(deps.session) : undefined
+        let result
+        try {
+          result = snapshot.admission === "compact" ? await context.compactor.compact(deps.session, undefined, { signal: abort })
+            : automatic ? await context.compactor.maybeCompact(deps.session, { signal: abort }) : undefined
+        } catch (error) {
+          if ((error as { code?: string })?.code !== "CONTEXT_INPUT_STALE") throw error
+          state.compacted = false
+          if (++state.staleRebuilds > 3) throw stalePreparedInput()
+          continue
+        }
         abort?.throwIfAborted()
         if (!bindingUnchanged() || before !== revision() || result?.compacted) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
       }

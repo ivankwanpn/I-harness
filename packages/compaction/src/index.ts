@@ -1,5 +1,5 @@
-import type { Session } from "@i-harness/core-session"
-import type { ModelClient, ToolSchema } from "@i-harness/llm-seam"
+import type { Session, ContextBindingMetadata } from "@i-harness/core-session"
+import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
 import type { Telemetry } from "@i-harness/telemetry"
 import { resolveCompactSpec, resolveContextWindow, type CompactionConfig } from "./config.ts"
@@ -36,23 +36,26 @@ export interface CompactionResult {
    * a real FAILURE; the other seven mean "nothing to do" and stay absent
    * (pre-M73 behavior, unchanged). */
   reason?: "summarizer-failed"
+  /** Safe engine-owned policy/admission failure, never a provider response body. */
+  blockedReason?: string
+}
+
+export interface CompactionRunOptions {
+  signal?: AbortSignal
+  protectedSeqs?: readonly number[]
+  reason?: "auto" | "manual" | "recovery"
+  maxSummaryCalls?: number
 }
 
 export interface CompactionEngine {
-  maybeCompact(session: Session): Promise<CompactionResult>
+  maybeCompact(session: Session, options?: CompactionRunOptions): Promise<CompactionResult>
   // M33 §5: `instructions` is the manual session-compact surface — threaded
   // into the summarizer prompt as a "User instructions" section. Optional and
   // additive: absent → pre-M33 behavior; the auto path never passes one.
-  compact(session: Session, instructions?: string): Promise<CompactionResult>
-  // M20 (absorbs codex token-budget `start_new_context_window`): new context
-  // window — hide everything except the last `retainLast` events, appending a
-  // `compaction/reset` marker, NO summary. Used when compact (summary) fails
-  // or cannot bring the session back under budget. Pure-reset is more reliable
-  // than summarization at the hard cap: the model cannot read a full context
-  // it has already overflowed.
-  // FIX ROUND 1 (Ruling 4): append-only — no truncation; the marker records
-  // `removedSeqs` and deriveMessages shadows them (M11 shadow mechanism), so
-  // the durable log and in-memory truth stay identical across resume.
+  compact(session: Session, instructions?: string, options?: CompactionRunOptions): Promise<CompactionResult>
+  recover(session: Session, options?: CompactionRunOptions): Promise<CompactionResult>
+  // Legacy explicit append-only tail reset. Automatic/forced recovery never
+  // calls this: protected task/authority/outcomes require a valid checkpoint.
   resetWindow(session: Session, retainLast: number): Promise<CompactionResult>
 }
 
@@ -87,12 +90,18 @@ export function createCompactionEngine(deps: {
    * not sent at all. Which side wins depends on the cache discount and on where
    * the pruned output sits. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
-  /** M73: the model's resolved output cap, handed down from core-agent's deps
-   * — the layer that resolved it. Absent → the summarizer's request
-   * carries no cap (pre-M73 behavior). NOT `config.maxTokens`, which stays the
-   * post-hoc character slice of the accepted summary — see summarizeWithModel's
-   * `limits` note. */
+  /** Main binding's known output limit. Only inherited summaries use this as
+   * a hard model upper bound; their preferred wire cap is independently4096. */
   maxOutputTokens?: number
+  contextMetadata?: ContextBindingMetadata
+  reasoningEffort?: ReasoningEffort
+  /** Explicit summary metadata/effort belong to the distinct summary client. */
+  summaryMetadata?: ContextBindingMetadata
+  summaryReasoningEffort?: ReasoningEffort
+  signal?: AbortSignal
+  flush?: () => Promise<void>
+  /** Pure owner validation captured for this summary pass; never prepares/authenticates. */
+  summaryInputGuard?: (inherited: boolean) => () => void
   /** Current system/tool overhead when the model-facing catalog is live. */
   overheadTokens?: () => number
   /** Optional full current input estimate, including system/tools. A host may
@@ -117,8 +126,8 @@ export function createCompactionEngine(deps: {
     config, contextWindow,
     session => deps.contextTokens?.() ?? activeTokens(session) + overheadNow(),
     overheadNow,
-    (session, allowPruneOnly, instructions, reason) => runCompactionPass(
-      session, allowPruneOnly, instructions, reason, config, contextWindow, deps, overheadNow,
+    (session, allowPruneOnly, instructions, options) => runCompactionPass(
+      session, allowPruneOnly, instructions, options, config, contextWindow, deps, overheadNow,
     ),
   )
 }

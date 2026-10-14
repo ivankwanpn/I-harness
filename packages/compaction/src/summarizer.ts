@@ -1,9 +1,7 @@
-import { clampOutputCap } from "@i-harness/llm-seam"
+import { prepareModelRequest, modelFailureFacts } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
-import { estimateContent } from "@i-harness/token-meter"
-import type { Session } from "@i-harness/core-session"
-import { approxTokens } from "./tokens.ts"
-import { sliceRegion } from "./slices.ts"
+import { deriveMessagesUpTo, type Session } from "@i-harness/core-session"
+import { sliceMessages } from "./slices.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
 // a shadow line containing one is copied into the Sensitive Instructions
@@ -145,245 +143,184 @@ function extractSensitiveLines(shadowText: string): string[] {
   return out
 }
 
-function trimToTokens(text: string, maxTokens: number): string {
-  return text.slice(0, maxTokens * 4)
+export class SummaryCheckpointError extends Error {
+  constructor(readonly failure: unknown) { super("compaction: summary checkpoint persistence failed", { cause: failure }) }
 }
 
-/**
- * Summarize with a retry guard against degenerate output.
- *
- * M34 ⑦c: `minSummaryChars` (default 500) is the quality floor — a trimmed
- * output SHORTER than the floor counts as a failed attempt (not a valid
- * summary): ONE same-model retry is made, then the attempt throws (the
- * engine's fail-soft path swallows it unchanged — no new error type). The
- * empty-output case keeps its immediate throw (pre-M34 semantics). The
- * maxTokens truncation happens AFTER the floor check, on the accepted output.
- * `attempts` reports how many model calls the pass took (the engine feeds it
- * into the compaction/attempt analytics event).
- *
- * M75: when the single prefix-shaped request CANNOT FIT the window, and the
- * caller hands the region in, the pass summarises that region in chained
- * pieces instead of sending the one impossible request — the one a strict
- * provider rejects with a NON-retryable validation error, whose fail-soft arm
- * is the reset that throws the inherited context away. The fit predicate and
- * the piece loop live HERE, beside the clamp they must agree with: both
- * evaluate `priceInput` below, so the two can never drift. No cap, no window,
- * no prefix or no region ⇒ the single path, byte for byte as before.
- */
+type SummaryBlock = "retention-policy" | "output-floor" | "fixed-input" | "call-limit" | "call-policy" | "shrink-limit" | "retention-output" | "binding" | "opaque" | "refused" | "truncated" | "incomplete"
+/** Closed engine-owned reasons; provider messages never become result data. */
+export class SummaryBlockedError extends Error {
+  constructor(kind: SummaryBlock, facts: { chars?: number; floor?: number; input?: number; output?: number; window?: number; limit?: number } = {}) {
+    const numeric = (value: number | undefined) => Number.isSafeInteger(value) && value! >= 0 ? String(value) : "unknown"
+    const reasons: Record<SummaryBlock, string> = {
+      "retention-policy": `compaction: retained checkpoint ceiling ${numeric(facts.chars)} chars is below quality floor ${numeric(facts.floor)}`,
+      "output-floor": `compaction: summary output ceiling ${numeric(facts.output)} cannot provide reasoning/retention allowance ${numeric(facts.floor)}`,
+      "fixed-input": `compaction: indivisible/fixed summary input cannot fit (${numeric(facts.input)} input tokens; ${numeric(facts.output)} required output; window ${numeric(facts.window)})`,
+      "call-limit": `compaction: shared summary call limit exhausted (${numeric(facts.limit)})`,
+      "call-policy": "compaction: maxSummaryCalls must be an integer in [1, 8]",
+      "shrink-limit": "compaction: summary overflow shrink limit exhausted (2)",
+      "retention-output": `compaction: retained summary outside quality/size limits (${numeric(facts.chars)} chars; floor ${numeric(facts.floor)}; ceiling ${numeric(facts.limit)})`,
+      binding: "compaction: summary binding does not match prepared model",
+      opaque: "compaction: summary fixed input contains unpriced provider references",
+      refused: "compaction: the provider refused to produce a summary",
+      truncated: "compaction: provider truncated the summary; checkpoint was not committed",
+      incomplete: "compaction: incomplete summary stream; checkpoint was not committed",
+    }
+    super(reasons[kind])
+  }
+}
+
+interface SummaryLimits {
+  maxOutputTokens?: number
+  outputCapExplicit?: boolean
+  contextWindow?: number
+  modelMaxOutputTokens?: number
+  overheadTokens?: number // compatibility: actual prepared system/tools are priced instead
+  reasoningEffort?: LLMRequest["reasoningEffort"]
+  metadata?: import("@i-harness/core-session").ContextBindingMetadata
+  signal?: AbortSignal
+  maxSummaryCalls?: number
+  beforeTransport?: () => Promise<void>
+  validateBeforeTransport?: () => void
+  onMeasurement?: (facts: { inputTokens: number; contextWindow?: number; outputReserve: number; effectiveCap?: number; capSupport: string; minimumCap: number; reasoningBudget?: number; defaultFloorAdjusted: boolean; coverage: string; estimateSource: "projected-heuristic"; uncertainties: readonly string[] }) => void
+  onUsage?: (usage: LLMUsage) => void
+}
+
+function confirmedOverflow(error: unknown): boolean {
+  if (modelFailureFacts(error)?.code !== "CONTEXT_WINDOW_EXCEEDED") return false
+  let current = error
+  for (let i = 0; i < 5 && current && typeof current === "object"; i++) {
+    const record = current as { code?: string; modelFailure?: { code?: string }; cause?: unknown }
+    if (record.code === "CONTEXT_WINDOW_EXCEEDED" || record.modelFailure?.code === "CONTEXT_WINDOW_EXCEEDED") return true
+    current = record.cause
+  }
+  return false
+}
+
+/** Independent prepared summary admission. All physical calls share one bound. */
 export async function summarizeWithModel(
-  model: ModelClient,
-  replayText: string,
-  maxTokens: number,
-  previousSummary?: string,
-  instructions?: string,
-  minSummaryChars = 500,
-  attemptsTracker?: { count: number }, // optional: model-call count even when the pass throws
-  // M5/D2: the shape the main loop sends. Present → this request is a byte-prefix
-  // of the last main request, so the provider's cache can serve the whole
-  // conversation instead of charging full price for it. Absent → the legacy
-  // single-message text form, unchanged.
+  model: ModelClient, replayText: string, maxTokens: number,
+  previousSummary?: string, instructions?: string, minSummaryChars = 500,
+  attemptsTracker?: { count: number },
   prefix?: { systemPrompt: string; tools: ToolSchema[]; messages: LLMMessage[] },
-  /** M73: the request's OWN budget. `maxOutputTokens` is the model's resolved
-   * cap (the chain's value, anthropic's required fallback included);
-   * `contextWindow` is what the engine resolved; `overheadTokens` is the
-   * host-known charge the session log does not carry (system prompt + tool
-   * schemas) that the clamp must add to the input it prices. All optional —
-   * absent means the request carries no cap, exactly as before.
-   *
-   * NOT `CompactionConfig.maxTokens`, which stays the 3rd argument and keeps
-   * its meaning: a post-hoc CHARACTER slice of the accepted summary
-   * (`trimToTokens` = `slice(0, maxTokens * 4)`, ~4 096 chars at the default
-   * 1024). Wiring THAT to the wire would cut the summary off mid-sentence and
-   * the truncated text still clears `minSummaryChars`, so the next round's
-   * anchored summary would be built on the stump. This one is a token ceiling
-   * on the request; the two are different quantities and different arguments. */
-  limits?: { maxOutputTokens?: number; contextWindow?: number; overheadTokens?: number; onUsage?: (usage: LLMUsage) => void },
-  /** M75: the region this call is summarising — the session and the seqs the
-   * caller would have shadowed, handed in RAW and un-sliced. The decision to
-   * slice is taken here, by the very expression the clamp below is fed, so the
-   * predicate can never drift from the clamp's own arithmetic: a caller-side
-   * `priceInput(prefix.messages)` would leave out the directive and the
-   * overhead the clamp charges, and the band where the region alone fits but
-   * the request does not would keep taking the single-call path into a
-   * provider rejection. Read only when `prefix` and both `limits` numbers are
-   * present; otherwise the single path runs, byte for byte unchanged. */
-  region?: { session: Session; shadowedSeqs: number[] },
+  limits: SummaryLimits = {}, region?: { session: Session; shadowedSeqs: number[] },
 ): Promise<{ text: string; attempts: number }> {
-  let attempts = 0
-  const attemptsTrackerOut = attemptsTracker ?? { count: 0 }
-
-  // M75: the ONE input-price arithmetic — what the cap is clamped against
-  // (M73) and what decides "the single request cannot fit" (M75). They are the
-  // same quantity by construction: `clampOutputCap` returns the cap UNTOUCHED
-  // exactly when `contextWindow − this` is not `>= 1` (llm-seam:462-463), which
-  // is exactly when a strict provider rejects `input + max_tokens > context`
-  // (a validation error, and NOT in the retryable set).
-  //
-  // The price is the way the session's own clamp prices it (core-agent:
-  // `estimateContent(messages) + overheadTokens`): this request really does
-  // carry `prefix.systemPrompt` and `prefix.tools`, which the session log does
-  // not, so charging the messages alone would under-price the input and make
-  // the room the clamp promises too generous — the exact overrun the clamp
-  // exists to prevent. `?? 0` for a caller that hands no overhead; the engine
-  // always resolves a number.
-  //
-  // The overhead is charged ONLY when the request really carries the pair it
-  // stands for. On the legacy text path (`prefix` undefined) the request has
-  // neither system prompt nor tools, so charging it over-prices the input — and
-  // when the charge alone fills the window, `hardRoom < 1` trips the clamp's
-  // "the input already fills the window" arm and the RAW cap leaves (that
-  // defect survives on that route: reachable with a configured
-  // `summarizationModel`, or an engine built without `requestShape`).
-  const priceInput = (messages: LLMMessage[]): number =>
-    estimateContent(messages) + (prefix === undefined ? 0 : (limits?.overheadTokens ?? 0))
-
-  /** One model call, with the M34 ⑦c retry guard. `messages` is the
-   * conversation this request carries: [] on the legacy text path (the
-   * directive embeds the replay text instead), the region fold on the single
-   * prefix call, one piece on the chained path. `previous` anchors this call's
-   * directive; `enforceFloor` is the quality floor — see the M75 §1.5 note at
-   * the check. */
-  const callModel = async (messages: LLMMessage[], previous: string | undefined, enforceFloor: boolean): Promise<string> => {
-    let lastLength = 0
-    for (let round = 0; round < 2; round++) {
-      attempts += 1
-      attemptsTrackerOut.count += 1
-      const directive = buildSummaryPrompt(replayText, previous, instructions, { embedText: prefix === undefined })
-      const request: LLMRequest =
-        prefix === undefined
-          ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
-          : { messages: [...messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
-      // One-off summaries do not introduce explicit cache writes or retention.
-      // The original-message prefix remains intact; upstream automatic caching
-      // is protocol-owned and cannot be disabled with this neutral intent.
-      request.promptCache = { mode: "off" }
-      // M73: the cap this request carries, clamped against the window and the
-      // input we are about to send — the same `clampOutputCap` the session's
-      // own requests go through (llm-seam), applied HERE because this request
-      // is built here and nowhere else. Absent cap ⇒ absent key: a default
-      // would be a number nobody chose. The input is priced by the SAME
-      // `priceInput` the M75 fit predicate uses (see its note above).
-      const cappedRequest: LLMRequest = limits?.maxOutputTokens === undefined
-        ? request
-        : { ...request, maxOutputTokens: clampOutputCap(limits.maxOutputTokens, limits.contextWindow, priceInput(request.messages)) }
-      let out = ""
-      // M77: per-call, so a refusal cannot leak into the next round's message.
-      let refused = false
-      let truncated = false
+  if (maxTokens * 4 < minSummaryChars) throw new SummaryBlockedError("retention-policy", { chars: maxTokens * 4, floor: minSummaryChars })
+  const maximum = limits.maxSummaryCalls ?? 8
+  if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 8) throw new SummaryBlockedError("call-policy")
+  const tracker = attemptsTracker ?? { count: 0 }
+  let attempts = 0, running = previousSummary
+  const check = () => { limits.signal?.throwIfAborted(); limits.validateBeforeTransport?.() }
+  // Distinct summary bindings receive a text projection. Preserve semantic
+  // tool work and image descriptors without replaying another model's signed
+  // continuation, signatures or base64 payload as ordinary user text.
+  const textOf = (messages: LLMMessage[]) => messages.map(message => {
+    const content = typeof message.content === "string" ? message.content : message.content.map(part => part.type === "text" ? part.text : `[image: ${part.image.mediaType}, ${Math.ceil(part.image.dataBase64.length * 3 / 4)} bytes]`).join("\n")
+    const calls = message.role === "assistant" ? (message.toolCalls ?? []).map(call => `tool ${call.name} (${call.id}): ${JSON.stringify(call.args)}`).join("\n") : ""
+    return `[${message.role}]\n${content}${calls ? `\n${calls}` : ""}`
+  }).join("\n")
+  type Piece = { messages: LLMMessage[]; text: string; shrinks: number; rejectedTokens?: number }
+  let whole = prefix?.messages ?? []
+  if (!prefix && region) {
+    try { whole = deriveMessagesUpTo(region.session, Math.max(...region.shadowedSeqs)) }
+    catch { whole = [{ role: "user", content: replayText }] } // malformed legacy images remain descriptor text
+  }
+  const pending: Piece[] = [{ messages: whole, text: replayText, shrinks: 0 }]
+  let lastLength = 0
+  while (pending.length) {
+    const piece = pending[0]!
+    let accepted = false
+    for (let qualityRound = 0; qualityRound < 2; qualityRound++) {
+      check()
+      const directive = buildSummaryPrompt(piece.text, running, instructions, { embedText: prefix === undefined })
+        + `\nRetained checkpoint must be between ${minSummaryChars} and ${maxTokens * 4} characters. Preserve the objective, authority, instructions and completed outcomes within that limit.`
+        + (qualityRound ? "\nThe previous output did not meet the retained checkpoint limits. Produce a complete shorter checkpoint within those limits." : "")
+      const request: LLMRequest = { systemPrompt: prefix?.systemPrompt ?? "", tools: prefix?.tools ?? [],
+        messages: [...(prefix ? piece.messages : []), { role: "user", content: directive }], promptCache: { mode: "off" },
+        ...(limits.reasoningEffort !== undefined ? { reasoningEffort: limits.reasoningEffort } : {}), ...(limits.signal ? { signal: limits.signal } : {}) }
+      // Capture pure uncapped facts first: reasoning floors can exceed the preferred
+      // default. Only a derivative of this captured payload is allowed to execute.
+      const prepared = await prepareModelRequest(model, request)
+      check()
+      const { input, output } = prepared.measurement
+      if (limits.metadata && input.coverage !== "neutral-only" && (input.modelId !== limits.metadata.modelId || input.protocol !== limits.metadata.protocol)) throw new SummaryBlockedError("binding")
+      if (input.coverage === "incomplete") throw new SummaryBlockedError("opaque")
+      const inputTokens = Object.values(input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
+      const preferred = limits.maxOutputTokens ?? 4096
+      const explicit = limits.outputCapExplicit ?? limits.maxOutputTokens !== undefined
+      const required = output.minimumCap > preferred && output.reasoningBudget !== undefined ? Math.max(output.minimumCap, output.reasoningBudget + maxTokens) : output.minimumCap
+      let ceiling = explicit ? preferred : Math.max(preferred, required)
+      if (limits.modelMaxOutputTokens !== undefined) ceiling = Math.min(ceiling, limits.modelMaxOutputTokens)
+      if (ceiling < required) throw new SummaryBlockedError("output-floor", { output: ceiling, floor: required })
+      const room = limits.contextWindow === undefined ? undefined : limits.contextWindow - inputTokens - Math.ceil(limits.contextWindow * .05)
+      // Smaller descendants must show reduction on the actual provider projection,
+      // so fixed raw overrides cannot manufacture progress from neutral slicing.
+      const reduced = piece.rejectedTokens === undefined || inputTokens < piece.rejectedTokens
+      const requiredRoom = output.capSupport === "unsupported" ? ceiling : required
+      if (!reduced || room !== undefined && room < requiredRoom) {
+        const segments = sliceMessages(piece.messages, 1)
+        if (!reduced || segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
+        const split = Math.ceil(segments.length / 2)
+        const chunks = [segments.slice(0, split).flat(), segments.slice(split).flat()]
+        pending.splice(0, 1, ...chunks.map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks, rejectedTokens: inputTokens })))
+        accepted = true // resliced; no work consumed and no transport made
+        break
+      }
+      const cap = output.capSupport === "unsupported" || room === undefined ? ceiling : Math.min(ceiling, room)
+      const candidate = output.capSupport === "unsupported" ? prepared : prepared.withOutputCap(cap)
+      const effective = candidate.measurement.output.effectiveCap
+      limits.onMeasurement?.({ inputTokens, contextWindow: limits.contextWindow, outputReserve: cap,
+        ...(output.capSupport === "supported" && effective !== undefined ? { effectiveCap: effective } : {}), capSupport: output.capSupport, minimumCap: output.minimumCap,
+        reasoningBudget: output.reasoningBudget, defaultFloorAdjusted: !explicit && ceiling > preferred, coverage: input.coverage, estimateSource: "projected-heuristic", uncertainties: input.uncertainties })
+      if (tracker.count >= maximum) throw new SummaryBlockedError("call-limit", { limit: maximum })
+      if (limits.beforeTransport) {
+        try { await limits.beforeTransport() } catch (error) { throw new SummaryCheckpointError(error) }
+      }
+      check()
+      attempts++; tracker.count++
+      let out = "", ended = false, refused = false, truncated = false
       const usage: LLMUsage = {}
-      for await (const ev of model.stream(cappedRequest)) {
-        if (ev.type === "text/chunk") out += ev.text
-        else if (ev.type === "error") throw ev.error
-        else if (ev.type === "usage") {
-          for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
-            const value = ev.usage[field]
-            if (typeof value === "number" && Number.isFinite(value)) usage[field] = value
+      try {
+        for await (const event of candidate.stream({ signal: limits.signal, validateBeforeTransport: check })) {
+          limits.signal?.throwIfAborted()
+          if (event.type === "text/chunk") out += event.text
+          else if (event.type === "error") throw event.error
+          else if (event.type === "usage") {
+            for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+              const value = event.usage[field]
+              if (typeof value === "number" && Number.isFinite(value)) usage[field] = value
+            }
+            if (event.usage.inputTokenSemantics === "includes-cache" || event.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = event.usage.inputTokenSemantics
           }
-          if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = ev.usage.inputTokenSemantics
+          else if (event.type === "end") { ended = true; refused = event.refused === true; truncated = event.truncated === true; break }
         }
-        else if (ev.type === "end") {
-          if (ev.refused === true) refused = true
-          if (ev.truncated === true) truncated = true
-          break
-        }
+      } catch (error) {
+        limits.signal?.throwIfAborted()
+        if (!confirmedOverflow(error)) throw error
+        check()
+        if (piece.shrinks >= 2) throw new SummaryBlockedError("shrink-limit")
+        const segments = sliceMessages(piece.messages, 1)
+        if (segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
+        const split = Math.ceil(segments.length / 2)
+        pending.splice(0, 1, ...[segments.slice(0, split).flat(), segments.slice(split).flat()].map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks + 1, rejectedTokens: inputTokens })))
+        accepted = true
+        break
       }
-      if (Object.keys(usage).length) limits?.onUsage?.(usage)
-      if (truncated) throw new Error("compaction: provider truncated the summary; checkpoint was not committed")
+      if (Object.keys(usage).length) limits.onUsage?.(usage)
+      check()
+      if (refused) throw new SummaryBlockedError("refused")
+      if (truncated) throw new SummaryBlockedError("truncated")
+      if (!ended) throw new SummaryBlockedError("incomplete")
       const trimmed = out.trim()
-      // M77: an empty output has two causes, and the message may not merge them.
-      // A provider REFUSAL (HTTP 200, no content, `end.refused`) reported as
-      // "summarizer returned empty output" blames this pass for a decision the
-      // provider made — the engine's fail-soft warn quotes this text verbatim.
-      // Absent stays absent: without the bit the message is byte-identical.
-      if (trimmed.length === 0) {
-        throw new Error(refused
-          ? "compaction: the provider refused to produce a summary"
-          : "compaction: summarizer returned empty output")
-      }
+      if (!trimmed) throw new Error("compaction: summarizer returned empty output")
       lastLength = trimmed.length
-      // M75 §1.5: the floor guards the text the SESSION ends up with, so it is
-      // enforced only where this call's output IS that text — the single call,
-      // or the LAST piece of a chain. Per-piece enforcement would be wrong: a
-      // legitimate intermediate merge can be short (that piece had little to
-      // fold in), and failing it would throw away a chain that was working.
-      // BLIND SPOT, named: a chain that is muddled in the middle but long
-      // enough at the end is not caught — the same blind spot today's single
-      // call has when it lands just above the floor.
-      if (enforceFloor && trimmed.length < minSummaryChars) continue // degenerate → one retry
-      return approxTokens(trimmed) > maxTokens ? trimToTokens(trimmed, maxTokens) : trimmed
+      if (trimmed.length < minSummaryChars || trimmed.length > maxTokens * 4) continue
+      // No lossy slice. Every accepted piece is a complete retained checkpoint.
+      running = trimmed; pending.shift(); accepted = true; break
     }
-    throw new Error(`compaction: summarizer output below minSummaryChars (${lastLength} < ${minSummaryChars})`)
+    if (!accepted) throw new SummaryBlockedError("retention-output", { chars: lastLength, floor: minSummaryChars, limit: maxTokens * 4 })
   }
-
-  // M75: the fallback gate. The single prefix-shaped request is the fast path —
-  // it is a byte prefix of the session's last main request and the provider
-  // cache serves it. It stops being possible exactly when the REQUEST fills the
-  // window — the region fold PLUS the directive PLUS the overhead the clamp
-  // charges (clampOutputCap's arm C returns the raw cap; a strict provider
-  // rejects `input + max_tokens > context`). The predicate below is that
-  // quantity and not the region alone, because the two are not the same
-  // question: a region that fits can still carry a request that does not, and
-  // that band is exactly where a region-priced gate would send the impossible
-  // call. THEN — and only then — the pass summarises the region in pieces:
-  // pieces 2..N are cold reads (this tree sends no cache breakpoints), which is
-  // strictly better than today's outcome there: no summary at all and the
-  // context thrown away by a reset.
-  //
-  // All four entry conditions are deliberately required: no cap or no window ⇒
-  // the clamp never runs, so there is no "does not fit" question to answer and
-  // the single path stays byte-identical (as do the callers that never had a
-  // budget); no prefix ⇒ the request is the legacy text form, which carries no
-  // piece messages; no region ⇒ nothing to slice.
-  if (
-    region !== undefined &&
-    prefix !== undefined &&
-    limits !== undefined &&
-    limits.maxOutputTokens !== undefined &&
-    limits.contextWindow !== undefined
-  ) {
-    const contextWindow = limits.contextWindow
-    const singleDirective = buildSummaryPrompt(replayText, previousSummary, instructions, { embedText: false })
-    // The single request's own price — the SAME expression the clamp is fed,
-    // region fold PLUS directive PLUS overhead, priced as one request.
-    const singlePrice = priceInput([...prefix.messages, { role: "user", content: singleDirective }])
-    if (!(contextWindow - singlePrice >= 1)) {
-      // The per-piece budget: the window minus everything a piece request
-      // carries BESIDES the piece — the overhead, the directive priced in its
-      // WORST case, and one output allowance. The directive's worst case is the
-      // chain's own anchor ceiling: a running summary is `maxTokens * 4` chars
-      // at most (`trimToTokens` caps the accepted text there), and never
-      // shorter than the caller's existing anchor. The output allowance is
-      // `maxTokens` — the size the accepted summary is capped to, and therefore
-      // also the bound just used. Measured, 12-turn fixture, window 1 000,
-      // maxTokens 200, no overhead: directive allowance 684, budget 116 → 12
-      // pieces of one turn each (175/196 tokens), every piece request 624..838
-      // tokens — all of them legal on that window, where the single call priced
-      // 2 591. A piece with no interior cut is emitted over budget by
-      // `sliceRegion`'s own contract; if even that does not fit, the call
-      // throws and the caller's fail-soft arm answers exactly as it does today.
-      const runningChars = Math.max(previousSummary?.length ?? 0, maxTokens * 4)
-      const allowance = priceInput([
-        { role: "user", content: buildSummaryPrompt(replayText, "x".repeat(runningChars), instructions, { embedText: false }) },
-      ])
-      const pieces = sliceRegion(region.session, region.shadowedSeqs, Math.max(1, contextWindow - allowance - maxTokens))
-      if (pieces.length > 0) {
-        // Chained: piece k>1 receives what piece k-1 produced as its anchor —
-        // "merge the conversation ABOVE into the previous summary" is what the
-        // prompt already asks for. The running text lives in MEMORY only:
-        // nothing is appended mid-pass; the caller appends the ONE
-        // `compaction/summary` for the whole region once this returns, and a
-        // throw here leaves the log untouched (fail-soft upstream).
-        let running = previousSummary
-        let text = ""
-        for (let k = 0; k < pieces.length; k++) {
-          text = await callModel(pieces[k]!, running, k === pieces.length - 1)
-          running = text
-        }
-        return { text, attempts }
-      }
-      // An empty region: nothing to slice and nothing to summarise — fall
-      // through to the single call, which fails exactly as it does today.
-    }
-  }
-  return { text: await callModel(prefix === undefined ? [] : prefix.messages, previousSummary, true), attempts }
+  check()
+  if (running === undefined || running.length < minSummaryChars || running.length > maxTokens * 4) throw new Error("compaction: final retained checkpoint is invalid")
+  return { text: running, attempts }
 }

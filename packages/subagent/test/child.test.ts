@@ -1312,7 +1312,7 @@ describe("the child's request carries the resolved budget", () => {
   // `prompt_too_long` rather than sending an over-window request for the
   // provider to reject. The trade this milestone inherits is unchanged: the
   // provider's 400 is not a better failure.
-  it("a child past its window FAILS CLOSED — the summarizer runs, and no over-window request", async () => {
+  it("a child past its window fails summary admission before any model transport", async () => {
     const f = spawnFixture()
     const parentClient = recordingClient("parent")
     const { jobId } = await spawnChild({
@@ -1349,7 +1349,7 @@ describe("the child's request carries the resolved budget", () => {
     // zero above is now a claim about WHICH request it was. Reddens if the
     // compactor is removed (measured: 0 requests), so the case still pins the
     // compactor's participation and not merely the absence of traffic.
-    expect(parentClient.requests.length).toBeGreaterThan(0)
+    expect(parentClient.requests).toHaveLength(0)
   }, 10_000)
 
   // M74. Before this, a child past `window * 0.9` had exactly one ladder layer
@@ -1387,7 +1387,7 @@ describe("the child's request carries the resolved budget", () => {
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 2_000, // the seed alone is over 0.8 × this
+      contextWindow: 3_000, // actual prepared seed remains over the owned window
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1457,13 +1457,13 @@ describe("the child's request carries the resolved budget", () => {
     // 256 overhead = 3336 against a 1600 gate (0.8 × 2000) and an 1800 budget;
     // the summarizer's own request prices at 3792, over the 2000 window by
     // itself — the raw 4_242 cap the clamp leaves on it makes that worse.
-    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), 2_000)
+    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), 3_000)
     const { path, jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 2_000,
+      contextWindow: 3_000,
       maxOutputTokens: 4_242,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1533,13 +1533,13 @@ describe("the child's request carries the resolved budget", () => {
         yield { type: "text/chunk", text: isSummary ? CHILD_SUMMARY : "child done" }
         yield { type: "end" }
       },
-    }, 2_000)
+    }, 3_000)
     const { path, jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 2_000,
+      contextWindow: 3_000,
       maxOutputTokens: 4_242,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1553,6 +1553,8 @@ describe("the child's request carries the resolved budget", () => {
     expect(f.jobs.read(jobId).output).toBe("child done")
 
     const childSession = f.table.get(path)!.session
+    const firstBudget = childSession.events.find(event => event.type === "context/budget")
+    expect(firstBudget?.snapshot.admissionInputTokens).toBeGreaterThan(3000)
     // THE claim: a summary exists — the outcome the case above cannot reach on
     // its fixture …
     const marker = childSession.events.find((e) => e.type === "compaction/summary")
@@ -1574,6 +1576,7 @@ describe("the child's request carries the resolved budget", () => {
       return typeof last?.content === "string" && last.content.includes("summar")
     })
     expect(summarizerRequests.length).toBeGreaterThan(1)
+    expect(summarizerRequests.length).toBeLessThanOrEqual(8)
     // the inherited head was READ, not dropped: the sentinel rides an accepted
     // request (piece 1 carries the head turn verbatim — the slice is of the
     // region's own messages)
@@ -1678,7 +1681,7 @@ describe("the child's request carries the resolved budget", () => {
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 2_000,
+      contextWindow: 4_000,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1712,7 +1715,7 @@ describe("the child's request carries the resolved budget", () => {
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
     // inherited turns the parent's own marker did NOT hide (see the fixture);
     // 16 is the marker and is NOT in the set (region.ts skips markers).
-    expect(marker.shadowedSeqs).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20])
+    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
@@ -1731,7 +1734,7 @@ describe("the child's request carries the resolved budget", () => {
    * this case documents the engine's behaviour given a TOLERANT provider — not
    * what a strict window-enforcing one yields (the strict-provider case above
    * measures that). */
-  it("M74: a compacted child shows BOTH summaries — a later summary never hides an earlier one", async () => {
+  it("M74: a compacted child replaces its incorporated parent checkpoint and preserves raw audit", async () => {
     const { f, path, PARENT_SUMMARY, CHILD_SUMMARY } = await spawnFromCompactedParent()
     const childSession = f.table.get(path)!.session
     // the summary path produced this surface, not the ladder's reset layer —
@@ -1746,10 +1749,10 @@ describe("the child's request carries the resolved budget", () => {
     // logged text. It clears `minSummaryChars` (500) and the default `maxTokens`
     // (1024 → 4096 chars) does not slice it, so trimming is the only change.
     expect(deriveMessages(childSession)).toEqual([
-      { role: "user", content: PARENT_SUMMARY },
       { role: "user", content: CHILD_SUMMARY.trim() },
       { role: "assistant", content: "child done" },
     ])
+    expect(childSession.events.some(event => event.type === "compaction/summary" && event.text === PARENT_SUMMARY)).toBe(true)
   }, 15_000)
 
   // M74 Task 4: the NEGATIVE half of the child-compactor contract. The two

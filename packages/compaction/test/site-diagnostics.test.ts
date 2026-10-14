@@ -43,7 +43,7 @@ function parsed(lines: string[]): DiagnosticRecord[] {
 }
 
 /** `engine.test.ts`'s config + long-session fixture, unchanged. */
-const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 50 }
+const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
 
 function longSession() {
   const s = createSession()

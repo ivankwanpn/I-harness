@@ -5,7 +5,7 @@ import type { Telemetry } from "@i-harness/telemetry"
 import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 
 const text = "retained work ".repeat(60)
-const config: CompactionConfig = { contextWindow: 100, thresholdRatio: .5, retainTokens: 0, minTurnsBeforeRecompact: 0 }
+const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: .005, retainTokens: 0, minTurnsBeforeRecompact: 0 }
 
 it("shares the until-success breaker across engines without resetting the count on fresh content", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -47,7 +47,8 @@ it("shares prune-only sticky state across engines even without an end marker", a
   const session = createSession()
   append(session, { type: "tool/call", callId: "c", name: "read", args: {} })
   append(session, { type: "tool/result", callId: "c", name: "read", output: "x".repeat(100_000) })
-  const options = { model, config: { contextWindow: 20_000, thresholdRatio: .5 }, overheadTokens: () => 10_000 }
+  let overheadReads = 0
+  const options = { model, config: { contextWindow: 20_000, thresholdRatio: .5 }, overheadTokens: () => ++overheadReads >= 3 ? 10_000 : 0 }
   const first = createCompactionEngine(options), second = createCompactionEngine(options)
   expect(await first.maybeCompact(session)).toEqual({ compacted: true, shadowedSeqs: [], pruned: true })
   expect(session.events.at(-1)?.type).toBe("compaction/prune")
@@ -56,11 +57,12 @@ it("shares prune-only sticky state across engines even without an end marker", a
   expect(session.events).toHaveLength(count)
   expect(calls).toBe(0)
   append(session, { type: "user/message", text: "fresh content" })
-  expect((await second.maybeCompact(session)).pruned).toBe(true)
-  expect(session.events.filter(event => event.type === "compaction/prune")).toHaveLength(2)
+  expect((await second.maybeCompact(session)).compacted).toBe(true)
+  expect(session.events.filter(event => event.type === "compaction/prune")).toHaveLength(1)
+  expect(calls).toBe(1)
 })
 
-it("captures configuration once and preserves live getters, method receivers, post-prune prefix and reads across the model await", async () => {
+it("captures config and method receivers but refuses an owned model change across the held summary await", async () => {
   const trace: string[] = []
   const session = createSession(event => { if (event.type.startsWith("compaction/")) trace.push(event.type) })
   append(session, { type: "tool/call", callId: "c", name: "read", args: {} })
@@ -82,7 +84,7 @@ it("captures configuration once and preserves live getters, method receivers, po
     yield { type: "end" }
   } }
   let liveModel = model, overhead = 0, cap = 2048
-  const earlier: Telemetry = { emit() { throw new Error("telemetry captured too early") }, close() {} }
+  const earlier: Telemetry = { emit(event) { trace.push(event.type) }, close() {} }
   const later: Telemetry = { emit(event) { expect(this).toBe(later); trace.push(event.type) }, close() {} }
   let liveTelemetry = earlier
   const deps = {
@@ -98,8 +100,9 @@ it("captures configuration once and preserves live getters, method receivers, po
   expect(trace).toEqual([])
   deps.config = { contextWindow: 1, thresholdRatio: .5, maxTokens: 1 }
   const pass = engine.maybeCompact(session)
+  try {
   await Promise.race([entered, pass.then(() => { throw new Error("pass ended before model entry") })])
-  expect(trace).toEqual(["context:get", "context:call", "compaction/prune", "model:get", "shape:get", "shape:call", "cap:get", "cap:get", "overhead:get", "overhead:call", "model:stream"])
+  expect(trace).toEqual(["context:get", "context:call", "overhead:get", "overhead:call", "compaction/prune", "model:get", "shape:get", "shape:call", "cap:get", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "telemetry:get", "provider/context", "model:get", "shape:get", "shape:call", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "model:stream"])
   expect(request?.maxOutputTokens).toBe(2048)
   expect(request?.systemPrompt).toBe("system")
   liveModel = { async *stream() { throw new Error("model re-read across await") } }
@@ -107,16 +110,14 @@ it("captures configuration once and preserves live getters, method receivers, po
   overhead = 100_000
   cap = 1
   release()
-  const result = await pass
-  expect(result).toEqual({ compacted: true, shadowedSeqs: [0, 1], summary: text.trim(), pruned: true })
-  expect(trace.slice(11)).toEqual(["telemetry:get", "compaction/usage", "compaction/start", "compaction/summary", "compaction/end", "telemetry:get", "compaction/attempt", "overhead:get", "overhead:call"])
-  // The late overhead read arms sticky using the captured window. Live context
-  // still runs before that gate and must not re-read model/shape/cap afterward.
-  expect(await engine.maybeCompact(session)).toEqual({ compacted: false, shadowedSeqs: [] })
-  expect(trace.slice(-2)).toEqual(["context:get", "context:call"])
+  await expect(pass).rejects.toMatchObject({ code: "CONTEXT_INPUT_STALE" })
+  expect(trace.slice(29)).toEqual(["telemetry:get", "compaction/usage", "model:get"])
+  expect(session.events.filter(event => event.type.startsWith("compaction/")).map(event => event.type)).toEqual(["compaction/prune"])
+  expect(session.events.find(event => event.type === "tool/result")).toMatchObject({ output: "x".repeat(12_000) })
+  } finally { release(); await pass.catch(() => undefined) }
 })
 
-it("keeps shape failures outside the summary catch and overhead failures inside it", async () => {
+it("keeps shape failures outside the summary catch and does not charge legacy overhead to summary input", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
     const model: ModelClient = { async *stream() { throw new Error("must not call model") } }
@@ -127,7 +128,7 @@ it("keeps shape failures outside the summary catch and overhead failures inside 
     expect(warn).not.toHaveBeenCalled()
     const inside = createCompactionEngine({ model, config, overheadTokens() { throw new Error("overhead fixture") } })
     expect(await inside.compact(session)).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
-    expect(warn).toHaveBeenCalledExactlyOnceWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): overhead fixture")
+    expect(warn).toHaveBeenCalledExactlyOnceWith("[i-harness] compaction summarizer failed (fail-soft, retrying next step): must not call model")
     expect(session.events).toHaveLength(1)
   } finally { warn.mockRestore() }
 })

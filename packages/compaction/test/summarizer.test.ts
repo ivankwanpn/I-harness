@@ -80,7 +80,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
     const s = createSession()
     for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 50 }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
 
     const r1 = await engine.compact(s)
@@ -102,7 +102,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hello" })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5 }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s, "summarize the tool section in Chinese")
     expect(r.compacted).toBe(true)
@@ -112,7 +112,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
 })
 
 describe("summary degenerate floor (M34 ⑦c)", () => {
-  const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5 }
+  const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
   function smallSession(): ReturnType<typeof createSession> {
     const s = createSession()
     for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
@@ -148,7 +148,7 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
     const engine = createCompactionEngine({ model: short, config })
     const result = await engine.compact(s)
     // M73: the summarizer-failure arm names its reason (the shape stays pinned).
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed", blockedReason: "compaction: retained summary outside quality/size limits (100 chars; floor 500; ceiling 4096)" })
     expect(calls.n).toBe(2) // one retry, then fail-soft
     // M78 exception, named: "a failed pass appends nothing" is no longer true in
     // general — a pass that PRUNED leaves its `compaction/prune` marker behind

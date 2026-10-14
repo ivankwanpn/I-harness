@@ -10,7 +10,8 @@ export function createAdmission(
   compactOnce: CompactPass,
 ): CompactionEngine {
   return {
-    async maybeCompact(session: Session): Promise<CompactionResult> {
+    async maybeCompact(session: Session, options): Promise<CompactionResult> {
+      options?.signal?.throwIfAborted()
       // M33 §3.1: the host-known charge the session log does not carry
       // (system prompt + tool schemas — CompactionConfig.overheadTokens).
       if (readContextTokens(session) < contextWindow * config.thresholdRatio) {
@@ -69,7 +70,7 @@ export function createAdmission(
           return { compacted: false, shadowedSeqs: [] }
         }
       }
-      const result = await compactOnce(session, true, undefined, "auto")
+      const result = await compactOnce(session, true, undefined, { ...options, reason: options?.reason ?? "auto" })
       if (result.compacted) {
         autoFailures.set(session, { count: 0, openSeq: -1 })
         // M34 ⑦d sticky arm: success that still leaves the surface over the
@@ -88,8 +89,8 @@ export function createAdmission(
       }
       return result
     },
-    compact: async (session, instructions) => {
-      const result = await compactOnce(session, false, instructions, "manual")
+    compact: async (session, instructions, options) => {
+      const result = await compactOnce(session, false, instructions, { ...options, reason: options?.reason ?? "manual" })
       // M34 ⑦d: a MANUAL compaction success shares the until-success reset
       // (breaker close + sticky release) — the only other release condition
       // is new non-marker content on the auto path.
@@ -99,6 +100,7 @@ export function createAdmission(
       }
       return result
     },
+    recover: (session, options) => compactOnce(session, true, undefined, { ...options, reason: "recovery" }),
     resetWindow: resetWindowOnce,
   }
 }

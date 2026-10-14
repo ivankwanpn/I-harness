@@ -64,7 +64,7 @@ describe("summarizer request shape (M5 D2)", () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 10000, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
     })
     await engine.compact(s)
@@ -90,7 +90,7 @@ describe("summarizer request shape (M5 D2)", () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 10000, thresholdRatio: 0.5, maxTokens: 200 },
     })
     await engine.compact(s)
     expect(requests).toHaveLength(1)
@@ -137,15 +137,16 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     expect(req.maxOutputTokens!).toBeLessThan(50_000)
   })
 
-  it("with no resolved cap the request carries NO key (absent stays absent)", async () => {
+  it("uses the independent summary default without a main resolved cap", async () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
     })
     await engine.compact(toolSession())
-    expect("maxOutputTokens" in requests[0]!).toBe(false)
+    expect(requests[0]!.maxOutputTokens).toBeGreaterThan(0)
+    expect(requests[0]!.maxOutputTokens!).toBeLessThanOrEqual(4096)
   })
 
   // Fix round 1 (finding 3). The message list the clamp can see is NOT the
@@ -162,12 +163,12 @@ describe("M73: the summarizer request carries a clamped cap", () => {
   // (8 000) EXCEEDS llm-seam's `OUTPUT_CAP_SAFETY_MARGIN` (4 096) — below that
   // the uncharged run would promise less room, not more, and this case would
   // stay green with the term deleted. Lower 8_000 only with that in mind.
-  it("charges the host-known overhead the session's own clamp charges", async () => {
+  it("charges the actual system surface instead of a legacy overhead subtraction", async () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 12_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
-      requestShape: () => SHAPE,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
+      requestShape: () => ({ ...SHAPE, systemPrompt: "s".repeat(9000) }),
       maxOutputTokens: 50_000,
     })
     await engine.compact(toolSession())
@@ -177,7 +178,8 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     // meter — so nothing here assumes llm-seam's unexported margin.
     const input = estimateContent(req.messages)
     expect(input).toBeGreaterThan(0) // the recomputation is of a real request
-    expect(req.maxOutputTokens).toBeLessThanOrEqual(12_000 - input - 8_000)
+    expect(req.systemPrompt).toHaveLength(9000)
+    expect(req.maxOutputTokens).toBeLessThanOrEqual(8_000 - input - 3_000)
   })
 
   // Fix wave (I2). `config.summarizationModel ?? deps.model` sends the summary
@@ -188,7 +190,7 @@ describe("M73: the summarizer request carries a clamped cap", () => {
   // number, which is worse than an absent one"), and `config.summarizationModel`
   // is that spawn's named twin — so the two arms answer the same way. The gate
   // is the one the SHAPE one screen up already uses.
-  it("a CONFIGURED summarization model's request carries NO cap", async () => {
+  it("a CONFIGURED summary binding uses its own independent default cap", async () => {
     const { model, requests } = capturingModel()
     const { model: configured, requests: configuredRequests } = capturingModel()
     const engine = createCompactionEngine({
@@ -206,7 +208,7 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     // 缺席即缺席 — the session's cap belongs to the session's model. On the
     // legacy text path the clamp WOULD shrink 50 000 to a real number (the case
     // below measures the same fixture), so a present key here is the bug.
-    expect("maxOutputTokens" in configuredRequests[0]!).toBe(false)
+    expect(configuredRequests[0]!.maxOutputTokens).toBe(4096)
   })
 
   // Fix round 2 (Minor 1). The LEGACY text path — no `requestShape`, so
@@ -341,10 +343,10 @@ const summariesOf = (m: LLMRequest): string =>
 // the window moves.
 describe("M75: an over-window region is summarised in chained pieces", () => {
   it("M75: a region that does NOT fit the window still gets a SUMMARY (not a reset)", async () => {
-    const { model, requests } = strictModel(1_000)
+    const { model, requests } = strictModel(2_500)
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
       maxOutputTokens: 50_000,
     })
@@ -437,7 +439,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     const { model, requests } = sequencedModel(PIECE_TEXTS)
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
       maxOutputTokens: 50_000,
     })
@@ -464,8 +466,9 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
   it("M75: the pass appends exactly ONE summary marker, shadowing the WHOLE region", async () => {
     const { model } = sequencedModel(PIECE_TEXTS)
     const s = toolSession()
+    const selected = selectShadowableRange(s, 0)
     await createCompactionEngine({
-      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      model, config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE, maxOutputTokens: 50_000,
     }).compact(s)
 
@@ -477,7 +480,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     // only valid because it SKIPS every compaction marker (`region.ts`:
     // `isCompactionMarker`): the `start`/`summary`/`end` triple this pass just
     // appended is invisible to it, so before and after yield the same list.
-    expect((markers[0] as { shadowedSeqs: number[] }).shadowedSeqs).toEqual(selectShadowableRange(s, 0))
+    expect((markers[0] as { shadowedSeqs: number[] }).shadowedSeqs).toEqual(selected)
   }, 30_000)
 
   it("M75: no marker appears mid-pass", async () => {
@@ -492,7 +495,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
       },
     }
     const result = await createCompactionEngine({
-      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      model, config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE, maxOutputTokens: 50_000,
     }).compact(s)
 
@@ -518,11 +521,11 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
       async *stream(): AsyncIterable<LLMStreamEvent> {
         call += 1
         if (call === 2) yield { type: "error", error: new Error("piece two exploded") }
-        else { yield { type: "text/chunk", text: "PIECE-" + call }; yield { type: "end" } }
+        else { yield { type: "text/chunk", text: ("PIECE-" + call).repeat(100) }; yield { type: "end" } }
       },
     }
     const result = await createCompactionEngine({
-      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      model, config: { contextWindow: 2_500, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE, maxOutputTokens: 50_000,
     }).compact(s)
 
@@ -574,7 +577,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 2_800, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 5_000, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
       maxOutputTokens: 50_000,
     })

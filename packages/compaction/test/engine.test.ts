@@ -13,7 +13,7 @@ function mockModel(text: string): ModelClient {
   }
 }
 
-const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 50 }
+const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
 
 function longSession() {
   const s = createSession()
@@ -95,19 +95,20 @@ describe("compaction engine", () => {
     expect((await engine.compact(s)).compacted).toBe(false)
   })
 
-  it("summary is truncated to maxTokens (approx)", async () => {
+  it("oversize summary is rejected without a lossy maxTokens slice", async () => {
     const engine = createCompactionEngine({ model: mockModel("y".repeat(1000)), config })
     const s = longSession()
     const result = await engine.compact(s)
-    expect(result.compacted).toBe(true)
-    expect(result.summary!.length).toBeLessThanOrEqual(50 * 4)
+    expect(result.compacted).toBe(false)
+    expect(result.summary).toBeUndefined()
+    expect(s.events.some(event => event.type === "compaction/summary")).toBe(false)
   })
 
   it("maybeCompact does not re-fire after a compaction until new non-marker events arrive", async () => {
     // Hot-loop shape: `retainTokens 0` + `maxTokens >= threshold` means the
     // summary alone (~100 tokens) keeps activeTokens above the 50-token
     // threshold — the re-fire guard, not pressure, must stop the loop.
-    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200 }
     const s = longSession()
     const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
     const first = await engine.maybeCompact(s)
@@ -120,7 +121,7 @@ describe("compaction engine", () => {
   it("maybeCompact re-fires once new non-marker events are appended past the last compaction/end", async () => {
     // M33 §2.1: `minTurnsBeforeRecompact: 0` pin the PURE re-fire guard (the
     // default 3-turn hysteresis is covered by hysteresis-breaker.test.ts).
-    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
+    const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200, minTurnsBeforeRecompact: 0 }
     const s = longSession()
     const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
     await engine.maybeCompact(s)
@@ -132,13 +133,13 @@ describe("compaction engine", () => {
   })
 
   it("compact (explicit) is NOT gated by the re-fire guard", async () => {
-    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100 }
+    const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200 }
     const s = longSession()
     const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
     await engine.maybeCompact(s) // appends one trio; no new events afterwards
-    const explicit = await engine.compact(s) // still always attempts
-    expect(explicit.compacted).toBe(true)
-    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(2)
+    const explicit = await engine.compact(s) // no new material to replace
+    expect(explicit.compacted).toBe(false)
+    expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(1)
   })
 
   // Fix round 1 (M20 Ruling 4): resetWindow MUST be append-only. Persistence
@@ -211,8 +212,8 @@ describe("compaction engine", () => {
     // re-plan (and re-append) the SAME prune records on the next step —
     // sticky is the guard that stops the loop.
     const config: CompactionConfig = {
-      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
-      minTurnsBeforeRecompact: 0, overheadTokens: 1500,
+      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 200,
+      minTurnsBeforeRecompact: 0, overheadTokens: 2500,
     }
     const threshold = 4000 * 0.5
     const s = createSession()
@@ -229,6 +230,7 @@ describe("compaction engine", () => {
     expect(second).toEqual({ compacted: false, shadowedSeqs: [] }) // sticky suppresses
     expect(s.events.filter((e) => e.type === "compaction/prune")).toHaveLength(1) // no hot re-plan
     // a manual compact success releases the sticky...
+    append(s, { type: "user/message", text: "new checkpoint material" })
     expect((await engine.compact(s)).compacted).toBe(true)
     // ...and fresh pressure lets the auto path run again
     append(s, { type: "tool/call", callId: "c2", name: "shell", args: {} })
@@ -238,13 +240,13 @@ describe("compaction engine", () => {
 
   it("until-success + sticky (M34 ⑦d): a new non-marker event releases sticky", async () => {
     const config: CompactionConfig = {
-      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
-      minTurnsBeforeRecompact: 0, overheadTokens: 1500,
+      contextWindow: 4000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 200,
+      minTurnsBeforeRecompact: 0, overheadTokens: 2500,
     }
     const s = createSession()
     append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
     append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(100_000) } })
-    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    const engine = createCompactionEngine({ model: mockModel("checkpoint " + "work ".repeat(120)), config })
     expect((await engine.maybeCompact(s)).pruned).toBe(true)
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // sticky: suppressed without new content
     append(s, { type: "user/message", text: "fresh turn work" }) // new non-marker event
@@ -265,7 +267,7 @@ describe("compaction engine", () => {
         }
       },
     }
-    const hotConfig: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
+    const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200, minTurnsBeforeRecompact: 0 }
     const s = createSession()
     for (let i = 0; i < 20; i++) append(s, { type: "user/message", text: "word ".repeat(80) })
     const engine = createCompactionEngine({ model: flip, config: hotConfig })
@@ -373,7 +375,7 @@ describe("compaction with a retained tail is block-aligned too (M5/D2)", () => {
       const s = toolSession()
       const engine = createCompactionEngine({
         model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)),
-        config: { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 200, retainTokens },
+        config: { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200, retainTokens },
       })
       await engine.compact(s)
       const why = assertWellFormed(deriveMessages(s))

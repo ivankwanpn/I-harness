@@ -1,12 +1,28 @@
 import type { Session, SessionEvent } from "@i-harness/core-session"
-import { deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
+import { deriveSearchText, derivePruneSubstitutes, renderPruneSubstitute, rewindCuts, type PruneRecord } from "@i-harness/core-session"
+
+/** Mirror the additive shadow/rewind fold; raw source events remain untouched. */
+export function activeEvents(session: Session): SessionEvent[] {
+  const hidden = new Set<number>()
+  for (const event of session.events) {
+    if (event.type === "compaction/summary") for (const seq of event.shadowedSeqs) hidden.add(seq)
+    else if (event.type === "compaction/reset") for (const seq of event.removedSeqs ?? []) hidden.add(seq)
+  }
+  const cuts = rewindCuts(session)
+  return session.events.filter(event => event.seq === undefined || !hidden.has(event.seq) && !cuts.some(cut => event.seq! >= cut.cutFrom && event.seq! < cut.markerSeq))
+}
+
+export function activeSummary(session: Session) {
+  return activeEvents(session).findLast(event => event.type === "compaction/summary") as Extract<SessionEvent, { type: "compaction/summary" }> | undefined
+}
 
 export function renderShadowed(session: Session, shadowedSeqs: number[], pruneRecords: PruneRecord[] = []): string {
   const set = new Set(shadowedSeqs)
   // M33: summary-input substitution — the shadow region's pruned results are
   // rendered as substitutes so the summarizer never pays for the removed
   // middle (design 裁定 ①).
-  const prunedByCall = new Map(pruneRecords.map((record) => [record.callId, record]))
+  const prunedByCall = derivePruneSubstitutes(session)
+  for (const record of pruneRecords) prunedByCall.set(record.callId, record)
   const parts: string[] = []
   for (const ev of session.events) {
     if (ev.seq !== undefined && set.has(ev.seq)) {
@@ -65,14 +81,6 @@ export function renderShadowed(session: Session, shadowedSeqs: number[], pruneRe
 // M33 §1.2: the text of the LAST `compaction/summary` event, if any.
 // Defensive `typeof` guard: persisted logs bypass append validation, so a
 // malformed marker must not break the anchored scan (falls back to fresh).
-export function lastSummaryText(session: Session): string | undefined {
-  for (let i = session.events.length - 1; i >= 0; i--) {
-    const ev = session.events[i]
-    if (ev && ev.type === "compaction/summary") return typeof ev.text === "string" ? ev.text : undefined
-  }
-  return undefined
-}
-
 function imageDescriptor(ev: SessionEvent): string | undefined {
   // FINAL REVIEW (Ruling 8b): the probe covers BOTH image locations —
   // user-message images live at the top level (`event.images`), while

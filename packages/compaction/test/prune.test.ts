@@ -11,7 +11,7 @@ function recordingModel(seen: { request?: LLMRequest; calls: number }): ModelCli
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       seen.calls += 1
-      seen.request = request
+      seen.request ??= request
       yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
@@ -35,7 +35,7 @@ describe("model-free prune pass", () => {
     const seen = { calls: 0 }
     const engine = createCompactionEngine({
       model: recordingModel(seen),
-      config: { contextWindow: 100_000, thresholdRatio: 0.8, maxTokens: 100 },
+      config: { contextWindow: 100_000, thresholdRatio: 0.8, maxTokens: 200 },
     })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
@@ -65,7 +65,7 @@ describe("model-free prune pass", () => {
     bigResultEvents(s)
     for (let i = 0; i < 100; i++) append(s, { type: "user/message", text: "x".repeat(400) }) // ~104 tokens each
     const seen = { request: undefined as LLMRequest | undefined, calls: 0 }
-    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 64 }
+    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 200 }
     const engine = createCompactionEngine({ model: recordingModel(seen), config })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
@@ -90,7 +90,7 @@ describe("model-free prune pass", () => {
     bigResultEvents(s)
     for (let i = 0; i < 8; i++) append(s, { type: "user/message", text: `z${i}` }) // small tail after the big result
     const seen = { request: undefined as LLMRequest | undefined, calls: 0 }
-    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 64 }
+    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 200 }
     const engine = createCompactionEngine({ model: recordingModel(seen), config })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
@@ -110,7 +110,7 @@ describe("model-free prune pass", () => {
     bigResultEvents(s)
     for (let i = 0; i < 100; i++) append(s, { type: "user/message", text: "x".repeat(400) })
     const seen = { request: undefined as LLMRequest | undefined, calls: 0 }
-    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 64, prune: false }
+    const config: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 200, prune: false }
     const engine = createCompactionEngine({ model: recordingModel(seen), config })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
@@ -158,7 +158,7 @@ describe("compaction/prune marker in region selection", () => {
     const seen = { calls: 0 }
     const engine = createCompactionEngine({
       model: recordingModel(seen),
-      config: { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 },
+      config: { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200, minTurnsBeforeRecompact: 0 },
     })
     const s2 = createSession()
     for (let i = 0; i < 20; i++) append(s2, { type: "user/message", text: "word ".repeat(80) })
@@ -250,7 +250,7 @@ function replayedText(request: LLMRequest): string {
   return request.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
 }
 
-const M78_CONFIG: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 64 }
+const M78_CONFIG: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.5, retainTokens: 500, maxTokens: 200 }
 
 /** The M78 fixture: one OLD tool/result the prune plan hits (its stringified
  * output is far over the 8192-char threshold) sitting INSIDE the shadowed
@@ -323,6 +323,7 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
   // trio is not appended yet.
   it("the request stays a LEADING SLICE of the main fold across a prune marker", async () => {
     const s = m78Session() // retainTokens 500: the region's last shadowed seq stops short of the marker (measured 104 vs the marker's 110)
+    const lastShadowed = Math.max(...selectShadowableRange(s, M78_CONFIG.retainTokens!))
     const observed: { request: LLMRequest; mainFold: LLMMessage[] }[] = []
     const model: ModelClient = {
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
@@ -352,7 +353,6 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
     // assertion above (it is a leading slice of itself); measured, M78: that
     // mutant leaves every other case in this package green, because their
     // fixtures retain nothing and so the region already IS the log.
-    const lastShadowed = Math.max(...selectShadowableRange(s, M78_CONFIG.retainTokens!))
     expect(replayed).toEqual(deriveMessagesUpTo(s, lastShadowed))
     expect(replayed.length).toBeLessThan(mainFold.length)
   })

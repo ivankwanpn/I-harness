@@ -35,11 +35,11 @@ describe("compaction analytics (M34 ⑦b)", () => {
   it("auto success emits one compaction/attempt with outcome success and token deltas", async () => {
     const s = pressureSession()
     const { telemetry, events } = spyTelemetry()
-    const engine = createCompactionEngine({ model: longModel(LONG_SUMMARY), config: { contextWindow: 1000, thresholdRatio: 0.5 }, telemetry })
+    const engine = createCompactionEngine({ model: longModel(LONG_SUMMARY), config: { contextWindow: 10000, thresholdRatio: 0.05 }, telemetry })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
-    expect(events).toHaveLength(1)
-    const ev = events[0]!
+    expect(events.filter(event => event.type === "compaction/attempt")).toHaveLength(1)
+    const ev = events.find(event => event.type === "compaction/attempt")!
     expect(ev.type).toBe("compaction/attempt")
     expect(ev.ts).toBeGreaterThan(0)
     expect(ev.data.reason).toBe("auto")
@@ -65,7 +65,7 @@ describe("compaction analytics (M34 ⑦b)", () => {
       },
     }
     const { telemetry, events } = spyTelemetry()
-    const engine = createCompactionEngine({ model: counting, config: { contextWindow: 100_000, thresholdRatio: 0.8, maxTokens: 100 }, telemetry })
+    const engine = createCompactionEngine({ model: counting, config: { contextWindow: 100_000, thresholdRatio: 0.8, maxTokens: 200 }, telemetry })
     const result = await engine.maybeCompact(s)
     expect(result.pruned).toBe(true)
     expect(calls.n).toBe(0)
@@ -88,16 +88,17 @@ describe("compaction analytics (M34 ⑦b)", () => {
     }
     const s = pressureSession()
     const { telemetry, events } = spyTelemetry()
-    const engine = createCompactionEngine({ model: failing, config: { contextWindow: 1000, thresholdRatio: 0.5 }, telemetry })
+    const engine = createCompactionEngine({ model: failing, config: { contextWindow: 10000, thresholdRatio: 0.05 }, telemetry })
     const result = await engine.maybeCompact(s)
     // M73: the summarizer-failure arm names its reason (the shape stays pinned).
     expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
-    expect(events).toHaveLength(1)
-    expect(events[0]!.data.reason).toBe("auto")
-    expect(events[0]!.data.outcome).toBe("failure")
-    expect(events[0]!.data.attempts).toBe(1)
-    expect(events[0]!.data.tokensBefore).toBeGreaterThan(0)
-    expect(events[0]!.data.durationMs).toBeGreaterThanOrEqual(0)
+    const attempts = events.filter(event => event.type === "compaction/attempt")
+    expect(attempts).toHaveLength(1)
+    expect(attempts[0]!.data.reason).toBe("auto")
+    expect(attempts[0]!.data.outcome).toBe("failure")
+    expect(attempts[0]!.data.attempts).toBe(1)
+    expect(attempts[0]!.data.tokensBefore).toBeGreaterThan(0)
+    expect(attempts[0]!.data.durationMs).toBeGreaterThanOrEqual(0)
   })
 
   it("nothing-shadowable emits outcome skipped (manual compact)", async () => {
@@ -106,7 +107,7 @@ describe("compaction analytics (M34 ⑦b)", () => {
     const { telemetry, events } = spyTelemetry()
     const engine = createCompactionEngine({
       model: longModel(LONG_SUMMARY),
-      config: { contextWindow: 1000, thresholdRatio: 0.5, retainTokens: 100_000 }, // nothing shadowable
+      config: { contextWindow: 10000, thresholdRatio: 0.05, retainTokens: 100_000 }, // nothing shadowable
       telemetry,
     })
     const result = await engine.compact(s)
@@ -119,7 +120,7 @@ describe("compaction analytics (M34 ⑦b)", () => {
 
   it("no telemetry dep: zero events, unchanged byte-identical behavior", async () => {
     const s = pressureSession()
-    const engine = createCompactionEngine({ model: longModel(LONG_SUMMARY), config: { contextWindow: 1000, thresholdRatio: 0.5 } })
+    const engine = createCompactionEngine({ model: longModel(LONG_SUMMARY), config: { contextWindow: 10000, thresholdRatio: 0.05 } })
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
     expect(result.summary).toContain("Primary Request")

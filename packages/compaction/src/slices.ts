@@ -47,6 +47,11 @@ export function sliceRegion(session: Session, shadowedSeqs: number[], budgetToke
   for (const seq of shadowedSeqs) if (seq > lastRegionSeq) lastRegionSeq = seq
   if (lastRegionSeq < 0) return []
   const whole = deriveMessagesUpTo(session, lastRegionSeq)
+  return sliceMessages(whole, budgetTokens)
+}
+
+/** Balanced tool-safe message segments, also used to reslice pending work. */
+export function sliceMessages(whole: LLMMessage[], budgetTokens: number): LLMMessage[][] {
   if (whole.length === 0) return []
 
   // Cut candidates: the fold's user messages (index 0 excluded — a cut there

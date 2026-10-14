@@ -33,7 +33,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     // threshold 190 → maybeCompact no-op（163+5 < 190），所以是 enforceBudget 的
     // layer-1 compact（retainTokens 50）把最舊 2 條 shadow 掉 → 摘要 6 + 保留 54
     // + "work" 5 = 65 tokens < 100 → 繼續。
-    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(200) })
+    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(800) })
     const agent = createAgent(ctx, {
       session,
       tools: createEmptyRegistry(),
@@ -44,8 +44,8 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
       // 500-char minSummaryChars floor would make this tiny-window compact
       // always degenerate, so the floor is opted out explicitly (this suite
       // measures the budget ladder, not the summary floor).
-      compact: { contextWindow: 300, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
-      budget: { contextWindow: 300, reserveRatio: 0.5 },
+      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
+      budget: { contextWindow: 1500, reserveRatio: 0.5 },
     } as never)
     const r = await agent.run("work", undefined)
     expect(r.finalText).toBe("answer")
@@ -243,7 +243,7 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
     // the whole conversation is re-read at full price, forever. So the assertion
     // is on the wire, not on the outcome.
     const session = createSession()
-    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(200) })
+    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(800) })
     const seen: Array<{ systemPrompt: string; tools: number; lastRole: string }> = []
     const model = {
       async *stream(req: { systemPrompt: string; tools: unknown[]; messages: Array<{ role: string }> }) {
@@ -265,8 +265,8 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
       model,
       systemPrompt: "SYS-PROMPT",
       maxTurns: 10,
-      compact: { contextWindow: 200, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
-      budget: { contextWindow: 400, reserveRatio: 0.5 },
+      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
+      budget: { contextWindow: 1500, reserveRatio: 0.5 },
     } as never)
     await agent.run("work", undefined)
     expect(session.events.some((e) => e.type === "compaction/end")).toBe(true)

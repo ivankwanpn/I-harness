@@ -31,7 +31,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     },
     run: (task, signal, images, inputId) => track(() => runTurn(task, signal, images, inputId)),
     followup: (message, signal) => track(() => runTurn(message, signal)),
-    compact: (instructions?: string) => track(async () =>
-      context.compactor ? context.compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] }),
+    compact: (instructions, options) => track(async () => {
+      context.refreshBinding()
+      return context.compactor ? context.compactor.compact(deps.session, instructions, options) : { compacted: false, shadowedSeqs: [] }
+    }),
   }
 }

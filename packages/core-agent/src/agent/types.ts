@@ -1,4 +1,4 @@
-import type { CompactionConfig, CompactionResult } from "@i-harness/compaction"
+import type { CompactionConfig, CompactionResult, CompactionRunOptions } from "@i-harness/compaction"
 import type { ImageInput, Session, BudgetRead, ContextBindingMetadata } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
@@ -110,7 +110,7 @@ export interface Agent {
   // compact config, `createAgent` still returns a `compact` that no-ops.
   // M33 §5: optional `instructions` are threaded to the summarizer (the
   // session-compact command surface).
-  compact?(instructions?: string): Promise<CompactionResult>
+  compact?(instructions?: string, options?: CompactionRunOptions): Promise<CompactionResult>
   updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata }): void
 }
 
