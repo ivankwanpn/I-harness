@@ -10,6 +10,7 @@ import { createWaitTool, createTaskOutputTool } from "./tools/wait.ts"
 import { createListTool, createJobOutputTool, createJobListTool } from "./tools/status.ts"
 import { createSendTool, createFollowupTool, createResumeTool } from "./tools/followup.ts"
 import { createInterruptTool, createCloseTool, createJobKillTool, createStopTaskTool } from "./tools/cancel.ts"
+import { withReportPolicy } from "./report-policy.ts"
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   const spawnTool = createSpawnTool(deps)
@@ -25,5 +26,5 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   const jobKillTool = createJobKillTool(deps)
   const getTaskOutputTool = createTaskOutputTool(deps)
   const stopTaskTool = createStopTaskTool(deps)
-  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool, getTaskOutputTool, stopTaskTool]
+  return [spawnTool, waitTool, listTool, sendTool, interruptTool, followupTool, closeTool, resumeTool, jobOutputTool, jobListTool, jobKillTool, getTaskOutputTool, stopTaskTool].map(tool => withReportPolicy(tool, deps))
 }

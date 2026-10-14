@@ -11,8 +11,10 @@ import type { AgentTable } from "../agent-table.ts"
 import type { RoleRegistry } from "../roles.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "../child.ts"
 import type { TaskRegistry } from "../task-protocol.ts"
+import type { ReportPolicy } from "../report-policy.ts"
 
 export interface SubagentToolDeps extends RoleModelHost {
+  reportPolicy?: ReportPolicy
   table: AgentTable
   jobs: JobRegistry
   roles: RoleRegistry

@@ -30,6 +30,8 @@ import { createTeamTools } from "./tools.ts"
 import { AgentPath } from "./agent-path.ts"
 
 export interface TeamSubagentDeps {
+  reportPolicy?: import("@i-harness/subagent").ReportPolicy
+  retainResults?: () => Promise<"durable" | "memory">
   table: AgentTable
   jobs: JobRegistry
   roles: RoleRegistry

@@ -32,6 +32,8 @@ export function createWaitTool(deps: SubagentToolDeps): Tool {
           ...(entry.sessionId ? { session_id: entry.sessionId } : {}), ...(entry.jobId ? { job_id: entry.jobId } : {}),
           ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
           ...(entry.error !== undefined ? { error: entry.error } : {}),
+          ...(entry.retention !== undefined ? { retention: entry.retention } : {}),
+          ...(entry.retentionError !== undefined ? { retention_error: entry.retentionError } : {}),
           ...(yieldReason ? { yielded: true as const, yield_reason: yieldReason } : {}),
           message,
           timed_out: !changed && !settled && reason === "deadline",
@@ -40,7 +42,9 @@ export function createWaitTool(deps: SubagentToolDeps): Tool {
       const running = () => [...deps.table.entries().values()].some(entry => entry.status === "running")
       const reason = await observe(() => !running())
       exec.abortSignal?.throwIfAborted()
-      if (!running()) return { message: `All subagents settled: ${[...deps.table.entries().keys()].join(", ") || "(none)"}`, timed_out: false }
+      if (!running()) return deps.reportPolicy
+        ? { message: `All ${deps.table.entries().size} subagents settled; use list_agents for paged reports.`, timed_out: false }
+        : { message: `All subagents settled: ${[...deps.table.entries().keys()].join(", ") || "(none)"}`, timed_out: false }
       if (reason === "user-steer") return { message: "wait yielded to new user input; subagents continue running", timed_out: false, yielded: true as const, yield_reason: "user-steer" as const }
       return { message: reason === "deadline" ? "wait timed out with subagents still running" : "Subagent state changed; some subagents are currently running", timed_out: reason === "deadline" }
     },

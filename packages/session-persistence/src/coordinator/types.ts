@@ -124,6 +124,8 @@ export interface SessionCoordinator {
    */
   close(): Promise<void>
   putDocument(key: string, data: unknown): Promise<void>
+  /** Reject this document write's failure; subsequent document writes still proceed. */
+  putDocumentStrict?(key: string, data: unknown): Promise<void>
   getDocument(key: string): Promise<unknown | undefined>
   /** Whether this coordinator holds the session's write ownership lease (M23, opt-in lock). */
   ownerOf(sessionId: string): boolean

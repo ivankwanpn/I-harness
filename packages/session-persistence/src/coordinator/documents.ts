@@ -26,6 +26,12 @@ export function createDocuments(
   return {
     closeAdmissions(keys: string[]) { for (const key of keys) deletedDocuments.add(key) },
     pendingWrites: () => docChain,
+    async putDocumentStrict(key: string, data: unknown) {
+      if (deletedDocuments.has(key)) throw new Error("Session document is deleted")
+      const p = docChain.then(() => putDocumentWithLease(key, data))
+      docChain = p.catch(() => {})
+      return p
+    },
     async putDocument(key: string, data: unknown) {
       if (deletedDocuments.has(key)) { report(new Error("Session document is deleted")); return }
       const p = docChain.then(() => putDocumentWithLease(key, data))

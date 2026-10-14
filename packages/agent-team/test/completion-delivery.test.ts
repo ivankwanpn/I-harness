@@ -75,6 +75,53 @@ it("delivers initial and followup teammate finals exactly once to an idle Lead u
   } finally { await f.close() }
 })
 
+it("shipping teammate completion waits for strict owned retention and bounds its framed model notice", async () => {
+  const output = "TEAM_BARRIER " + '中文🙂"\n'.repeat(12000)
+  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: output }; yield { type: "end" } } }
+  const lead: ModelClient = { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } }
+  const notices: string[] = []
+  const f = await fixture(lead, child, { admit: async input => { notices.push(input.text) }, wake: () => {} })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
+  let retained = false
+  f.coordinator.putDocumentStrict = async (key, data) => {
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_BARRIER")) { await held; retained = true }
+    await strict(key, data)
+  }
+  try {
+    await f.execute("spawn_teammate", { name: "helper", description: "large result", prompt: "first", context: "fresh" })
+    await vi.waitFor(() => expect(f.assembly.subagentState().jobs.some(job => job.output === output)).toBe(true))
+    expect(notices).toHaveLength(0)
+    release()
+    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    expect(retained).toBe(true)
+    expect(Buffer.byteLength(notices[0]!, "utf8")).toBeLessThanOrEqual(16384)
+    expect(notices[0]).toContain("job_output")
+    expect(f.assembly.subagentState().jobs.find(job => job.output === output)?.status).toBe("completed")
+  } finally { release(); await f.close() }
+})
+
+it("shipping teammate retention failure keeps the real completed result inspectable and suppresses admission", async () => {
+  let turns = 0, admissions = 0
+  const child: ModelClient = { async *stream() { turns++; yield { type: "text/chunk", text: "TEAM_RETENTION_FAILED completed effect" }; yield { type: "end" } } }
+  const lead: ModelClient = { async *stream() { yield { type: "end" } } }
+  const f = await fixture(lead, child, { admit: async () => { admissions++ }, wake: () => {} })
+  const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
+  f.coordinator.putDocumentStrict = async (key, data) => {
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_RETENTION_FAILED")) throw new Error("team result disk full")
+    await strict(key, data)
+  }
+  try {
+    await f.execute("spawn_teammate", { name: "helper", description: "controlled result", prompt: "first", context: "fresh" })
+    await vi.waitFor(() => expect(f.assembly.subagentState().agentTable[0]).toMatchObject({ retention: "failed", retentionError: "team result disk full" }))
+    expect(admissions).toBe(0); expect(turns).toBe(1)
+    expect(f.assembly.subagentState().jobs[0]).toMatchObject({ status: "completed", output: "TEAM_RETENTION_FAILED completed effect" })
+    const job = await f.execute("job_output", { job_id: f.assembly.subagentState().jobs[0]!.id }) as any
+    expect(job).toMatchObject({ status: "completed", text: "TEAM_RETENTION_FAILED completed effect", retention: "failed", retention_error: "team result disk full" })
+  } finally { await f.close() }
+})
+
 it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized UTF-8 result summary and retains the full job output (%#)", async (output) => {
   const seen: LLMRequest[] = []
   const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received summary" }; yield { type: "end" } } }
@@ -91,7 +138,16 @@ it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized
     const jobId = notification.text.match(/job_output\(\{job_id:"([^"]+)"\}\)/)?.[1]
     expect(jobId).toBeDefined()
     expect(notification.text).not.toContain("\uFFFD")
-    expect(await f.execute("job_output", { job_id: jobId })).toEqual(expect.objectContaining({ status: "completed", text: `${output}\n[status: completed]` }))
+    let offset = 0, digest: string | undefined, full = ""
+    for (;;) {
+      const page = await f.execute("job_output", { job_id: jobId, offset_bytes: offset, digest, max_output_bytes: 4096 }) as { text: string; status: string; digest: string; next_offset_bytes: number; truncated: boolean }
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
+      expect(page.status).toBe("completed")
+      full += page.text; digest = page.digest
+      if (!page.truncated) break
+      expect(page.next_offset_bytes).toBeGreaterThan(offset); offset = page.next_offset_bytes
+    }
+    expect(full).toBe(output)
   } finally { await f.close() }
 })
 

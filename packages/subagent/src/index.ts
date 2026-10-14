@@ -24,6 +24,8 @@ export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
 export { createNotificationDrain, ParentNotificationStoppedError, isParentNotificationStopped } from "./task-notification.ts"
+export { SHIPPING_REPORT_POLICY } from "./report-policy.ts"
+export type { ReportPolicy } from "./report-policy.ts"
 export type { ParentInputAdmission, NotificationDrainOptions } from "./task-notification.ts"
 
 import type { PluginContext } from "@i-harness/core-plugin"
@@ -42,12 +44,14 @@ import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./t
 import type { SubagentToolDeps } from "./tools.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
-import { emitRestoredJobTransitions, restoreState, wireSubagentPersistence } from "./persist.ts"
+import { emitRestoredJobTransitions, restoreState, snapshotState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
+import type { ReportPolicy } from "./report-policy.ts"
 
 export interface RegisterSubagentOptions extends RoleModelHost {
+  reportPolicy?: ReportPolicy
   /** The host mounted the generic shell tool; expose it to built-in workers. */
   includeAgentShell?: boolean
   includeNativeContext?: boolean
@@ -86,6 +90,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
+  /** Strict barrier over the existing complete job/table state document. */
+  retainResults(): Promise<"durable" | "memory">
   roles: RoleRegistry
   jobs: JobRegistry
   table: AgentTable
@@ -156,6 +162,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // triggers an immediate delivery attempt.
   let notifDrainHook: (() => void) | undefined
   const tasks = createTaskRegistry({
+    reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
     maxConcurrency: opts.maxConcurrency,
     onTerminalized: () => { notifDrainHook?.() },
@@ -164,6 +171,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    reportPolicy: opts.reportPolicy,
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
@@ -209,6 +217,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // was cancelled (R-D3 opencode rule). One drain instance per mount; it is
   // also awaited at the cold-restore chain tail (below).
   const notifDrain = createNotificationDrain({
+    reportPolicy: opts.reportPolicy,
     tasks,
     admit: opts.parentNotify,
     isSessionCancelled: (sessionId) => isSessionCancelledChain(tasks, sessionId),
@@ -236,6 +245,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks, notifDrain)
   }
   return {
+    async retainResults() {
+      if (!opts.persist) return "memory"
+      if (!opts.persist.coordinator.putDocumentStrict) throw new Error("Strict result retention is unavailable")
+      await opts.persist.coordinator.putDocumentStrict(opts.persist.stateId, snapshotState({ jobs, table, roles }))
+      return "durable"
+    },
     roles, jobs, table, agents,
     ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
     ready, tasks,

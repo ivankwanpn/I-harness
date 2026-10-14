@@ -404,8 +404,8 @@ describe("ensureResidentAgent", () => {
     // selection and the reset walk read those numbers.
     for (let i = 0; i < 12; i++) {
       append(entry.session, { type: "turn/start" })
-      append(entry.session, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
-      append(entry.session, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(entry.session, { type: "user/message", text: `q${i} ` + "filler ".repeat(600) })
+      append(entry.session, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(600) })
       append(entry.session, { type: "turn/end" })
     }
     append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
@@ -421,7 +421,11 @@ describe("ensureResidentAgent", () => {
         yield { type: "end" }
       },
     }
-    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 2_000 }
+    // The current independent summary output default is 4096. The old 2000-token
+    // fixture exhausted the shared eight-call budget before retaining a usable
+    // checkpoint. Give directives/source/output coherent headroom while keeping
+    // real over-window pressure by increasing restored history with the window.
+    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 16_000 }
 
     await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
 
@@ -431,6 +435,9 @@ describe("ensureResidentAgent", () => {
     expect(entry.finalText).toBe("rebuilt done")
     // …and it was the rebuilt child's OWN compactor that rescued it
     expect(requests.length).toBeGreaterThan(1)
+    expect(entry.session.events.filter(e => e.type === "user/message" && e.text.startsWith("q"))).toHaveLength(12)
+    expect(entry.session.events.some(e => e.type === "compaction/summary")).toBe(true)
+    expect(requests.some(request => request.maxOutputTokens === 4096)).toBe(true)
   }, 15_000)
 
   // M73, the declared arm's window precedence in the OTHER direction: a binding

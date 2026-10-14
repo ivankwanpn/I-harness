@@ -44,6 +44,8 @@ export function createListTool(deps: SubagentToolDeps): Tool {
             ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
             ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
             ...(e.error !== undefined ? { error: e.error } : {}),
+            ...(e.retention !== undefined ? { retention: e.retention } : {}),
+            ...(e.retentionError !== undefined ? { retention_error: e.retentionError } : {}),
           }
         })
       return { agents }
@@ -84,7 +86,11 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
       }) : undefined
       exec.abortSignal?.throwIfAborted()
       const view = read()
-      return { text: `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status,
+      const entry = [...deps.table.entries().values()].find(row => row.jobId === args.job_id)
+      return { text: deps.reportPolicy ? view.output : `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status, ...(deps.reportPolicy ? { job_id: args.job_id,
+        ...(entry?.retention !== undefined ? { retention: entry.retention } : {}),
+        ...(entry?.retentionError !== undefined ? { retention_error: entry.retentionError } : {}),
+      } : {}),
         ...(reason === "user-steer" && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
     },
   }

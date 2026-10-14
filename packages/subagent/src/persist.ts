@@ -9,6 +9,8 @@ export interface DurableAgentEntry {
   status: ChildStatus
   finalText?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   sessionId?: string
@@ -86,6 +88,8 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     status: e.status,
     ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
     ...(e.error !== undefined ? { error: e.error } : {}),
+    ...(e.retention !== undefined ? { retention: e.retention } : {}),
+    ...(e.retentionError !== undefined ? { retentionError: e.retentionError } : {}),
     mailbox: e.mailbox,
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
@@ -129,6 +133,8 @@ export function restoreState(
       controller: new AbortController(),
       ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
       ...(wasRunning || entry.error !== undefined ? { error: wasRunning ? "interrupted by resume" : entry.error } : {}),
+      ...(entry.retention !== undefined ? { retention: entry.retention } : {}),
+      ...(entry.retentionError !== undefined ? { retentionError: entry.retentionError } : {}),
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),

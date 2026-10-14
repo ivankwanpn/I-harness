@@ -52,6 +52,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     flush: mutations.flush,
     close: lifecycle.close,
     putDocument: documents.putDocument,
+    putDocumentStrict: documents.putDocumentStrict,
     getDocument: documents.getDocument,
     ownerOf: ownership.ownerOf,
     adoptOwnership: mutations.adoptOwnership,

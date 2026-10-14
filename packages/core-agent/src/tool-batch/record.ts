@@ -16,10 +16,12 @@ export function createBatchRecords(ctx: PluginContext, session: Session, tools: 
       if (slot === undefined) break
       const call = batch[committed]!
       if ("synthetic" in slot) {
-        // M51 B3: an abort fill whose output is already decided — append only,
+        // M51 B3: an abort fill whose outcome is already decided — retain/project
+        // through the owned output seam before append, without executing again,
         // so the head-of-line cursor advances in model order without running
         // finalize (tools/post-execute) or agent/post-tool.
-        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: slot.output, isError: true })
+        const output = await ctx.cascade("tools/project-synthetic-result", { name: slot.name, output: slot.output }, async () => slot.output)
+        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output, isError: true })
         committed += 1
         continue
       }

@@ -46,7 +46,7 @@ import { createScheduleTools } from "@i-harness/schedule/tools"
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, SHIPPING_REPORT_POLICY, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -858,6 +858,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
             : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason, decision.sufficientMode) }
         }
   const fsToolsDeps = {
+    readPolicy: { maxOutputBytes: 64000 },
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
       ? { rewind: { take: (path: string, before: Uint8Array | null) => rewindRecorder.take(path, before) } }
@@ -876,7 +877,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
   // (spill outermost so it sees the largest unprocessed output).
-  if (opts.outputSpill) ctx.mount(createOutputSpillGuard(ctx, opts.outputSpill))
+  if (opts.outputSpill) ctx.mount(createOutputSpillGuard(ctx, { ...opts.outputSpill, boundSyntheticFailures: true }))
   if (opts.contextOutput) installNativeContextOutput(ctx,{service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
     ...(opts.coordinator&&opts.sessionId?{inheritedSessionFor:async(id:string)=>{
       const {meta}=await opts.coordinator!.profile(id)
@@ -1209,6 +1210,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const subagent = registerSubagent(ctx, tools, {
+      reportPolicy: SHIPPING_REPORT_POLICY,
       codeMode, codeModeFactory,
       ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
       includeAgentShell: agentShell !== undefined,
@@ -1397,6 +1399,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session,
         parentRegistry: tools,
         subagents: {
+          reportPolicy: SHIPPING_REPORT_POLICY,
+          retainResults: subagent.retainResults,
           codeMode, codeModeFactory,
           ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
           table: subagent.table,

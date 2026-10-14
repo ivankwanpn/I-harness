@@ -45,7 +45,9 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
       // here would report a child woken a moment ago as one that has been
       // running since it was spawned — the exact wrong answer W11's signal
       // exists to prevent.
-      deps.table.update(entry.path, entry, { error: undefined, finalText: undefined, status: "running", startedAt: Date.now(), controller: new AbortController() })
+      deps.table.update(entry.path, entry, { error: undefined, finalText: undefined, status: "running", startedAt: Date.now(), controller: new AbortController(),
+        ...(entry.retention !== undefined || entry.retentionError !== undefined ? { retention: undefined, retentionError: undefined } : {}),
+      })
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
         const result = await agent.followup(ev.message, entry.controller.signal)

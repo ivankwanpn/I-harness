@@ -55,11 +55,12 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
             // would bury it one level deeper). Only spread when the raw output
             // is an object; a non-object output is replaced as-is.
             const base = result && typeof result === "object" ? result : {}
-            return {
+            const output = {
               ...base,
               error: `tool call timed out after ${timeoutMs}ms`,
               code: TOOL_TIMEOUT,
             }
+            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
           }
           return result
         } catch (err) {
@@ -67,7 +68,8 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
           // surface a structured TOOL_TIMEOUT when OUR timer fired; otherwise
           // the rejection aborts the whole agent run with no marker.
           if (timedOut) {
-            return { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
+            const output = { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
+            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
           }
           throw err
         } finally {

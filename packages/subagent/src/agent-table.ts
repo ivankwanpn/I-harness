@@ -9,6 +9,8 @@ export interface ChildAgentEntry {
   controller: AbortController
   finalText?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   unmount?: () => void
