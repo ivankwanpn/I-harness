@@ -24,7 +24,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { append, subscribe, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
 import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
@@ -271,6 +271,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const active = new Set<Promise<void>>()
   const closing = new Map<string, Promise<void>>()
   const telemetry = opts.telemetry
+  function failureDiagnostics(error: unknown) {
+    const modelFailure = modelFailureFacts(error)
+    return { error: modelFailure?.message ?? "Session execution failed.", ...(modelFailure ? { modelFailure } : {}) }
+  }
   let closed = false
   let currentSandbox = opts.sandbox
   const cancelledParents = new Set<string>()
@@ -803,7 +807,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (!closed) telemetry?.emit({
             type: "session/error",
             ts: Date.now(),
-            data: { sessionId, error: error instanceof Error ? error.message : String(error) },
+            data: { sessionId, ...failureDiagnostics(error) },
           })
           settleError(error)
           return
@@ -829,7 +833,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
               telemetry?.emit({
                 type: "session/error",
                 ts: Date.now(),
-                data: { sessionId, error: error instanceof Error ? error.message : String(error) },
+                data: { sessionId, ...failureDiagnostics(error) },
               })
             }
             settleError(error)
@@ -840,7 +844,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         telemetry?.emit({
           type: "session/error",
           ts: Date.now(),
-          data: { sessionId, error: error instanceof Error ? error.message : String(error) },
+          data: { sessionId, ...failureDiagnostics(error) },
         })
         settleError(error)
       })
