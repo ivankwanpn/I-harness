@@ -1,3 +1,4 @@
+import { stringifyJsonData } from "@i-harness/core-session"
 import type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness/token-meter"
 import type { LLMRequest, LLMStreamEvent } from "../index.ts"
 import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
@@ -16,7 +17,7 @@ export function createPreparedPayload<T>(options: {
   const original = snapshotModelData(options.body)
   const input = freezePreparedFacts(options.input)
   function derive(body: T, request = options.request): PreparedModelRequest {
-    const serialized = JSON.stringify(body)
+    const serialized = stringifyJsonData(body)!
     const output = options.output(body, request)
     validateOutputCap(output.effectiveCap, output.minimumCap)
     const measurement = freezePreparedFacts({

@@ -2,11 +2,12 @@ import { createHash } from "node:crypto"
 import type { ImmutableJson } from "../contracts/snapshot.ts"
 import type { Captured } from "../contracts/snapshot.ts"
 import type { ConversationProjection } from "@i-harness/core-session"
-import { canonicalData, captureData } from "./data.ts"
+import { captureData } from "./data.ts"
+import { canonicalJsonData } from "@i-harness/core-session"
 
 /** Versioned, domain-separated digests, never archive-length certificates. */
 export function contextRevision(domain: string, value: unknown): string {
-  return createHash("sha256").update(`i-harness:context:v1:${domain}\0`).update(canonicalData(captureData(value) as ImmutableJson)).digest("hex")
+  return createHash("sha256").update(`i-harness:context:v1:${domain}\0`).update(canonicalJsonData(captureData(value) as ImmutableJson)).digest("hex")
 }
 
 /** Input/source/acceptance identity excludes lifecycle and effect observations. */

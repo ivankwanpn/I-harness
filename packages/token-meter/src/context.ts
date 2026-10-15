@@ -1,3 +1,4 @@
+import { stringifyJsonData } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
 import type { LLMMessage } from "@i-harness/core-session"
 import { estimateContent } from "./estimate.ts"
@@ -9,7 +10,7 @@ export { normalizeInputUsage } from "./calibration-usage.ts"
 
 interface ContextRequest { messages: LLMMessage[]; systemPrompt: string; tools: unknown[]; model?: string; reasoningEffort?: string }
 type ContextEstimate = { tokens: number; source: "provider" | "estimate" }
-const fingerprint = (value: unknown): string => createHash("sha256").update(JSON.stringify(value)).digest("hex")
+const fingerprint = (value: unknown): string => createHash("sha256").update(stringifyJsonData(value)!).digest("hex")
 const shape = (request: ContextRequest): string => fingerprint({ system: request.systemPrompt, tools: request.tools, model: request.model, reasoningEffort: request.reasoningEffort })
 
 /** One completed-request anchor, containing hashes only. No prompt body cache.

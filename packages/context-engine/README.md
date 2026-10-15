@@ -19,8 +19,11 @@ Only newly owned nodes are frozen, and rendering yields fresh adapter containers
 Archive cursors are observations, separate from model-visible semantic identity,
 protection, branch and rewrite lineage. Digests are SHA-256 over a versioned,
 domain-separated canonical encoding; record keys sort and array/native order is
-preserved. Effect-only evidence belongs to protection. Identities are replay
-facts, never scheduling, authority, lease or result-promotion capabilities.
+preserved. Effect-only evidence belongs to protection. Pending/unknown call
+evidence remains protected even in a structurally
+closed exchange, and its reported state participates in protection identity.
+Identities are replay facts, never scheduling, authority, lease or
+result-promotion capabilities.
 
 Reads currently rewalk and validate history synchronously. There is no mutable
 length cache or incremental performance claim. Persisted budget identities refer

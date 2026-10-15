@@ -2,6 +2,7 @@ import type { ConversationSourceRef } from "./types.ts"
 import type { SessionEvent } from "../events/types.ts"
 import { imageDescriptor, type ImageInput } from "../images.ts"
 import { renderPruneSubstitute, type PruneRecord } from "../projection/pruning.ts"
+import { stringifyJsonData } from "../serialization/json-data.ts"
 
 export type ConversationPayloadCapture = (value: unknown, source: ConversationSourceRef) => unknown
 
@@ -37,13 +38,13 @@ export function projectToolResult(event: Extract<SessionEvent, { type: "tool/res
 
 /** Images travel in a companion message, never as base64 in result text. */
 function toolResultText(output: unknown): string {
-  if (output === null || typeof output !== "object" || Array.isArray(output)) return JSON.stringify(output) ?? String(output)
+  if (output === null || typeof output !== "object" || Array.isArray(output)) return stringifyJsonData(output) ?? String(output)
   const record = output as Record<string, unknown>
   const images = record["images"]
-  if (!Array.isArray(images) || images.length === 0) return JSON.stringify(output) ?? String(output)
+  if (!Array.isArray(images) || images.length === 0) return stringifyJsonData(output) ?? String(output)
   const { images: _images, ...rest } = record
   const hasRest = Object.keys(rest).length > 0
-  const restText = hasRest ? (JSON.stringify(rest) ?? String(rest)) : ""
+  const restText = hasRest ? (stringifyJsonData(rest) ?? String(rest)) : ""
   const descriptor = imageDescriptor(images as ImageInput[])
   return hasRest ? restText + descriptor : descriptor.trimStart()
 }

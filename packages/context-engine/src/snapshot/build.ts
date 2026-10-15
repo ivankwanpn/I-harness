@@ -18,11 +18,12 @@ function captureConversation(session: Session, ownerSessionId: string) {
     const state = readConversationState(session, projection)
     if (state.kind === "ambiguous") return unsupported("protection", state.sourceIds, "CONTEXT_STATE_AMBIGUOUS")
     const conversation = captureData(projection), protection = contextProtection(state.state)
+    const effects = state.state.effects ?? []
     // Empty audit fragments carry no accepted model input. Their unresolved
     // effects remain evidence in protection, never semantic message identity.
     const coordinates: ContextCoordinates = Object.freeze({ ownerSessionId, archive: Object.freeze(state.state.archive),
       semanticRevision: semanticContextRevision(ownerSessionId, conversation),
-      protectionRevision: contextRevision("protection", [ownerSessionId, protection, state.state.pending, state.state.turnSourceId ?? null]),
+      protectionRevision: contextRevision("protection", [ownerSessionId, protection, state.state.pending, state.state.turnSourceId ?? null, ...(effects.length ? [{ effects }] : [])]),
       branchId: contextRevision("branch", [ownerSessionId, state.state.branch]),
       contextEpoch: contextRevision("epoch", [ownerSessionId, state.state.rewrites]),
     })

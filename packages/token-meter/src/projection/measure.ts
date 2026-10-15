@@ -1,3 +1,4 @@
+import { stringifyJsonData } from "@i-harness/core-session"
 import { projectionFingerprint } from "./fingerprint.ts"
 import { priceProjectedText } from "./pricing.ts"
 import type { ComponentFacts, InputComponent, ProjectedInputFacts } from "./types.ts"
@@ -17,7 +18,7 @@ export class ProjectionCounter {
   text(category: InputComponent, value: unknown): void {
     if (value === undefined)
       return
-    const text = typeof value === "string" ? value : JSON.stringify(value) ?? ""
+    const text = typeof value === "string" ? value : stringifyJsonData(value) ?? ""
     const facts = this.components[category]
     facts.textUtf8Bytes += Buffer.byteLength(text)
     facts.blockCount++
@@ -26,14 +27,14 @@ export class ProjectionCounter {
   structured(category: InputComponent, value: unknown): void {
     if (value === undefined)
       return
-    const text = JSON.stringify(value) ?? ""
+    const text = stringifyJsonData(value) ?? ""
     const facts = this.components[category]
     facts.structuredBytes += Buffer.byteLength(text)
     facts.blockCount++
     facts.heuristicTokens += priceProjectedText(text) + 4
   }
   opaque(value: unknown): void {
-    const bytes = value instanceof Uint8Array ? value.byteLength : Buffer.byteLength(typeof value === "string" ? value : JSON.stringify(value) ?? "")
+    const bytes = value instanceof Uint8Array ? value.byteLength : Buffer.byteLength(typeof value === "string" ? value : stringifyJsonData(value) ?? "")
     const facts = this.components.opaqueContinuation
     facts.binaryBytes += bytes
     facts.blockCount++
@@ -61,7 +62,7 @@ export class ProjectionCounter {
   metadata(value: Record<string, unknown>): void {
     for (const key of ['cache_control', 'cachePoint', 'prompt_cache_breakpoint', 'prompt_cache_key', 'prompt_cache_retention', 'prompt_cache_options', 'cachedContent'])
       if (value[key] !== undefined)
-        this.cacheMetadataBytes += Buffer.byteLength(JSON.stringify(value[key]))
+        this.cacheMetadataBytes += Buffer.byteLength(stringifyJsonData(value[key])!)
     for (const key of ['signature', 'thoughtSignature'])
       if (typeof value[key] === "string") {
         this.signatureBytes += Buffer.byteLength(value[key])

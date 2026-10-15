@@ -5,21 +5,30 @@ import { prepareModelRequest } from "./fallback.ts"
 /** Copy data without cloning abort signals, callbacks, transport functions or
  * the original affinity-scope identity. Buffer copies remain SDK bytes. */
 export function snapshotModelData<T>(value: T, exclude: readonly string[] = []): T {
-  if (value instanceof Date)
-    return new Date(value.getTime()) as T
-  if (value instanceof Uint8Array)
-    return Buffer.from(value) as T
-  if (Array.isArray(value))
-    return value.map(item => snapshotModelData(item)) as T
-  if (value && typeof value === "object") {
-    if (value instanceof AbortSignal)
-      return value
-    return Object.fromEntries(Object.keys(value).filter(key => !exclude.includes(key)).map(key => {
-      const item = (value as Record<string, unknown>)[key]
-      return [key, key === "requestScope" ? item : snapshotModelData(item)]
-    })) as T
+  type Work = { value: unknown; put: (value: unknown) => void; exclude?: readonly string[] } | { source: object; key: string; put: (value: unknown) => void } | { leave: object }
+  let result: unknown
+  const seen = new WeakMap<object, unknown>(), work: Work[] = [{ value, exclude, put: item => { result = item } }]
+  while (work.length) {
+    const task = work.pop()!
+    if ("leave" in task) { seen.delete(task.leave); continue }
+    const item = "source" in task ? (task.source as Record<string, unknown>)[task.key] : task.value
+    if ("key" in task && task.key === "requestScope") { task.put(item); continue }
+    if (item instanceof Date) { task.put(new Date(item.getTime())); continue }
+    if (item instanceof Uint8Array) { task.put(Buffer.from(item)); continue }
+    if (!item || typeof item !== "object" || item instanceof AbortSignal) { task.put(item); continue }
+    const previous = seen.get(item)
+    if (previous) { task.put(previous); continue }
+    const array = Array.isArray(item), copy: unknown[] | Record<string, unknown> = array ? new Array(item.length) : {}
+    seen.set(item, copy); task.put(copy)
+    work.push({ leave: item })
+    const keys = array ? Array.from({ length: item.length }, (_, index) => String(index)).filter(key => key in item)
+      : Object.keys(item).filter(key => !("exclude" in task && task.exclude?.includes(key)))
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index]!
+      work.push({ source: item, key, put: child => Object.defineProperty(copy, key, { value: child, writable: true, enumerable: true, configurable: true }) })
+    }
   }
-  return value
+  return result as T
 }
 export function preparedControls(request: PreparedStreamControl, control?: PreparedStreamControl): PreparedStreamControl {
   return {

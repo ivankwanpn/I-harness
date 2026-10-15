@@ -1,4 +1,4 @@
-import type { Captured, ImmutableJson } from "../contracts/snapshot.ts"
+import type { Captured } from "../contracts/snapshot.ts"
 
 export class UnsupportedData extends Error {
   constructor() { super("CONTEXT_SNAPSHOT_UNSUPPORTED") }
@@ -56,27 +56,4 @@ export function captureData<T>(input: T): Captured<T> {
   }
   // The descriptor walk establishes this narrowing, including every unknown leaf.
   return result as Captured<T>
-}
-
-/** Canonical encoding of already owned data only; array/native order is exact. */
-export function canonicalData(input: ImmutableJson): string {
-  const output: string[] = []
-  type Work = { data: ImmutableJson } | { text: string }
-  const work: Work[] = [{ data: input }]
-  while (work.length) {
-    const task = work.pop()!
-    if ("text" in task) { output.push(task.text); continue }
-    const value = task.data
-    if (value === null || typeof value !== "object") { output.push(JSON.stringify(value)); continue }
-    const array = Array.isArray(value), keys = array ? value.map((_, i) => String(i)) : Object.keys(value).sort()
-    output.push(array ? "[" : "{")
-    work.push({ text: array ? "]" : "}" })
-    for (let index = keys.length - 1; index >= 0; index--) {
-      const key = keys[index]!
-      work.push({ data: (value as { readonly [key: string]: ImmutableJson })[key]! })
-      if (!array) work.push({ text: `${JSON.stringify(key)}:` })
-      if (index > 0) work.push({ text: "," })
-    }
-  }
-  return output.join("")
 }

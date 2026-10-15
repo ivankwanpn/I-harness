@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
-import { append, renderConversation, deriveProjectionRewrite } from "@i-harness/core-session"
+import { append, renderConversation, deriveProjectionRewrite, copyConversationData, canonicalJsonData } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
 import { randomUUID } from "node:crypto"
 import { assertMessagesFromLog, type LLMRequest } from "@i-harness/llm-seam"
@@ -20,14 +20,6 @@ export const hookRuntime = (ctx: PluginContext): {
  * order is irrelevant; message/array order and native strings remain exact.
  * This is a cache-continuity observation, not the request's context identity.
  */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
-  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, entry]) => entry !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`
-}
 export function startStep(deps: Pick<AgentDeps, "session" | "stepInputs">, lifecycle: TurnLifecycle): number {
   // R-A1: steer-tier inputs arrive at the provider boundary — claimed
   // before step/start so deriveMessages below already includes them.
@@ -74,7 +66,7 @@ export function createStepInput(deps: AgentDeps & AgentConfig, _context: AgentCo
       retryOutput: "discard",
       ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
       messages,
-      tools: surface.tools.map(tool => ({ ...tool, inputSchema: structuredClone(tool.inputSchema) })),
+      tools: surface.tools.map(tool => ({ ...tool, inputSchema: copyConversationData(tool.inputSchema) })),
       systemPrompt: surface.systemPrompt,
       ...(deps.sessionId === undefined ? {} : { promptCache: { key: `ih_${createHash("sha256").update(deps.sessionId).digest("hex").slice(0, 48)}` } }),
       // Preserve the host ceiling until the adapter has prepared actual input.
@@ -111,7 +103,7 @@ export function createStepInput(deps: AgentDeps & AgentConfig, _context: AgentCo
     // bytes themselves (the effect), so the two are read together. `shared` is
     // the number of leading messages that are byte-identical, and the previous
     // request is "still a prefix" only when every one of its messages is.
-    const fingerprints = messages.map(canonicalJson)
+    const fingerprints = messages.map(canonicalJsonData)
     let shared = 0
     if (prevFingerprints !== undefined) {
       const limit = Math.min(fingerprints.length, prevFingerprints.length)

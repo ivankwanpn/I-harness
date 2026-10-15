@@ -1,5 +1,5 @@
 import type { Session } from "../events/types.ts"
-import type { ConversationProjection } from "./types.ts"
+import type { ConversationProjection, ConversationCall } from "./types.ts"
 import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"
 
@@ -9,6 +9,7 @@ export interface ConversationState {
   rewrites: { sourceId: string; type: string }[]
   itemIds: string[]; sourceIds: string[]; pendingInputIds: string[]; unsettledDelegationIds: string[]
   pending: { inputId: string; state: "admitted" | "promoted"; sourceIds: string[] }[]
+  effects?: { itemId: string; callId: string; outcome: ConversationCall["outcome"]; sourceIds: string[] }[]
   turnSourceId?: string
 }
 export type ConversationStateRead = { kind: "available"; state: ConversationState } | { kind: "ambiguous"; sourceIds: readonly string[] }
@@ -47,13 +48,16 @@ export function readConversationState(session: Session, projection: Conversation
     else if (event.type === "subagent/end" && event.outcome !== "recovery-required") delegations.delete(event.taskId)
   }
   for (const id of consumed) pending.delete(id)
-  const protectedItems = projection.items.filter(item => item.provenance.scope === "session" || item.kind === "input" && turn !== undefined && item.sources.some(source => source.eventIndex > turn!) || item.exchange && item.exchange.state !== "closed")
+  const effects = projection.items.flatMap(item => (item.exchange?.calls ?? []).filter(call => call.outcome === "unknown" || call.outcome === "pending")
+    .map(call => ({ itemId: item.id, callId: call.callId, outcome: call.outcome, sourceIds: [call.call, call.dispatch, call.result].flatMap(source => source ? [source.id] : []) })))
+  const unsettledItems = new Set(effects.map(effect => effect.itemId))
+  const protectedItems = projection.items.filter(item => item.provenance.scope === "session" || item.kind === "input" && turn !== undefined && item.sources.some(source => source.eventIndex > turn!) || item.exchange && item.exchange.state !== "closed" || unsettledItems.has(item.id))
   const itemIds = protectedItems.map(item => item.id)
   const sourceIds = [...new Set([...protectedItems.flatMap(item => [...item.sources, ...item.provenance.evidence].map(source => source.id)), ...[...pending.values()].flatMap(input => input.sourceIds), ...delegations.values()])]
   const lastSeq = session.events.at(-1)?.seq
   return { kind: "available", state: {
     archive: { eventCount: session.events.length, ...(lastSeq === undefined ? {} : { lastSeq }) }, branch, rewrites,
-    itemIds, sourceIds, pendingInputIds: [...pending.keys()], unsettledDelegationIds: [...delegations.keys()], pending: [...pending.values()],
+    itemIds, sourceIds, pendingInputIds: [...pending.keys()], unsettledDelegationIds: [...delegations.keys()], pending: [...pending.values()], effects,
     ...(turn === undefined ? {} : { turnSourceId: sources.ref(turn, "event").id }),
   } }
 }

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
-import { deriveMessages, renderConversation } from "@i-harness/core-session"
+import { deriveMessages, renderConversation, stringifyJsonData } from "@i-harness/core-session"
 import { createHash, randomUUID } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
@@ -393,8 +393,8 @@ export function assertMessagesFromLog(messages: LLMMessage[], source: Session | 
   // A captured projection is a source-owned view of the log. Revalidating its
   // renderer must not fold a newer live archive into this request in place.
   const logged = "events" in source ? deriveMessages(source) : renderConversation(source)
-  const msgJson = JSON.stringify(messages)
-  const logJson = JSON.stringify(logged)
+  const msgJson = stringifyJsonData(messages)
+  const logJson = stringifyJsonData(logged)
   if (msgJson !== logJson) throw new Error("model-visible messages must derive from the session log (audit F01-3)")
 }
 

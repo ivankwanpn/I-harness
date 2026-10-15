@@ -1,3 +1,4 @@
+import { stringifyJsonData } from "@i-harness/core-session"
 import { ProjectionCounter } from "@i-harness/token-meter"
 import type { LLMRequest, ModelClient } from "../index.ts"
 import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
@@ -33,7 +34,7 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
       measurement: freezePreparedFacts({
         projectionId: input.inputFingerprint, input,
         output: { capSupport: "unknown" as const, configuredCap: cap, minimumCap: 1, source: "request" as const },
-        packet: { sizeKind: "neutral-envelope-estimate" as const, sdkCommandBytesEstimate: Buffer.byteLength(JSON.stringify({ system: captured.systemPrompt, tools: captured.tools, messages: captured.messages })), inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: 0, signatureBytes: 0 }
+        packet: { sizeKind: "neutral-envelope-estimate" as const, sdkCommandBytesEstimate: Buffer.byteLength(stringifyJsonData({ system: captured.systemPrompt, tools: captured.tools, messages: captured.messages })!), inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: 0, signatureBytes: 0 }
       }),
       withOutputCap: derive,
       stream: (control?: PreparedStreamControl) => {

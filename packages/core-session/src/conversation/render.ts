@@ -6,10 +6,12 @@ type ReadonlyMessage = ReadonlyData<LLMMessage>
  * Non-plain unknown values remain opaque; R1C owns validated immutable capture.
  */
 export function copyConversationMessage(message: ReadonlyMessage): LLMMessage {
-  return copyContainers(message) as LLMMessage
+  return copyConversationData(message) as LLMMessage
 }
 
-function copyContainers<T>(input: T): T {
+/** Fresh containers for validated conversation/request data. Legacy non-plain
+ * values remain opaque, as on the renderer's original compatibility path. */
+export function copyConversationData<T>(input: T): T {
   const seen = new WeakMap<object, unknown>()
   let result: unknown
   const stack: { value: unknown; put: (value: unknown) => void }[] = [{ value: input, put: value => { result = value } }]
