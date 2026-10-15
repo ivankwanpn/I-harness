@@ -18,14 +18,26 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     return session.events.flatMap(event=>event.type==='context/result-ref'&&!cuts.some(cut=>event.seq!>=cut.cutFrom&&event.seq!<cut.markerSeq)?[event.ref]:[])
   }})
   let runtime=await makeRuntime();await runtime.contextOutput.configure({enabled:true})
-  const requests:LLMRequest[]=[];let first=true,childSession:Session|undefined
+  const requests:LLMRequest[]=[];let first=true,childSession:Session|undefined,waits=0,effects=0
   const model:ModelClient={async *stream(request){requests.push(structuredClone(request))
-    if(first){first=false;yield{type:'tool_call',call:mode==='off'?{name:'fixture_long',args:{}}:{name:'code_exec',args:{code:'await tools.fixture_long({});text("c".repeat(20000)+"EMITTED_MARKER"+"d".repeat(20000));',max_output_tokens:16}}}}
-    else yield{type:'text/chunk',text:'Child finished.'}
+    // A zero observation window makes the valid asynchronous return explicit.
+    // Continue the same owned cell instead of assuming the first read settled.
+    if(first){first=false;yield{type:'tool_call',call:mode==='off'?{name:'fixture_long',args:{}}:{name:'code_exec',args:{code:'await tools.fixture_long({});text("c".repeat(20000)+"EMITTED_MARKER"+"d".repeat(20000));',yield_time_ms:0,max_output_tokens:16}}}}
+    else {
+      const latest=[...request.messages].reverse().find(message=>message.role==='tool')
+      const observation=mode==='only'&&typeof latest?.content==='string'?JSON.parse(latest.content) as {cell_id?:string;status?:string;error?:string}:undefined
+      if(observation?.cell_id){
+        expect(['running','completed'],observation.error).toContain(observation.status)
+        if(observation.status==='running'){
+          expect(++waits).toBeLessThanOrEqual(8)
+          yield{type:'tool_call',call:{name:'code_wait',args:{cell_id:observation.cell_id,yield_time_ms:1000,max_tokens:16}}}
+        }else yield{type:'text/chunk',text:'Child finished.'}
+      }else yield{type:'text/chunk',text:'Child finished.'}
+    }
     yield{type:'end'}
   }}
   const summarizer:ModelClient={async *stream(){yield{type:'text/chunk',text:'The child completed its inspection. Native references are needed to continue.'};yield{type:'end'}}}
-  const options={workspace:root,sessionId:'parent',model,sandbox:'danger-full-access' as const,approveAll:true,codeMode:{mode},additionalTools:[{name:'fixture_long',description:'long fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=> 'a'.repeat(20000)+'DIRECT_MARKER'+'b'.repeat(20000)}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
+  const options={workspace:root,sessionId:'parent',model,sandbox:'danger-full-access' as const,approveAll:true,codeMode:{mode},additionalTools:[{name:'fixture_long',description:'long fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=>{effects++;return 'a'.repeat(20000)+'DIRECT_MARKER'+'b'.repeat(20000)}}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
   let assembly=await createSessionAssembly({...options,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
   const observe=()=>assembly.ctx.on('agent/post-tool',payload=>{const event=payload as {name:string;session:Session};if(event.name==='fixture_long'||event.name==='code_exec')childSession=event.session})
   observe()
@@ -36,7 +48,19 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     const path=(spawned.output as {agent_path:string}).agent_path
     expect(childSession).toBeDefined()
     const refs=childSession!.events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])
-    expect(refs).toHaveLength(mode==='off'?1:2)
+    const observed=childSession!.events.filter(event=>event.type==='tool/result'&&event.name==='code_exec')
+    expect(refs,JSON.stringify(observed)).toHaveLength(mode==='off'?1:2)
+    expect(effects).toBe(1)
+    if(mode==='only'){
+      expect(observed).toMatchObject([{output:{status:'running'}}])
+      const calls=childSession!.events.filter(event=>event.type==='tool/call'&&event.name==='code_exec')
+      expect(calls).toHaveLength(1)
+      const call=calls[0];if(call?.type!=='tool/call')throw new Error('Missing code execution call')
+      expect(childSession!.events.filter(event=>event.type==='tool/dispatch'&&event.callId===call.callId)).toHaveLength(1)
+      const completed=childSession!.events.filter(event=>event.type==='tool/result'&&event.name==='code_wait')
+      expect(completed.at(-1)).toMatchObject({output:{status:'completed'}})
+      expect(waits).toBeGreaterThan(0);expect(waits).toBeLessThanOrEqual(8)
+    }
     const childId=refs[0]!.sessionId
     const assertRecovery=()=>{for(const ref of refs)expect(requests.at(-1)!.systemPrompt).toContain(ref.id);expect(requests.at(-1)!.systemPrompt).not.toContain(parentOnly.id)}
     assertRecovery()
@@ -69,5 +93,6 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     await runtime.inheritFork(childId,fork.sessionId,inherited)
     await runtime.contextOutput.clear('parent');await runtime.contextOutput.clear(childId)
     for(const query of ['DIRECT_MARKER',...(mode==='only'?['EMITTED_MARKER']:[])])expect((await runtime.contextOutput.search({sessionId:fork.sessionId},{query})).hits).toHaveLength(1)
+    expect(effects).toBe(1)
   }finally{await assembly.dispose();await runtime.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },15000)
