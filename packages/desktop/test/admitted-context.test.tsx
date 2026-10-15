@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { append, contextStateFromBudget, createSession, readSessionContextState } from "../../core-session/src/index.ts"
 import { createOwnedBudget } from "../../core-agent/src/agent/budget.ts"
@@ -28,15 +28,23 @@ async function show(state: unknown) {
   return request
 }
 
+function fact(label: string, value: number) {
+  const term = screen.getByText(label, { selector: "dt" })
+  expect(within(term.parentElement!).getByRole("definition").textContent).toBe(new Intl.NumberFormat("en-US").format(value))
+}
+
 it("renders actual projected components, reserve, coverage, and cap support", async () => {
   const { state, snapshot } = await projection()
   const request = await show(state)
-  expect(screen.getByText(`系統提示: ${snapshot.systemTokens}`)).toBeTruthy()
-  expect(screen.getByText(`工具定義: ${snapshot.schemaTokens}`)).toBeTruthy()
+  fact("系統提示", snapshot.systemTokens)
+  fact("工具定義", snapshot.schemaTokens)
   expect(snapshot.reasoningTokens).toBeGreaterThan(0)
-  expect(screen.getByText(`重用推理: ${snapshot.reasoningTokens}`)).toBeTruthy()
+  fact("重用推理", snapshot.reasoningTokens)
   expect(screen.getByText("已準備輸入的估算 · 部分內容成本不確定 · 已包含完整輸入")).toBeTruthy()
-  expect(screen.getByText(`輸出預留: ${new Intl.NumberFormat("en-US").format(snapshot.outputReserve)}`)).toBeTruthy()
+  fact("輸出預留", snapshot.outputReserve)
+  fact("上次估算輸入", snapshot.estimatedInputTokens)
+  fact("安全餘量", snapshot.safetyMargin)
+  fact("剩餘輸入預算", snapshot.remainingInputBudget!)
   expect(request).toHaveBeenCalledTimes(1)
 })
 
@@ -55,7 +63,8 @@ it.each(["accepted", "provider"])("keeps %s facts without a healthy gauge", asyn
   await show(state)
   expect(screen.getByRole("button", { name: "上下文容量" }).textContent).toBe("—")
   expect(screen.queryByRole("progressbar")).toBeNull()
-  expect(screen.getByText(`系統提示: ${snapshot.systemTokens}`)).toBeTruthy()
+  fact("系統提示", snapshot.systemTokens)
+  expect(screen.queryByText("剩餘輸入預算")).toBeNull()
   expect(screen.getByText(kind === "accepted" ? /模型已回覆；下一次請求準備完成後會重新估算容量。/ : /供應商拒絕了目前上下文，需先壓縮或更換模型。/)).toBeTruthy()
 })
 

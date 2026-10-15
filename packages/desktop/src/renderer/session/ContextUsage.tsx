@@ -4,6 +4,7 @@ import { readSessionContextState, type SessionContextState } from "@i-harness/sd
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { listenForegroundEscape } from "../design/foreground-escape.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 import "./ContextUsage.css"
 
 const refreshDelay = 250
@@ -184,12 +185,15 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       </svg>
       <span id={readingId} className="context-usage-reading">{reading}</span>
     </button>
-    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover" style={placement} role="dialog" aria-label={t("上下文容量")}
+    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover" style={{ ...placement, maxHeight: `calc(100vh - ${placement.bottom + 16}px)` }} role="dialog" aria-label={t("上下文容量")}
       onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <strong>{t("估算上下文容量")}</strong>
-      {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || unavailableReason || t("無法取得上下文容量。")}</p><button type="button" disabled={current?.loading} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</button></div> : ready ? <>
-        <p>{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>
+      {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || unavailableReason || t("無法取得上下文容量。")}</p><Button variant="secondary" size="small" loading={current?.loading} loadingLabel={t("正在處理…")} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("刷新狀態")}</Button></div> : ready ? <>
+        <p className="context-usage-capacity">{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>
         <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />
+        {snapshot?.remainingInputBudget !== undefined ? <dl className="context-usage-remaining">
+          <div className="context-usage-fact"><dt>{t("剩餘輸入預算")}</dt><dd>{number(snapshot.remainingInputBudget)}</dd></div>
+        </dl> : null}
         {roleTokens ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>
           {(["user", "assistant", "tool"] as const).map((role) => <div className="context-usage-role" key={role} data-role={role}><span>{t(role === "user" ? "使用者訊息" : role === "assistant" ? "助手訊息" : "工具訊息")}</span><output>{number(roleTokens[role])}</output></div>)}
         </div> : null}
@@ -197,15 +201,18 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       </> : <p>{t("讀取上下文容量中…")}</p>}
       {snapshot ? <div className="context-usage-facts" aria-label={t("已準備的上下文")}>
         <small>{t(sourceLabels[snapshot.estimateSource])} · {t(confidenceLabels[snapshot.confidence])} · {t(coverageLabels[snapshot.coverage])}</small>
-        <div>{t("系統提示")}: {number(snapshot.systemTokens)}</div>
-        <div>{t("工具定義")}: {number(snapshot.schemaTokens)}</div>
-        <div>{t("重用推理")}: {number(snapshot.reasoningTokens)}</div>
-        <div>{t("上次估算輸入")}: {number(snapshot.estimatedInputTokens)}</div>
-        <div>{t("輸出預留")}: {number(snapshot.outputReserve)}</div>
-        <div>{t("輸出上限")}: {t(capLabels[snapshot.capSupport])}{snapshot.effectiveOutputCap === undefined ? "" : ` · ${number(snapshot.effectiveOutputCap)}`}</div>
+        <dl className="context-usage-fact-group">
+          <div className="context-usage-fact"><dt>{t("系統提示")}</dt><dd>{number(snapshot.systemTokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("工具定義")}</dt><dd>{number(snapshot.schemaTokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("重用推理")}</dt><dd>{number(snapshot.reasoningTokens)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("上次估算輸入")}</dt><dd>{number(snapshot.estimatedInputTokens)}</dd></div>
+        </dl>
+        <dl className="context-usage-fact-group">
+          <div className="context-usage-fact"><dt>{t("輸出預留")}</dt><dd>{number(snapshot.outputReserve)}</dd></div>
+          <div className="context-usage-fact"><dt>{t("輸出上限")}</dt><dd>{t(capLabels[snapshot.capSupport])}{snapshot.effectiveOutputCap === undefined ? "" : ` · ${number(snapshot.effectiveOutputCap)}`}</dd></div>
+          <div className="context-usage-fact"><dt>{t("安全餘量")}</dt><dd>{number(snapshot.safetyMargin)}</dd></div>
+        </dl>
         {snapshot.capSupport === "unsupported" ? <small>{t("此路由未套用傳送給供應商的輸出上限。")}</small> : null}
-        <div>{t("安全餘量")}: {number(snapshot.safetyMargin)}</div>
-        {ready && snapshot.remainingInputBudget !== undefined ? <div>{t("剩餘輸入預算")}: {number(snapshot.remainingInputBudget)}</div> : null}
         {snapshot.fullByProvider ? <p>{t("供應商拒絕了上下文；請先壓縮或更換模型，再重試。")}</p> : snapshot.admission === "compact" ? <p>{t("需要先壓縮上下文才能繼續請求。")}</p> : null}
       </div> : null}
     </div>, document.body) : null}
