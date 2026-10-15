@@ -219,7 +219,7 @@ export async function summarizeWithModel(
     const calls = message.role === "assistant" ? (message.toolCalls ?? []).map(call => `tool ${call.name} (${call.id}): ${JSON.stringify(call.args)}`).join("\n") : ""
     return `[${message.role}]\n${content}${calls ? `\n${calls}` : ""}`
   }).join("\n")
-  type Piece = { messages: LLMMessage[]; text: string; shrinks: number; rejectedTokens?: number }
+  type Piece = { messages: LLMMessage[]; text: string; shrinks: number; standalone?: true; rejectedTokens?: number }
   let whole = prefix?.messages ?? []
   if (!prefix && region) {
     // Distinct text splits must incorporate the same selected events/anchor
@@ -244,7 +244,7 @@ export async function summarizeWithModel(
       // preceding calls have results. Keep its native assistant/result payload
       // intact and open a legal standalone conversation. The rolling checkpoint
       // in directive carries the original task/authority from preceding pieces.
-      const opener: LLMMessage[] = prefix && piece.messages[0]?.role === "assistant"
+      const opener: LLMMessage[] = prefix && piece.standalone && piece.messages[0]?.role === "assistant"
         ? [{ role: "user", content: "Summarize the following recorded conversation continuation. Preserve its completed outcomes under the task and authority in the checkpoint." }] : []
       const request: LLMRequest = { systemPrompt: prefix?.systemPrompt ?? "", tools: prefix?.tools ?? [],
         messages: [...opener, ...(prefix ? piece.messages : []), { role: "user", content: directive }], promptCache: { mode: "off" },
@@ -273,7 +273,7 @@ export async function summarizeWithModel(
         if (!reduced || segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
         const split = Math.ceil(segments.length / 2)
         const chunks = [segments.slice(0, split).flat(), segments.slice(split).flat()]
-        pending.splice(0, 1, ...chunks.map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks, rejectedTokens: inputTokens })))
+        pending.splice(0, 1, ...chunks.map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks, standalone: true as const, rejectedTokens: inputTokens })))
         accepted = true // resliced; no work consumed and no transport made
         break
       }
@@ -313,7 +313,7 @@ export async function summarizeWithModel(
         const segments = sliceMessages(piece.messages, 1, true)
         if (segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
         const split = Math.ceil(segments.length / 2)
-        pending.splice(0, 1, ...[segments.slice(0, split).flat(), segments.slice(split).flat()].map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks + 1, rejectedTokens: inputTokens })))
+        pending.splice(0, 1, ...[segments.slice(0, split).flat(), segments.slice(split).flat()].map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks + 1, standalone: true as const, rejectedTokens: inputTokens })))
         accepted = true
         break
       }
