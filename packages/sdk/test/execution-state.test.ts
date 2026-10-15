@@ -14,7 +14,11 @@ function gate() {
 it.each(["stop", "flush"])("refreshes an internally submitted parent result after delayed %s settles", async delay => {
   const session = createSession(), stop = gate(), entered = gate(), read = gate()
   const service = createSessionService({ workspace: process.cwd(), session,
-    ...(delay === "flush" ? { coordinator: { flush: async () => { entered.release(); await stop.promise } } as unknown as SessionCoordinator } : {}),
+    ...(delay === "flush" ? { coordinator: { flush: async () => {
+      // Admission also checkpoints before transport. Hold the final durable
+      // turn boundary whose delayed settlement this refresh case exercises.
+      if (session.events.at(-1)?.type === "turn/end") { entered.release(); await stop.promise }
+    } } as unknown as SessionCoordinator } : {}),
     model: { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } } })
   let renderedRunning = false
   const snapshots: boolean[] = []

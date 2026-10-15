@@ -60,6 +60,10 @@ it.each([false, true])("child context reader preserves its owner and current par
   await coordinator.create({ sessionId: "parent" })
   const actual = createAnthropicClient({ model: "controlled", apiKey: "fixture" })
   const measurements: PreparedModelRequest["measurement"][] = []
+  let enterParent!: () => void
+  let releaseParent!: () => void
+  const parentEntered = new Promise<void>(resolve => { enterParent = resolve })
+  const parentGate = new Promise<void>(resolve => { releaseParent = resolve })
   let liveChildState: unknown
   let liveChildWire: unknown
   const service = createSessionService({ workspace: root, coordinator, approveAll: true, contextWindow: 100000, compact: { auto: false }, autoCompactionEnabled: () => false, pluginAgents: [{ name: "context-inspector", description: "Context inspector", systemPrompt: "Inspect your own prepared context", tools: ["get_context_remaining"] }],
@@ -69,6 +73,7 @@ it.each([false, true])("child context reader preserves its owner and current par
       const first = measurements.length === 1
       return wrapPreparedRequest(prepared, (_stream, control) => (async function* () {
         control?.validateBeforeTransport?.()
+        if (request.sessionId === "parent") { enterParent(); await parentGate }
         if (first) {
           liveChildState = await service.contextState(request.sessionId!)
           liveChildWire = decodeFrame((await childServer.handleLine(encodeFrame(makeRequest(2, "session/context", { sessionId: request.sessionId }))))!)
@@ -98,10 +103,19 @@ it.each([false, true])("child context reader preserves its owner and current par
       ownerSessionId: childId, contextWindow: 100000, systemTokens: measurements[0]!.input.components.system.heuristicTokens,
       schemaTokens: measurements[0]!.input.components.toolSchemas.heuristicTokens } } })
     expect(measurements.length).toBeGreaterThanOrEqual(2)
+    await parentEntered
     const beforeInspection = measurements.length
-    expect(await service.contextState("parent")).toMatchObject({ kind: "unavailable" })
+    // A completed background child wakes a real parent notification request.
+    // Inspect that held request's owner, then its accepted-output state.
+    const parentState = await service.contextState("parent")
+    expect(parentState).toMatchObject({ kind: "ready", snapshot: { ownerSessionId: "parent" } })
+    expect(decodeFrame((await childServer.handleLine(encodeFrame(makeRequest(3, "session/context", { sessionId: "parent" }))))!)).toMatchObject({ result: parentState })
     expect(measurements).toHaveLength(beforeInspection)
-  } finally { await childServer.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    releaseParent()
+    await expect.poll(() => service.queueState("parent").running).toBe(false)
+    expect(await service.contextState("parent")).toMatchObject({ kind: "unavailable", snapshot: { ownerSessionId: "parent" } })
+    expect(measurements).toHaveLength(beforeInspection)
+  } finally { releaseParent(); await childServer.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 it("preserves actual image uncertainty through the shared SDK contract without inspection transport", async () => {

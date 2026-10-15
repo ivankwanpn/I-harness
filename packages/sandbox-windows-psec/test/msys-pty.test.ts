@@ -8,7 +8,9 @@ import { type SupervisedExecution } from "@i-harness/exec"
 import { createOwnedExec } from "./owned-exec.ts"
 
 const git = win32.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git")
-const bash = win32.join(git, "bin", "bash.exe")
+// Exercise the actual MSYS image supported by PE import detection. Unknown
+// Git launcher shims deliberately retain their native ConPTY behavior.
+const bash = win32.join(git, "usr", "bin", "bash.exe")
 const suite = describe.skipIf(process.platform !== "win32" || !existsSync(bash))
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function until(check: () => boolean, detail: () => string = () => "", timeout = 5000) {
@@ -108,7 +110,7 @@ suite("owned MSYS PTY production acceptance", () => {
   it("retains descendants with closed stdio and cancels the actual tree", async () => {
     const f = await fixture()
     try {
-      const t = await f.start(["--noprofile", "--norc", "-c", "nohup bash --noprofile --norc -c 'cat /proc/$$/winpid > child.pid; sleep 30; :' </dev/null >/dev/null 2>&1 & while [[ ! -s child.pid ]]; do :; done"], "retain-tree")
+      const t = await f.start(["--noprofile", "--norc", "-c", "nohup \"$BASH\" --noprofile --norc -c 'cat /proc/$$/winpid > child.pid; sleep 30; :' </dev/null >/dev/null 2>&1 & while [[ ! -s child.pid ]]; do :; done"], "retain-tree")
       expect(await t.execution.handle.rootExited).toMatchObject({ exitCode: 0 })
       const child = Number(await readFile(join(f.root, "child.pid"), "utf8")); process.kill(child, 0)
       expect(await Promise.race([t.execution.handle.settled.then(() => "settled"), pause(50).then(() => "retained")])).toBe("retained")
