@@ -86,7 +86,7 @@ function loadModelCatalog(): {
   rows: Record<string, ModelCatalogRow[]>
   provenance: ModelCatalogProvenance
 } {
-  const text = readFileSync(new URL("../model-catalog.json", import.meta.url), "utf8")
+  const text = readFileSync(new URL(process.env.I_HARNESS_DIST === "1" ? "./model-catalog.json" : "../model-catalog.json", import.meta.url), "utf8")
   const parsed: unknown = JSON.parse(text)
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new Error(`${CATALOG_FILE} is not an object`)
