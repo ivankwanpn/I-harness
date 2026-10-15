@@ -10,6 +10,9 @@ import { useUiStore } from "../shell/ui-store.ts"
 
 interface Feedback { retry?: RuntimeDiagnosticEntry; error?: RuntimeDiagnosticEntry; activity?: RuntimeActivity["activity"] }
 const scopeKey = (workspaceId?: string, sessionId?: string) => JSON.stringify([workspaceId, sessionId])
+const feedbackKinds = new Set<RuntimeDiagnosticEntry["kind"]>([
+  "model/retry", "model/recovered", "session/cancelled", "session/error", "runtime/error", "gateway/disconnected",
+])
 
 /** Live feedback only. Historical records remain in the native Log and never
  * resurrect popups after dismissal or a renderer restart. */
@@ -56,6 +59,9 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
       }
       if (event.kind === "runtime/diagnostic") {
         const entry = event.entry
+        // Diagnostic bookkeeping belongs in the Log. Only explicit feedback
+        // events may change retries or create a request-failure notification.
+        if (!feedbackKinds.has(entry.kind)) return
         if (seen.current.has(entry.id)) return
         seen.current.add(entry.id)
         if (seen.current.size > 1000) seen.current.delete(seen.current.values().next().value!)
@@ -71,8 +77,6 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
             if (!entry.requestId || current.retry?.requestId === entry.requestId) next.set(key, { ...current, retry: undefined })
           } else if (entry.kind === "session/cancelled") {
             if (!busy && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)) next.set(key, { ...current, retry: undefined, activity: undefined })
-          } else if (entry.kind.startsWith("model/")) {
-            // Lifecycle records are history only; live activity arrives separately.
           } else {
             // Admission failures belong to a separate RPC even in the same chat.
             const clearsRetry = !busy && entry.kind === "session/error" && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)
