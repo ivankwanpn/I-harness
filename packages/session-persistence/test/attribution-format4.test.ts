@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { append, createSession, contextUsageAnchorId, type ContextUsageCheckpointV2 } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionCoordinator, ownedContextReadiness, remapConversationSeed } from '../src/index.ts'
+import { conversationIndexes } from '../../core-session/src/events/state.ts'
 const roots: string[] = [], d = 'a'.repeat(64)
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 function history() {
@@ -60,4 +61,51 @@ it('central seed drops all operational facts and inherited accepted receipts eve
   const accepted = seed.find(e => e.type === 'model/exchange-accepted')
   expect(accepted?.version).toBe(1); expect(accepted).not.toHaveProperty('request')
   expect(JSON.stringify(seed)).not.toMatch(/send1|"E"|observationLifetimeId/)
+})
+it('rebuilds an already cached format3 Session index after its durable owner upgrades memory in place', async () => {
+  const { backend, coordinator } = await store(3), prepared = history()
+  const session = createSession(); session.formatVersion = 3
+  for (const event of prepared.session.events.slice(0, 3)) append(session, event)
+  const cached = conversationIndexes.get(session)!
+  expect(cached.formatVersion).toBe(3)
+  expect(cached.index.formatVersion).toBe(3)
+  await backend.append('s', session.events)
+  await ownedContextReadiness(coordinator, 's', session)()
+  expect(session.formatVersion).toBe(4)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(4)
+  expect(conversationIndexes.get(session)).toBe(cached)
+  append(session, prepared.session.events[3]!)
+  append(session, prepared.sample)
+  expect(conversationIndexes.get(session)).not.toBe(cached)
+  expect(conversationIndexes.get(session)?.index.formatVersion).toBe(4)
+  await coordinator.append('s', session.events.slice(3))
+  expect((await coordinator.snapshot!('s')).session.events).toEqual(session.events)
+  await coordinator.close()
+})
+it('refuses undeclared DTO payloads before durable append and refuses an imported malformed DTO before repair', async () => {
+  const { backend, coordinator, path } = await store(4), prepared = history()
+  await coordinator.append('s', prepared.session.events)
+  const event = structuredClone(prepared.sample)
+  Object.defineProperty(event.checkpoint, 'constructor', { value: { payload: 'unexpected-private-payload' }, enumerable: true })
+  const before = await readFile(path, 'utf8')
+  await expect(coordinator.append('s', [event])).rejects.toThrow()
+  expect(await readFile(path, 'utf8')).toBe(before)
+  const imported = before + JSON.stringify(event) + '\n'
+  await writeFile(path, imported)
+  const repair = vi.spyOn(backend, 'repair')
+  await expect(coordinator.snapshot!('s')).rejects.toThrow()
+  await expect(coordinator.loadOwned('s')).rejects.toThrow()
+  expect(repair).not.toHaveBeenCalled()
+  expect(await readFile(path, 'utf8')).toBe(imported)
+  await coordinator.close()
+})
+it('refuses durable step identity mutation when the current operation loads its acceptance prefix', async () => {
+  const { coordinator, path } = await store(4), prepared = history()
+  await coordinator.append('s', prepared.session.events)
+  const lines = (await readFile(path, 'utf8')).trimEnd().split('\n')
+  const start = JSON.parse(lines[2]!); start.actionId = 'mutated'; lines[2] = JSON.stringify(start)
+  const changed = lines.join('\n') + '\n'; await writeFile(path, changed)
+  await expect(coordinator.append('s', [prepared.sample])).rejects.toThrow()
+  expect(await readFile(path, 'utf8')).toBe(changed)
+  await coordinator.close()
 })

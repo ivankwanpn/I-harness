@@ -109,7 +109,28 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
           const seq = event.op === "sample" ? event.checkpoint.accepted.acceptedSeq : undefined
           const accepted = seq === undefined ? undefined : newAcceptances.get(seq) ?? acceptances.get(seq)
           const actual = accepted && (accepted.index < count ? readCurrent?.(accepted.index) : suffix[accepted.index - count])
-          const fact = validateUsageFact(event, position, { accepted, actual, requireCurrent: !!readCurrent, anchor: newAnchors.get(anchorId) ?? anchors.get(anchorId), completedAnchorId: seq === undefined ? undefined : newCompletions.get(seq) ?? completions.get(seq) })
+          const fact = validateUsageFact(event, position, {
+            accepted,
+            actual,
+            requireCurrent: !!readCurrent,
+            anchor: newAnchors.get(anchorId) ?? anchors.get(anchorId),
+            completedAnchorId: seq === undefined ? undefined : newCompletions.get(seq) ?? completions.get(seq),
+          })
+          if (accepted && event.op === "sample") {
+            const references: [number, SessionEvent["type"]][] = [
+              [accepted.stepStartSeq, "step/start"],
+              [accepted.assistantSeq, "assistant/message"],
+              ...JSON.parse(accepted.callSeqs).map((seq: number) => [seq, "tool/call"] as [number, SessionEvent["type"]]),
+            ]
+            for (const [seq, kind] of references) {
+              const target = lookup(seq)
+              if (!target
+                || target.ambiguous
+                || target.type !== kind
+                || target.index >= accepted.index) fail("invalid acceptance reference")
+              verify(seq, target, readCurrent)
+            }
+          }
           newAnchors.set(anchorId, fact)
           if (seq !== undefined) newCompletions.set(seq, anchorId)
         }

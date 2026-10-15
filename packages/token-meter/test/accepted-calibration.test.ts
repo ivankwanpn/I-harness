@@ -46,3 +46,14 @@ it.each(['candidateId','sendId','payloadId','ownerSessionId','observationLifetim
 it.each([['includes-cache',100],['excludes-cache',150]] as const)('normalizes %s once to literal %s', (semantics, expected) => {
   expect(meter.normalizeInputUsage({ inputTokens: 100, cacheReadTokens: 40, cacheCreationTokens: 10, inputTokenSemantics: semantics })?.totalInputTokens).toBe(expected)
 })
+it.each(['request-prototype', 'snapshot-prototype', 'request-constructor', 'snapshot-constructor'])('ignores malformed %s attribution without replacing a valid sample', shape => {
+  const source = meter.createAcceptedCalibration('owner', 'live'), input = facts(), a = acceptance(input)
+  source.recordAccepted(input, a.request, a.accepted, usage)
+  const b = acceptance(input, 'send2', 8)
+  let request = structuredClone(b.request)
+  if (shape === 'request-prototype') request = Object.create(request)
+  if (shape === 'snapshot-prototype') request.snapshot = Object.create(request.snapshot)
+  if (shape.endsWith('constructor')) Object.defineProperty(shape.startsWith('request') ? request : request.snapshot, 'constructor', { value: { payload: 'unexpected-private-payload' }, enumerable: true })
+  expect(source.recordAccepted(input, request, { ...b.accepted, request }, usage).kind).toBe('ignored')
+  expect(source.probe(facts([7, 3]), compatibility)).toEqual({ tokens: 110, calibrated: true })
+})
