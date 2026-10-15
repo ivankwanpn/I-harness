@@ -431,10 +431,11 @@ describe("spawnChild durable child sessions (M8)", () => {
     // …and by then the child's marker had been DRAINED through the coordinator,
     // under the child's own session id: the checkpoint is the child's, not the
     // parent's, and it covers the marker that recovery reads.
-    expect(drainsAtBody).toHaveLength(2)
+    expect(drainsAtBody).toHaveLength(3)
     expect(drainsAtBody![0]!.id).toBe(sessionId)
     expect(drainsAtBody![0]!.types).toContain("context/budget")
-    expect(drainsAtBody![1]!.types).toContain("tool/dispatch")
+    expect(drainsAtBody![1]!.types).toContain("model/exchange-accepted")
+    expect(drainsAtBody![2]!.types).toContain("tool/dispatch")
   }, 10_000)
 
   // M24a (B1): delegationDepth recursion — a child of a depth-1 subagent is
@@ -1567,7 +1568,7 @@ describe("the child's request carries the resolved budget", () => {
     // MEASURED: 51 seqs — every non-marker event in the log (48 seed events,
     // plus the child's own turn/start, user/message and step/start). Nothing of
     // the inherited surface is left unaccounted for on the surface.
-    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(52)
+    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(53)
 
     // the mechanism, request by request: the summarizer's calls are the ones
     // whose last message is the directive, and there are several — the pieces
@@ -1715,7 +1716,7 @@ describe("the child's request carries the resolved budget", () => {
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
     // inherited turns the parent's own marker did NOT hide (see the fixture);
     // 16 is the marker and is NOT in the set (region.ts skips markers).
-    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
+    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")

@@ -30,6 +30,7 @@ describe("CLI input tiers", () => {
     })
     expect(result.exitCode).toBe(0)
     expect(result.finalText).toBe("initial answer")
+    expect(session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
     // one submitted input drives exactly one serial turn on the session
     expect(session.events.filter((e) => e.type === "turn/end")).toHaveLength(1)
   })

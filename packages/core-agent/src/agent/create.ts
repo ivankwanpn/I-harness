@@ -29,8 +29,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (activeOperations > 0) throw new Error("agent is busy")
       context.update(config)
     },
-    run: (task, signal, images, inputId) => track(() => runTurn(task, signal, images, inputId)),
-    followup: (message, signal) => track(() => runTurn(message, signal)),
+    run: (task, signal, images, inputId, options) => track(() => runTurn(task, signal, images, inputId, options, "agent.run")),
+    followup: (message, signal, options) => track(() => runTurn(message, signal, undefined, undefined, options, "agent.followup")),
     compact: (instructions, options) => track(async () => {
       context.refreshBinding()
       return context.compactor ? context.compactor.compact(deps.session, instructions, options) : { compacted: false, shadowedSeqs: [] }

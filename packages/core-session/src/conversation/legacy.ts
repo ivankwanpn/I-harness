@@ -2,6 +2,7 @@ import type { Session, SessionEvent } from "../events/types.ts"
 import type { ConversationCall, ConversationDiagnostic } from "./types.ts"
 import type { ConversationSources } from "./sources.ts"
 import type { ConversationVisibility } from "./visibility.ts"
+import type { ExchangeAcceptedEvent } from "../events/conversation.ts"
 
 export interface LegacyStep {
   start: number
@@ -11,6 +12,9 @@ export interface LegacyStep {
   failed: boolean
   ended: boolean
   suppressed: boolean
+  explicitRegion?: boolean
+  acceptance?: ExchangeAcceptedEvent
+  acceptanceIndex?: number
 }
 
 /** Legacy evidence and failure prepass; it never constructs model messages. */
@@ -23,6 +27,18 @@ export function inferLegacy(session: Session, visibility: ConversationVisibility
   const suppressedCalls = new Set<string>()
   const suppressedAssistants = new Set<number>()
   const add = (map: Map<string, number[]>, id: string, index: number) => { const entries = map.get(id) ?? []; entries.push(index); map.set(id, entries) }
+  const fenceIndex = session.events.findIndex(event => event.type === "conversation/semantics")
+  const accepted = new Map<number, { event: ExchangeAcceptedEvent; index: number }>()
+  const acceptedAssistants = new Set<number>(), acceptedCallSeqs = new Set<number>(), acceptedCallIds = new Set<string>(), unacceptedResults = new Set<number>()
+  for (const [index, event] of session.events.entries()) if (event.type === "model/exchange-accepted" && visibility.selected(event)) {
+    accepted.set(event.stepStartSeq, { event, index }); acceptedAssistants.add(event.assistantSeq)
+    for (const seq of event.callSeqs) acceptedCallSeqs.add(seq)
+  }
+  for (const [index, event] of session.events.entries()) if (fenceIndex >= 0 && index > fenceIndex) {
+    if (event.type === "assistant/message" && !acceptedAssistants.has(event.seq!)) suppressedAssistants.add(index)
+    if (event.type === "tool/call") { if (acceptedCallSeqs.has(event.seq!)) acceptedCallIds.add(event.callId); else suppressedCalls.add(event.callId) }
+  }
+  for (const [index, event] of session.events.entries()) if (fenceIndex >= 0 && index > fenceIndex && event.type === "tool/result" && !acceptedCallIds.has(event.callId)) unacceptedResults.add(index)
   for (const [index, event] of session.events.entries()) {
     if (!visibility.content(event)) continue
     if (event.type === "tool/call") add(calls, event.callId, index)
@@ -33,7 +49,7 @@ export function inferLegacy(session: Session, visibility: ConversationVisibility
   const close = (ended: boolean) => {
     if (!active) return
     active.ended = ended
-    active.suppressed = active.failed || active.calls.some(index => !results.has((session.events[index] as Extract<SessionEvent, { type: "tool/call" }>).callId))
+    active.suppressed = (active.explicitRegion ? !active.acceptance : active.failed) || active.calls.some(index => !results.has((session.events[index] as Extract<SessionEvent, { type: "tool/call" }>).callId))
     if (active.suppressed) {
       for (const index of active.calls) suppressedCalls.add((session.events[index] as Extract<SessionEvent, { type: "tool/call" }>).callId)
       for (const index of active.assistants) suppressedAssistants.add(index)
@@ -51,6 +67,7 @@ export function inferLegacy(session: Session, visibility: ConversationVisibility
     if (event.type === "step/start") {
       close(true)
       active = { start: index, members: [], calls: [], assistants: [], failed: false, ended: false, suppressed: false }
+      if (fenceIndex >= 0 && index > fenceIndex) { active.explicitRegion = true; const acceptance = accepted.get(event.seq!); active.acceptance = acceptance?.event; active.acceptanceIndex = acceptance?.index }
       steps.push(active)
     }
     if (active) {
@@ -95,7 +112,7 @@ export function inferLegacy(session: Session, visibility: ConversationVisibility
       outcome: ambiguous || dispatchIndices.length > 1 ? "unknown" : recordedOutcome(result, dispatchIndices.length > 0, !!step?.failed, !!step?.ended, dispatches.size > 0),
     }
   }
-  return { calls, results, steps, stepByEvent, suppressedCalls, suppressedAssistants, callMetadata }
+  return { calls, results, steps, stepByEvent, suppressedCalls, suppressedAssistants, unacceptedResults, fenceIndex, callMetadata }
 }
 
 /** Reported outcome only: legacy records cannot authenticate a synthetic producer. */

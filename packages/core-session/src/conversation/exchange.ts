@@ -36,6 +36,6 @@ export function finishItem(item: ItemBuilder): ConversationItem {
   return Object.freeze({
     id: item.id, kind: item.kind, sources: Object.freeze(item.sources), provenance: item.provenance,
     messages: Object.freeze(item.messages.map(copyConversationMessage)),
-    ...(item.kind === "exchange" ? { exchange: Object.freeze({ id: `${item.id}:exchange`, ...(item.stepSource ? { step: item.stepSource } : {}), acceptance: "legacy-inferred" as const, state, calls: Object.freeze(item.calls.map(call => Object.freeze(call))) }) } : {}),
+    ...(item.kind === "exchange" ? { exchange: Object.freeze({ id: item.step?.acceptance?.exchangeId ?? `${item.id}:exchange`, ...(item.stepSource ? { step: item.stepSource } : {}), acceptance: item.step?.acceptance ? "explicit" as const : "legacy-inferred" as const, state, calls: Object.freeze(item.calls.map(call => Object.freeze(call))) }) } : {}),
   })
 }

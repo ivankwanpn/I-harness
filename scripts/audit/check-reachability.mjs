@@ -684,6 +684,9 @@ const PERSISTENCE_COORDINATOR_SOURCE_UNIT = new Set([
   "packages/session-persistence/src/coordinator/ownership.ts",
   "packages/session-persistence/src/coordinator/documents.ts",
   "packages/session-persistence/src/coordinator/mutations.ts",
+  // R1B's derived prefix index is an internal coordinator validation owner;
+  // its use of the existing format error is not an external API consumer.
+  "packages/session-persistence/src/coordinator/conversation-index.ts",
   "packages/session-persistence/src/coordinator/lifecycle.ts",
   "packages/session-persistence/src/format/registry.ts",
   "packages/session-persistence/src/format/validation.ts",

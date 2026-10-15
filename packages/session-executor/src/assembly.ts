@@ -1001,7 +1001,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // so the user sees the reminder) while the write-behind retains & retries the batch —
         // `deliveryErrors` is a durability report, not a refusal.
         for (const ev of delivery.dispatchEvents) append(session, ev)
-        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system", synthetic: {
+        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system", provenance: { kind: "plugin", authority: "observation", scope: "turn", producer: "session.schedule" }, synthetic: {
           description: "Scheduled reminder", scope: "turn",
           display: {
             kind: "schedule",

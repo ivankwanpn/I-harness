@@ -901,7 +901,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       name: "session-send",
       execute: async (input) => {
         const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "send", text })
+        executor.submit({ tier: "send", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
         return JSON.stringify({ queued: true })
       },
     })
@@ -909,7 +909,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       name: "session-followup",
       execute: async (input) => {
         const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "followup", text })
+        executor.submit({ tier: "followup", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
         return JSON.stringify({ queued: true })
       },
     })
@@ -917,7 +917,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       name: "session-steer",
       execute: async (input) => {
         const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "steer", text })
+        executor.submit({ tier: "steer", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
         return JSON.stringify({ queued: true })
       },
     })
@@ -953,7 +953,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // recovered pending inputs precede it FIFO). drain REJECTS on the first
     // turn failure — thrown into the catch below → exitCode 1 (the CLI's
     // exit-code contract).
-    executor.submit({ tier: "followup", text: task })
+    executor.submit({ tier: "followup", text: task, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
     await executor.drain()
     const derived = deriveMessages(session).at(-1)
     const finalText = typeof derived?.content === "string" ? derived.content : ""

@@ -3,8 +3,8 @@ import type { SessionEvent } from "@i-harness/core-session"
 // F01-7: refusal before structural decode — "upgrade the harness", never a
 // silent corruption.
 export class SessionFormatUnsupportedError extends Error {
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = "SessionFormatUnsupportedError"
   }
 }
@@ -13,6 +13,7 @@ export class SessionFormatUnsupportedError extends Error {
 // chain is empty; the first format bump only needs registerUpgrade(1, fn).
 export const upgrades = new Map<number, (events: SessionEvent[]) => SessionEvent[]>()
 upgrades.set(1, events => events)
+upgrades.set(2, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }
@@ -139,3 +140,5 @@ registerEventType("model/retry")
 registerEventType("context/budget")
 registerEventType("context/usage")
 registerEventType("context/recovery")
+registerEventType("conversation/semantics")
+registerEventType("model/exchange-accepted")

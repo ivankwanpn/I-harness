@@ -8,9 +8,11 @@ import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"
 import { inferLegacy, type LegacyStep } from "./legacy.ts"
 import { addItemSource, awaitingItemResults, finishItem, itemBuilder, type ItemBuilder } from "./exchange.ts"
+import { validateConversationHistory } from "./validation.ts"
 
 /** Sole conversation fold: source metadata is attached before message flattening. */
 export function projectConversation(session: Session, options: { ownerSessionId?: string; throughSeq?: number } = {}): ConversationProjection {
+  validateConversationHistory(session.events, session.formatVersion)
   const diagnostics: ConversationDiagnostic[] = []
   const sources = conversationSources(session, options.ownerSessionId, diagnostics)
   const visibility = conversationVisibility(session, options.throughSeq)
@@ -27,10 +29,14 @@ export function projectConversation(session: Session, options: { ownerSessionId?
   let toolResultsPending = false
   let block: ItemBuilder | undefined
   const auditSteps = new Map<LegacyStep, ItemBuilder>()
+  const explicitCalls = new Map<string, ItemBuilder>()
 
   const makeItem = (kind: ItemBuilder["kind"], index: number, part: string, admissionIndex?: number) => {
     const step = kind === "exchange" ? legacy.stepByEvent.get(index) : undefined
-    return itemBuilder(kind, sources.ref(index, part), sources.provenance(index, part, admissionIndex), step, step ? sources.ref(step.start, "step") : undefined)
+    const unaccepted = kind === "exchange" && legacy.fenceIndex >= 0 && index > legacy.fenceIndex && !step?.acceptance
+    const item = itemBuilder(unaccepted ? "legacy-fragment" : kind, sources.ref(index, part), sources.provenance(index, part, admissionIndex), step, step ? sources.ref(step.start, "step") : undefined)
+    if (step?.acceptanceIndex !== undefined) addItemSource(item, sources.ref(step.acceptanceIndex, "acceptance"))
+    return item
   }
   const addCall = (item: ItemBuilder, index: number) => {
     const call = legacy.callMetadata(index)
@@ -99,10 +105,13 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       if (!legacy.results.has(event.callId) || legacy.suppressedCalls.has(event.callId)) { addCall(auditItem(index, "call"), index); continue }
       if (!block) { block = makeItem("exchange", index, "call"); items.push(block) }
       addCall(block, index)
+      if (block.step?.acceptance) explicitCalls.set(event.callId, block)
       pendingCalls ??= []
       pendingCalls.push({ id: event.callId, name: event.name, args: event.args })
     } else if (event.type === "tool/result") {
-      if (legacy.suppressedCalls.has(event.callId)) continue
+      if (legacy.suppressedCalls.has(event.callId) || legacy.unacceptedResults.has(index)) continue
+      const acceptedOwner = explicitCalls.get(event.callId)
+      if (acceptedOwner && acceptedOwner !== block) { flushToolBlock(); block = acceptedOwner }
       if (!block) { block = makeItem("legacy-fragment", index, "result"); items.push(block) }
       const resultSource = sources.ref(index, "result")
       addItemSource(block, resultSource)

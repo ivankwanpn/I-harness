@@ -3,6 +3,10 @@ export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
 export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic, InputDisplay, UserMessageInput } from "./inbox.ts"
 
 export { CURRENT_FORMAT_VERSION } from "./events/types.ts"
+export type { InputProvenance, ConversationSemanticsEvent, ExchangeAcceptedEvent } from "./events/conversation.ts"
+export { validateConversationEventShape } from "./events/conversation.ts"
+export { createConversationValidationIndex, validateConversationHistory } from "./conversation/validation.ts"
+export type { ConversationValidationIndex } from "./conversation/validation.ts"
 export type {
   ModelRetryInfo,
   ModelActivityInfo,

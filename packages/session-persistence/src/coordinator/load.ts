@@ -7,10 +7,10 @@ import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 
 export function createLoads(
-  backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "id" | "upgradeSessionFormat">,
+  backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
   { withSessionOperation, borrowOwnership, releaseOwnershipUnlocked }:
     Pick<Ownership, "withSessionOperation" | "borrowOwnership" | "releaseOwnershipUnlocked">,
-  { assertWritable, pendingWriteBehind }: Pick<Mutations, "assertWritable" | "pendingWriteBehind">,
+  { assertWritable, pendingWriteBehind, invalidateConversation }: Pick<Mutations, "assertWritable" | "pendingWriteBehind" | "invalidateConversation">,
 ) {
   return {
     async snapshot(sessionId: string) {
@@ -24,6 +24,7 @@ export function createLoads(
     },
     async load(sessionId: string) {
       return withSessionOperation(sessionId, async () => {
+        invalidateConversation(sessionId)
         const peeked = await backend.read(sessionId)
         preflightSessionFormat(peeked.version, peeked.events)
         await migrate(peeked.version, guardIgnorable(peeked.events, true))
@@ -74,6 +75,7 @@ export function createLoads(
           syntheticCount += 1
           return { ...event, seq }
         })
+        preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical)
         return { session: buildSession(meta, canonical) }
       })
     },
@@ -82,12 +84,13 @@ export function createLoads(
       const pendingWrites = pendingWriteBehind(sessionId)
       if (pendingWrites !== undefined) await pendingWrites.flush()
       return withSessionOperation(sessionId, async () => {
+        invalidateConversation(sessionId)
         const acquired = await borrowOwnership(sessionId)
         try {
           const peeked = await backend.read(sessionId)
           preflightSessionFormat(peeked.version, peeked.events)
           assertUpgradeCapability(backend, peeked.version)
-          if (backend.replaceEvents === undefined && repairTurnTail(peeked.events).some((event, index) => event.seq !== index || JSON.stringify(event) !== JSON.stringify(peeked.events[index]))) throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+          if (backend.replaceEvents === undefined && !peeked.events.some(event => event.type === "conversation/semantics") && repairTurnTail(peeked.events).some((event, index) => event.seq !== index || JSON.stringify(event) !== JSON.stringify(peeked.events[index]))) throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
           const checked = await backend.read(sessionId)
           preflightSessionFormat(checked.version, checked.events)
           await migrate(checked.version, guardIgnorable(checked.events, true))
@@ -105,11 +108,19 @@ export function createLoads(
           })
           const needsRewrite = canonical.length !== repaired.events.length
             || canonical.some((event, index) => JSON.stringify(event) !== JSON.stringify(repaired.events[index]))
+          preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical)
           if (needsRewrite) {
-            if (backend.replaceEvents === undefined) {
-              throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+            const fenced = repaired.events.some(event => event.type === "conversation/semantics")
+            const unchangedPrefix = canonical.slice(0, repaired.events.length).every((event, index) => JSON.stringify(event) === JSON.stringify(repaired.events[index]))
+            if (fenced && unchangedPrefix) {
+              await ensureWritableFormatUnlocked(backend, sessionId)
+              await backend.append(sessionId, canonical.slice(repaired.events.length))
+            } else {
+              if (backend.replaceEvents === undefined) {
+                throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
+              }
+              await backend.replaceEvents(sessionId, canonical)
             }
-            await backend.replaceEvents(sessionId, canonical)
           }
           await ensureWritableFormatUnlocked(backend, sessionId)
           return { session: buildSession(repaired.meta, canonical) }

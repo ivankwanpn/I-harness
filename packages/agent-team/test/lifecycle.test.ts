@@ -562,7 +562,7 @@ describe("mountAgentTeams lifecycle", () => {
       expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(1)
       expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(1)
       // the wakeup drive ran a followup turn on the REBUILT resident agent
-      await vi.waitFor(() => expect(followup).toHaveBeenCalledWith(expect.stringContaining("wake"), expect.any(AbortSignal)))
+      await vi.waitFor(() => expect(followup).toHaveBeenCalledWith(expect.stringContaining("wake"), expect.any(AbortSignal), { provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }))
     } finally {
       await handle.unmount()
     }

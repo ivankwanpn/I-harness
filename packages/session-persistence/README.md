@@ -1,7 +1,7 @@
 # Session persistence maintenance map
 
-`src/index.ts` remains the package facade. Its named exports and the package
-export path are unchanged; backends and callers use `@i-harness/session-persistence`.
+`src/index.ts` remains the package facade. The package
+export path is unchanged; backends and callers use `@i-harness/session-persistence`.
 The facade reads the background reporter and batching delay, then initializes
 the ownership service. This keeps the original option getter order. Acquisition
 retry/deadline options remain lazy reads inside each lease acquisition. Backend
@@ -12,6 +12,7 @@ methods remain calls on the live backend object, including reads after awaits.
 | `coordinator/types.ts` | Backend, coordinator, metadata, model selection, options and artifact manifest contracts. |
 | `coordinator/ownership.ts` | One held-lease Map, one in-flight acquisition Map and one session-operation Map per coordinator; shared acquire, borrow/release and operation serialization. |
 | `coordinator/mutations.ts` | One write-behind Map and one session deletion-admission Set per coordinator; create/append/enqueue/meta mutation and explicit ownership adoption/release. |
+| `coordinator/conversation-index.ts` | Derived structural metadata under the existing operation gate; invalidated by recovery, failed/uncertain append, release, deletion and close. No raw archive cache. |
 | `coordinator/documents.ts` | One document chain and one deleted-document Set per coordinator; document leases, admission and legacy failure reporting. |
 | `coordinator/load.ts` | Snapshot, repairing load and owned recovery, each with its own sequence and header behavior. |
 | `coordinator/lifecycle.ts` | Deletion and close ordering through narrow capabilities of the existing state owners. |
@@ -19,7 +20,8 @@ methods remain calls on the live backend object, including reads after awaits.
 | `format/validation.ts` | Version gate, migration, ignorable-event gate and lineage-header projection. |
 
 `write-behind.ts` owns batching, timers and retained retry batches. `repair.ts`
-owns semantic tail repair. `fork.ts` owns fork materialization and event remapping.
+owns semantic tail repair. `fork.ts` owns completed-turn selection; `seed.ts` owns shared batch semantics,
+image materialization, reference remapping and inherited seed provenance.
 `store-root.ts` owns root resolution. These pre-existing modules remain independent.
 Small document/lifecycle/validation modules reflect cohesive responsibilities;
 the three load algorithms stay together so their differing contracts are visible.
@@ -95,3 +97,20 @@ lease conflicts, shared acquisition, adoption/borrow behavior and release.
 `persistence.test.ts` covers format refusal, event filtering, batching failure
 and document writes; `load-gate-coverage.test.ts` reads the authoritative
 `format/registry.ts`. JSONL deletion/meta tests cover the durable store boundary.
+
+The current durable header is version 3, with identity migrations from versions 1
+and 2. Complete reads validate history before any backend repair; shape-only batch
+preflight permits references into an earlier durable batch. The writer stages those
+references against one derived prefix index and commits metadata after storage
+accepts the append. An uncertain append invalidates the index and the next attempt
+rereads actual records, recognizing an already durable identical prefix. Existing
+write-behind owns retry retention and scheduling.
+
+Fenced semantic recovery appends truthful results and closers at new coordinates,
+including closed accepted tails. It never shifts defined references. JSONL preserves
+committed raw lines through fenced repair and preserves unknown metadata/body bytes
+through header upgrade. Snapshot remains read-only. Batch seed transformation
+restores a sliced-away fence before explicit observations and rejects partial
+accepted bundles before child creation; the isolated legacy remapper rejects
+explicit acceptance/fence records. Metadata validation is incremental; backend
+full-file reads and atomic replacement I/O remain CX1/R6 work.

@@ -48,13 +48,11 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
 }
 
 export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, _request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
-  const { stepUsage, refusedThisStep, truncatedThisStep, stepText, toolCallsThisStep, thinkingBlocks, providerContinuation } = step
+  const { stepUsage, refusedThisStep, truncatedThisStep } = step
   reportModelUsage(deps, step)
 
-  // The provider's signed continuation belongs to its tool-use message.
-  // Persist it before a tool can be refused, cancelled or fail to commit;
-  // otherwise a resumed session has tool calls without their signatures.
-  if (stepText || toolCallsThisStep === 0 || thinkingBlocks?.length || providerContinuation) append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
+  // Acceptance owns assistant/native persistence; this owner only reports usage
+  // and calibrates the measured request that produced the completed response.
   context.ownedBudget.record(measurement, stepUsage, requestRevision, !abort?.aborted && !refusedThisStep && !truncatedThisStep)
 
 }

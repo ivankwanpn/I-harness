@@ -380,7 +380,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ resumed: true })
     expect(agents.get("child-1")).toBe(fakeAgent) // unchanged — NOT rebuilt
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok")
   }, 10_000)
@@ -562,7 +562,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ delivered: true })
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "again" }))
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok2")
     expect(jobs.read(jobId).status).toBe("completed")
@@ -1343,7 +1343,7 @@ describe("W11 elapsed on a running subagent", () => {
     const calledAt = Date.now()
     await follow.execute({ target: "root/helper", message: "again" }, {})
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.startedAt!).toBeGreaterThanOrEqual(calledAt)
     expect(Date.now() - entry.startedAt!).toBeLessThan(500) // a fresh clock, not the 500ms-old one

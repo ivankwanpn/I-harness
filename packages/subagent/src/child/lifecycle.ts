@@ -16,7 +16,7 @@ export function publishChild(
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
-  const initialRun = agent.run(opts.message, controller.signal)
+  const initialRun = agent.run(opts.message, controller.signal, undefined, undefined, { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.initial", ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
   const entry: ChildAgentEntry = {
     path: childPath,
     status: "running",

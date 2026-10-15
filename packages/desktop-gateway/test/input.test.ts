@@ -33,6 +33,7 @@ it("repeated model 400 failures preserve facts, the same service and parked work
   try {
     const assembly = await service.assemblyFor("s")
     await input.admit("s", { text: "start", delivery: "queue" }); await input.drain()
+    expect(assembly.session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" } })
     const parked = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec") as { output: { cell_id: string; status: string } }
     expect(parked.output.status).toBe("running"); cellId = parked.output.cell_id
     await vi.waitFor(() => expect(effects).toBe(1), { timeout: 5000 })

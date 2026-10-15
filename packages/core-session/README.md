@@ -4,14 +4,17 @@
 views. The package exports only `src/index.ts`; consumers import that public
 entry. The facade explicitly re-exports the existing API, including Inbox,
 provider continuation types, image validation, projections, and JSONL helpers.
-The session format remains version 2 (version 1 logs remain readable).
+The writer uses session format 3; versions 1 and 2 remain readable. A version-3
+header without a semantics fence still describes a legacy prefix.
 
 | Module | Responsibility |
 | --- | --- |
 | `src/index.ts` | Stable public facade; no state or projection implementation. |
 | `src/events/types.ts` | Event protocol, session/header shapes, todo/goal payload vocabulary, format version. |
-| `src/events/state.ts` | Sole owner of the append-hook and subscriber WeakMaps. |
+| `src/events/state.ts` | Sole owner of append-hook, subscriber and derived conversation-index WeakMaps. |
 | `src/events/append.ts` | Session creation, append validation, image admission references, durable sequencing and observer delivery. |
+| `src/events/conversation.ts` | Versioned acceptance/provenance shapes and scalar-safe format errors. |
+| `src/conversation/validation.ts` | Sole incremental reference/fence algorithm; complete-prefix validation reuses it. |
 | `src/events/subscription.ts` | Subscribe/unsubscribe and transient delivery through the shared subscriber map. |
 | `src/inbox.ts` | Durable admission, promotion, cancellation, and pending-input replay. |
 | `src/images.ts` | Image shapes, capacity/base64 validation, and compact image descriptors. |
@@ -88,9 +91,8 @@ descriptors, image summaries, and interval merging are not public package export
   never truncate the raw log. Pruning substitutes model-visible tool-result text
   only. Prefix projection retains content-addressed prune markers beyond its
   sequence cutoff, while time-scoped rewrite markers obey the cutoff.
-- Search excludes media bytes and streaming noise. JSONL decoding retains its
-  existing version/error behavior and does not add append-time validation;
-  migration to the sole supported version remains the existing no-op seam.
+- Search excludes media bytes and streaming noise. JSONL decoding validates conversation references and versioned fields before
+  migration. Operational context facts require at least version 2.
 
 ## Verification
 
@@ -115,3 +117,12 @@ claim additional event-producer coverage.
 R1A extends that map only for `conversation/visibility.ts`, where the existing
 internal rewind-type read moved. The new semantic API has a real production
 consumer in the message facade; its use is not supplied by a test or allowlist.
+
+After the semantics fence, only an explicit `model/exchange-accepted` record can
+expose an assistant/call bundle. Accepted unresolved exchanges keep their metadata
+while protocol rendering waits for truthful results. Later settlement failure does
+not revoke acceptance. The fence is read from the archive independently of rewrite
+visibility. In-memory append stages structural metadata, pushes the event, commits
+metadata, then publishes observations; a throwing observer cannot erase that fact.
+Recorded descriptors follow the matched admission, and inherited admissions never
+establish child-local human request authority.

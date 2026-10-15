@@ -107,3 +107,18 @@ preserved. E1–E4/E9 completion and event semantics remain separate work.
 S17 actual sizes, source/AST comparisons, complete audit identity and command
 logs are recorded in
 `.superpowers/sdd/2026-10-13-v0.1.13-product-decomposition/task-S17-report.md`.
+
+## Explicit response acceptance
+
+`agent/exchange.ts` owns the first-new-turn semantics fence and the sole accepted
+assistant append plus acceptance checkpoint. Construction stays empty so hosts can
+restore or install a seed first. Logical steps mint one action ID; physical retry
+attempts mint new attempt IDs and retain their actual step-start coordinate. A
+response needs an explicit clean end. Acceptance flush precedes recovery resolution
+and tool preparation; the existing tool scheduler still owns dispatch and its own
+pre-body flush. Usage/calibration remains in finalization.
+
+`agent/input.ts` resolves matched durable admissions before opening the turn and
+rejects conflicting descriptors. Standalone run/followup default to unknown source;
+application roots supply human provenance and child/plugin producers observations.
+The existing provider call-ID reuse rejection remains unchanged for later R5 work.

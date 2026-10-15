@@ -3,7 +3,8 @@ import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import { ensureWritableFormatUnlocked } from "./writable-format.ts"
-import { preflightSessionFormat } from "../format/validation.ts"
+import { preflightBatchShape } from "../format/validation.ts"
+import { createConversationIndexes } from "./conversation-index.ts"
 
 export function createMutations(
   backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta" | "read" | "id" | "upgradeSessionFormat">,
@@ -14,6 +15,14 @@ export function createMutations(
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
+  const conversation = createConversationIndexes(backend)
+  async function appendUnlocked(sessionId: string, events: SessionEvent[]) {
+    try {
+      const staged = await conversation.stage(sessionId, events)
+      if (staged.events.length || events.length === 0) await backend.append(sessionId, staged.events)
+      staged.commit()
+    } catch (error) { conversation.invalidate(sessionId); throw error }
+  }
   function assertWritable(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
 
   const writeBehindFor = (sessionId: string): SessionWriteBehind => {
@@ -28,9 +37,7 @@ export function createMutations(
         write: async (events) => {
           await withSessionOperation(sessionId, async () => {
             await ensureOwnership(sessionId)
-            await ensureWritableFormatUnlocked(backend, sessionId)
-            preflightSessionFormat(CURRENT_FORMAT_VERSION, events)
-            await backend.append(sessionId, events)
+            await appendUnlocked(sessionId, events)
           })
         },
         reportBackgroundFailure: report,
@@ -42,7 +49,9 @@ export function createMutations(
 
   return {
     assertWritable,
-    closeAdmission: (sessionId: string) => { deleted.add(sessionId) },
+    invalidateConversation: (sessionId: string) => conversation.invalidate(sessionId),
+    clearConversationIndexes: () => conversation.clear(),
+    closeAdmission: (sessionId: string) => { deleted.add(sessionId); conversation.invalidate(sessionId) },
     pendingWriteBehind: (sessionId: string) => writeBehinds.get(sessionId),
     removeWriteBehind: (sessionId: string) => { writeBehinds.delete(sessionId) },
     flushWriteBehinds: () => [...writeBehinds.values()].map((wb) => wb.flush()),
@@ -78,13 +87,12 @@ export function createMutations(
       assertWritable(sessionId)
       await withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId) // acquire-at-first-use (M23)
-        await ensureWritableFormatUnlocked(backend, sessionId)
-        preflightSessionFormat(CURRENT_FORMAT_VERSION, events)
-        await backend.append(sessionId, events)
+        await appendUnlocked(sessionId, events)
       })
     },
     enqueue(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
+      preflightBatchShape(CURRENT_FORMAT_VERSION, events)
       const wb = writeBehindFor(sessionId)
       for (const ev of events) wb.enqueue(ev)
     },
@@ -117,7 +125,7 @@ export function createMutations(
       })
     },
     async releaseOwnership(sessionId: string) {
-      await withSessionOperation(sessionId, () => releaseOwnershipUnlocked(sessionId))
+      await withSessionOperation(sessionId, async () => { conversation.invalidate(sessionId); await releaseOwnershipUnlocked(sessionId) })
     },
   }
 }

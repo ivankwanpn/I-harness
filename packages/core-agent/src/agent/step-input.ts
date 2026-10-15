@@ -2,6 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { assertMessagesFromLog, type LLMRequest } from "@i-harness/llm-seam"
 import type { AgentDeps, AgentConfig, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
@@ -50,7 +51,7 @@ export function startStep(deps: Pick<AgentDeps, "session" | "stepInputs">, lifec
   // before step/start so deriveMessages below already includes them.
   deps.stepInputs?.claimAtStepBoundary()
   const stepStartSeq = deps.session.events.length
-  append(deps.session, { type: "step/start" })
+  append(deps.session, { type: "step/start", actionId: randomUUID(), attemptId: randomUUID() })
   lifecycle.stepOpen = true
   lifecycle.providerCompleted = false
   lifecycle.stepFailed = false
@@ -60,7 +61,7 @@ export function startStep(deps: Pick<AgentDeps, "session" | "stepInputs">, lifec
 
 export function drainHookContext(ctx: PluginContext, deps: Pick<AgentDeps, "session">): string[] {
   const hookContext = hookRuntime(ctx)?.drainContext(deps.session) ?? []
-  for (const text of hookContext) append(deps.session, { type: "user/message", text: feedbackText(text), source: { kind: "plugin", plugin: "hooks" } })
+  for (const text of hookContext) append(deps.session, { type: "user/message", text: feedbackText(text), source: { kind: "plugin", plugin: "hooks" }, provenance: { kind: "plugin", authority: "observation", scope: "turn", producer: "agent.hooks" } })
   return hookContext
 }
 

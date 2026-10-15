@@ -121,7 +121,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         const prepared = raw.start === false ? raw.text : await options.prepare?.(id, raw.text) ?? raw.text
         const text = raw.context ? `${prepared}\n\n${raw.context}` : prepared
         const delivery = raw.delivery === "steer" && !service.queueState(id).running ? "queue" : raw.delivery
-        inbox.admit({ inputId, text, delivery, intent: "user", ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
+        inbox.admit({ inputId, text, delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" }, ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
         await coordinator.flush(id)
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && delivery === "queue") {

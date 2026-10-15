@@ -1,8 +1,8 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append, SYSTEM_INPUT_PLUGIN, type ImageInput } from "@i-harness/core-session"
+import { append, type ImageInput } from "@i-harness/core-session"
 import { randomUUID } from "node:crypto"
 import { executeToolCalls } from "../execute-tool-calls.ts"
-import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle } from "./types.ts"
+import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle, AgentInputOptions } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
@@ -10,6 +10,8 @@ import { failTurn, completeModelStep, reportModelUsage, closeStep, finishTurn } 
 import { createAdmission, stalePreparedInput } from "./admission.ts"
 import { createRecovery } from "./recovery.ts"
 import { modelFailureFacts } from "@i-harness/llm-seam"
+import { ensureConversationSemantics, acceptModelExchange } from "./exchange.ts"
+import { prepareTurnInput } from "./input.ts"
 
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
@@ -19,23 +21,17 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
   const prepareRequest = createStepInput(deps, context)
   const recovery = createRecovery(deps, context)
   const admit = createAdmission(deps, context, prepareRequest, recovery)
-  async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
+  async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions, producer = "agent.run"): Promise<AgentResult> {
     const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
     const abort = signal ?? deps.signal
+    const input = prepareTurnInput(deps.session, { message, images, inputId, options, producer })
+    ensureConversationSemantics(deps.session)
     append(deps.session, { type: "turn/start" })
     lifecycle.turnOpen = true
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
-    const admitted = inputId ? deps.session.events.findLast((event) => event.type === "agent/input/admitted" && event.inputId === inputId) : undefined
-    append(deps.session, {
-      type: "user/message", text: message,
-      ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}),
-      ...(admitted?.type === "agent/input/admitted" ? {
-        input: { inputId: admitted.inputId, intent: admitted.intent, ...(admitted.synthetic !== undefined ? { synthetic: admitted.synthetic } : {}) },
-        ...(admitted.intent === "system" ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } } : {}),
-      } : {}),
-    })
+    append(deps.session, input)
 
     let needsContinuation = true
     let stopContinuations = 0
@@ -73,15 +69,16 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
             // Reopen only the physical model boundary. Hooks, admitted inputs
             // and prior accepted tool effects belong to the logical step.
             physicalStepStartSeq = deps.session.events.length
-            append(deps.session, { type: "step/start" }); lifecycle.stepOpen = true; lifecycle.stepFailed = false
+            const failedStart = deps.session.events[streamStep.result().identity.stepStartSeq]
+            append(deps.session, { type: "step/start", actionId: failedStart?.type === "step/start" ? failedStart.actionId : randomUUID(), attemptId: randomUUID() }); lifecycle.stepOpen = true; lifecycle.stepFailed = false
             rebuild = true
           } else streamStep.fail(error)
         } finally { streamStep.settle() }
         if (!rebuild) break
       }
       const { request, requestRevision, prepared } = candidate
-      lifecycle.providerCompleted = true
       const step = streamStep.result()
+      if (!step.providerEnded) streamStep.fail(Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" }))
       if (step.truncatedThisStep || step.refusedThisStep) {
         reportModelUsage(deps, step)
         streamStep.discard()
@@ -89,6 +86,9 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
       }
       completeModelStep(deps, context, request, requestRevision, abort, step, prepared.measurement)
+      const acceptedSeq = deps.session.events.length + 1
+      try { await acceptModelExchange(deps, { identity: step.identity, step, signal: abort }) }
+      finally { lifecycle.providerCompleted = deps.session.events[acceptedSeq]?.type === "model/exchange-accepted" }
       await recovery.resolve(prepared.measurement, abort)
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
@@ -123,7 +123,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         const reason = [verdict?.continuation?.reason, hookVerdict?.reason].filter(value => typeof value === "string" && value.trim()).join("\n\n")
         if (typeof reason === "string" && reason.trim()) {
           stopContinuations += 1
-          append(deps.session, { type: "user/message", text: feedbackText(reason), source: { kind: "plugin", plugin: "hooks" } })
+          append(deps.session, { type: "user/message", text: feedbackText(reason), source: { kind: "plugin", plugin: "hooks" }, provenance: { kind: "plugin", authority: "observation", scope: "turn", producer: "agent.hooks" } })
           needsContinuation = true
         }
       }
@@ -131,9 +131,9 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
 
     return finishTurn(ctx, deps, lifecycle, getSteps, modelLoop.reasoning)
   }
-  return async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
+  return async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions, producer?: string): Promise<AgentResult> {
     const lifecycle: TurnLifecycle = { turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false }
-    try { return await executeTurn(lifecycle, message, signal, images, inputId) }
+    try { return await executeTurn(lifecycle, message, signal, images, inputId, options, producer) }
     catch (error) { return failTurn(deps, lifecycle, error) }
   }
 }

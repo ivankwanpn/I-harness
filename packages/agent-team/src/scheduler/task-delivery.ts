@@ -21,7 +21,7 @@ export function createTaskDelivery(
       // Lead is always live: durably record the message in the parent session
       // log (subagent/inbox-style event; the parent's mirror persists it).
       // Flush the parent's write-behind so the ack means on-disk.
-      if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) append(deps.parentSession, { type: "subagent/inbox", messageId, message: content })
+      if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) append(deps.parentSession, { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } })
       if (sub.childSessions) {
         try {
           await sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
@@ -73,7 +73,7 @@ export function createTaskDelivery(
     // Durable inbox write: append through the child's mirror (spawnChild's
     // session hook enqueues every append to the coordinator write-behind),
     // then update the live mailbox mirror.
-    append(entry.session, { type: "subagent/inbox", messageId, message: content })
+    append(entry.session, { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } })
     entry.mailbox.push(content)
     // FLUSH BEFORE ACK: true must mean the message is on disk in the target's
     // session (binding: "durably in the target's session before returning

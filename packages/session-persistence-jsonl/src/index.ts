@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
 
@@ -124,7 +124,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
       const header = await readHeader(path)
-      if (events.some(event => isContextEventType(event.type) && (header.formatVersion !== CURRENT_FORMAT_VERSION || !validContextEvent(event)))) throw new Error("operational context append requires format 2 and valid facts")
+      for (const event of events) validateConversationEventShape(event, header.formatVersion)
+      if (events.some(event => isContextEventType(event.type) && (header.formatVersion < 2 || !validContextEvent(event)))) throw new Error("operational context append requires format 2 and valid facts")
       const handle = await open(path, "r+")
       let committedBytes = 0
       try {
@@ -175,6 +176,20 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const events = parseEventLines(lines.slice(1))
       const torn = hasTornTail(lines.slice(1))
       const closers = missingClosers(events)
+      if (events.some(event => event.type === "conversation/semantics")) {
+        for (const [index, event] of closers.entries()) event.seq = events.length + index
+        if (torn || closers.length) {
+          let committed = lines[0]! + "\n"
+          for (const line of lines.slice(1)) {
+            if (line.trim()) { try { JSON.parse(line) } catch { break } }
+            committed += line + "\n"
+          }
+          // Preserve every existing committed line, including whitespace. Only
+          // the torn suffix is removed; repair facts get new coordinates.
+          await replaceRawSessionFile(path, committed + closers.map(event => JSON.stringify(event) + "\n").join(""))
+        }
+        return { version: header.formatVersion, events: [...events, ...closers], meta: header }
+      }
       if (torn || closers.length > 0) {
         await replaceSessionFile(path, headerLine, [...events, ...closers])
       }
@@ -192,7 +207,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || expected !== 1 && expected !== target) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       const raw = await readFile(path)
       const end = raw.indexOf(0x0a)

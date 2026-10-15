@@ -6,9 +6,15 @@ import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { createStepReasoning } from "./reasoning.ts"
 import { TOOL_ABORTED_BEFORE_DISPATCH } from "@i-harness/core-tools"
+import { randomUUID } from "node:crypto"
 
 export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
+  const initialStart = deps.session.events[initialStartSeq]
+  const actionId = initialStart?.type === "step/start" ? initialStart.actionId! : ""
+  let attemptId = initialStart?.type === "step/start" ? initialStart.attemptId! : ""
+  let reopenedRetry: string | undefined
+  let endFingerprint: string | undefined
   let stepText = ""
   let toolCallsThisStep = 0
   // Reports merge within this attempt; a discarded retry resets usage.
@@ -48,6 +54,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
     accept(ev: LLMStreamEvent) {
       stepReasoning.checkPublication()
       if (abort?.aborted) throw new Error("agent aborted")
+      if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
       if (ev.type !== "reasoning" && ev.type !== "usage" && ev.type !== "activity") stepReasoning.flush()
       switch (ev.type) {
         case "activity":
@@ -55,7 +62,9 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: ev.activity })
           break
         case "retry":
-          if (ev.retry.phase === "waiting" && ev.retry.discardOutput) {
+          if (!providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`) {
+            if ((stepText || batch.length) && !ev.retry.discardOutput) throw new Error("model retry cannot preserve partial output")
+            reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
             // Keep failed output in the append-only audit, but exclude it
             // and its unexecuted calls from the next model projection.
             if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
@@ -74,9 +83,11 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             thinkingBlocks = undefined
             providerContinuation = undefined
             providerEnded = false
+            endFingerprint = undefined
             context.contextMeter.invalidate()
             stepStartSeq = deps.session.events.length
-            append(deps.session, { type: "step/start" })
+            attemptId = randomUUID()
+            append(deps.session, { type: "step/start", actionId, attemptId })
             lifecycle.stepOpen = true
             lifecycle.stepFailed = false
           }
@@ -114,6 +125,8 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           })
         }
         case "end":
+          if (providerEnded && endFingerprint !== JSON.stringify(ev)) throw Object.assign(new Error("Conflicting model completion records"), { code: "MODEL_RESPONSE_INCOMPLETE" })
+          endFingerprint = JSON.stringify(ev)
           providerEnded = true
           thinkingBlocks = ev.thinkingBlocks
           providerContinuation = ev.providerContinuation
@@ -140,7 +153,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
       }
       stepReasoning.flush()
     },
-    result() { return { stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded } },
+    result() { return { stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
   }
 }
 

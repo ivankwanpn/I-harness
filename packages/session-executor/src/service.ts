@@ -310,7 +310,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (input.sessionId !== id || !assembly || assembly !== owner()) throw new Error("parent notification admission unavailable")
           const inputId = `parent-notify-${createHash("sha256").update(input.text).update(input.description).digest("hex")}`
           if (!assembly.session.events.some((event) => event.type === "agent/input/admitted" && event.inputId === inputId)) {
-            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
+            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", provenance: { kind: input.display && ["task", "team-message", "team-result"].includes(input.display.kind) ? "child-report" : "plugin", authority: "observation", scope: "turn", producer: "session.notification" }, synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
           }
           await opts.coordinator?.flush(id)
           if (closed || closing.has(id) || cancelledParents.has(id)) {
@@ -815,7 +815,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             if (pending.text !== text) throw new Error("Admitted input does not match submitted text")
             execution = lane.runAdmitted(id, controller.signal)
           } else {
-            assembly.inbox.admit({ inputId: id, text, delivery: "queue", intent: "user", ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) })
+            assembly.inbox.admit({ inputId: id, text, delivery: "queue", intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "session.prompt" }, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) })
             execution = lane.runAdmitted(id, controller.signal)
           }
           record.state = "queued"

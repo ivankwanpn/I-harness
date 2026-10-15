@@ -50,7 +50,7 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
       })
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
-        const result = await agent.followup(ev.message, entry.controller.signal)
+        const result = await agent.followup(ev.message, entry.controller.signal, { provenance: ev.provenance ?? { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox", ...(entry.session.header?.parentSession ? { originSessionId: entry.session.header.parentSession } : {}) } })
         // Clear a stale error (e.g. "aborted" from an earlier interrupted
         // turn) once a followup succeeds — otherwise a misleading error would
         // persist into the M6 snapshot.

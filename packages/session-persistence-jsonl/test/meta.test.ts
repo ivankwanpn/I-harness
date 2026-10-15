@@ -57,7 +57,7 @@ describe("parseHeader modelSelection protocol (protocol-selection §2)", () => {
     // not know is a field the rewrite SILENTLY DELETES — the session would come
     // back resolving on a different wire than the one it was told to use.
     const meta = parseHeader(JSON.stringify({
-      formatVersion: 2, sessionId: "s1",
+      formatVersion: 3, sessionId: "s1",
       modelSelection: { provider: "gateway", model: "m", protocol: "anthropic-messages", reasoningEffort: "high" },
     }))
     expect(meta.modelSelection).toEqual({
@@ -67,7 +67,7 @@ describe("parseHeader modelSelection protocol (protocol-selection §2)", () => {
     // Structurally invalid is DROPPED, not passed through — the same rule the
     // rest of this parser already applies to provider/model.
     const bad = parseHeader(JSON.stringify({
-      formatVersion: 2, sessionId: "s1",
+      formatVersion: 3, sessionId: "s1",
       modelSelection: { provider: "gateway", model: "m", protocol: "not-a-protocol" },
     }))
     expect(bad.modelSelection).toEqual({ provider: "gateway", model: "m" })

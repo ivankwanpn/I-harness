@@ -1,5 +1,5 @@
 import type { CompactionConfig, CompactionResult, CompactionRunOptions } from "@i-harness/compaction"
-import type { ImageInput, Session, BudgetRead, ContextBindingMetadata } from "@i-harness/core-session"
+import type { ImageInput, Session, BudgetRead, ContextBindingMetadata, InputProvenance } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -103,8 +103,8 @@ export interface AgentResult {
 
 export interface Agent {
   contextBudget?(): BudgetRead
-  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult>
-  followup(message: string, signal?: AbortSignal): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>
+  followup(message: string, signal?: AbortSignal, options?: AgentInputOptions): Promise<AgentResult>
   // M11: explicit manual compaction. Optional because a registry may hold
   // agents that were never configured with a compact seam (no engine). With no
   // compact config, `createAgent` still returns a `compact` that no-ops.
@@ -113,6 +113,7 @@ export interface Agent {
   compact?(instructions?: string, options?: CompactionRunOptions): Promise<CompactionResult>
   updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata }): void
 }
+export interface AgentInputOptions { provenance: InputProvenance }
 
 export interface AgentRegistry {
   register(sessionId: string, agent: Agent): void

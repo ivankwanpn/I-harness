@@ -133,6 +133,8 @@ const STEP_CONTENT_TYPES = new Set<SessionEvent["type"]>([
  */
 export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
   if (events.length === 0) return []
+  const fence = events.findIndex(event => event.type === "conversation/semantics")
+  if (fence >= 0) return repairFencedTail(events, fence)
 
   // Q8 (M71): does THIS LOG prove its writing build had the boundary? One
   // marker in ANY turn does — and then a marker-less call elsewhere in the same
@@ -238,5 +240,32 @@ export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
     out.push({ type: "turn/end" } as SessionEvent)
   }
 
+  return out
+}
+
+/** Explicit acceptance makes every old coordinate immutable, including closed tails. */
+function repairFencedTail(events: SessionEvent[], fence: number): SessionEvent[] {
+  const accepted = new Set<number>(), dispatched = new Set<string>(), completed = new Set<string>()
+  let turnOpen = false, stepOpen = false
+  let nextSeq = events.reduce((highest, event) => Math.max(highest, event.seq ?? -1), -1) + 1
+  for (const event of events.slice(fence + 1)) {
+    if (event.type === "model/exchange-accepted") for (const seq of event.callSeqs) accepted.add(seq)
+    else if (event.type === "tool/dispatch") dispatched.add(event.callId)
+    else if (event.type === "tool/result") completed.add(event.callId)
+    else if (event.type === "turn/start") { turnOpen = true; stepOpen = false }
+    else if (event.type === "turn/end") { turnOpen = false; stepOpen = false }
+    else if (event.type === "step/start") stepOpen = true
+    else if (event.type === "step/end") stepOpen = false
+  }
+  const out = events.map(event => ({ ...event }))
+  for (const event of events.slice(fence + 1)) {
+    if (event.type !== "tool/call" || completed.has(event.callId)) continue
+    const unknown = accepted.has(event.seq!) && dispatched.has(event.callId)
+    out.push({ type: "tool/result", callId: event.callId, name: event.name, isError: true,
+      output: unknown ? TOOL_OUTCOME_UNKNOWN_RESULT : TOOL_ABORTED_RECOVERY_RESULT, seq: nextSeq++ })
+    completed.add(event.callId)
+  }
+  if (stepOpen) out.push({ type: "step/end", seq: nextSeq++ })
+  if (turnOpen) out.push({ type: "turn/end", seq: nextSeq++ })
   return out
 }

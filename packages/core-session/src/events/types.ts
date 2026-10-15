@@ -2,6 +2,7 @@ import type { InputDisplay, InputSynthetic, UserMessageInput } from "../inbox.ts
 import type { ImageInput, ImageSummary } from "../images.ts"
 import type { ProviderThinkingBlock, ProviderContinuation } from "../projection/types.ts"
 import type { PruneRecord } from "../projection/pruning.ts"
+import type { InputProvenance } from "./conversation.ts"
 
 export interface ModelRetryInfo {
   requestId: string
@@ -32,14 +33,14 @@ export interface ModelActivityInfo {
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
-    | { type: "step/start"; seq?: number }
+    | { type: "step/start"; actionId?: string; attemptId?: string; seq?: number }
     | { type: "step/failed"; seq?: number }
     | { type: "model/retry"; version: 1; ts: number; retry: ModelRetryInfo; seq?: number }
     | { type: "model/activity"; version: 1; ts: number; activity: ModelActivityInfo; seq?: number }
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
-    | { type: "user/message"; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
+    | { type: "user/message"; provenance?: InputProvenance; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -64,7 +65,7 @@ export type SessionEvent =
     | { type: "code/store"; version: 1; cellId: string; sessionId?: string; writes: Array<[string, unknown]>; seq?: number }
     | { type: "step/end"; seq?: number; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true; /** M77: the provider REFUSED to produce content (HTTP 200, no content, a bare `end` at the seam). Written only as `true` — absent stays absent, exactly like `truncated`, and the two are INDEPENDENT: one step can be both. */ refused?: true; /** M80: the provider returned NO content at all — an empty success (HTTP 200, no text, no tool call, a bare `end`). Written only as `true`; absent stays absent. Excluded by construction from a step that was `truncated` or `refused` (those are the more specific facts about the same step), and a step whose only output was a tool call is NOT empty. */ empty?: true }
     | { type: "turn/end"; seq?: number }
-    | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }
+    | { type: "subagent/inbox"; messageId: string; message: string; provenance?: InputProvenance; seq?: number }
     | { type: "compaction/start"; seq?: number }
     | { type: "compaction/end"; seq?: number }
     | { type: "compaction/summary"; text: string; shadowedSeqs: number[]; seq?: number }
@@ -136,7 +137,7 @@ export type SessionEvent =
     // All three are log-only (never model-visible; the text enters the model
     // surface only through the promoted user/message). version 1 (M19/M21
     // convention for structured new event slots).
-    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string; seq?: number }
+    | { type: "agent/input/admitted"; provenance?: InputProvenance; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string; seq?: number }
     | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
     | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
     // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).
@@ -194,6 +195,8 @@ export type SessionEvent =
     // (unindexed). Additive; format version stays 1.
     | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "session" | "mount" | "shutdown"; error?: string; seq?: number }
     | import("./context.ts").ContextEvent
+    | import("./conversation.ts").ConversationSemanticsEvent
+    | import("./conversation.ts").ExchangeAcceptedEvent
   )
   & { ignorable?: true }
 
@@ -244,4 +247,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 2
+export const CURRENT_FORMAT_VERSION = 3

@@ -1,6 +1,8 @@
 import { CURRENT_FORMAT_VERSION } from "./types.ts"
 import type { Session, SessionEvent } from "./types.ts"
-import { appendHooks, subscribers } from "./state.ts"
+import { appendHooks, subscribers, conversationIndexes } from "./state.ts"
+import { createConversationIndex } from "../conversation/validation.ts"
+import { validateConversationEventShape } from "./conversation.ts"
 import { validateImages } from "../images.ts"
 import type { ImageInput, ImageSummary } from "../images.ts"
 import { isContextEventType, validContextEvent } from "./context.ts"
@@ -12,7 +14,7 @@ export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
 }
 
 export function append(session: Session, event: SessionEvent): void {
-  if (isContextEventType(event.type) && (session.formatVersion !== CURRENT_FORMAT_VERSION || !validContextEvent({ ...event, seq: session.events.length }))) throw new Error("invalid operational context event or session format")
+  if (isContextEventType(event.type) && (session.formatVersion < 2 || !validContextEvent({ ...event, seq: session.events.length }))) throw new Error("invalid operational context event or session format")
   if (event.type === "model/activity") throw new Error("model/activity must be published as a transient event")
   if (event.type === "reasoning/chunk") throw new Error("reasoning/chunk must be published as a transient event")
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
@@ -50,7 +52,15 @@ export function append(session: Session, event: SessionEvent): void {
     validateImages(maybeOutputImages as ImageInput[], event.type)
   }
   const ev = { ...event, ...(imageSummaries !== undefined ? { imageSummaries } : {}), seq: session.events.length }
+  validateConversationEventShape(ev, session.formatVersion)
+  let cached = conversationIndexes.get(session)
+  if (!cached || cached.events !== session.events || cached.index.eventCount !== session.events.length) {
+    cached = { events: session.events, index: createConversationIndex(session.events, index => session.events[index], session.formatVersion) }
+    conversationIndexes.set(session, cached)
+  }
+  const staged = cached.index.stage([ev])
   session.events.push(ev)
+  staged.commit()
   appendHooks.get(session)?.(ev)
   subscribers.get(session)?.forEach((l) => l(ev))
 }

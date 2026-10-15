@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto"
 import type { ImageInput, Session } from "@i-harness/core-session"
 import { Inbox, type AdmittedInput, type PendingInput } from "@i-harness/core-session"
 import type { AgentResult } from "./index.ts"
+import type { AgentInputOptions } from "./agent/types.ts"
 
-export type InputSubmit =
+export type InputSubmit = (
   /** `signal` (M41b): the per-turn abort — the pump forwards it to
    * agent.run so an in-flight turn can be cancelled at step boundaries /
    * stream yields (not just the queued gate). */
@@ -11,9 +12,10 @@ export type InputSubmit =
   | { tier: "followup"; text: string; signal?: AbortSignal; images?: ImageInput[]; clientToken?: string }
   | { tier: "steer"; text: string; signal?: AbortSignal; images?: ImageInput[]; clientToken?: string }
   | { tier: "inject"; text: string; description: string; scope: "turn" | "session" }
+) & { provenance?: import("@i-harness/core-session").InputProvenance }
 
 export interface AgentRunSurface {
-  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>
 }
 
 export interface SessionExecutorDeps {
@@ -76,16 +78,18 @@ export interface SessionExecutor {
 // This helper constructs an admission; submit() below owns the push.
 // Keep cross-tier/idle/boundary semantics in that document.
 export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
+  const provenance = input.provenance ?? { kind: "unknown" as const, authority: "unknown" as const, scope: "turn" as const, producer: "agent.input" }
   switch (input.tier) {
     case "send":
     case "followup":
-      return { inputId: randomUUID(), text: input.text, delivery: "queue", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
+      return { inputId: randomUUID(), text: input.text, provenance, delivery: "queue", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
     case "steer":
-      return { inputId: randomUUID(), text: input.text, delivery: "steer", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
+      return { inputId: randomUUID(), text: input.text, provenance, delivery: "steer", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
     case "inject":
       return {
         inputId: randomUUID(),
         text: input.text,
+        provenance,
         delivery: input.scope === "turn" ? "steer" : "queue",
         intent: "system",
         synthetic: { description: input.description, scope: input.scope },
@@ -137,7 +141,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           // (agent.run), so the promoted marker immediately precedes them.
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
-          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId)
+          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, ...(next.provenance ? [{ provenance: next.provenance }] : []))
           lastError = undefined
         } catch (err) {
           lastError = withPendingCount(err, deps.inbox.pending().length)

@@ -16,7 +16,7 @@ export function createSendTool(deps: SubagentToolDeps): Tool {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
       // Durable inbox: append a model-hidden event through the child's mirror.
-      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
+      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } })
       entry.mailbox.push(args.message)
       return { queued: true }
     },
@@ -34,7 +34,7 @@ export function createFollowupTool(deps: SubagentToolDeps): Tool {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
       // Durable inbox + wake: queue the message and drive a turn on the child.
-      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message })
+      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } })
       entry.mailbox.push(args.message)
       // M23 (Minor 4): inject the lazy rebuild so a wakeup for a restored
       // (fresh-registry) entry rebuilds the resident agent instead of

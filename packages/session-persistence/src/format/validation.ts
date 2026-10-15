@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, type Session, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationHistory, validateConversationEventShape, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionMeta } from "../coordinator/types.ts"
 import { upgrades, isKnownEventType, SessionFormatUnsupportedError } from "./registry.ts"
 
@@ -38,9 +38,18 @@ export function assertVersionSupported(version: number): void {
 
 /** Validate the committed prefix before any structural repair, and again under ownership. */
 export function preflightSessionFormat(version: number, events: SessionEvent[]): void {
+  preflightBatchShape(version, events)
+  try { validateConversationHistory(events, version) }
+  catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation history", { cause }) }
+}
+
+/** A batch may name earlier durable records. References are checked by the writer's prefix index. */
+export function preflightBatchShape(version: number, events: readonly SessionEvent[]): void {
   assertVersionSupported(version)
-  guardIgnorable(events, true)
+  guardIgnorable([...events], true)
   for (const event of events) {
+    try { validateConversationEventShape(event, version) }
+    catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation payload", { cause }) }
     if (isContextEventType(event.type) && (version < 2 || !validContextEvent(event))) {
       throw new SessionFormatUnsupportedError(`unsupported operational payload or format for '${event.type}'`)
     }
