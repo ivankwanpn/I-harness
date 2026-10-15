@@ -130,3 +130,32 @@ it("a failed post-response observation preserves accepted usage and blocks the n
   await expect(agent.followup("next")).rejects.toMatchObject({ code: "CONTEXT_SNAPSHOT_UNSUPPORTED" })
   expect(preparations).toBe(1); expect(Object.isFrozen(unsupported)).toBe(false)
 })
+
+it("does not restore a historical read to fit when a changed surface is restored", async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  let prompt = "original", preparations = 0, transports = 0
+  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
+    preparations++
+    return wrapPreparedRequest(await actual.prepare!(request), (_stream, control) => (async function*() {
+      entered.resolve(); await release.promise; control?.validateBeforeTransport?.(); transports++
+      yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
+    })())
+  } }
+  const agent = createAgent(ctx, { session, tools, model, systemPrompt: () => prompt, budget: { contextWindow: 100000 } })
+  const running = agent.run("anchor")
+  try {
+    await entered.promise
+    const initial = agent.contextBudget!()
+    expect(initial).toMatchObject({ kind: "ready", snapshot: { admission: "fit" } })
+    prompt = "changed"
+    expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+    prompt = "original"
+    const restored = agent.contextBudget!()
+    expect(restored).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+    expect(restored.kind === "ready" && restored.snapshot.requestContext).toEqual(initial.kind === "ready" && initial.snapshot.requestContext)
+    expect(preparations).toBe(1); expect(transports).toBe(0)
+    release.resolve(); await running
+  } finally { release.resolve(); await running.catch(() => {}) }
+})

@@ -24,6 +24,9 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
         try { if (!sameRequestCandidate(captured, freshness())) unavailable = "Model context or request surface/binding changed since the prepared budget" }
         catch { unavailable = "Current context capture is unavailable" }
       }
+      // Observing a stale assessment makes it historical. Restoring a previous
+      // surface cannot turn a read into a new admission certificate.
+      if (unavailable) invalidated = unavailable
       const recovery = deriveContextRecovery(session, ownerSessionId, latest.snapshot)
       const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
       const read = unavailable ? historical(unavailable) : latest
