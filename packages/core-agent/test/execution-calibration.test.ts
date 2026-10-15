@@ -10,19 +10,19 @@ function fixture(session = createSession(), retry = false) {
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let identity: LiveExecutionIdentity | undefined = E, confirms = 0, sends = 0, hooks = 0, claims = 0
   const epochs: (LiveExecutionIdentity | undefined)[] = []
-  let usage: LLMUsage = { inputTokens: 100, outputTokens: 9000, inputTokenSemantics: 'includes-cache' }, failNext = false
+  let usage: LLMUsage = { inputTokens: 100, outputTokens: 9000, inputTokenSemantics: 'includes-cache' }, failNext = false, usageBeforeConfirm = false
   const confirmers: ((c: ExecutionConfirmation) => void)[] = []
   ctx.on('agent/pre-step', () => { hooks++ })
   const model: ModelClient = { executionIdentity: E, async *stream() { throw Error('unprepared') }, async prepare(request) {
     return createPreparedPayload({ body: { messages: request.messages }, request,
       describe(body) { const c = new ProjectionCounter('projected-pricing-v2'); for (const m of body.messages) c.unit(m, m.role, () => c.text('visibleText', m.content)); return { input: c.finish({ protocol: 'test', modelId: 'm' }, body, 'fixed-shape'), packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } } },
       output: () => ({ capSupport: 'unsupported', minimumCap: 1, source: 'request' }), cap: b => b,
-      async *execute(_b, _s, control, execution) { if (control.confirmExecution) confirmers.push(control.confirmExecution); confirms++; execution.confirm(epochs.length ? epochs.shift() : identity); sends++; if (failNext) { failNext = false; throw Object.assign(Error('failed transport'), { code: 'SERVER' }) }; yield { type: 'usage', usage }; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } },
+      async *execute(_b, _s, control, execution) { if (usageBeforeConfirm) yield { type: 'usage', usage }; if (control.confirmExecution) confirmers.push(control.confirmExecution); confirms++; execution.confirm(epochs.length ? epochs.shift() : identity); sends++; if (failNext) { failNext = false; throw Object.assign(Error('failed transport'), { code: 'SERVER' }) }; yield { type: 'usage', usage }; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } },
     })
   } }
   const sending = retry ? Object.assign(createRetryingClient(model, resolveRetryPolicy({ mode: 'always', backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } })), { executionIdentity: E }) : model
   const agent = createAgent(ctx, { session, sessionId: 'owner', model: sending, tools, systemPrompt: '', budget: { contextWindow: 20000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
-  return { agent, session, confirmers, usage: (value: LLMUsage) => { usage = value }, fail: () => { failNext = true }, set: (epoch: string | undefined) => { identity = epoch ? { ...E, authEpoch: epoch } : undefined }, epochs, counts: () => ({ confirms, sends, hooks, claims }) }
+  return { agent, session, confirmers, preUsage: () => { usageBeforeConfirm = true }, usage: (value: LLMUsage) => { usage = value }, fail: () => { failNext = true }, set: (epoch: string | undefined) => { identity = epoch ? { ...E, authEpoch: epoch } : undefined }, epochs, counts: () => ({ confirms, sends, hooks, claims }) }
 }
 it('writes exact accepted v2 lineage and prices only actual replay suffix on the next live step', async () => {
   const f = fixture(); await f.agent.run('first'); await f.agent.followup('second')
@@ -79,6 +79,11 @@ it('does not reset retry allowance after a real send when mode is always', async
   await expect(f.agent.followup('retry then epoch change')).rejects.toMatchObject({ code: 'EXECUTION_IDENTITY_CHANGED' })
   expect(f.counts()).toEqual({ confirms: 3, sends: 2, hooks: 2, claims: 2 })
   expect(f.session.events.filter(e => e.type === 'model/exchange-accepted')).toHaveLength(1)
+})
+it('treats provider usage observed without a send callback as output and refuses an epoch rebuild', async () => {
+  const f = fixture(); await f.agent.run('anchor'); f.preUsage(); f.set('F')
+  await expect(f.agent.followup('usage proves a response before late confirmation')).rejects.toMatchObject({ code: 'EXECUTION_IDENTITY_CHANGED' })
+  expect(f.counts()).toEqual({ confirms: 2, sends: 1, hooks: 2, claims: 2 })
 })
 it('records only the successful retry send and its current physical attempt', async () => {
   const f = fixture(undefined, true); f.fail(); await f.agent.run('retry')

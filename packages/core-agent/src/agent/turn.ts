@@ -57,7 +57,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         let physicalAttempts = 0, observed = false, rebuild = false
         try {
           for await (const ev of candidate.prepared.stream({ confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: () => { activeCandidate.validateBeforeTransport(); physicalAttempts++; candidateState.hasStartedSend = true } })) {
-            if (["text/chunk", "tool_call", "reasoning", "end"].includes(ev.type)) { observed = true; candidateState.hasObservedOutput = true }
+            if (ev.type !== "activity" && ev.type !== "retry") { observed = true; candidateState.hasObservedOutput = true }
             streamStep.accept(ev)
           }
         } catch (error) {
