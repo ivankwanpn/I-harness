@@ -3,6 +3,22 @@ import { createBedrockClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 import type { BedrockRuntimeFace } from "../src/index.ts"
 afterEach(() => vi.unstubAllGlobals())
+it("remeasures managed thinking caps and restores the original SDK command identity", async () => {
+  let sent: Record<string, any> = {}
+  const runtime = { async send(command: { input: Record<string, unknown> }) { sent = command.input; return { stream: [] } }, destroy() {} } as unknown as BedrockRuntimeFace
+  const prepared = await createBedrockClient({ model: "anthropic.claude-3-7-sonnet" }, runtime).prepare!({ systemPrompt: "", tools: [], messages: [], reasoningEffort: "high", maxOutputTokens: 4096 })
+  const lower = prepared.withOutputCap(1025)
+  expect(prepared.measurement.output.reasoningBudget).toBe(4095)
+  expect(lower.measurement.output.reasoningBudget).toBe(1024)
+  expect(lower.measurement.input.semanticIdentity?.shapeId).not.toBe(prepared.measurement.input.semanticIdentity?.shapeId)
+  expect(lower.measurement.input.shapeFingerprint).not.toBe(prepared.measurement.input.shapeFingerprint)
+  expect(lower.measurement.payloadIdentity?.id).not.toBe(prepared.measurement.payloadIdentity?.id)
+  expect(lower.withOutputCap(4096).measurement).toEqual(prepared.measurement)
+  for await (const _event of lower.stream()) {}
+  expect(sent.additionalModelRequestFields.thinking).toEqual({ type: "enabled", budget_tokens: 1024 })
+  expect(sent.inferenceConfig).toEqual({ maxTokens: 1025 })
+  expect(lower.measurement.packet.bodyBytes).toBeUndefined()
+})
 it("captures nested image data and options before image validation suspends preparation", async () => {
   const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   const imageInput = { mediaType: "image/png" as const, dataBase64: image }

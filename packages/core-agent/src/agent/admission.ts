@@ -18,16 +18,16 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const initial = await prepareModelRequest(captured.model, request)
       abort?.throwIfAborted()
       if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
-      const assess = (authorized = false) => context.ownedBudget.assess(initial, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized)
+      const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.ownedBudget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized, selectOutputCap)
       const assessed = assess()
-      const recoveryAdmission = await recovery.admit(initial.measurement, state, abort)
+      const recoveryAdmission = await recovery.admit(assessed.prepared.measurement, state, abort)
       if (recoveryAdmission === "rebuild") { state.compacted = true; continue }
       if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const { prepared, snapshot } = recoveryAdmission === "authorized"
-        ? assess(true) : assessed
+        ? assess(true, assessed.prepared, false) : assessed
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
-        systemBytes: initial.measurement.input.components.system.textUtf8Bytes,
-        schemaBytes: initial.measurement.input.components.toolSchemas.structuredBytes,
+        systemBytes: prepared.measurement.input.components.system.textUtf8Bytes,
+        schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes,
         estimatedInputTokens: snapshot.admissionInputTokens, estimateSource: snapshot.estimateSource, coverage: snapshot.coverage,
         reasoningTokens: snapshot.reasoningTokens, outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport,
       } })

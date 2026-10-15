@@ -1,4 +1,7 @@
-import { prepareModelRequest, modelFailureFacts } from "@i-harness/llm-seam"
+import { prepareSummary, type SummaryLimits } from "./prepared-summary.ts"
+import { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
+export { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
+import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import { deriveMessages, type Session } from "@i-harness/core-session"
 import { sliceMessages } from "./slices.ts"
@@ -143,49 +146,6 @@ function extractSensitiveLines(shadowText: string): string[] {
   return out
 }
 
-export class SummaryCheckpointError extends Error {
-  constructor(readonly failure: unknown) { super("compaction: summary checkpoint persistence failed", { cause: failure }) }
-}
-
-type SummaryBlock = "retention-policy" | "output-floor" | "fixed-input" | "call-limit" | "call-policy" | "shrink-limit" | "retention-output" | "binding" | "opaque" | "refused" | "truncated" | "incomplete"
-/** Closed engine-owned reasons; provider messages never become result data. */
-export class SummaryBlockedError extends Error {
-  constructor(kind: SummaryBlock, facts: { chars?: number; floor?: number; input?: number; output?: number; window?: number; limit?: number } = {}) {
-    const numeric = (value: number | undefined) => Number.isSafeInteger(value) && value! >= 0 ? String(value) : "unknown"
-    const reasons: Record<SummaryBlock, string> = {
-      "retention-policy": `compaction: retained checkpoint ceiling ${numeric(facts.chars)} chars is below quality floor ${numeric(facts.floor)}`,
-      "output-floor": `compaction: summary output ceiling ${numeric(facts.output)} cannot provide reasoning/retention allowance ${numeric(facts.floor)}`,
-      "fixed-input": `compaction: indivisible/fixed summary input cannot fit (${numeric(facts.input)} input tokens; ${numeric(facts.output)} required output; window ${numeric(facts.window)})`,
-      "call-limit": `compaction: shared summary call limit exhausted (${numeric(facts.limit)})`,
-      "call-policy": "compaction: maxSummaryCalls must be an integer in [1, 8]",
-      "shrink-limit": "compaction: summary overflow shrink limit exhausted (2)",
-      "retention-output": `compaction: retained summary outside quality/size limits (${numeric(facts.chars)} chars; floor ${numeric(facts.floor)}; ceiling ${numeric(facts.limit)})`,
-      binding: "compaction: summary binding does not match prepared model",
-      opaque: "compaction: summary fixed input contains unpriced provider references",
-      refused: "compaction: the provider refused to produce a summary",
-      truncated: "compaction: provider truncated the summary; checkpoint was not committed",
-      incomplete: "compaction: incomplete summary stream; checkpoint was not committed",
-    }
-    super(reasons[kind])
-  }
-}
-
-interface SummaryLimits {
-  maxOutputTokens?: number
-  outputCapExplicit?: boolean
-  contextWindow?: number
-  modelMaxOutputTokens?: number
-  overheadTokens?: number // compatibility: actual prepared system/tools are priced instead
-  reasoningEffort?: LLMRequest["reasoningEffort"]
-  metadata?: import("@i-harness/core-session").ContextBindingMetadata
-  signal?: AbortSignal
-  maxSummaryCalls?: number
-  beforeTransport?: () => Promise<void>
-  validateBeforeTransport?: () => void
-  onMeasurement?: (facts: { inputTokens: number; contextWindow?: number; outputReserve: number; effectiveCap?: number; capSupport: string; minimumCap: number; reasoningBudget?: number; defaultFloorAdjusted: boolean; coverage: string; estimateSource: "projected-heuristic"; uncertainties: readonly string[] }) => void
-  onUsage?: (usage: LLMUsage) => void
-}
-
 function confirmedOverflow(error: unknown): boolean {
   if (modelFailureFacts(error)?.code !== "CONTEXT_WINDOW_EXCEEDED") return false
   let current = error
@@ -249,25 +209,9 @@ export async function summarizeWithModel(
       const request: LLMRequest = { systemPrompt: prefix?.systemPrompt ?? "", tools: prefix?.tools ?? [],
         messages: [...opener, ...(prefix ? piece.messages : []), { role: "user", content: directive }], promptCache: { mode: "off" },
         ...(limits.reasoningEffort !== undefined ? { reasoningEffort: limits.reasoningEffort } : {}), ...(limits.signal ? { signal: limits.signal } : {}) }
-      // Capture pure uncapped facts first: reasoning floors can exceed the preferred
-      // default. Only a derivative of this captured payload is allowed to execute.
-      const prepared = await prepareModelRequest(model, request)
-      check()
-      const { input, output } = prepared.measurement
-      if (limits.metadata && input.coverage !== "neutral-only" && (input.modelId !== limits.metadata.modelId || input.protocol !== limits.metadata.protocol)) throw new SummaryBlockedError("binding")
-      if (input.coverage === "incomplete") throw new SummaryBlockedError("opaque")
-      const inputTokens = Object.values(input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
-      const preferred = limits.maxOutputTokens ?? 4096
-      const explicit = limits.outputCapExplicit ?? limits.maxOutputTokens !== undefined
-      const required = output.minimumCap > preferred && output.reasoningBudget !== undefined ? Math.max(output.minimumCap, output.reasoningBudget + maxTokens) : output.minimumCap
-      let ceiling = explicit ? preferred : Math.max(preferred, required)
-      if (limits.modelMaxOutputTokens !== undefined) ceiling = Math.min(ceiling, limits.modelMaxOutputTokens)
-      if (ceiling < required) throw new SummaryBlockedError("output-floor", { output: ceiling, floor: required })
-      const room = limits.contextWindow === undefined ? undefined : limits.contextWindow - inputTokens - Math.ceil(limits.contextWindow * .05)
-      // Smaller descendants must show reduction on the actual provider projection,
-      // so fixed raw overrides cannot manufacture progress from neutral slicing.
+      const { candidate, inputTokens, room, requiredRoom, facts } = await prepareSummary(model, request, maxTokens, limits, check)
+      // Compare final candidates on both sides of reduction.
       const reduced = piece.rejectedTokens === undefined || inputTokens < piece.rejectedTokens
-      const requiredRoom = output.capSupport === "unsupported" ? ceiling : required
       if (!reduced || room !== undefined && room < requiredRoom) {
         const segments = sliceMessages(piece.messages, 1, true)
         if (!reduced || segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
@@ -277,12 +221,7 @@ export async function summarizeWithModel(
         accepted = true // resliced; no work consumed and no transport made
         break
       }
-      const cap = output.capSupport === "unsupported" || room === undefined ? ceiling : Math.min(ceiling, room)
-      const candidate = output.capSupport === "unsupported" ? prepared : prepared.withOutputCap(cap)
-      const effective = candidate.measurement.output.effectiveCap
-      limits.onMeasurement?.({ inputTokens, contextWindow: limits.contextWindow, outputReserve: cap,
-        ...(output.capSupport === "supported" && effective !== undefined ? { effectiveCap: effective } : {}), capSupport: output.capSupport, minimumCap: output.minimumCap,
-        reasoningBudget: output.reasoningBudget, defaultFloorAdjusted: !explicit && ceiling > preferred, coverage: input.coverage, estimateSource: "projected-heuristic", uncertainties: input.uncertainties })
+      limits.onMeasurement?.(facts)
       if (tracker.count >= maximum) throw new SummaryBlockedError("call-limit", { limit: maximum })
       if (limits.beforeTransport) {
         try { await limits.beforeTransport() } catch (error) { throw new SummaryCheckpointError(error) }

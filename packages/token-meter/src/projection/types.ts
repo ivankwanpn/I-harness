@@ -16,10 +16,12 @@ export interface ProjectedInputFacts {
   bindingFingerprint: string
   shapeFingerprint: string
   inputFingerprint: string
+  readonly semanticIdentity?: SemanticInputIdentityV2
   units: readonly {
     fingerprint: string
     role?: 'user' | 'assistant' | 'tool'
     heuristicTokens: number
+    readonly semanticId?: string
   }[]
   components: Readonly<Record<InputComponent, ComponentFacts>>
   coverage: 'complete' | 'neutral-only' | 'incomplete'
@@ -27,6 +29,7 @@ export interface ProjectedInputFacts {
   overriddenInputFields: readonly ('model' | 'system' | 'messages' | 'tools')[]
 }
 export interface PreparedRequestMeasurement {
+  readonly payloadIdentity?: PayloadIdentityV2
   projectionId: string
   input: ProjectedInputFacts
   output: {
@@ -45,4 +48,17 @@ export interface PreparedRequestMeasurement {
     cacheMetadataBytes: number
     signatureBytes: number
   }
+}
+export interface SemanticInputIdentityV2 {
+  readonly version: 2
+  readonly schema: 'projected-input-v2'
+  readonly pricingVersion: 'projected-pricing-v2'
+  readonly bindingId: string
+  readonly shapeId: string
+  readonly semanticId: string
+}
+export interface PayloadIdentityV2 {
+  readonly version: 2
+  readonly kind: 'http-json-body' | 'sdk-command-estimate'
+  readonly id: string
 }

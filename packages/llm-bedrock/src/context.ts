@@ -4,7 +4,7 @@ import type { ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime
 import type { BedrockConfig } from "./types.ts"
 import { translateReasoning } from "./request/reasoning.ts"
 export function describeContext(body: ConverseStreamCommandInput, config: BedrockConfig) {
-  const counter = new ProjectionCounter()
+  const counter = new ProjectionCounter("projected-pricing-v2")
   counter.structured("system", body.system)
   counter.structured("toolSchemas", body.toolConfig)
   for (const item of body.messages ?? [])
@@ -32,9 +32,13 @@ export function describeContext(body: ConverseStreamCommandInput, config: Bedroc
       }
     })
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined
-  const other = Object.fromEntries(Object.entries(additional ?? {}).filter(([key]) => !["thinking", "reasoningConfig", "output_config", "max_tokens", "maxTokens", "max_completion_tokens"].includes(key)))
+  const additionalInput = Object.fromEntries(Object.entries(additional ?? {}).filter(([key]) => !["max_tokens", "maxTokens", "max_completion_tokens"].includes(key)))
+  const inference = { ...body.inferenceConfig }
+  delete inference.maxTokens
+  const root = Object.fromEntries(Object.entries(body).filter(([key]) => !["modelId", "system", "messages", "toolConfig", "inferenceConfig", "additionalModelRequestFields", "requestMetadata"].includes(key)))
+  const other = { ...root, ...(Object.keys(inference).length ? { inferenceConfig: inference } : {}), ...(Object.keys(additionalInput).length ? { additionalModelRequestFields: additionalInput } : {}) }
   counter.structured("otherInput", other)
-  const input = counter.finish({ protocol: "bedrock", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.toolConfig, messages: body.messages, other }, { system: body.system, tools: body.toolConfig })
+  const input = counter.finish({ protocol: "bedrock", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.toolConfig, messages: body.messages, other }, { system: body.system, tools: body.toolConfig, other })
   return { input, packet: { sizeKind: "sdk-command-estimate" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: ConverseStreamCommandInput, request: LLMRequest, config: BedrockConfig) {

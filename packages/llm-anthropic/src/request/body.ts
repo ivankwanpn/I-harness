@@ -2,6 +2,7 @@ import { ANTHROPIC_MAX_TOKENS_FALLBACK, resolvePromptCacheMode, type LLMMessage,
 import type { AnthropicConfig } from "../types.ts"
 import { toWireMessages } from "./messages.ts"
 import { translateReasoning } from "./reasoning.ts"
+import type { CacheEdit, CacheEvidence } from "./cache-evidence.ts"
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -10,7 +11,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Work on the final wire copy so cache markers never enter signed-continuation
  * fingerprints or mutate the neutral transcript. Only cache-control locations
  * are visited: a tool schema or tool argument named cache_control is data. */
-function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConfig | undefined, intent: LLMRequest["promptCache"]): Record<string, unknown> {
+function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConfig | undefined, intent: LLMRequest["promptCache"], edits: CacheEdit[]): Record<string, unknown> {
   const mode = resolvePromptCacheMode(config, intent)
   if (mode === undefined) return body
   const tools = Array.isArray(body.tools) ? body.tools : []
@@ -44,14 +45,19 @@ function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConf
     if (block.type === "tool_result") for (const inner of blocks(block.content)) countBlock(inner)
   }
   for (const block of [...blocks(body.system), ...tools.filter(isRecord), ...messages.flatMap((message) => isRecord(message) ? blocks(message.content) : [])]) countBlock(block)
-  const mark = (block: Record<string, unknown>): Record<string, unknown> => {
+  const mark = (block: Record<string, unknown>, path?: (string | number)[]): Record<string, unknown> => {
     if (used >= 4 || Object.hasOwn(block, "cache_control")) return block
     used++
+    if (path) edits.push({ path: [...path, "cache_control"], inserted: { ...marker } })
     return { ...block, cache_control: { ...marker } }
   }
   let system = body.system
-  if (typeof system === "string" && system.length > 0 && used < 4) system = [mark({ type: "text", text: system })]
-  const cachedTools = tools.map((tool, index) => index === tools.length - 1 && isRecord(tool) ? mark(tool) : tool)
+  if (typeof system === "string" && system.length > 0 && used < 4) {
+    const original = system
+    system = [mark({ type: "text", text: system })]
+    edits.push({ path: ["system"], inserted: system, original })
+  }
+  const cachedTools = tools.map((tool, index) => index === tools.length - 1 && isRecord(tool) ? mark(tool, ["tools", index]) : tool)
   const cachedMessages = [...messages]
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]
@@ -59,13 +65,14 @@ function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConf
     if (typeof message.content === "string") {
       if (message.content.length === 0 || used >= 4) continue
       cachedMessages[index] = { ...message, content: [mark({ type: "text", text: message.content })] }
+      edits.push({ path: ["messages", index, "content"], inserted: (cachedMessages[index] as Record<string, unknown>).content, original: message.content })
       break
     }
     if (!Array.isArray(message.content)) continue
     const content = [...message.content]
     const last = content.findLastIndex((block) => isRecord(block) && (block.type === "tool_result" || block.type === "image" || block.type === "text" && typeof block.text === "string" && block.text.length > 0))
     if (last === -1) continue
-    content[last] = mark(content[last] as Record<string, unknown>)
+    content[last] = mark(content[last] as Record<string, unknown>, ["messages", index, "content", last])
     cachedMessages[index] = { ...message, content }
     break
   }
@@ -75,7 +82,7 @@ function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConf
 /** Build the signed prefix first, then add cache markers only to the wire copy. */
 export function createRequestBody(config: AnthropicConfig, request: LLMRequest, messages: LLMMessage[]):
   | { error: Error }
-  | { body: Record<string, unknown>; payload: Record<string, unknown> } {
+  | { body: Record<string, unknown>; payload: Record<string, unknown>; cacheEvidence: CacheEvidence } {
   const maxTokens = request.maxOutputTokens ??
     (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK)
   const reasoning = translateReasoning(config.model, request.reasoningEffort)
@@ -104,6 +111,7 @@ export function createRequestBody(config: AnthropicConfig, request: LLMRequest, 
     // `options.max_tokens` keeps working and the constant is the last resort.
     max_tokens: maxTokens,
   }
-  const payload = applyPromptCache(body, config.promptCache, request.promptCache)
-  return { body, payload }
+  const cacheEdits: CacheEdit[] = []
+  const payload = applyPromptCache(body, config.promptCache, request.promptCache, cacheEdits)
+  return { body, payload, cacheEvidence: { adapter: "anthropic-messages", revision: "anthropic-cache-v1", edits: cacheEdits } }
 }

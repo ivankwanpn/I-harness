@@ -2,6 +2,48 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createAnthropicClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it("excludes only produced cache wrappers and preserves old prefixes and unit prices", async () => {
+  const request: LLMRequest = { systemPrompt: "sys", tools: [{ name: "read", description: "read", inputSchema: { cache_control: "ordinary data" } }], messages: [{ role: "user", content: "中" }] }
+  const plain = createAnthropicClient({ apiKey: "test", model: "fixture" })
+  const cached = createAnthropicClient({ apiKey: "test", model: "fixture", promptCache: { mode: "automatic" } })
+  const a = await plain.prepare!(request), b = await cached.prepare!(request)
+  expect(a.measurement.input.semanticIdentity).toBeDefined()
+  expect(b.measurement.input.semanticIdentity).toEqual(a.measurement.input.semanticIdentity)
+  expect(b.measurement.input.units[0]).toEqual(a.measurement.input.units[0])
+  expect(b.measurement.input.units[0]!.heuristicTokens).toBe(19)
+  expect(b.measurement.packet.cacheMetadataBytes).toBeGreaterThan(0)
+  expect(b.measurement.payloadIdentity?.id).not.toBe(a.measurement.payloadIdentity?.id)
+  const appended = await cached.prepare!({ ...request, messages: [...request.messages, { role: "assistant", content: "ok" }, { role: "user", content: "next" }] })
+  expect(appended.measurement.input.units[0]).toEqual(b.measurement.input.units[0])
+  const changed = await cached.prepare!({ ...request, messages: [{ role: "user", content: "文" }] })
+  expect(changed.measurement.input.units[0]!.semanticId).not.toBe(b.measurement.input.units[0]!.semanticId)
+  const callerBlock = await plain.prepare!({ ...request, messages: [{ role: "user", content: [{ type: "text", text: "中" }] }] })
+  expect(callerBlock.measurement.input.units[0]!.semanticId).not.toBe(a.measurement.input.units[0]!.semanticId)
+})
+it("remeasures managed thinking derivatives from the original intent", async () => {
+  const prepared = await createAnthropicClient({ apiKey: "test", model: "claude-3-7-sonnet" }).prepare!({ systemPrompt: "", tools: [], messages: [], maxOutputTokens: 4096, reasoningEffort: "high" })
+  const lower = prepared.withOutputCap(1025)
+  expect(lower.measurement.input.semanticIdentity?.shapeId).not.toBe(prepared.measurement.input.semanticIdentity?.shapeId)
+  expect(lower.measurement.input.shapeFingerprint).not.toBe(prepared.measurement.input.shapeFingerprint)
+  // Both budgets have four decimal digits and therefore the same heuristic
+  // cost. New component facts and new shape prove the selected input was read.
+  // {"thinking":{"type":"enabled","budget_tokens":1024}} is 52 ASCII bytes:
+  // ceil(52/3) + the existing four-token structured-block overhead.
+  expect(lower.measurement.input.components.otherInput.heuristicTokens).toBe(22)
+  expect(lower.measurement.input.components.otherInput).not.toBe(prepared.measurement.input.components.otherInput)
+  expect(lower.withOutputCap(4096).measurement).toEqual(prepared.measurement)
+})
+it("retains caller cache markers and describes the actual cache-off policy result", async () => {
+  const request: LLMRequest = { systemPrompt: "sys", tools: [], messages: [{ role: "user", content: "中" }] }
+  const config = { apiKey: "controlled", model: "fixture" }
+  const a = await createAnthropicClient({ ...config, options: { cache_control: { type: "ephemeral", ttl: "5m" } } }).prepare!(request)
+  const b = await createAnthropicClient({ ...config, options: { cache_control: { type: "ephemeral", ttl: "1h" } } }).prepare!(request)
+  expect(a.measurement.input.semanticIdentity?.shapeId).not.toBe(b.measurement.input.semanticIdentity?.shapeId)
+  const offA = await createAnthropicClient({ ...config, promptCache: { mode: "off" }, options: { cache_control: { type: "ephemeral", ttl: "5m" } } }).prepare!(request)
+  const offB = await createAnthropicClient(config).prepare!(request)
+  expect(offA.measurement.input.semanticIdentity).toEqual(offB.measurement.input.semanticIdentity)
+  expect(offA.measurement.payloadIdentity).toEqual(offB.measurement.payloadIdentity)
+})
 it("captures nested image data and options before image validation suspends preparation", async () => {
   const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   const imageInput = { mediaType: "image/png" as const, dataBase64: image }

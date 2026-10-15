@@ -2,8 +2,11 @@ import { ProjectionCounter } from "@i-harness/token-meter"
 import { ANTHROPIC_MAX_TOKENS_FALLBACK, invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
 import { translateReasoning } from "./request/reasoning.ts"
 import type { AnthropicConfig } from "./types.ts"
-export function describeContext(body: Record<string, unknown>, config: AnthropicConfig) {
-  const counter = new ProjectionCounter()
+import { describeCachedBody, type CacheEvidence } from "./request/cache-evidence.ts"
+export function describeContext(actualBody: Record<string, unknown>, config: AnthropicConfig, cacheEvidence: CacheEvidence) {
+  const { semantic: body, metadataBytes } = describeCachedBody(actualBody, cacheEvidence)
+  const counter = new ProjectionCounter("projected-pricing-v2")
+  counter.cacheMetadataBytes += metadataBytes
   counter.metadata(body)
   const block = (value: unknown, category: "system" | "visibleText" | "toolResults"): void => {
     if (typeof value === "string") {
@@ -55,10 +58,10 @@ export function describeContext(body: Record<string, unknown>, config: Anthropic
         else
           block(item.content, "visibleText")
       })
-  const excluded = new Set(["model", "system", "messages", "tools", "max_tokens", "thinking", "output_config", "stream", "cache_control"])
+  const excluded = new Set(["model", "system", "messages", "tools", "max_tokens", "stream"])
   const other = Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key)))
   counter.structured("otherInput", other)
-  const input = counter.finish({ protocol: "anthropic-messages", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.tools, messages: body.messages, other }, { system: body.system, tools: body.tools })
+  const input = counter.finish({ protocol: "anthropic-messages", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.tools, messages: body.messages, other }, { system: body.system, tools: body.tools, other })
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: AnthropicConfig) {

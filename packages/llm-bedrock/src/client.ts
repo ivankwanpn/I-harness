@@ -32,9 +32,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     const body = mapped.body
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    const facts = describeContext(body, capturedConfig)
     return createPreparedPayload({
-      body: body, request, ...facts,
+      body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
       async *execute(actualBody, _serialized, control): AsyncIterable<LLMStreamEvent> {

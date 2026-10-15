@@ -16,5 +16,8 @@ export type { ComponentFacts, InputComponent, ProjectedInputFacts, PreparedReque
 export { ProjectionCounter } from "./projection/measure.ts"
 export { projectionFingerprint } from "./projection/fingerprint.ts"
 export { priceProjectedText } from "./projection/pricing.ts"
+export { encodedProjectionDigest, semanticProjectionDigest } from "./projection/identity.ts"
+export { encodeSdkCommandData } from "./projection/sdk-data.ts"
+export type { SemanticInputIdentityV2, PayloadIdentityV2 } from "./projection/types.ts"
 export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead } from "@i-harness/core-session"
 export type { NumericEvidence, ModelLimits, GenerationPolicy } from "./binding-evidence.ts"

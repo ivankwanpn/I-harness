@@ -1,6 +1,7 @@
 import { resolvePromptCacheMode, type LLMRequest, type ReasoningEffort } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "../types.ts"
 import { mapMessages, withoutCacheBreakpoints } from "./messages.ts"
+import type { GeneratedAffinity } from "./cache-evidence.ts"
 
 /**
  * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE
@@ -37,6 +38,7 @@ export function createRequestBody(
     ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
   }
   const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
+  let generatedAffinity: GeneratedAffinity | undefined
   if (cacheMode === "off") {
     delete body.prompt_cache_key
     delete body.prompt_cache_retention
@@ -48,6 +50,7 @@ export function createRequestBody(
   // Native subscription parity; public/API-key route defaults stay intact.
   if (subscriptionCacheKey && cacheMode !== "off" && body.prompt_cache_key === undefined) {
     body.prompt_cache_key = request.promptCache?.key ?? subscriptionCacheKey()
+    if (request.promptCache?.key === undefined) generatedAffinity = { adapter: "openai-responses-subscription", revision: "subscription-affinity-v1", path: "prompt_cache_key", value: body.prompt_cache_key as string }
   }
   if (codexSubscription) {
     // Match Codex 0.160.0 codex-api/src/common.rs ResponsesApiRequest;
@@ -66,5 +69,5 @@ export function createRequestBody(
       tools: request.tools.map(t => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
     }] : []
   }
-  return { body, cacheMode }
+  return { body, cacheMode, generatedAffinity }
 }

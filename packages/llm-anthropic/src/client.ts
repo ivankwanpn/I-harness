@@ -21,12 +21,11 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     if ("error" in prepared) {
       throw invalidPreparedRequest(prepared.error.message)
     }
-    const { body, payload } = prepared
+    const { body, payload, cacheEvidence } = prepared
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    const facts = describeContext(payload, capturedConfig)
     return createPreparedPayload({
-      body: payload, request, ...facts,
+      body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
       async *execute(_actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {

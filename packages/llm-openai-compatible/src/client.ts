@@ -18,9 +18,8 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
     const body = createRequestBody(capturedConfig, request, messages)
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    const facts = describeContext(body, capturedConfig)
     return createPreparedPayload({
-      body: body, request, ...facts,
+      body: body, request, describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => {
         const field = capturedConfig.maxTokensField ?? "max_tokens"

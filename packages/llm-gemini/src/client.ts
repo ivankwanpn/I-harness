@@ -20,9 +20,8 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
     const body = createRequestBody(request, capturedConfig, contents)
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    const facts = describeContext(body, capturedConfig)
     return createPreparedPayload({
-      body: body, request, ...facts,
+      body: body, request, describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => {
         const generation = { ...(body.generationConfig as Record<string, unknown> ?? {}) }

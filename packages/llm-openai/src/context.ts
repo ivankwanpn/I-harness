@@ -1,10 +1,17 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
 import { invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "./types.ts"
-export function describeContext(body: Record<string, unknown>, config: OpenAIConfig, subscription: boolean) {
+import type { GeneratedAffinity } from "./request/cache-evidence.ts"
+export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity) {
+  const body = { ...actualBody }
+  // Only the affinity producer's exact insertion is cache metadata. Caller,
+  // config and request keys stay model-input evidence even at this same path.
+  const ownedKey = generatedAffinity !== undefined && body[generatedAffinity.path] === generatedAffinity.value
+  if (ownedKey) delete body.prompt_cache_key
   if (body.model !== config.model)
     throw invalidPreparedRequest("Actual request model does not match the resolved binding", "MODEL_BINDING_MISMATCH")
-  const counter = new ProjectionCounter()
+  const counter = new ProjectionCounter("projected-pricing-v2")
+  if (ownedKey) counter.cacheMetadataBytes += Buffer.byteLength(JSON.stringify(generatedAffinity!.value))
   counter.metadata(body)
   let referencedInput = false
   if (!subscription && config.baseUrl !== undefined && !/^https:\/\/api\.openai\.com\/?$/.test(config.baseUrl))
@@ -86,7 +93,7 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICon
   const references = referencedInput || body.previous_response_id !== undefined || body.conversation !== undefined || body.prompt !== undefined
   if (references)
     counter.uncertainties.add("server-referenced-context-unavailable")
-  const excluded = new Set(["model", "instructions", "input", "tools", "max_output_tokens", "reasoning", "stream", "store", "include", "previous_response_id", "conversation", "prompt", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options", "service_tier", "client_metadata", "parallel_tool_calls"])
+  const excluded = new Set(["model", "instructions", "input", "tools", "max_output_tokens", "stream", "store", "include", "previous_response_id", "conversation", "prompt", "service_tier", "client_metadata"])
   const other = Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key)))
   counter.structured("otherInput", other)
   const overrides: ("model" | "system" | "messages" | "tools")[] = []
@@ -94,7 +101,7 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICon
     for (const [wire, field] of [["model", "model"], ["instructions", "system"], ["input", "messages"], ["tools", "tools"]] as const)
       if (Object.hasOwn(config.options ?? {}, wire))
         overrides.push(field)
-  const input = counter.finish({ protocol: subscription ? "openai-responses-subscription" : "openai-responses", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { instructions: body.instructions, input: body.input, tools: body.tools, other, previous_response_id: body.previous_response_id, conversation: body.conversation, prompt: body.prompt }, { instructions: body.instructions, tools: body.tools, subscription, ...(fixedInput.length ? { fixedInput } : {}) }, overrides, references ? "incomplete" : "complete")
+  const input = counter.finish({ protocol: subscription ? "openai-responses-subscription" : "openai-responses", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { instructions: body.instructions, input: body.input, tools: body.tools, other, previous_response_id: body.previous_response_id, conversation: body.conversation, prompt: body.prompt }, { instructions: body.instructions, tools: body.tools, subscription, other, ...(fixedInput.length ? { fixedInput } : {}) }, overrides, references ? "incomplete" : "complete")
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: OpenAIConfig, subscription: boolean) {

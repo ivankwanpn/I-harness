@@ -4,7 +4,7 @@ import type { OpenAICompatibleConfig } from "./types.ts"
 export function describeContext(body: Record<string, unknown>, config: OpenAICompatibleConfig) {
   if (body.model !== config.model)
     throw invalidPreparedRequest("Actual request model does not match the resolved binding", "MODEL_BINDING_MISMATCH")
-  const counter = new ProjectionCounter()
+  const counter = new ProjectionCounter("projected-pricing-v2")
   counter.metadata(body)
   let unknownInput = false
   counter.structured("toolSchemas", body.tools)
@@ -42,14 +42,14 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICom
       else
         counter.unit(value, item.role === "assistant" ? "assistant" : item.role === "tool" ? "tool" : "user", visit)
     }
-  const excluded = new Set(["model", "messages", "tools", "max_tokens", "max_completion_tokens", "reasoning_effort", "stream", "stream_options", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"])
+  const excluded = new Set(["model", "messages", "tools", "max_tokens", "max_completion_tokens", "stream", "stream_options"])
   const other = Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key)))
   counter.structured("otherInput", other)
   const overrides: ("model" | "system" | "messages" | "tools")[] = []
   for (const key of ["model", "messages", "tools"] as const)
     if (Object.hasOwn(config.options ?? {}, key))
       overrides.push(key)
-  const input = counter.finish({ protocol: "openai-compatible", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { messages: body.messages, tools: body.tools, other }, { tools: body.tools, system: Array.isArray(body.messages) ? body.messages.filter(item => item.role === "system" || item.role === "developer") : [] }, overrides, unknownInput || counter.uncertainties.has("external-image-token-cost") ? "incomplete" : "complete")
+  const input = counter.finish({ protocol: "openai-compatible", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { messages: body.messages, tools: body.tools, other }, { tools: body.tools, other, system: Array.isArray(body.messages) ? body.messages.filter(item => item.role === "system" || item.role === "developer") : [] }, overrides, unknownInput || counter.uncertainties.has("external-image-token-cost") ? "incomplete" : "complete")
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: OpenAICompatibleConfig) {

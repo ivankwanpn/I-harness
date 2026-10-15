@@ -5,7 +5,7 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
   // Gemini model is the URL path; a body model option cannot resolve another binding.
   if (body.model !== undefined && body.model !== config.model)
     throw invalidPreparedRequest("Actual request model does not match the resolved binding", "MODEL_BINDING_MISMATCH")
-  const counter = new ProjectionCounter()
+  const counter = new ProjectionCounter("projected-pricing-v2")
   counter.metadata(body)
   counter.structured("system", body.systemInstruction)
   counter.structured("toolSchemas", body.tools)
@@ -38,13 +38,15 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
   if (referenced)
     counter.uncertainties.add("external-cached-content")
   const excluded = new Set(["contents", "systemInstruction", "tools", "generationConfig", "cachedContent"])
-  const other = Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key)))
+  const generation = { ...(body.generationConfig as Record<string, unknown> ?? {}) }
+  delete generation.maxOutputTokens
+  const other = { ...Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key))), ...(Object.keys(generation).length ? { generationConfig: generation } : {}) }
   counter.structured("otherInput", other)
   const overrides: ("model" | "system" | "messages" | "tools")[] = []
   for (const [wire, field] of [["model", "model"], ["systemInstruction", "system"], ["contents", "messages"], ["tools", "tools"]] as const)
     if (Object.hasOwn(config.options ?? {}, wire))
       overrides.push(field)
-  const input = counter.finish({ protocol: "gemini", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.systemInstruction, tools: body.tools, contents: body.contents, cachedContent: body.cachedContent, other }, { system: body.systemInstruction, tools: body.tools }, overrides, referenced || counter.uncertainties.has("external-image-token-cost") ? "incomplete" : "complete")
+  const input = counter.finish({ protocol: "gemini", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.systemInstruction, tools: body.tools, contents: body.contents, cachedContent: body.cachedContent, other }, { system: body.systemInstruction, tools: body.tools, other }, overrides, referenced || counter.uncertainties.has("external-image-token-cost") ? "incomplete" : "complete")
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: GeminiConfig) {

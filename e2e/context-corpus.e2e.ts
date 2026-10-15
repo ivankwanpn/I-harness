@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
+import { createHash } from "node:crypto"
 import { append, createSession, deriveMessages, renderConversation, fromJSONL, toJSONL } from "../packages/core-session/src/index.ts"
 import { captureContextSnapshot } from "../packages/context-engine/src/index.ts"
 import { describeRouteBudgetCapability, type ModelBudgetBinding, type LLMRequest, type PreparedModelRequest } from "../packages/llm-seam/src/index.ts"
@@ -145,11 +146,13 @@ async function send(prepared: PreparedModelRequest, capture: CapturedRequest[]):
     expect(prepared.measurement.packet.sizeKind).toBe("http-json-body")
     expect(prepared.measurement.packet.bodyBytes).toBe(Buffer.byteLength(sent.raw, "utf8"))
     expect(prepared.measurement.packet.sdkCommandBytesEstimate).toBeUndefined()
+    expect(prepared.measurement.payloadIdentity).toEqual({ version: 2, kind: "http-json-body", id: createHash("sha256").update("i-harness:projection:v2:http-json-body\0").update(sent.raw, "utf8").digest("hex") })
   } else {
     expect(sent.commandName).toBe("ConverseStreamCommand")
     expect(prepared.measurement.packet.sizeKind).toBe("sdk-command-estimate")
     expect(prepared.measurement.packet.bodyBytes).toBeUndefined()
-    expect(prepared.measurement.packet.sdkCommandBytesEstimate).toBe(Buffer.byteLength(JSON.stringify(sent.body), "utf8"))
+    expect(prepared.measurement.packet.sdkCommandBytesEstimate).toBeGreaterThan(prepared.measurement.packet.inlineBinaryBytes)
+    expect(prepared.measurement.payloadIdentity).toMatchObject({ version: 2, kind: "sdk-command-estimate", id: expect.stringMatching(/^[a-f0-9]{64}$/) })
   }
   return sent.body
 }
@@ -179,6 +182,68 @@ function loseNative(route: CorpusRoute, body: Wire): void {
 }
 
 describe.each(corpusRoutes)("real prepared adapter: %s", route => {
+  it.each([2000, 6000])("prepares, identifies and transports a depth-%s schema through the actual route", async depth => {
+    const transport = installTransport(route), request = makeToolRound(route).request
+    let schema: unknown = { leaf: "retained", cache_control: "ordinary" }
+    for (let index = 0; index < depth; index++) schema = { child: schema }
+    request.tools[0]!.inputSchema = schema
+    const prepared = await makeClient(route, transport).prepare!(request)
+    expect(prepared.measurement.input.semanticIdentity?.semanticId).toMatch(/^[a-f0-9]{64}$/)
+    const body = await send(prepared.withOutputCap(2048), transport.captures)
+    let actual = route === "chat" ? body.tools[0].function.parameters : route === "responses" ? body.tools[0].parameters : route === "subscription" ? body.tools[0].tools[0].parameters : route === "anthropic" ? body.tools[0].input_schema : route === "gemini" ? body.tools[0].functionDeclarations[0].parameters : body.toolConfig.tools[0].toolSpec.inputSchema.json
+    for (let index = 0; index < depth; index++) actual = actual.child
+    expect(actual).toEqual({ leaf: "retained", cache_control: "ordinary" })
+  })
+  it("binds accepted native signatures and ordered blocks to the actual semantic input", async () => {
+    const transport = installTransport(route), request = makeToolRound(route).request
+    const original = await makeClient(route, transport).prepare!(request)
+    const mutated = structuredClone(request), assistant = mutated.messages.find(item => item.role === "assistant") as Wire
+    const native = assistant.providerContinuation
+    if (route === "chat") native.reasoningContent = "changed reasoning"
+    else if (route === "responses" || route === "subscription") native.reasoningItems[0].encrypted_content = "changed signature"
+    else if (route === "anthropic") assistant.thinkingBlocks[0].signature = "changed signature"
+    else if (route === "gemini") native.thoughtParts[0].thoughtSignature = "changed signature"
+    else native.reasoningBlocks[0].reasoningText.signature = "changed signature"
+    const changed = await makeClient(route, transport).prepare!(mutated)
+    expect(changed.measurement.input.semanticIdentity?.semanticId).not.toBe(original.measurement.input.semanticIdentity?.semanticId)
+    const ordered = structuredClone(request), orderedAssistant = ordered.messages.find(item => item.role === "assistant") as Wire
+    if (route === "chat") orderedAssistant.toolCalls.reverse()
+    else if (route === "responses" || route === "subscription") orderedAssistant.providerContinuation.outputOrder.reverse()
+    else if (route === "gemini") orderedAssistant.providerContinuation.partOrder.reverse()
+    else orderedAssistant.providerContinuation.contentOrder.reverse()
+    expect((await makeClient(route, transport).prepare!(ordered)).measurement.input.semanticIdentity?.semanticId).not.toBe(original.measurement.input.semanticIdentity?.semanticId)
+    expect(transport.captures).toHaveLength(0)
+  })
+  it("binds semantic options, schema, role and tool values while excluding only generation caps", async () => {
+    const transport = installTransport(route), base = makeToolRound(route).request
+    const prepare = async (options: Record<string, unknown>, request = base) => (await makeClient(route, transport, { options }).prepare!(request)).measurement
+    // Subscription has a closed option allowlist; text is a retained semantic
+    // option there. Gemini options live inside generationConfig on the wire.
+    const optionA = route === "subscription" ? { text: { verbosity: "low" } } : route === "gemini" ? { generationConfig: { temperature: .2 } } : { temperature: .2 }
+    const optionB = route === "subscription" ? { text: { verbosity: "high" } } : route === "gemini" ? { generationConfig: { temperature: .8 } } : { temperature: .8 }
+    const a = await prepare(optionA), b = await prepare(optionB)
+    expect(a.input.semanticIdentity?.shapeId).not.toBe(b.input.semanticIdentity?.shapeId)
+    expect(a.input.shapeFingerprint).not.toBe(b.input.shapeFingerprint)
+    const cap = (await makeClient(route, transport, { options: optionA }).prepare!(base)).withOutputCap(2048).measurement
+    expect(cap.input.semanticIdentity).toEqual(a.input.semanticIdentity)
+    for (const field of ["cache_control", "cachePoint", "cachedContent"]) {
+      const schemaA = structuredClone(base), schemaB = structuredClone(base)
+      schemaA.tools[0]!.inputSchema = { [field]: "A" }; schemaB.tools[0]!.inputSchema = { [field]: "B" }
+      expect((await prepare({}, schemaA)).input.semanticIdentity?.shapeId).not.toBe((await prepare({}, schemaB)).input.semanticIdentity?.shapeId)
+      const argsA = structuredClone(base), argsB = structuredClone(base)
+      const assistantA = argsA.messages.find(item => item.role === "assistant")!, assistantB = argsB.messages.find(item => item.role === "assistant")!
+      if (assistantA.role !== "assistant" || assistantB.role !== "assistant") throw Error("assistant fixture")
+      assistantA.toolCalls![0]!.args = { [field]: "A" }; assistantB.toolCalls![0]!.args = { [field]: "B" }
+      expect((await prepare({}, argsA)).input.semanticIdentity?.semanticId).not.toBe((await prepare({}, argsB)).input.semanticIdentity?.semanticId)
+    }
+    const changedRole = structuredClone(base)
+    changedRole.messages[0] = { role: "assistant", content: "Read files a and b." }
+    expect((await prepare({}, changedRole)).input.units[0]!.semanticId).not.toBe((await prepare({})).input.units[0]!.semanticId)
+    const changedResult = structuredClone(base)
+    changedResult.messages.find(item => item.role === "tool")!.content = "different result"
+    expect((await prepare({}, changedResult)).input.semanticIdentity?.semanticId).not.toBe((await prepare({})).input.semanticIdentity?.semanticId)
+    expect(transport.captures).toHaveLength(0); expect(transport.authCalls()).toBe(0)
+  })
   // Rejects serializer loss of authority/schema/call pairings and mutable caller aliases.
   it("physically sends original and output-cap handles with frozen inputs and native order after caller mutation", async () => {
     const transport = installTransport(route)
@@ -197,9 +262,13 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     const snapshotBefore = JSON.stringify(captured.snapshot)
     const adapterRequest: LLMRequest = { ...request, systemPrompt: surface.systemPrompt, tools: surface.tools.map(tool => ({ ...tool, inputSchema: structuredClone(tool.inputSchema) })), messages: renderConversation(conversation) }
     const prepared = await client.prepare!(adapterRequest)
+    expect(prepared.measurement.input.semanticIdentity).toMatchObject({ version: 2, schema: "projected-input-v2", pricingVersion: "projected-pricing-v2" })
+    expect(prepared.measurement.input.units.every(unit => /^[a-f0-9]{64}$/.test(unit.semanticId!))).toBe(true)
     expect(transport.captures).toHaveLength(0)
     expect(transport.authCalls()).toBe(0)
     const capped = prepared.withOutputCap(2048)
+    if (route === "subscription") expect(capped.measurement.payloadIdentity).toEqual(prepared.measurement.payloadIdentity)
+    else expect(capped.measurement.payloadIdentity?.id).not.toBe(prepared.measurement.payloadIdentity?.id)
     expect(capped.measurement.input).toEqual(prepared.measurement.input)
     expect(prepared.measurement.output.effectiveCap).toBe(route === "subscription" ? undefined : 1024)
     expect(capped.measurement.output.effectiveCap).toBe(route === "subscription" ? undefined : 2048)

@@ -4,6 +4,17 @@ vi.mock("@i-harness/http-transport", () => ({ systemFetch: vi.fn(async () => new
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it("excludes generated subscription affinity only and retains raw and request keys", async () => {
+  const request: LLMRequest = { systemPrompt: "", tools: [], messages: [{ role: "user", content: "中" }], requestScope: { sessionId: "s", turnId: "t" } }
+  const create = (options?: Record<string, unknown>) => createOpenAIClient({ apiKey: "", model: "fixture", codexSubscription: true, options })
+  const generatedA = await create().prepare!(request), generatedB = await create().prepare!({ ...request, requestScope: { sessionId: "other", turnId: "other" } })
+  expect(generatedA.measurement.input.semanticIdentity).toEqual(generatedB.measurement.input.semanticIdentity)
+  expect(generatedA.measurement.payloadIdentity?.id).not.toBe(generatedB.measurement.payloadIdentity?.id)
+  const rawA = await create({ prompt_cache_key: "caller-a" }).prepare!(request), rawB = await create({ prompt_cache_key: "caller-b" }).prepare!(request)
+  expect(rawA.measurement.input.semanticIdentity?.shapeId).not.toBe(rawB.measurement.input.semanticIdentity?.shapeId)
+  const explicitA = await create().prepare!({ ...request, promptCache: { key: "caller-a" } }), explicitB = await create().prepare!({ ...request, promptCache: { key: "caller-b" } })
+  expect(explicitA.measurement.input.semanticIdentity?.shapeId).not.toBe(explicitB.measurement.input.semanticIdentity?.shapeId)
+})
 it("validates owned input after held subscription auth and before transport, including cap derivatives", async () => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let current = true, checked = 0

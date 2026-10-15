@@ -75,6 +75,8 @@ it("prices projected image bytes separately and quarantines text-only input", as
 it("marks cachedContent incomplete and counts the actual raw contents", async () => {
   const prepared = await createGeminiClient({ apiKey: "test", model: "fixture", options: { cachedContent: "cachedContents/short", contents: [{ role: "user", parts: [{ text: "raw" }] }] } }).prepare!({ systemPrompt: "", tools: [], messages: [{ role: "user", content: "neutral" }] })
   expect(prepared.measurement.input.coverage).toBe("incomplete")
+  expect(prepared.measurement.input.semanticIdentity).toMatchObject({ version: 2, schema: "projected-input-v2" })
+  expect(prepared.measurement.input.units[0]!.semanticId).toMatch(/^[a-f0-9]{64}$/)
   expect(prepared.measurement.input.uncertainties).toContain("external-cached-content")
   expect(prepared.measurement.input.components.visibleText.textUtf8Bytes).toBe(3)
   expect(prepared.measurement.input.overriddenInputFields).toContain("messages")

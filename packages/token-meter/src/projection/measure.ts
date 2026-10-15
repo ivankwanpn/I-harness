@@ -1,15 +1,18 @@
 import { stringifyJsonData } from "@i-harness/core-session"
 import { projectionFingerprint } from "./fingerprint.ts"
 import { priceProjectedText } from "./pricing.ts"
+import { semanticInputIdentity, semanticProjectionDigest } from "./identity.ts"
 import type { ComponentFacts, InputComponent, ProjectedInputFacts } from "./types.ts"
 const categories: InputComponent[] = ['system', 'toolSchemas', 'visibleText', 'toolArguments', 'toolResults', 'replayedReasoning', 'opaqueContinuation', 'images', 'otherInput', 'framing']
 export class ProjectionCounter {
+  constructor(private readonly pricingVersion?: "projected-pricing-v2") {}
   readonly components = Object.fromEntries(categories.map(key => [key, { textUtf8Bytes: 0, structuredBytes: 0, binaryBytes: 0, imageCount: 0, blockCount: 0, heuristicTokens: 0 }])) as Record<InputComponent, ComponentFacts>;
   readonly uncertainties = new Set<string>();
   readonly units: {
     fingerprint: string
     role?: 'user' | 'assistant' | 'tool'
     heuristicTokens: number
+    semanticId?: string
   }[] = [];
   inlineBinaryBytes = 0;
   cacheMetadataBytes = 0;
@@ -56,7 +59,8 @@ export class ProjectionCounter {
     this.components.framing.blockCount++
     this.components.framing.heuristicTokens += 12
     visit()
-    this.units.push({ fingerprint: projectionFingerprint(value), ...(role ? { role } : {}), heuristicTokens: this.total() - start })
+    const semanticId = this.pricingVersion ? semanticProjectionDigest("unit", value) : undefined
+    this.units.push({ fingerprint: semanticId ?? projectionFingerprint(value), ...(semanticId ? { semanticId } : {}), ...(role ? { role } : {}), heuristicTokens: this.total() - start })
   }
   /** Only invoke on protocol blocks, never schemas/tool argument objects. */
   metadata(value: Record<string, unknown>): void {
@@ -76,9 +80,11 @@ export class ProjectionCounter {
     modelId: string
     expectedModelId?: string
   }, input: unknown, shape: unknown, overrides: ProjectedInputFacts['overriddenInputFields'] = [], coverage: ProjectedInputFacts['coverage'] = 'complete'): ProjectedInputFacts {
+    const semanticIdentity = this.pricingVersion ? semanticInputIdentity(identity, shape, input, this.units) : undefined
     return {
       version: 1, ...identity,
-      bindingFingerprint: projectionFingerprint(identity), shapeFingerprint: projectionFingerprint(shape), inputFingerprint: projectionFingerprint(input),
+      bindingFingerprint: projectionFingerprint(identity), shapeFingerprint: semanticIdentity ? projectionFingerprint(['projection-compat-v2', semanticIdentity.shapeId, semanticIdentity.pricingVersion]) : projectionFingerprint(shape), inputFingerprint: semanticIdentity?.semanticId ?? projectionFingerprint(input),
+      ...(semanticIdentity ? { semanticIdentity } : {}),
       units: this.units, components: this.components, coverage, uncertainties: [...this.uncertainties],
       overriddenInputFields: overrides,
     }

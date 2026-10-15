@@ -39,20 +39,28 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       const read = this.read()
       return read.kind === "ready" && read.snapshot.admission !== "unavailable" ? read.snapshot.admissionInputTokens + read.snapshot.outputReserve + read.snapshot.safetyMargin : undefined
     },
-    assess(prepared: PreparedModelRequest, evidence: RequestEvidence, window: number | undefined, configuredCap?: number, reserveRatio = .9, recoveryAuthorized = false) {
-      const measurement = prepared.measurement, { input, output } = measurement, binding = evidence.metadata
+    assess(prepared: PreparedModelRequest, evidence: RequestEvidence, window: number | undefined, configuredCap?: number, reserveRatio = .9, recoveryAuthorized = false, selectOutputCap = true) {
+      let { input, output } = prepared.measurement
+      const binding = evidence.metadata
       if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: prepared input does not match owned model binding")
-      const estimate = calibration.estimate(input, binding, evidence.projectionRevision)
-      const recovery = deriveContextRecovery(session, ownerSessionId, { ...input, providerId: binding?.providerId ?? input.providerId })
-      const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
-      const fullByProvider = recoveryRequired
+      let estimate = calibration.estimate(input, binding, evidence.projectionRevision)
       const safetyMargin = window === undefined ? 0 : Math.ceil(window * (1 - reserveRatio))
-      const available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
-      const ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
+      let available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
+      let ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
       let candidate = prepared
       // Unknown/unsupported routes reserve honestly; only an explicit supported
       // derivative can claim an effective applied wire cap.
-      if ((output.capSupport === "supported" || output.capSupport === "unknown" && input.coverage === "neutral-only") && ceiling !== undefined && available !== undefined && available >= output.minimumCap) candidate = prepared.withOutputCap(Math.min(ceiling, available))
+      if (selectOutputCap && (output.capSupport === "supported" || output.capSupport === "unknown" && input.coverage === "neutral-only") && ceiling !== undefined && available !== undefined && available >= output.minimumCap) candidate = prepared.withOutputCap(Math.min(ceiling, available))
+      // One derivative selection, followed by the same owner's final estimate.
+      // A changed semantic shape can retire a provisional legacy anchor here.
+      ;({ input, output } = candidate.measurement)
+      if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: selected input does not match owned model binding")
+      estimate = calibration.estimate(input, binding, evidence.projectionRevision)
+      available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
+      ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
+      const recovery = deriveContextRecovery(session, ownerSessionId, { ...input, providerId: binding?.providerId ?? input.providerId })
+      const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
+      const fullByProvider = recoveryRequired
       const cap = candidate.measurement.output.effectiveCap
       const outputReserve = ceiling === undefined ? 0 : output.capSupport === "supported" ? cap ?? ceiling : input.coverage === "neutral-only" ? candidate.measurement.output.configuredCap ?? ceiling : ceiling
       const incomplete = input.coverage === "incomplete"
