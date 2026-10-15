@@ -480,7 +480,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       || saved.modelId !== metadata.modelId || saved.protocol !== metadata.protocol || saved.contextWindow !== metadata.contextWindow
       || saved.projectionRevision !== deriveProjectionRewrite(session!).markers + session!.events.filter(event => event.type === "compaction/prune").length
       || saved.neutralFingerprint !== projectionFingerprint(deriveMessages(session!))) return { kind: "unavailable", reason: "Saved prepared budget is missing or stale" }
-    const recovery = deriveContextRecovery(session!, sessionId)
+    const recovery = deriveContextRecovery(session!, sessionId, metadata)
     return contextStateFromBudget({ kind: "ready", snapshot: recovery && recovery.state !== "resolved"
       ? { ...saved, recoveryRequired: true, fullByProvider: true, admission: "compact", reason: "Provider context recovery remains required" } : saved })
   }

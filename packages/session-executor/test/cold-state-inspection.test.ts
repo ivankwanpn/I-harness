@@ -7,6 +7,57 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { coldReaderFixture } from "./helpers/cold-reader.ts"
+import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
+import type { ContextRecoveryFacts } from "@i-harness/core-session"
+
+it.each([
+  { name: "another model", tuple: { providerId: "fixture", modelId: "model-a", protocol: "openai-compatible" }, required: false },
+  { name: "another known provider", tuple: { providerId: "other", modelId: "model-b", protocol: "openai-compatible" }, required: false },
+  { name: "the current binding", tuple: { providerId: "fixture", modelId: "model-b", protocol: "openai-compatible" }, required: true },
+  { name: "legacy facts without a tuple", tuple: {}, required: true },
+  { name: "ambiguous provider identity", tuple: { modelId: "model-b", protocol: "openai-compatible" }, required: true },
+])("cold context matches the live B owner with unresolved recovery for $name", async ({ tuple, required }) => {
+  const root = await mkdtemp(join(tmpdir(), "ih-cold-binding-")), store = join(root, "sessions"), id = "owned"
+  const coordinator = createSessionCoordinator(createJsonlBackend(store))
+  await coordinator.create({ sessionId: id })
+  const metadata = { version: 1 as const, providerId: "fixture", modelId: "model-b", protocol: "openai-compatible", contextWindow: 100_000,
+    maxOutputTokens: 2000, identityCoverage: "complete" as const, bindingConfigFingerprint: "b".repeat(64) }
+  const transport = vi.fn(async () => new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "B accepted" }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 7 } })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } }))
+  const actual = createOpenAICompatibleClient({ apiKey: "controlled", model: "model-b", fetch: transport })
+  const prepare = vi.fn(actual.prepare!.bind(actual)), authenticate = vi.fn()
+  const model = { ...actual, prepare }
+  const resolve = vi.fn(async () => { authenticate(); return { status: "ready" as const, binding: { model, ...metadata, contextMetadata: metadata, label: "B" } } })
+  const inspect = vi.fn(async () => metadata)
+  const live = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelBindingFor: resolve, modelMetadataFor: inspect })
+  let cold: ReturnType<typeof createSessionService> | undefined
+  try {
+    const assembly = await live.assemblyFor(id)
+    const recovery: ContextRecoveryFacts = { version: 1, ownerSessionId: id, recoveryId: "old-rejection", logicalStepSeq: 0, state: "required",
+      bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "c".repeat(64), ...tuple }
+    // A's unresolved evidence precedes B's valid prepared/accepted budget.
+    // Applicable restrictions are appended after B's accepted turn as controls.
+    if (!required) append(assembly.session, { type: "context/recovery", ...recovery })
+    await live.submit(id, "Use model B", new AbortController().signal)
+    if (required) append(assembly.session, { type: "context/recovery", ...recovery })
+    await coordinator.flush(id)
+    const counts = { prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }
+    const expected = await live.contextState(id)
+    expect(expected.kind).toBe("unavailable")
+    expect(Boolean(expected.snapshot?.fullByProvider)).toBe(required)
+    expect(Boolean(expected.snapshot?.recoveryRequired)).toBe(required)
+    if (!required) expect(expected).toMatchObject({ reason: "Accepted output awaits the next protocol projection" })
+    expect(assembly.session.events.filter(event => event.type === "context/usage")).toHaveLength(1)
+    await live.close()
+    const file = join(store, `${id}.jsonl`), before = await readFile(file, "utf8")
+    cold = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelBindingFor: resolve, modelMetadataFor: inspect })
+    expect(await cold.contextState(id)).toEqual(expected)
+    expect(await cold.contextState(id)).toEqual(expected)
+    expect(cold.hasAssembly(id)).toBe(false)
+    expect(inspect).toHaveBeenCalledTimes(2)
+    expect({ prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }).toEqual(counts)
+    expect(await readFile(file, "utf8")).toBe(before)
+  } finally { await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 it("a legacy live Agent without an owned reader is unavailable without recursive cold fallback", async () => {
   let reads = 0
