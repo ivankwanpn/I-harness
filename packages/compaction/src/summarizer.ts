@@ -240,8 +240,14 @@ export async function summarizeWithModel(
       const directive = buildSummaryPrompt(piece.text, running, instructions, { embedText: prefix === undefined })
         + `\nRetained checkpoint must be between ${minSummaryChars} and ${maxTokens * 4} characters. Preserve the objective, authority, instructions and completed outcomes within that limit.`
         + (qualityRound ? "\nThe previous output did not meet the retained checkpoint limits. Produce a complete shorter checkpoint within those limits." : "")
+      // A later autonomous tool round can be summarized independently once all
+      // preceding calls have results. Keep its native assistant/result payload
+      // intact and open a legal standalone conversation. The rolling checkpoint
+      // in directive carries the original task/authority from preceding pieces.
+      const opener: LLMMessage[] = prefix && piece.messages[0]?.role === "assistant"
+        ? [{ role: "user", content: "Summarize the following recorded conversation continuation. Preserve its completed outcomes under the task and authority in the checkpoint." }] : []
       const request: LLMRequest = { systemPrompt: prefix?.systemPrompt ?? "", tools: prefix?.tools ?? [],
-        messages: [...(prefix ? piece.messages : []), { role: "user", content: directive }], promptCache: { mode: "off" },
+        messages: [...opener, ...(prefix ? piece.messages : []), { role: "user", content: directive }], promptCache: { mode: "off" },
         ...(limits.reasoningEffort !== undefined ? { reasoningEffort: limits.reasoningEffort } : {}), ...(limits.signal ? { signal: limits.signal } : {}) }
       // Capture pure uncapped facts first: reasoning floors can exceed the preferred
       // default. Only a derivative of this captured payload is allowed to execute.
@@ -263,7 +269,7 @@ export async function summarizeWithModel(
       const reduced = piece.rejectedTokens === undefined || inputTokens < piece.rejectedTokens
       const requiredRoom = output.capSupport === "unsupported" ? ceiling : required
       if (!reduced || room !== undefined && room < requiredRoom) {
-        const segments = sliceMessages(piece.messages, 1)
+        const segments = sliceMessages(piece.messages, 1, true)
         if (!reduced || segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
         const split = Math.ceil(segments.length / 2)
         const chunks = [segments.slice(0, split).flat(), segments.slice(split).flat()]
@@ -304,7 +310,7 @@ export async function summarizeWithModel(
         if (!confirmedOverflow(error)) throw error
         check()
         if (piece.shrinks >= 2) throw new SummaryBlockedError("shrink-limit")
-        const segments = sliceMessages(piece.messages, 1)
+        const segments = sliceMessages(piece.messages, 1, true)
         if (segments.length < 2) throw new SummaryBlockedError("fixed-input", { input: inputTokens, output: requiredRoom, window: limits.contextWindow })
         const split = Math.ceil(segments.length / 2)
         pending.splice(0, 1, ...[segments.slice(0, split).flat(), segments.slice(split).flat()].map(messages => ({ messages, text: textOf(messages), shrinks: piece.shrinks + 1, rejectedTokens: inputTokens })))

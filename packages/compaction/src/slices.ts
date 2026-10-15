@@ -50,8 +50,10 @@ export function sliceRegion(session: Session, shadowedSeqs: number[], budgetToke
   return sliceMessages(whole, budgetTokens)
 }
 
-/** Balanced tool-safe message segments, also used to reslice pending work. */
-export function sliceMessages(whole: LLMMessage[], budgetTokens: number): LLMMessage[][] {
+/** Balanced tool-safe message segments. Summary callers may opt into cuts
+ * between closed tool rounds; they must supply a user opener when a resulting
+ * piece starts with assistant content. Legacy sliceRegion keeps user cuts. */
+export function sliceMessages(whole: LLMMessage[], budgetTokens: number, toolRoundCuts = false): LLMMessage[][] {
   if (whole.length === 0) return []
 
   // Cut candidates: the fold's user messages (index 0 excluded — a cut there
@@ -62,7 +64,8 @@ export function sliceMessages(whole: LLMMessage[], budgetTokens: number): LLMMes
   const outstanding = new Set<string>()
   for (let i = 0; i < whole.length; i++) {
     const m = whole[i]!
-    if (i > 0 && m.role === "user" && outstanding.size === 0) bounds.push(i)
+    if (i > 0 && outstanding.size === 0 && (m.role === "user"
+      || toolRoundCuts && m.role === "assistant" && whole[i - 1]!.role === "tool")) bounds.push(i)
     if (m.role === "assistant") for (const call of m.toolCalls ?? []) outstanding.add(call.id)
     else if (m.role === "tool") outstanding.delete(m.toolCallId)
   }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { append, createSession, deriveMessagesUpTo, type Session } from "@i-harness/core-session"
 import { estimateContent } from "@i-harness/token-meter"
-import { sliceRegion } from "../src/slices.ts"
+import { sliceRegion, sliceMessages } from "../src/slices.ts"
 
 /** One turn: a user message, a read call with its result, an answer. */
 function appendTurn(s: Session, t: number): void {
@@ -87,6 +87,23 @@ const orphans = (slice: { role: string; toolCalls?: { id: string }[]; toolCallId
 }
 
 describe("sliceRegion", () => {
+  it("summary reslicing can divide an autonomous chain only after a complete parallel tool round", () => {
+    const whole = [
+      { role: "user" as const, content: "Original task and authority" },
+      { role: "assistant" as const, content: "", toolCalls: [{ id: "a", name: "read", args: {} }, { id: "b", name: "read", args: {} }] },
+      { role: "tool" as const, toolCallId: "a", content: "first outcome" },
+      { role: "user" as const, content: "interleaved instruction must remain in this open block" },
+      { role: "tool" as const, toolCallId: "b", content: "second outcome" },
+      { role: "assistant" as const, content: "", toolCalls: [{ id: "c", name: "read", args: {} }] },
+      { role: "tool" as const, toolCallId: "c", content: "third outcome" },
+    ]
+    expect(sliceMessages(whole, 1)).toHaveLength(1)
+    const pieces = sliceMessages(whole, 1, true)
+    expect(pieces).toHaveLength(2)
+    expect(pieces.flat()).toEqual(whole)
+    expect(pieces[0]).toHaveLength(5)
+    for (const piece of pieces) expect(orphans(piece)).toEqual([])
+  })
   it("M75: a budget that fits everything returns ONE slice, equal to the whole fold", () => {
     const s = toolSession(3)
     const slices = sliceRegion(s, allSeqs(s), 1_000_000)
