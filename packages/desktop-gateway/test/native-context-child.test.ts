@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
 import {createSessionCoordinator} from '@i-harness/session-persistence'
@@ -41,6 +41,47 @@ it('live enabling lets a real explore child capture and search native refs throu
     await runtime.contextOutput.clear(child.sessionId)
     expect((await runtime.contextOutput.search({sessionId:'parent'},{query:'CHILD_RETAINED'})).hits).toHaveLength(1)
   } finally {await service.close();await runtime.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+},15000)
+
+it.each(['release','reject'] as const)('persists the trusted fork seed before granting refs or entering the child model (%s)',async outcome=>{
+  const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'barrier-'))
+  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{maxDelayMs:60000});await coordinator.create({sessionId:'parent'})
+  let service:ReturnType<typeof createSessionService>|undefined
+  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
+    visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
+  let transports=0
+  const model:ModelClient={async *stream(){transports++;yield{type:'text/chunk',text:'child complete'};yield{type:'end'}}}
+  service=createSessionService({workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),model,sandbox:'danger-full-access',approveAll:true,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
+  const grant=vi.spyOn(runtime.contextOutput,'grant'),actualFlush=coordinator.flush.bind(coordinator)
+  let release!:()=>void,entered!:()=>void
+  const held=new Promise<void>(resolve=>{release=resolve}),started=new Promise<void>(resolve=>{entered=resolve})
+  let childId=''
+  try{
+    await runtime.contextOutput.configure({enabled:true})
+    const assembly=await service.assemblyFor('parent')
+    const ref=(await runtime.contextOutput.capture({sessionId:'parent',callId:'seed',label:'seed',text:'TRUSTED_SEED',complete:true,source:await runtime.sourceFor('parent')}))!
+    append(assembly.session,{type:'turn/start'});append(assembly.session,{type:'user/message',text:'seed'});append(assembly.session,{type:'context/result-ref',ref});append(assembly.session,{type:'turn/end'})
+    await actualFlush('parent')
+    coordinator.flush=async id=>{
+      if(id.startsWith('child-')){childId=id;entered();await held;if(outcome==='reject')throw new Error('required seed persistence rejected')}
+      await actualFlush(id)
+    }
+    const spawned=assembly.tools.dispatch(await assembly.tools.prepare({name:'spawn_agent',args:{message:'Use trusted seed',task_name:'barrier',agent_type:'explore',fork_turns:'all',background:false}},undefined,{sessionId:'parent',callId:'spawn'}))
+    await Promise.race([started,spawned.then(()=>{throw new Error('spawn completed before seed barrier')})])
+    await new Promise<void>(resolve=>setImmediate(resolve))
+    expect(transports).toBe(0);expect(grant).not.toHaveBeenCalled()
+    expect((await coordinator.snapshot!(childId)).session.events).toEqual([])
+    release()
+    if(outcome==='reject'){
+      await expect(spawned).rejects.toThrow('required seed persistence rejected')
+      expect(transports).toBe(0);expect(grant).not.toHaveBeenCalled()
+    }else{
+      const result=await spawned
+      expect(JSON.stringify(result)).toContain('child complete')
+      expect(transports).toBe(1);expect(grant).toHaveBeenCalledWith({sessionId:'parent'},[ref.id],childId)
+      expect((await coordinator.snapshot!(childId)).session.events.some(event=>event.type==='context/result-ref'&&event.ref.id===ref.id)).toBe(true)
+    }
+  }finally{release();coordinator.flush=actualFlush;grant.mockRestore();await service.close();await runtime.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },15000)
 
 it.each([false,true])('a real child owns its inherited native references before its first model request (disabled=%s)',async disabled=>{

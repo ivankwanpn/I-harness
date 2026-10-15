@@ -882,7 +882,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     ...(opts.coordinator&&opts.sessionId?{inheritedSessionFor:async(id:string)=>{
       const {meta}=await opts.coordinator!.profile(id)
       if(meta.parentSession!==opts.sessionId||meta.origin!=='subagent'||meta.seedLength===undefined)return undefined
+      // The inherited lifecycle precedes the child's first admission flush.
+      // Grants must inspect the persisted seed, never an empty queued prefix.
+      await opts.coordinator!.flush(id)
       const snapshot=await opts.coordinator!.snapshot!(id)
+      const current=(await opts.coordinator!.profile(id)).meta
+      if(current.parentSession!==opts.sessionId||current.origin!=='subagent'||current.seedLength!==meta.seedLength
+        ||snapshot.session.header?.parentSession!==opts.sessionId||snapshot.session.header?.origin!=='subagent'||snapshot.session.header?.seedLength!==meta.seedLength)return undefined
       return {...snapshot.session,events:snapshot.session.events.slice(0,meta.seedLength)}
     }}:{}),
   })
