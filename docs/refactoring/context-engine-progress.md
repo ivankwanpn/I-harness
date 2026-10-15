@@ -7,8 +7,8 @@ Normative inputs: [design](../superpowers/specs/2026-10-15-context-engine-redesi
 | Phase | Delivery | State |
 | --- | --- | --- |
 | R0 | Six-route offline request/projection corpus and baseline | Completed commit46b7b3af; independent spec/quality approved;63baseline＋57corpus cases, e2e types0; [report](../research/2026-10-15-context-engine-r0-baseline.md) |
-| R1 | Semantic exchange/snapshot, legacy importer, source and authority boundaries | R1A completed throughb122fd9b; R1B reviewed4d09ed4f:691focused tests/types/audit, [verification](../research/2026-10-16-context-engine-r1b-verification.md); R1C starting [snapshot plan](../superpowers/plans/2026-10-16-context-engine-r1-snapshot.md); R1D shares the R3 publication foundation gate |
-| R2 | Shared measurement/policy, semantic/wire identity, protocol validators | Pending R1 interfaces |
+| R1 | Semantic exchange/snapshot, legacy importer, source and authority boundaries | R1A completed throughb122fd9b; R1B reviewed4d09ed4f; R1C reviewed throughdcaff351 after two scoped corrections, [verification](../research/2026-10-16-context-engine-r1c-verification.md); R1D shares the R3 publication foundation gate |
+| R2 | Shared measurement/policy, semantic/wire identity, protocol validators | R2A starting: [binding evidence plan](../superpowers/plans/2026-10-16-context-engine-r2-binding-evidence.md); R2B identities/anchors, R2C/D route validators and R2E single admission cutover pending |
 | R3 | Transactional reduction/summary/checkpoint, bounded attempt ownership | Pending R1/R2 |
 | R4 | Result envelope/artifact lifetime, snapshot fork and durable delivery | Pending relevant R1/R3 contracts |
 | R5 | Typed recovery, SDK/gateway/CLI/UI observation and integrated decompositions | Pending domain owners |
@@ -23,3 +23,7 @@ R1A resolved that R0 minor. The fresh R1A review found an incomplete stepless le
 R1B completed on2026-10-16 with fresh independent spec/quality PASS and noCritical/Important findings. MinorM1 preserves the missing fresh pre-edit JSONL-context baseline; no retrospective run is represented as that baseline. Format3/acceptance/provenance/seed/recovery are integrated, not yet the full ContextEngine. R1C will use captured request identities and retain historical budget facts with unavailable admission when stale.
 
 R1D sequencing ruling: new positional replacement production must ship with a real durable-publication owner boundary, including live-reader visibility, Stop and uncertain writes. Main-loop flush waiting alone is insufficient. The integrated R1D/R3-foundation gate may follow R2; no temporary weaker producer or false R1-complete claim is introduced.
+
+R1C baseline at910da9a9: owned-budget/context-update/context-usage reports17passed/5failed before R1C edits. These additional suites were outside the R1B selected691-case gate and expose historical-reading assertions after acceptance/inherited binding/update. Their receipts remain real failing baseline evidence; resolving them is part of the active R1C request-versus-observation contract, not a reason to relabel R1B as whole-program green.
+
+R1C also recorded executor8passed/5failed before editing. Final fix scopes cover746distinct passing scenarios plus types/audit/isolated packaging; original fresh review's two Important findings (closed uncertain effects and deep actual request traversal) are resolved atdcaff351. The earlier533scenario gate is overlapping evidence, not another count to add. Deep JSONL/native/summary and whole-program qualification remain explicit later gates.

@@ -114,9 +114,8 @@ const result = captureContextSnapshot(source, { ownerSessionId: 'owner-A', surfa
 expect(result.kind).toBe('captured');
 if (result.kind !== 'captured') throw new Error('fixture must capture');
 const before = result.snapshot;
-append(source, { type: 'model/activity', version: 1, ts: 1,
-  activity: { requestId: 'request-A', phase: 'connecting', startedAt: 1,
-    waitingFor: 'first-response' } });
+append(source, { type: 'operator/run-end', version: 1, runId: 'run-A',
+  exitCode: 0, durationMs: 1, phase: 'turn' });
 const after = readContextCoordinates(source, { ownerSessionId: 'owner-A' });
 expect(after.kind).toBe('available');
 if (after.kind !== 'available') throw new Error('fixture must read');
@@ -124,7 +123,7 @@ expect(after.coordinates.semanticRevision).toBe(before.coordinates.semanticRevis
 expect(after.coordinates.archive.eventCount).toBeGreaterThan(before.coordinates.archive.eventCount);
 ```
 
-This valid model/activity fixture proves archive-only appends do not invalidate input. Add initial RED for missing API, then behavior-specific RED when a fixture exercises a faulty intermediate implementation. No assertion that simply regenerates expected JSON with the production serializer.
+This valid persisted operator/run-end fixture proves archive-only appends do not invalidate input. model/activity is a transient record rejected by append; an explicitly injected transient-view control may test a separate boundary but cannot stand in for a durable append. Add initial RED for missing API, then behavior-specific RED when a fixture exercises a faulty intermediate implementation. No assertion that simply regenerates expected JSON with the production serializer.
 
 - [ ] **Step 2: Implement safe supported-data capture at the existing source fold.**
 

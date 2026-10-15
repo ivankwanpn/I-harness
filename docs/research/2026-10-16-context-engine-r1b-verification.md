@@ -40,4 +40,6 @@ No live provider, installed profile, credential, package release or remote opera
 
 R1C snapshot/protection, R1D selection with the R3 publication foundation, R2 policy, broader R3–R6, R5 failed-call-ID reuse and CX1 disk I/O remain outstanding. The earlier full verify:all FAILED/incomplete result remains unchanged. Original decomposition remains27/43; no S/CX completion is credited here.
 
+Subsequent R1C baseline at910da9a9 recorded17passed/5failed in the additional owned-budget/context-update/context-usage suites. These were outside the selected R1B gate and concern readable historical budget snapshots after accepted output/inherited binding/update. They are retained as pre-edit failures for R1C to resolve; the691 result above must not be interpreted as all repository tests passing.
+
 Detailed local evidence is retained under `.superpowers/sdd/2026-10-15-context-engine-r1-acceptance/`: task-1-report.md, task-1-review.md, gate logs/exit receipts, RED controls, changed-path/AST-size evidence, and exact audit arrays. The [execution plan](../superpowers/plans/2026-10-15-context-engine-r1-acceptance.md) fixes the tested scope.
