@@ -7,7 +7,7 @@ import type { ConversationDiagnostic, ConversationProjection } from "./types.ts"
 import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"
 import { inferLegacy, type LegacyStep } from "./legacy.ts"
-import { addItemSource, finishItem, itemBuilder, type ItemBuilder } from "./exchange.ts"
+import { addItemSource, awaitingItemResults, finishItem, itemBuilder, type ItemBuilder } from "./exchange.ts"
 
 /** Sole conversation fold: source metadata is attached before message flattening. */
 export function projectConversation(session: Session, options: { ownerSessionId?: string; throughSeq?: number } = {}): ConversationProjection {
@@ -56,7 +56,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
     if (pendingResults.length) { block!.messages.push(...pendingResults); pendingResults.length = 0 }
     if (pendingToolImages.length) { block!.messages.push(...pendingToolImages); pendingToolImages.length = 0 }
     if (deferredUser.length) { items.push(...deferredUser); deferredUser.length = 0 }
-    if (!stepOpen || !toolResultsPending) block = undefined
+    if ((!stepOpen || !toolResultsPending) && !(block && awaitingItemResults(block))) block = undefined
   }
 
   for (const [index, event] of session.events.entries()) {
@@ -72,7 +72,9 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       const item = makeItem("input", index, "message", admissionIndex)
       item.messages.push(images && images.length > 0 ? { role: "user", content: [{ type: "text", text: event.text }, ...images.map(image => ({ type: "image" as const, image }))] } : { role: "user", content: event.text })
       if (stepOpen && (pendingCalls || toolResultsPending)) deferredUser.push(item)
-      else { flushToolBlock(); items.push(item) }
+      // A stepless input keeps its historical position. A call bundle split by
+      // this independent input is unresolved, even if a later result is known.
+      else { flushToolBlock(); block = undefined; items.push(item) }
     } else if (event.type === "assistant/message") {
       if (legacy.suppressedAssistants.has(index)) { auditItem(index, "message"); continue }
       if (stepOpen && pendingCalls) {
@@ -80,14 +82,16 @@ export function projectConversation(session: Session, options: { ownerSessionId?
         flushToolBlock(event.text, event.thinkingBlocks, event.providerContinuation, index)
       } else {
         flushToolBlock()
-        const item = makeItem("exchange", index, "message")
+        const item = block && awaitingItemResults(block) ? block : makeItem("exchange", index, "message")
+        addItemSource(item, sources.ref(index, "message"))
         item.messages.push({ role: "assistant", content: event.text, ...(event.thinkingBlocks?.length ? { thinkingBlocks: event.thinkingBlocks } : {}), ...(event.providerContinuation ? { providerContinuation: event.providerContinuation } : {}) })
-        items.push(item)
+        if (item !== block) { items.push(item); block = undefined }
       }
     } else if (event.type === "step/start") stepOpen = true
     else if (event.type === "turn/start") { stepOpen = false; toolResultsPending = false }
     else if (event.type === "compaction/summary") {
       flushToolBlock()
+      block = undefined
       const item = makeItem("summary", index, "message")
       item.messages.push({ role: "user", content: event.text })
       items.push(item)
@@ -100,7 +104,9 @@ export function projectConversation(session: Session, options: { ownerSessionId?
     } else if (event.type === "tool/result") {
       if (legacy.suppressedCalls.has(event.callId)) continue
       if (!block) { block = makeItem("legacy-fragment", index, "result"); items.push(block) }
-      addItemSource(block, sources.ref(index, "result"))
+      const resultSource = sources.ref(index, "result")
+      addItemSource(block, resultSource)
+      block.receivedResults.add(resultSource.id)
       const out = event.output as { images?: ImageInput[] } | null | undefined
       const images = out?.images
       const record = pruned.get(event.callId)
@@ -113,6 +119,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       stepOpen = false
       toolResultsPending = false
       flushToolBlock()
+      block = undefined
     }
   }
   flushToolBlock()

@@ -123,6 +123,44 @@ describe("semantic conversation projection", () => {
     ])
   })
 
+  it.each([false, true])("owns the complete stepless call/assistant/result bundle when selected (image=%s)", withImage => {
+    const image = { mediaType: "image/png" as const, dataBase64: "aW1hZ2U=" }
+    const session = log(call(), { type: "assistant/message", text: "Checking", providerContinuation: continuation },
+      { type: "tool/result", callId: "a", name: "read", output: withImage ? { text: "A", images: [image] } : "A" })
+    const projection = projectConversation(session)
+    const exchange = projection.items[0]!
+    const expected = [
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "read", args: { path: "a" } }] },
+      { role: "assistant", content: "Checking", providerContinuation: continuation },
+      { role: "tool", toolCallId: "a", content: withImage ? '{"text":"A"}\nimage: unnamed ?x? 6B base64:aW1hZ2U=' : '"A"' },
+      ...(withImage ? [{ role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }] }] : []),
+    ]
+    expect(renderConversation(projection)).toEqual(expected)
+    expect(exchange.exchange).toMatchObject({ state: "closed", calls: [{ callId: "a", call: { eventIndex: 0 }, result: { eventIndex: 2 }, outcome: "success" }] })
+    expect(exchange.sources.map(source => [source.eventIndex, source.part])).toEqual(expect.arrayContaining([[0, "call"], [1, "message"], [2, "result"], ...(withImage ? [[2, "image"]] : [])]))
+    expect(renderConversation({ ...projection, items: [exchange] })).toEqual(expected)
+    expect(projection.items).toHaveLength(1)
+  })
+
+  it("keeps an interleaved stepless input in position and reports its separated call bundle unresolved", () => {
+    const image = { mediaType: "image/png" as const, dataBase64: "aW1hZ2U=" }
+    const projection = projectConversation(log(call(), { type: "assistant/message", text: "Checking" },
+      { type: "user/message", text: "Interleaved", source: { kind: "plugin", plugin: "fixture" } },
+      { type: "tool/result", callId: "a", name: "read", output: { images: [image] } }))
+    expect(renderConversation(projection)).toEqual([
+      { role: "assistant", content: "", toolCalls: [{ id: "a", name: "read", args: { path: "a" } }] },
+      { role: "assistant", content: "Checking" },
+      { role: "user", content: "Interleaved" },
+      { role: "tool", toolCallId: "a", content: "image: unnamed ?x? 6B base64:aW1hZ2U=" },
+      { role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, { type: "image", image }] },
+    ])
+    expect(projection.items[0]!.exchange).toMatchObject({ state: "unresolved", calls: [{ result: { eventIndex: 3 } }] })
+    const input = projection.items.find(item => item.kind === "input")!
+    expect(input).toMatchObject({ sources: [{ eventIndex: 2 }], provenance: { kind: "plugin", authority: "observation", producer: "fixture" } })
+    expect(renderConversation({ ...projection, items: [input] })).toEqual([{ role: "user", content: "Interleaved" }])
+    expect(projection.items.at(-1)!.kind).toBe("legacy-fragment")
+  })
+
   it("does not turn an inherited admission into a fresh local human request", () => {
     const session = log(
       { type: "agent/input/admitted", version: 1, inputId: "parent-input", text: "Parent request", delivery: "queue", intent: "user" },
