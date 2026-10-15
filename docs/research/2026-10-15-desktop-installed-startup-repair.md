@@ -1,5 +1,7 @@
 # 2026-10-15：已安裝 Desktop 無法啟動的修復
 
+**後續會話修復：最新的 `session-fix` 安裝包包含本報告的啟動修復，並處理兩個舊會話在壓縮後因工具／結果分組錯誤而出現的 HTTP400。** 見[壓縮後工具回合修復與驗證](2026-10-15-compacted-tool-http400-repair.md)。本報告保留來源fd4d及原startup-fix產物的歷史紀錄。
+
 使用者安裝上一份 RC1 後，主程序拋出 `ERR_MODULE_NOT_FOUND`，找不到 `@i-harness/usage-stats`。修復來源為 `fd4d9b5f47f028e2fa7c9799250a30d396239b6d`；新的打包程式已實際顯示介面、啟動內建 gateway，並正常退出。新的安裝器已完成實際 NSIS 編譯與獨立 PE／SHA-256 檢查。這些結果只涵蓋本次啟動修復；[先前完整候選驗證](2026-10-15-candidate-qualification.md)的四項失敗保留，沒有把整體資格改為通過。
 
 ## 原因與修復範圍
