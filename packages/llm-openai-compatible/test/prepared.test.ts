@@ -58,8 +58,8 @@ it("measures final raw input overrides and diagnoses cap conflicts and model mis
   expect(prepared.measurement.input.overriddenInputFields).toEqual(["messages", "tools"])
   expect(prepared.measurement.input.components.visibleText.textUtf8Bytes).toBe(15)
   expect(prepared.measurement.output.effectiveCap).toBe(80)
-  expect(() => prepared.withOutputCap(40)).toThrow(/conflicting/)
-  await expect(createOpenAICompatibleClient({ apiKey: "test", model: "fixture", options: { model: "wrong" } }).prepare!(request)).rejects.toMatchObject({ code: "MODEL_BINDING_MISMATCH" })
+  expect(() => prepared.withOutputCap(40)).toThrowError(expect.objectContaining({ code: 'INVALID_ARGUMENT', modelFailure: expect.objectContaining({ reason: 'schema', validation: expect.objectContaining({ issues: [{ rule: 'parameter-conflict', site: 'generation' }] }) }) }))
+  await expect(createOpenAICompatibleClient({ apiKey: "test", model: "fixture", options: { model: "wrong" } }).prepare!(request)).rejects.toMatchObject({ code: "INVALID_ARGUMENT", modelFailure: { reason: 'binding' } })
 })
 it("freezes input before the image projection await", async () => {
   let body: Record<string, unknown> = {}

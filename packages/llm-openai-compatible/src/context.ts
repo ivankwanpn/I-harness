@@ -1,9 +1,7 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
-import { invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "./types.ts"
 export function describeContext(body: Record<string, unknown>, config: OpenAICompatibleConfig) {
-  if (body.model !== config.model)
-    throw invalidPreparedRequest("Actual request model does not match the resolved binding", "MODEL_BINDING_MISMATCH")
   const counter = new ProjectionCounter("projected-pricing-v2")
   counter.metadata(body)
   let unknownInput = false
@@ -53,11 +51,7 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICom
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: OpenAICompatibleConfig) {
-  if (body.max_tokens !== undefined && body.max_completion_tokens !== undefined)
-    throw invalidPreparedRequest("Chat request contains conflicting output cap fields")
   const field = config.maxTokensField ?? "max_tokens"
   const value = body[field] ?? body[field === "max_tokens" ? "max_completion_tokens" : "max_tokens"]
-  if (value !== undefined && typeof value !== "number")
-    throw invalidPreparedRequest("Chat output cap is invalid")
   return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? (typeof value === "number" ? value : undefined), effectiveCap: typeof value === "number" ? value : undefined, minimumCap: 1, source: request.maxOutputTokens !== undefined ? "request" as const : value !== undefined ? "route" as const : "provider-default" as const }
 }

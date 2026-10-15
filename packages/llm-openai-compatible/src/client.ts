@@ -6,6 +6,7 @@ import { createChatFold } from "./stream/fold.ts"
 import { decodeChatStream } from "./stream/decode.ts"
 
 import { describeContext, outputFacts } from "./context.ts"
+import { chatValidator } from './request/validate.ts'
 
 export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.openai.com"
@@ -19,6 +20,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      validate: chatValidator(capturedConfig),
       body: body, request, describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => {

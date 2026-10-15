@@ -3,6 +3,7 @@ import { ProjectionCounter } from "@i-harness/token-meter"
 import type { LLMRequest, ModelClient } from "../index.ts"
 import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
 import { freezePreparedFacts, preparedControls, snapshotModelData, validateOutputCap } from "./wrappers.ts"
+import { createPreparedValidation } from './validation.ts'
 /** Compatible custom clients expose neutral-only coverage and unknown cap
  * support: a stream-only client cannot certify its protocol or applied cap. */
 export async function prepareModelRequest(client: ModelClient, request: LLMRequest): Promise<PreparedModelRequest> {
@@ -31,6 +32,7 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
   function derive(cap: number | undefined): PreparedModelRequest {
     validateOutputCap(cap)
     return Object.freeze({
+      validation: createPreparedValidation({ version: 1, route: 'custom', contract: 'neutral-only-v1', status: 'partial', coverage: 'neutral-only', native: 'unverified', issues: [], gaps: ['custom-client'], omittedIssueCount: 0 }),
       measurement: freezePreparedFacts({
         projectionId: input.inputFingerprint, input,
         output: { capSupport: "unknown" as const, configuredCap: cap, minimumCap: 1, source: "request" as const },

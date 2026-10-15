@@ -23,7 +23,8 @@ export function projectConversation(session: Session, options: { ownerSessionId?
   const admissions = new Map<string, number>()
   let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
   const pendingResults: LLMMessage[] = []
-  const pendingToolImages: LLMMessage[] = []
+  // Images belong to their exchange even if an interrupted fold changes block.
+  const pendingToolImages = new Map<ItemBuilder, LLMMessage[]>()
   const deferredUser: ItemBuilder[] = []
   let stepOpen = false
   let toolResultsPending = false
@@ -47,15 +48,19 @@ export function projectConversation(session: Session, options: { ownerSessionId?
 
   // Preserve calls, results, images, then separately attributed reminders.
   // Early assistant flushes keep the owner open for later parallel results.
-  const flushToolBlock = (content = "", thinkingBlocks?: ProviderThinkingBlock[], providerContinuation?: ProviderContinuation, assistantIndex?: number) => {
+  const flushToolBlock = (content = "", thinkingBlocks?: ProviderThinkingBlock[], providerContinuation?: ProviderContinuation, assistantIndex?: number, boundary = false) => {
     if (pendingCalls) {
       if (assistantIndex !== undefined) addItemSource(block!, sources.ref(assistantIndex, "message"))
       block!.messages.push({ role: "assistant", content, toolCalls: pendingCalls, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
       pendingCalls = undefined
     }
     if (pendingResults.length) { block!.messages.push(...pendingResults); pendingResults.length = 0 }
-    if (pendingToolImages.length) { block!.messages.push(...pendingToolImages); pendingToolImages.length = 0 }
-    if (deferredUser.length) { items.push(...deferredUser); deferredUser.length = 0 }
+    const awaiting = block && awaitingItemResults(block)
+    if (block && !awaiting) {
+      block.messages.push(...pendingToolImages.get(block) ?? [])
+      pendingToolImages.delete(block)
+    }
+    if ((!awaiting || boundary) && deferredUser.length) { items.push(...deferredUser); deferredUser.length = 0 }
     if ((!stepOpen || !toolResultsPending) && !(block && awaitingItemResults(block))) block = undefined
   }
 
@@ -74,7 +79,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       if (stepOpen && (pendingCalls || toolResultsPending)) deferredUser.push(item)
       // A stepless input keeps its historical position. A call bundle split by
       // this independent input is unresolved, even if a later result is known.
-      else { flushToolBlock(); block = undefined; items.push(item) }
+      else { flushToolBlock('', undefined, undefined, undefined, true); block = undefined; items.push(item) }
     } else if (event.type === "assistant/message") {
       if (legacy.suppressedAssistants.has(index)) { auditItem(index, "message"); continue }
       const thinkingBlocks = payload(event, "thinkingBlocks", index, "message")
@@ -92,7 +97,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
     } else if (event.type === "step/start") stepOpen = true
     else if (event.type === "turn/start") { stepOpen = false; toolResultsPending = false }
     else if (event.type === "compaction/summary") {
-      flushToolBlock()
+      flushToolBlock('', undefined, undefined, undefined, true)
       block = undefined
       const item = makeItem("summary", index, "message")
       item.messages.push({ role: "user", content: event.text })
@@ -107,7 +112,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
     } else if (event.type === "tool/result") {
       if (legacy.suppressedCalls.has(event.callId) || legacy.unacceptedResults.has(index)) continue
       const acceptedOwner = explicitCalls.get(event.callId)
-      if (acceptedOwner && acceptedOwner !== block) { flushToolBlock(); block = acceptedOwner }
+      if (acceptedOwner && acceptedOwner !== block) { flushToolBlock('', undefined, undefined, undefined, true); block = acceptedOwner }
       if (!block) { block = makeItem("legacy-fragment", index, "result"); items.push(block) }
       const resultSource = sources.ref(index, "result")
       addItemSource(block, resultSource)
@@ -116,15 +121,20 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       pendingResults.push({ role: "tool", toolCallId: event.callId, content, ...(event.isError === true ? { isError: true } : {}) })
       if (Array.isArray(images) && images.length > 0) {
         addItemSource(block, sources.ref(index, "image"))
-        pendingToolImages.push({ role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...images.map(image => ({ type: "image" as const, image }))] })
+        const companions = pendingToolImages.get(block) ?? []
+        companions.push({ role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...images.map(image => ({ type: "image" as const, image }))] })
+        pendingToolImages.set(block, companions)
       }
     } else if (event.type === "step/end" || event.type === "step/failed") {
       stepOpen = false
       toolResultsPending = false
-      flushToolBlock()
+      flushToolBlock('', undefined, undefined, undefined, true)
       block = undefined
     }
   }
-  flushToolBlock()
+  flushToolBlock('', undefined, undefined, undefined, true)
+  // An incomplete/interrupted source is still observable and protected. Keep
+  // its companions on the original exchange; validation must not invent results.
+  for (const [owner, images] of pendingToolImages) owner.messages.push(...images)
   return Object.freeze({ version: 1, ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: session.events.length, ...(options.throughSeq === undefined ? {} : { throughSeq: options.throughSeq }), items: Object.freeze(items.map(finishItem)), diagnostics: Object.freeze(diagnostics.map(diagnostic => Object.freeze({ ...diagnostic, sourceIds: Object.freeze(diagnostic.sourceIds) }))) })
 }

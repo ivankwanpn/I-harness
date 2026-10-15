@@ -9,6 +9,25 @@ type ModelClient = NonNullable<Parameters<typeof createSessionService>[0]["model
 type LLMRequest = Parameters<ModelClient["stream"]>[0]
 import { createDesktopInput } from "../src/input.ts"
 import { describeHttpError, type ModelFailureFacts } from "@i-harness/llm-seam"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+
+it('actual Gateway input reports bounded local final-schema refusal without transport, effect or context recovery', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gateway-final-validation-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root)); await coordinator.create({ sessionId: 's' })
+  let sends = 0, effects = 0
+  const model = createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null }, fetch: async () => { sends++; return new Response('') } })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, additionalTools: [{ name: 'effect', description: '', inputSchema: {}, execute: async () => { effects++; return 'done' } }] })
+  const onStatus = vi.fn(), input = createDesktopInput(coordinator, service, { onStatus })
+  try {
+    await input.admit('s', { text: 'sentinel-human-input', delivery: 'queue' }); await input.drain()
+    const failure = onStatus.mock.calls.find(row => row[1] === false && row[2])
+    expect(failure?.[3]).toMatchObject({ code: 'INVALID_ARGUMENT', reason: 'schema', validation: { route: 'openai-compatible', status: 'invalid' } })
+    expect(JSON.stringify(failure)).not.toContain('sentinel-human-input')
+    expect(sends).toBe(0); expect(effects).toBe(0)
+    expect(service.liveSession('s')?.events.some(event => event.type === 'context/recovery' || event.type === 'compaction/summary')).toBe(false)
+    expect(service.liveSession('s')?.events.find(event => event.type === 'user/message')).toMatchObject({ text: 'sentinel-human-input' })
+  } finally { await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 it("repeated model 400 failures preserve facts, the same service and parked work; legacy errors retain three status arguments", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-model-failure-"))

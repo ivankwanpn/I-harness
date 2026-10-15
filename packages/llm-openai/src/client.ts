@@ -8,6 +8,7 @@ import { createResponseFold } from "./stream/fold.ts"
 import { decodeResponseStream } from "./stream/decode.ts"
 
 import { describeContext, outputFacts } from "./context.ts"
+import { responsesValidator } from './request/validate.ts'
 
 export function createOpenAIClient(config: OpenAIConfig): ModelClient {
   const codexSubscription = config.codexSubscription === true
@@ -35,6 +36,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      validate: responsesValidator(capturedConfig, codexSubscription),
       body: body, request, describe: body => describeContext(body, capturedConfig, codexSubscription, generatedAffinity),
       output: (body, request) => outputFacts(body, request, capturedConfig, codexSubscription),
       cap: (body, cap) => {

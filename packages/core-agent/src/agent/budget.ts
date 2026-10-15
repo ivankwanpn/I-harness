@@ -2,7 +2,7 @@ import { append, deriveContextRecovery, type BudgetRead, type Session, type Exch
 import { checkBudget, createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { readContextCoordinates } from "@i-harness/context-engine"
 import { sameRequestCandidate, requestContextIdentity, type RequestEvidence } from "./request-snapshot.ts"
-import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
+import { assertPreparedValidation, preparedBindingError, freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
 export function createOwnedBudget(session: Session, ownerSessionId: string, freshness: () => RequestEvidence, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation) {
@@ -43,9 +43,10 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       return read.kind === "ready" && read.snapshot.admission !== "unavailable" ? read.snapshot.admissionInputTokens + read.snapshot.outputReserve + read.snapshot.safetyMargin : undefined
     },
     assess(prepared: PreparedModelRequest, evidence: RequestEvidence, window: number | undefined, configuredCap?: number, reserveRatio = .9, recoveryAuthorized = false, selectOutputCap = true) {
+      assertPreparedValidation(prepared)
       let { input, output } = prepared.measurement
       const binding = evidence.metadata
-      if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: prepared input does not match owned model binding")
+      if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw preparedBindingError(prepared)
       let estimate = calibration.probe(input, compatibility(evidence))
       const safetyMargin = window === undefined ? 0 : Math.ceil(window * (1 - reserveRatio))
       let available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
@@ -57,7 +58,8 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       // One derivative selection, followed by the same owner's final estimate.
       // A changed semantic shape can retire a provisional legacy anchor here.
       ;({ input, output } = candidate.measurement)
-      if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: selected input does not match owned model binding")
+      assertPreparedValidation(candidate)
+      if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw preparedBindingError(candidate)
       estimate = calibration.probe(input, compatibility(evidence))
       available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
       ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap

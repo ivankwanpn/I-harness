@@ -1,5 +1,5 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
-import { invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAIConfig } from "./types.ts"
 import type { GeneratedAffinity } from "./request/cache-evidence.ts"
 export function describeContext(actualBody: Record<string, unknown>, config: OpenAIConfig, subscription: boolean, generatedAffinity?: GeneratedAffinity) {
@@ -8,8 +8,6 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ope
   // config and request keys stay model-input evidence even at this same path.
   const ownedKey = generatedAffinity !== undefined && body[generatedAffinity.path] === generatedAffinity.value
   if (ownedKey) delete body.prompt_cache_key
-  if (body.model !== config.model)
-    throw invalidPreparedRequest("Actual request model does not match the resolved binding", "MODEL_BINDING_MISMATCH")
   const counter = new ProjectionCounter("projected-pricing-v2")
   if (ownedKey) counter.cacheMetadataBytes += Buffer.byteLength(JSON.stringify(generatedAffinity!.value))
   counter.metadata(body)
@@ -105,8 +103,6 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ope
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: OpenAIConfig, subscription: boolean) {
-  if (body.max_output_tokens !== undefined && typeof body.max_output_tokens !== "number")
-    throw invalidPreparedRequest("Responses output cap is invalid")
   return {
     capSupport: subscription ? "unsupported" as const : "supported" as const,
     configuredCap: request.maxOutputTokens ?? (typeof config.options?.max_output_tokens === "number" ? config.options.max_output_tokens : undefined),

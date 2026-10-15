@@ -136,6 +136,14 @@ function assertPolicyToolsCap(route: CorpusRoute, body: Wire, cap = 2048): void 
 }
 
 async function send(prepared: PreparedModelRequest, capture: CapturedRequest[]): Promise<Wire> {
+  const report = prepared.validation!
+  expect(report).toBeDefined()
+  expect(report.status).not.toBe('invalid')
+  expect(Object.isFrozen(report)).toBe(true)
+  expect(Buffer.byteLength(JSON.stringify(report))).toBeLessThanOrEqual(4096)
+  if (['anthropic-messages', 'gemini', 'bedrock'].includes(report.route)) {
+    expect(report).toMatchObject({ status: 'partial', coverage: 'unvalidated-protocol', gaps: ['protocol-contract-unavailable'] })
+  } else expect(report.coverage).toBe('final-protocol')
   const before = capture.length
   const events = []
   for await (const event of prepared.stream()) events.push(event)

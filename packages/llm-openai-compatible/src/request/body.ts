@@ -1,6 +1,6 @@
 import { resolvePromptCacheMode, type LLMRequest } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "../types.ts"
-import { toWireMessage } from "./messages.ts"
+import { toWireMessages } from "./messages.ts"
 import { translateReasoning } from "./reasoning.ts"
 
 /** Assemble only wire fields after the client has projected images. */
@@ -15,7 +15,7 @@ export function createRequestBody(config: OpenAICompatibleConfig, request: LLMRe
     // empty system turn is pure overhead.
     messages: [
       ...(request.systemPrompt.trim() !== "" ? [{ role: "system", content: request.systemPrompt }] : []),
-      ...messages.map((message) => toWireMessage(message, config)),
+      ...toWireMessages(messages, config),
     ],
     tools: request.tools.map((t) => ({
       type: "function",

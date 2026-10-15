@@ -6,6 +6,23 @@ import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import { RpcError, SdkRunError } from "@i-harness/sdk"
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+
+it('persists, rereads, copies and exports the bounded final report through actual SDK diagnostic consumers', async () => {
+  const dir = await root(), output = join(dir, 'validation.json'); let copied = ''
+  const local = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).prepare!({ systemPrompt: 'sentinel-private', messages: [], tools: [] }).catch(error => error)
+  const failure = modelFailureFacts(local), service = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+  service.observe({ kind: 'sdk/notification', workspaceId: 'ws', method: 'session/status', params: { sessionId: 's', status: 'failed', error: 'prompt is too long: sentinel-private', modelFailure: failure } })
+  service.recordRequestFailure('ws', 'other', new SdkRunError('sentinel-private', -32603, { modelFailure: failure }, []))
+  await service.flush()
+  const restored = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+  const rows = (await restored.list()).entries
+  expect(rows).toHaveLength(2)
+  for (const row of rows) expect(row).toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'schema', validation: failure?.validation } })
+  await restored.copy(rows[0]!.id); await restored.export()
+  expect(copied).toContain('validation'); expect(await readFile(output, 'utf8')).toContain('validation')
+  expect(copied + await readFile(output, 'utf8') + JSON.stringify(rows)).not.toContain('sentinel-private')
+})
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })

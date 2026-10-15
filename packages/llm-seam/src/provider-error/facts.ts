@@ -1,13 +1,15 @@
 import { normalizedCode, retryErrorCode } from "./classify.ts"
 import { canonicalErrorCodes, errorChain, errorRecord, type ModelFailureFacts } from "./types.ts"
+import { localValidationRejection, sanitizePreparedValidation } from '../prepared/validation.ts'
 
 const providerNames = /^(?:context_length_exceeded|context_window_exceeded|CONTEXT_TOO_LONG|invalid_request_error|invalid_argument|not_found_error|request_too_large|rate_limit_exceeded|rate_limit_error|server_error|api_error|overloaded_error|server_is_overloaded|server_overloaded|insufficient_quota|billing_hard_limit_reached|quota_exceeded|invalid_api_key|authentication_error|permission_error|permission_denied|ValidationException|ServiceQuotaExceededException|AccessDeniedException|UnrecognizedClientException|ThrottlingException|TooManyRequestsException|ServiceUnavailableException|InternalServerException|ModelStreamErrorException|INVALID_ARGUMENT|RESOURCE_EXHAUSTED|UNAUTHENTICATED|PERMISSION_DENIED|INTERNAL|UNAVAILABLE)$/i
 const parameters = new Set(["messages", "input", "prompt", "tools", "max_tokens", "max_output_tokens", "max_completion_tokens", "generationConfig.maxOutputTokens", "model", "temperature", "thinking", "thinking.budget_tokens"])
-const reasons = new Set<ModelFailureFacts["reason"]>(["context-limit", "output-limit", "request-size", "schema", "message-order", "unsupported-parameter", "unknown"])
+const reasons = new Set<ModelFailureFacts["reason"]>(["context-limit", "output-limit", "request-size", "schema", "message-order", "unsupported-parameter", 'binding', 'native-replay', "unknown"])
 const explanations: Record<string, string> = {
   "context-limit": "Model input exceeds the context window.", "output-limit": "Requested model output exceeds the output limit.",
   "request-size": "Model request exceeds the request size limit.", schema: "Model request schema is invalid.",
   "message-order": "Model request message order is invalid.", "unsupported-parameter": "Model request contains an unsupported parameter.",
+  binding: 'Model request does not match its selected binding.', 'native-replay': 'Model request native replay is incompatible.',
   AUTH: "Model authentication failed.", INVALID_API_KEY: "Model authentication failed.", QUOTA: "Model quota is exhausted.",
   ABORTED: "Model request was aborted.", TLS: "Model TLS connection failed.", RATE_LIMIT: "Model request was rate limited.",
   TIMEOUT: "Model request timed out.", TRANSPORT: "Model transport failed.", SERVER: "Model service failed.",
@@ -23,6 +25,8 @@ export function safeModelFailureFacts(value: unknown): ModelFailureFacts | undef
   const reason: ModelFailureFacts["reason"] = source.code === "CONTEXT_WINDOW_EXCEEDED" ? "context-limit"
     : source.code === "INVALID_ARGUMENT" && source.reason !== "context-limit" && reasons.has(source.reason as ModelFailureFacts["reason"]) ? source.reason as ModelFailureFacts["reason"] : "unknown"
   const result: ModelFailureFacts = { code: source.code, reason, message: explanations[reason!] ?? explanations[source.code] ?? "Model request failed." }
+  const validation = sanitizePreparedValidation(source.validation)
+  if (validation && (source.code !== 'INVALID_ARGUMENT' || validation.status !== 'invalid' || localValidationRejection(source))) result.validation = validation
   if (numeric(source.httpStatus) && source.httpStatus >= 100 && source.httpStatus <= 599) result.httpStatus = source.httpStatus
   for (const key of ["providerCode", "providerType"] as const) if (typeof source[key] === "string" && providerNames.test(source[key])) result[key] = source[key]
   if (typeof source.parameter === "string" && parameters.has(source.parameter)) result.parameter = source.parameter
@@ -36,6 +40,12 @@ export function modelFailureFacts(error: unknown): ModelFailureFacts | undefined
   const code = retryErrorCode(error)
   if (!code || !canonicalErrorCodes.has(code)) return
   const result: ModelFailureFacts = { code, message: "", reason: code === "CONTEXT_WINDOW_EXCEEDED" ? "context-limit" : "unknown" }
+  if (code === 'INVALID_ARGUMENT') {
+    for (const source of chain) {
+      const local = localValidationRejection(source.modelFailure) ?? localValidationRejection(errorRecord(source.data)?.modelFailure)
+      if (local) return safeModelFailureFacts({ code, reason: local.reason, validation: local.report })
+    }
+  }
   for (const source of chain) {
     const attached = safeModelFailureFacts(source.modelFailure) ?? safeModelFailureFacts(errorRecord(source.data)?.modelFailure)
     if (attached) return safeModelFailureFacts({ ...attached, code })

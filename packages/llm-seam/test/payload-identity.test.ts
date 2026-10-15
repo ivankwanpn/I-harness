@@ -2,9 +2,11 @@ import { createHash } from "node:crypto"
 import { expect, it } from "vitest"
 import { createPreparedPayload, prepareModelRequest } from "../src/index.ts"
 import { ProjectionCounter } from "@i-harness/token-meter"
+import { createPreparedValidation, type FinalValidationPacket } from '../src/prepared/validation.ts'
 const request = { systemPrompt: "", messages: [], tools: [] }
-function prepare(body: Record<string, unknown>, sdk = false) {
+function prepare(body: Record<string, unknown>, sdk = false, observe?: (body: unknown, packet: FinalValidationPacket) => void) {
   return createPreparedPayload({ body, request, kind: sdk ? "sdk-command-estimate" : "http-json-body",
+    ...(observe ? { validate(actual: Record<string, unknown>, packet: FinalValidationPacket) { observe(actual, packet); return { kind: 'accepted' as const, report: createPreparedValidation({ version: 1, route: 'custom', contract: 'neutral-only-v1', coverage: 'neutral-only', status: 'partial', native: 'unverified', issues: [], gaps: ['custom-client'], omittedIssueCount: 0 }) } } } : {}),
     describe(actual) {
       const counter = new ProjectionCounter("projected-pricing-v2")
       counter.structured("otherInput", actual)
@@ -49,6 +51,17 @@ it("lowers toJSON once before description and execution", async () => {
   const events = []; for await (const event of prepared.stream()) events.push(event)
   expect(calls).toBe(1)
   expect(events[0]).toEqual({ type: "text/chunk", text: '{"x":"value1"}' })
+})
+it('gives validation the once-lowered actual body and the same measured packet discriminant/bytes', () => {
+  let calls = 0
+  const seen: { body: unknown; packet: FinalValidationPacket }[] = []
+  const http = prepare({ x: { toJSON() { calls++; return '中' } } }, false, (body, packet) => seen.push({ body, packet }))
+  expect(calls).toBe(1)
+  expect(seen[0]).toEqual({ body: { x: '中' }, packet: { kind: 'http-json-body', bodyBytes: http.measurement.packet.bodyBytes } })
+  const sdk = prepare({ x: new Uint8Array([1, 2]) }, true, (body, packet) => seen.push({ body, packet }))
+  expect(seen[1]?.packet).toEqual({ kind: 'sdk-command-estimate', sdkCommandBytesEstimate: sdk.measurement.packet.sdkCommandBytesEstimate })
+  expect(seen[1]?.packet).not.toHaveProperty('bodyBytes')
+  expect((seen[1]?.body as { x: Uint8Array }).x).toBeInstanceOf(Uint8Array)
 })
 it("gives custom neutral fallback no invented protocol or payload identity", async () => {
   const prepared = await prepareModelRequest({ async *stream() { yield { type: "end" } } }, request)

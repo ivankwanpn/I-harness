@@ -12,6 +12,7 @@ import { createSessionService, type SessionAssembly, type SessionService } from 
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { HarnessClient } from "../src/client.ts"
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
   decodeFrame,
@@ -108,6 +109,21 @@ function makeStubService(): SessionService {
 }
 
 describe("createSdkServer", () => {
+  it('carries final validation from the actual adapter through server status, RPC framing and client sanitization', async () => {
+    const rejected = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).prepare!({ systemPrompt: 'sentinel-private-prompt', messages: [], tools: [] }).catch(error => error)
+    const service = makeStubService(); vi.mocked(service.submit).mockRejectedValue(rejected)
+    const server = createSdkServer(service), input = new PassThrough(), output = new PassThrough(), client = new HarnessClient(output, input)
+    const lines = createInterface({ input }); lines.on('line', line => { void server.handleLine(line).then(reply => { if (reply) output.write(reply + '\n') }) })
+    const notifications: RpcMessage[] = []; server.onNotify(message => { notifications.push(message); output.write(encodeFrame(message) + '\n') })
+    try {
+      await client.initialize()
+      const error = await client.run({ sessionId: 's', prompt: 'original task' }).catch(error => error)
+      expect(error.code).toBe(INTERNAL_ERROR)
+      expect(error.modelFailure).toMatchObject({ code: 'INVALID_ARGUMENT', reason: 'schema', validation: { status: 'invalid', route: 'openai-compatible', issues: [{ rule: 'shape', site: 'messages' }] } })
+      expect(notifications.find(message => 'method' in message && message.method === 'session/status' && (message.params as { status?: string }).status === 'error')).toMatchObject({ params: { modelFailure: error.modelFailure } })
+      expect(JSON.stringify([error.data, notifications])).not.toContain('sentinel-private-prompt')
+    } finally { client.close(); lines.close(); input.destroy(); output.destroy(); await server.close() }
+  })
   it("preserves safe model failure facts in status and RPC errors without replacing numeric codes", async () => {
     const service = makeStubService()
     const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "context_length_exceeded private prompt", param: "messages" } }), { status: 400, headers: { "request-id": "req-sdk-123" } }))

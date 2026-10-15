@@ -1,4 +1,4 @@
-import { prepareModelRequest, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
+import { assertPreparedValidation, prepareModelRequest, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import { SummaryBlockedError } from "./summary-errors.ts"
 
 export interface SummaryLimits {
@@ -22,6 +22,7 @@ export interface SummaryLimits {
  * Select one derivative, then measure and check only that candidate. */
 export async function prepareSummary(model: ModelClient, request: LLMRequest, maxTokens: number, limits: SummaryLimits, check: () => void) {
   const prepared = await prepareModelRequest(model, request)
+  assertPreparedValidation(prepared)
   check()
   const validate = (input: typeof prepared.measurement.input) => {
     if (limits.metadata && input.coverage !== "neutral-only" && (input.modelId !== limits.metadata.modelId || input.protocol !== limits.metadata.protocol)) throw new SummaryBlockedError("binding")
@@ -42,6 +43,7 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
   const cap = output.capSupport === "unsupported" || provisionalRoom === undefined || provisionalRoom < initialRequiredRoom ? ceiling : Math.min(ceiling, provisionalRoom)
   const candidate = output.capSupport === "unsupported" || provisionalRoom !== undefined && provisionalRoom < initialRequiredRoom ? prepared : prepared.withOutputCap(cap)
   const { input, output: finalOutput } = candidate.measurement
+  assertPreparedValidation(candidate)
   validate(input)
   const inputTokens = price(input), room = roomFor(inputTokens)
   const finalRequired = requiredOutput(finalOutput)

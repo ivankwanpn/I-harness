@@ -8,6 +8,20 @@ import { captureRequestCandidate } from "../src/agent/request-snapshot.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "../src/index.ts"
+import { validationCollector } from '@i-harness/llm-seam'
+
+it('rejects an invalid selected derivative before budget compaction or stream', async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const counter = new ProjectionCounter(), input = counter.finish({ protocol: 'openai-compatible', modelId: 'm' }, [], {})
+  const check = validationCollector('openai-compatible'); check.issue('tool-group', 'messages', 'message-order')
+  const invalid = check.finish().report
+  let sends = 0, compacts = 0
+  const selected: PreparedModelRequest = { validation: invalid, measurement: { projectionId: input.inputFingerprint, input, output: { capSupport: 'supported', minimumCap: 1, effectiveCap: 10, source: 'request' }, packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } }, withOutputCap() { return this }, async *stream() { sends++; yield { type: 'end' } } }
+  const initial: PreparedModelRequest = { ...selected, validation: undefined, withOutputCap() { return selected } }
+  const agent = createAgent(ctx, { session, tools, systemPrompt: '', budget: { contextWindow: 10000 }, maxOutputTokens: 10, model: { async prepare() { return initial }, async *stream() { throw Error('raw') } }, compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'checkpoint' }; yield { type: 'end' } } } } })
+  await expect(agent.run('preserve human steer')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'message-order' } })
+  expect(sends).toBe(0); expect(compacts).toBe(0)
+})
 
 it.each(["repriced", "incomplete"] as const)("rejects the selected %s derivative and publishes its final facts", mode => {
   const session = createSession(), model = { async *stream() { yield { type: "end" as const } } }

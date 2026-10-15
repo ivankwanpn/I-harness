@@ -12,7 +12,7 @@ function toContent(content: string | LLMContentPart[]): unknown {
 }
 
 // Translate the neutral LLMMessage union into Chat Completions wire messages.
-export function toWireMessage(m: {
+function toWireMessage(m: {
   role: "user" | "assistant" | "tool"
   content: string | LLMContentPart[]
   toolCalls?: { id: string; name: string; args: unknown }[]
@@ -35,4 +35,25 @@ export function toWireMessage(m: {
     }
   }
   return { role: m.role, content: toContent(m.content), ...reasoning }
+}
+
+/** Only adapter-created image companions move after sibling results. Ordinary
+ * user input keeps its position, so malformed source groups remain visible. */
+export function toWireMessages(messages: Parameters<typeof toWireMessage>[0][], target: Parameters<typeof toWireMessage>[1]): Record<string, unknown>[] {
+  const result: Record<string, unknown>[] = [], companions: Record<string, unknown>[] = [], pending = new Set<string>()
+  const flushImages = () => { result.push(...companions); companions.length = 0 }
+  for (const message of messages) {
+    if (message.role === 'assistant') for (const call of message.toolCalls ?? []) pending.add(call.id)
+    if (message.role === 'tool' && Array.isArray(message.content)) {
+      const images = message.content.filter(part => part.type === 'image')
+      result.push(toWireMessage({ ...message, content: message.content.filter(part => part.type === 'text') }, target))
+      if (images.length) companions.push({ role: 'user', content: toContent(images) })
+    } else result.push(toWireMessage(message, target))
+    if (message.role === 'tool') pending.delete(message.toolCallId!)
+    if (!pending.size) flushImages()
+  }
+  // Retain images even on malformed/incomplete sources; the final validator
+  // rejects the open group rather than repairing it or discarding the image.
+  flushImages()
+  return result
 }

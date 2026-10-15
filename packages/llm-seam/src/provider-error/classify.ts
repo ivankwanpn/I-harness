@@ -1,4 +1,5 @@
 import { canonicalErrorCodes, errorChain, errorRecord } from "./types.ts"
+import { localValidationRejection } from '../prepared/validation.ts'
 
 const capacityMessage = /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i
 const capacityCode = /^server_(?:is_)?overloaded$/i
@@ -39,7 +40,7 @@ export function retryErrorCode(error: unknown): string | undefined {
       : value.name === "SSEParseError" || value.name === "SyntaxError" ? "MALFORMED_RESPONSE"
       : identity && ["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "TLS"].includes(identity) ? identity
       : typeof attached?.code === "string" && canonicalErrorCodes.has(attached.code) ? attached.code : identity
-    return { code, status, message: typeof value.message === "string" ? value.message.slice(0, 8192) : "" }
+    return { code, status, local: localValidationRejection(attached), message: typeof value.message === "string" ? value.message.slice(0, 8192) : "" }
   })
   // Cancellation, credentials, quota and TLS cannot be overridden by body text.
   for (const item of candidates) {
@@ -47,6 +48,7 @@ export function retryErrorCode(error: unknown): string | undefined {
     if (item.status === 401 || item.status === 403) return "AUTH"
     if (item.status === 402) return "QUOTA"
   }
+  if (candidates.some(item => item.local)) return 'INVALID_ARGUMENT'
   for (const item of candidates) {
     if (item.code && item.code !== "INVALID_ARGUMENT") return item.code
     if (contextMessage(item.message)) return "CONTEXT_WINDOW_EXCEEDED"

@@ -51,6 +51,7 @@ export function preparedControls(request: PreparedStreamControl, control?: Prepa
 export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control: PreparedStreamControl | undefined, measurement: PreparedRequestMeasurement) => AsyncIterable<LLMStreamEvent>): PreparedModelRequest {
   return Object.freeze({
     measurement: prepared.measurement,
+    ...(prepared.validation !== undefined ? { validation: prepared.validation } : {}),
     withOutputCap: (cap: number | undefined) => wrapPreparedRequest(prepared.withOutputCap(cap), wrap),
     stream: (control?: PreparedStreamControl) => wrap(next => prepared.stream(next), control, prepared.measurement),
   })

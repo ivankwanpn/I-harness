@@ -10,6 +10,7 @@ export interface PreparedStreamControl {
 }
 export interface PreparedModelRequest {
   readonly measurement: PreparedRequestMeasurement
+  readonly validation?: import('./validation.ts').PreparedValidation
   withOutputCap(cap: number | undefined): PreparedModelRequest
   stream(control?: PreparedStreamControl): AsyncIterable<LLMStreamEvent>
 }
