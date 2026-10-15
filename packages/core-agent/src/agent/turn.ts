@@ -6,11 +6,11 @@ import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle, AgentInputOpti
 import type { AgentContext } from "./context.ts"
 import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
-import { failTurn, completeModelStep, reportModelUsage, closeStep, finishTurn } from "./finalization.ts"
+import { failTurn, acceptCompletedModelStep, reportModelUsage, closeStep, finishTurn } from "./finalization.ts"
 import { createAdmission, stalePreparedInput } from "./admission.ts"
 import { createRecovery } from "./recovery.ts"
 import { modelFailureFacts } from "@i-harness/llm-seam"
-import { ensureConversationSemantics, acceptModelExchange } from "./exchange.ts"
+import { ensureConversationSemantics } from "./exchange.ts"
 import { prepareTurnInput } from "./input.ts"
 
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
@@ -76,7 +76,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         } finally { streamStep.settle() }
         if (!rebuild) break
       }
-      const { request, requestRevision, prepared } = candidate
+      const { requestRevision, prepared } = candidate
       const step = streamStep.result()
       if (!step.providerEnded) streamStep.fail(Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" }))
       if (step.truncatedThisStep || step.refusedThisStep) {
@@ -85,10 +85,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         closeStep(deps, lifecycle, getSteps, step)
         throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
       }
-      completeModelStep(deps, context, request, requestRevision, abort, step, prepared.measurement)
-      const acceptedSeq = deps.session.events.length + 1
-      try { await acceptModelExchange(deps, { identity: step.identity, step, signal: abort }) }
-      finally { lifecycle.providerCompleted = deps.session.events[acceptedSeq]?.type === "model/exchange-accepted" }
+      await acceptCompletedModelStep(deps, context, lifecycle, requestRevision, step, prepared.measurement, abort)
       await recovery.resolve(prepared.measurement, abort)
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {

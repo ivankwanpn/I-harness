@@ -340,6 +340,15 @@ importers:
         specifier: workspace:*
         version: link:../token-meter
 
+  packages/context-engine:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+
   packages/context-output:
     dependencies:
       '@i-harness/core-tools':
@@ -351,6 +360,9 @@ importers:
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -1194,6 +1206,9 @@ importers:
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/context-output':
         specifier: workspace:*
         version: link:../context-output

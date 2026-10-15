@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { append, createSession, deriveMessages, fromJSONL, toJSONL } from "../packages/core-session/src/index.ts"
+import { append, createSession, deriveMessages, renderConversation, fromJSONL, toJSONL } from "../packages/core-session/src/index.ts"
+import { captureContextSnapshot } from "../packages/context-engine/src/index.ts"
 import type { LLMRequest, PreparedModelRequest } from "../packages/llm-seam/src/index.ts"
 import { systemFetch as quarantinedSystemFetch } from "../packages/http-transport/src/system-fetch.ts"
 import { corpusRoutes, makeCompactedToolRound, makeToolRound, png, type CorpusRoute } from "./fixtures/context-corpus.ts"
@@ -185,7 +186,13 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     const client = makeClient(route, transport, { options })
     const { session, request } = makeToolRound(route)
     const source = toJSONL(session)
-    const prepared = await client.prepare!(request)
+    const captured = captureContextSnapshot(session, { ownerSessionId: `corpus-${route}`, surface: { systemPrompt: request.systemPrompt, tools: request.tools, reasoningEffort: request.reasoningEffort, maxOutputTokens: request.maxOutputTokens } })
+    expect(captured.kind).toBe("captured")
+    if (captured.kind !== "captured") throw Error("corpus snapshot required")
+    const { surface, conversation } = captured.snapshot
+    const snapshotBefore = JSON.stringify(captured.snapshot)
+    const adapterRequest: LLMRequest = { ...request, systemPrompt: surface.systemPrompt, tools: surface.tools.map(tool => ({ ...tool, inputSchema: structuredClone(tool.inputSchema) })), messages: renderConversation(conversation) }
+    const prepared = await client.prepare!(adapterRequest)
     expect(transport.captures).toHaveLength(0)
     expect(transport.authCalls()).toBe(0)
     const capped = prepared.withOutputCap(2048)
@@ -203,6 +210,9 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     request.tools[0].inputSchema = { MUTATED: true }
     request.tools.length = 0
     options.text.verbosity = "MUTATED"
+    adapterRequest.messages.length = 0
+    adapterRequest.tools.length = 0
+    expect(JSON.stringify(captured.snapshot)).toBe(snapshotBefore)
     // Both handles must independently own their prepared input. Sending only
     // the derivative could mask an original-handle alias behind its clone.
     const originalBody = await send(prepared, transport.captures)

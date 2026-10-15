@@ -9,6 +9,9 @@ import { createDurableSessionLoader, createSessionService } from "../src/index.t
 import { coldReaderFixture } from "./helpers/cold-reader.ts"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import type { ContextRecoveryFacts } from "@i-harness/core-session"
+import { createContext } from "@i-harness/core-plugin"
+import { createToolRegistry } from "@i-harness/core-tools"
+import { createAgent } from "@i-harness/core-agent"
 
 it.each([
   { name: "another model", tuple: { providerId: "fixture", modelId: "model-a", protocol: "openai-compatible" }, required: false },
@@ -68,6 +71,29 @@ it("a legacy live Agent without an owned reader is unavailable without recursive
     reads = 0
     expect(await service.contextState("legacy")).toMatchObject({ kind: "unavailable" })
     expect(reads).toBe(0)
+  } finally { await service.close() }
+})
+
+it.each(["matching", "different", "missing", "legacy"] as const)("retains cold saved input facts without surface proof (%s binding)", async binding => {
+  const session = createSession(), ctx = createContext(), tools = createToolRegistry(ctx)
+  const metadata = { version: 1 as const, modelId: "m", protocol: "neutral", contextWindow: 100000, identityCoverage: "complete" as const, bindingConfigFingerprint: "a".repeat(64) }
+  await createAgent(ctx, { session, sessionId: "owner", tools, model: { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }, systemPrompt: "s", contextMetadata: metadata }).run("anchor")
+  const saved = session.events.find(event => event.type === "context/budget")!
+  if (saved.type !== "context/budget") throw Error("saved facts required")
+  // The cold view is the measured request itself, before output/turn closure.
+  session.events = session.events.slice(0, saved.seq! + 1)
+  if (binding === "legacy") {
+    const legacy = { ...saved.snapshot }; delete legacy.requestContext
+    session.events[session.events.length - 1] = { ...saved, snapshot: legacy }
+  }
+  const resolve = vi.fn(async () => { throw Error("read must not resolve/authenticate") })
+  const service = createSessionService({ workspace: process.cwd(), session, modelBindingFor: resolve,
+    modelMetadataFor: async () => binding === "missing" ? undefined : binding === "different" ? { ...metadata, bindingConfigFingerprint: "b".repeat(64) } : metadata })
+  try {
+    const state = await service.contextState("owner")
+    expect(state).toMatchObject({ kind: "unavailable", snapshot: { admission: "unavailable", neutralFingerprint: saved.snapshot.neutralFingerprint, admissionInputTokens: saved.snapshot.admissionInputTokens } })
+    expect(state.snapshot?.requestContext).toEqual(binding === "legacy" ? undefined : saved.snapshot.requestContext)
+    expect(service.hasAssembly("owner")).toBe(false); expect(resolve).not.toHaveBeenCalled()
   } finally { await service.close() }
 })
 

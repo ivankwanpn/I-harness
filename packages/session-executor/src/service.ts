@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { append, subscribe, validateImages, contextStateFromBudget, type SessionContextState, deriveContextBudget, deriveContextRecovery, deriveProjectionRewrite, deriveMessages, type ImageInput, type Session } from "@i-harness/core-session"
+import { append, subscribe, validateImages, contextStateFromBudget, type SessionContextState, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
@@ -30,7 +30,7 @@ import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/s
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
-import { projectionFingerprint } from "@i-harness/token-meter"
+import { createContextStateReader } from "./service/context-state.ts"
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
 // `session`: the message is about THIS session's resolved model binding (a
@@ -459,31 +459,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     }
     return undefined
   }
-  async function contextState(sessionId: string): Promise<SessionContextState> {
-    if (closed) throw new Error("session service closed")
-    let live = liveContextState(sessionId)
-    if (live) return live
-    const meta = await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined)
-    live = liveContextState(sessionId)
-    if (live) return live
-    let session = opts.sessionFor === undefined ? opts.session : undefined
-    if (opts.coordinator?.snapshot) session = (await opts.coordinator.snapshot(sessionId)).session
-    live = liveContextState(sessionId)
-    if (live) return live
-    if (!opts.modelMetadataFor) return { kind: "unavailable", reason: "Read-only model binding metadata is unavailable" }
-    const metadata = await opts.modelMetadataFor(sessionId, meta)
-    live = liveContextState(sessionId)
-    if (live) return live
-    if (!metadata || metadata.identityCoverage !== "complete" || !metadata.bindingConfigFingerprint) return { kind: "unavailable", reason: "Complete model binding identity is unavailable" }
-    const saved = session && deriveContextBudget(session, sessionId)
-    if (!saved || saved.identityCoverage !== "complete" || saved.bindingConfigFingerprint !== metadata.bindingConfigFingerprint
-      || saved.modelId !== metadata.modelId || saved.protocol !== metadata.protocol || saved.contextWindow !== metadata.contextWindow
-      || saved.projectionRevision !== deriveProjectionRewrite(session!).markers + session!.events.filter(event => event.type === "compaction/prune").length
-      || saved.neutralFingerprint !== projectionFingerprint(deriveMessages(session!))) return { kind: "unavailable", reason: "Saved prepared budget is missing or stale" }
-    const recovery = deriveContextRecovery(session!, sessionId, metadata)
-    return contextStateFromBudget({ kind: "ready", snapshot: recovery && recovery.state !== "resolved"
-      ? { ...saved, recoveryRequired: true, fullByProvider: true, admission: "compact", reason: "Provider context recovery remains required" } : saved })
-  }
+  const contextState = createContextStateReader<SessionMeta>({
+    assertOpen() { if (closed) throw new Error("session service closed") },
+    live: liveContextState,
+    meta: async sessionId => await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined),
+    snapshot: async sessionId => opts.coordinator?.snapshot ? (await opts.coordinator.snapshot(sessionId)).session : opts.sessionFor === undefined ? opts.session : undefined,
+    ...(opts.modelMetadataFor ? { metadata: opts.modelMetadataFor } : {}),
+  })
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
     if (closed) throw new Error("session service closed")

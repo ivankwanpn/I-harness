@@ -3,6 +3,7 @@ import type { ConversationCall, ConversationDiagnostic } from "./types.ts"
 import type { ConversationSources } from "./sources.ts"
 import type { ConversationVisibility } from "./visibility.ts"
 import type { ExchangeAcceptedEvent } from "../events/conversation.ts"
+import { outcomeField } from "./payload.ts"
 
 export interface LegacyStep {
   start: number
@@ -119,9 +120,10 @@ export function inferLegacy(session: Session, visibility: ConversationVisibility
 function recordedOutcome(result: Extract<SessionEvent, { type: "tool/result" }> | undefined, dispatched: boolean, failed: boolean, ended: boolean, hasDispatchBoundary: boolean): ConversationCall["outcome"] {
   if (!result) return dispatched || ended ? "unknown" : "pending"
   if (!result.isError) return "success"
-  const output = result.output as { code?: unknown; replay?: unknown } | null
-  if (output?.code === "TOOL_OUTCOME_UNKNOWN" && output.replay === false) return "unknown"
-  if (output?.code === "TOOL_ABORTED_BEFORE_DISPATCH" || output?.code === "TOOL_CANCELLED_BY_SIBLING") {
+  const output = outcomeField(result, "output")
+  const code = outcomeField(output, "code"), replay = outcomeField(output, "replay")
+  if (code === "TOOL_OUTCOME_UNKNOWN" && replay === false) return "unknown"
+  if (code === "TOOL_ABORTED_BEFORE_DISPATCH" || code === "TOOL_CANCELLED_BY_SIBLING") {
     if (dispatched) return "unknown"
     if (failed || hasDispatchBoundary) return "not-dispatched"
   }

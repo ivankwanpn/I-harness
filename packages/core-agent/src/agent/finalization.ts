@@ -1,10 +1,10 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, deriveMessages } from "@i-harness/core-session"
 import { activeTokens, normalizeInputUsage } from "@i-harness/token-meter"
-import type { LLMRequest } from "@i-harness/llm-seam"
 import type { AgentDeps, AgentResult, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import type { ModelStep } from "./model-loop.ts"
+import { acceptModelExchange } from "./exchange.ts"
 
 type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush">
 
@@ -47,14 +47,27 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
   } })
 }
 
-export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, _request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
-  const { stepUsage, refusedThisStep, truncatedThisStep } = step
+export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, requestRevision: number, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
+  const { stepUsage } = step
   reportModelUsage(deps, step)
 
   // Acceptance owns assistant/native persistence; this owner only reports usage
   // and calibrates the measured request that produced the completed response.
-  context.ownedBudget.record(measurement, stepUsage, requestRevision, !abort?.aborted && !refusedThisStep && !truncatedThisStep)
+  // The caller has the accepted fact. A later Stop cannot revoke real usage.
+  context.ownedBudget.record(measurement, stepUsage, requestRevision, true)
 
+}
+
+/** The accepted fact survives an uncertain flush or Stop; tool effects still
+ * wait for the awaited acceptance owner to return successfully. */
+export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, lifecycle: TurnLifecycle, requestRevision: number, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal): Promise<void> {
+  const acceptedSeq = deps.session.events.length + 1
+  try { await acceptModelExchange(deps, { identity: step.identity, step, signal }) }
+  finally {
+    lifecycle.providerCompleted = deps.session.events[acceptedSeq]?.type === "model/exchange-accepted"
+    if (lifecycle.providerCompleted) completeModelStep(deps, context, requestRevision, step, measurement)
+    else reportModelUsage(deps, step)
+  }
 }
 
 export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {

@@ -1,20 +1,20 @@
 import type { Session } from "../events/types.ts"
-import type { ImageInput } from "../images.ts"
-import { imageDescriptor } from "../images.ts"
-import { derivePruneSubstitutes, renderPruneSubstitute } from "../projection/pruning.ts"
+import { derivePruneSubstitutes } from "../projection/pruning.ts"
 import type { LLMMessage, ProviderContinuation, ProviderThinkingBlock } from "../projection/types.ts"
 import type { ConversationDiagnostic, ConversationProjection } from "./types.ts"
 import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"
 import { inferLegacy, type LegacyStep } from "./legacy.ts"
-import { addItemSource, awaitingItemResults, finishItem, itemBuilder, type ItemBuilder } from "./exchange.ts"
+import { addItemSource, awaitingItemResults, finishItem, projectedItem, type ItemBuilder } from "./exchange.ts"
 import { validateConversationHistory } from "./validation.ts"
+import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from "./payload.ts"
 
 /** Sole conversation fold: source metadata is attached before message flattening. */
-export function projectConversation(session: Session, options: { ownerSessionId?: string; throughSeq?: number } = {}): ConversationProjection {
+export function projectConversation(session: Session, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture } = {}): ConversationProjection {
   validateConversationHistory(session.events, session.formatVersion)
   const diagnostics: ConversationDiagnostic[] = []
   const sources = conversationSources(session, options.ownerSessionId, diagnostics)
+  const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string): T[K] => readConversationPayload(event, key, sources.ref(index, part), options.capturePayload)
   const visibility = conversationVisibility(session, options.throughSeq)
   const legacy = inferLegacy(session, visibility, sources, diagnostics)
   // Prune is content-addressed; all markers remain applicable even past a prefix.
@@ -31,13 +31,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
   const auditSteps = new Map<LegacyStep, ItemBuilder>()
   const explicitCalls = new Map<string, ItemBuilder>()
 
-  const makeItem = (kind: ItemBuilder["kind"], index: number, part: string, admissionIndex?: number) => {
-    const step = kind === "exchange" ? legacy.stepByEvent.get(index) : undefined
-    const unaccepted = kind === "exchange" && legacy.fenceIndex >= 0 && index > legacy.fenceIndex && !step?.acceptance
-    const item = itemBuilder(unaccepted ? "legacy-fragment" : kind, sources.ref(index, part), sources.provenance(index, part, admissionIndex), step, step ? sources.ref(step.start, "step") : undefined)
-    if (step?.acceptanceIndex !== undefined) addItemSource(item, sources.ref(step.acceptanceIndex, "acceptance"))
-    return item
-  }
+  const makeItem = (kind: ItemBuilder["kind"], index: number, part: string, admissionIndex?: number) => projectedItem(kind, index, part, sources, kind === "exchange" ? legacy.stepByEvent.get(index) : undefined, legacy.fenceIndex, admissionIndex)
   const addCall = (item: ItemBuilder, index: number) => {
     const call = legacy.callMetadata(index)
     item.calls.push(call)
@@ -73,7 +67,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
     if (event.type === "user/message") {
       const admissionIndex = admissions.get(event.input?.inputId ?? event.imageInputId ?? "")
       const imageAdmission = event.imageInputId === undefined ? undefined : session.events[admissions.get(event.imageInputId) ?? -1]
-      const images = event.imageInputId === undefined ? event.images : imageAdmission?.type === "agent/input/admitted" ? imageAdmission.images : undefined
+      const images = event.imageInputId === undefined ? payload(event, "images", index, "image") : imageAdmission?.type === "agent/input/admitted" ? payload(imageAdmission, "images", admissions.get(event.imageInputId)!, "admission") : undefined
       if (event.imageInputId !== undefined && !images?.length) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
       const item = makeItem("input", index, "message", admissionIndex)
       item.messages.push(images && images.length > 0 ? { role: "user", content: [{ type: "text", text: event.text }, ...images.map(image => ({ type: "image" as const, image }))] } : { role: "user", content: event.text })
@@ -83,14 +77,16 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       else { flushToolBlock(); block = undefined; items.push(item) }
     } else if (event.type === "assistant/message") {
       if (legacy.suppressedAssistants.has(index)) { auditItem(index, "message"); continue }
+      const thinkingBlocks = payload(event, "thinkingBlocks", index, "message")
+      const providerContinuation = payload(event, "providerContinuation", index, "message")
       if (stepOpen && pendingCalls) {
         toolResultsPending = true
-        flushToolBlock(event.text, event.thinkingBlocks, event.providerContinuation, index)
+        flushToolBlock(event.text, thinkingBlocks, providerContinuation, index)
       } else {
         flushToolBlock()
         const item = block && awaitingItemResults(block) ? block : makeItem("exchange", index, "message")
         addItemSource(item, sources.ref(index, "message"))
-        item.messages.push({ role: "assistant", content: event.text, ...(event.thinkingBlocks?.length ? { thinkingBlocks: event.thinkingBlocks } : {}), ...(event.providerContinuation ? { providerContinuation: event.providerContinuation } : {}) })
+        item.messages.push({ role: "assistant", content: event.text, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
         if (item !== block) { items.push(item); block = undefined }
       }
     } else if (event.type === "step/start") stepOpen = true
@@ -107,7 +103,7 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       addCall(block, index)
       if (block.step?.acceptance) explicitCalls.set(event.callId, block)
       pendingCalls ??= []
-      pendingCalls.push({ id: event.callId, name: event.name, args: event.args })
+      pendingCalls.push({ id: event.callId, name: event.name, args: payload(event, "args", index, "call") })
     } else if (event.type === "tool/result") {
       if (legacy.suppressedCalls.has(event.callId) || legacy.unacceptedResults.has(index)) continue
       const acceptedOwner = explicitCalls.get(event.callId)
@@ -116,10 +112,8 @@ export function projectConversation(session: Session, options: { ownerSessionId?
       const resultSource = sources.ref(index, "result")
       addItemSource(block, resultSource)
       block.receivedResults.add(resultSource.id)
-      const out = event.output as { images?: ImageInput[] } | null | undefined
-      const images = out?.images
-      const record = pruned.get(event.callId)
-      pendingResults.push({ role: "tool", toolCallId: event.callId, content: record !== undefined ? renderPruneSubstitute(record) : toolResultText(event.output), ...(event.isError === true ? { isError: true } : {}) })
+      const { content, images } = projectToolResult(event, pruned.get(event.callId), resultSource, sources.ref(index, "image"), options.capturePayload)
+      pendingResults.push({ role: "tool", toolCallId: event.callId, content, ...(event.isError === true ? { isError: true } : {}) })
       if (Array.isArray(images) && images.length > 0) {
         addItemSource(block, sources.ref(index, "image"))
         pendingToolImages.push({ role: "user", content: [{ type: "text", text: "Attached image(s) from tool result:" }, ...images.map(image => ({ type: "image" as const, image }))] })
@@ -133,17 +127,4 @@ export function projectConversation(session: Session, options: { ownerSessionId?
   }
   flushToolBlock()
   return Object.freeze({ version: 1, ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: session.events.length, ...(options.throughSeq === undefined ? {} : { throughSeq: options.throughSeq }), items: Object.freeze(items.map(finishItem)), diagnostics: Object.freeze(diagnostics.map(diagnostic => Object.freeze({ ...diagnostic, sourceIds: Object.freeze(diagnostic.sourceIds) }))) })
-}
-
-/** Images travel in a companion message, never as base64 in result text. */
-function toolResultText(output: unknown): string {
-  if (output === null || typeof output !== "object" || Array.isArray(output)) return JSON.stringify(output) ?? String(output)
-  const record = output as Record<string, unknown>
-  const images = record["images"]
-  if (!Array.isArray(images) || images.length === 0) return JSON.stringify(output) ?? String(output)
-  const { images: _images, ...rest } = record
-  const hasRest = Object.keys(rest).length > 0
-  const restText = hasRest ? (JSON.stringify(rest) ?? String(rest)) : ""
-  const descriptor = imageDescriptor(images as ImageInput[])
-  return hasRest ? restText + descriptor : descriptor.trimStart()
 }

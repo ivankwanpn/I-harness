@@ -21,7 +21,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   if (!Number.isInteger(maxParallel) || maxParallel < 1) {
     throw new Error(`maxParallelToolCalls must be a positive integer (got ${maxParallel})`)
   }
-  const context = createAgentContext(deps)
+  const context = createAgentContext(deps, requestSessionId)
   const runTurn = createTurnRunner(ctx, deps, context, requestSessionId, maxTurns, maxParallel)
   return {
     contextBudget: () => context.readBudget(),

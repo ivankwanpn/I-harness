@@ -23,6 +23,8 @@ export interface RequestBudgetSnapshot {
   outputReserve: number; effectiveOutputCap?: number; capSupport: "supported" | "unsupported" | "unknown"
   safetyMargin: number; remainingInputBudget?: number; admission: "fit" | "compact" | "unavailable"
   recoveryRequired: boolean; fullByProvider: boolean; reason?: string
+  requestContext?: { version: 1; semanticRevision: string; protectionRevision: string; branchId: string; contextEpoch: string; surfaceRevision: string }
+  postResponseContextRevision?: string
 }
 export type BudgetRead = { kind: "ready"; snapshot: RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }
 export interface ContextRecoveryFacts {
@@ -57,13 +59,15 @@ export function validContextCheckpoint(value: unknown): value is ContextUsageChe
   return fields(value, { ...identity, shapeFingerprint: digest, inputPrefixFingerprint: digest, inputUnitCount: integer, heuristicPrefixTokens: integer, reportedInputTokens: integer }, { bindingConfigFingerprint: digest, reportedOutputTokens: integer })
 }
 export function validBudgetSnapshot(value: unknown): value is RequestBudgetSnapshot {
+  if (object(value) && value.postResponseContextRevision !== undefined && value.requestContext === undefined) return false
   return fields(value, { ...identity, modelId: string, protocol: string, bindingRevision: integer, neutralFingerprint: digest,
     estimatedInputTokens: integer, admissionInputTokens: integer, estimateSource: enumOf("projected-heuristic", "provider-anchor-plus-projection", "neutral-only"),
     coverage: enumOf("complete", "neutral-only", "incomplete"), confidence: enumOf("estimated", "calibrated-mixed", "unknown-components"),
     roleTokens: v => fields(v, { user: integer, assistant: integer, tool: integer }), systemTokens: integer, schemaTokens: integer, reasoningTokens: integer,
     outputReserve: integer, capSupport: enumOf("supported", "unsupported", "unknown"), safetyMargin: integer, admission: enumOf("fit", "compact", "unavailable"),
     recoveryRequired: v => typeof v === "boolean", fullByProvider: v => typeof v === "boolean" },
-  { providerId: string, bindingConfigFingerprint: digest, contextWindow: integer, effectiveOutputCap: integer, remainingInputBudget: integer, reason: string })
+  { providerId: string, bindingConfigFingerprint: digest, contextWindow: integer, effectiveOutputCap: integer, remainingInputBudget: integer, reason: string,
+    requestContext: v => fields(v, { version: one, semanticRevision: digest, protectionRevision: digest, branchId: digest, contextEpoch: digest, surfaceRevision: digest }), postResponseContextRevision: digest })
 }
 export function isContextEventType(type: string): boolean { return ["context/budget", "context/usage", "context/recovery"].includes(type) }
 export function validContextEvent(value: unknown): value is ContextEvent {

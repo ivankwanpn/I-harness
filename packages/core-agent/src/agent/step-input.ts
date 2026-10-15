@@ -1,9 +1,10 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
-import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
+import { append, renderConversation, deriveProjectionRewrite } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
 import { randomUUID } from "node:crypto"
 import { assertMessagesFromLog, type LLMRequest } from "@i-harness/llm-seam"
+import type { RequestEvidence } from "./request-snapshot.ts"
 import type { AgentDeps, AgentConfig, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 
@@ -15,29 +16,10 @@ export const hookRuntime = (ctx: PluginContext): {
   try { return ctx.services.get("hooks/claude-runtime") } catch { return undefined }
 }
 
-/** M5 T2 (second half): one message as canonical JSON, for the per-request
- * prefix comparison. "The same message" has to mean the same CONTENT, not the
- * same construction order — a message rebuilt from a resumed log, or by a
- * producer that assembles its object in another order, must fingerprint
- * identically or the comparison reports a break that never happened. So object
- * keys are sorted (recursively), arrays keep their order (a tool-result run is
- * ordered), and `undefined`-valued keys are dropped the way `JSON.stringify`
- * drops them. Its only consumer is the request-prefix comparison below.
- *
- * ⚠ WHAT IT CALLS IDENTITY — and where it DISAGREES with the tree's other
- * definition of it. This fingerprints plain JSON structure: two values are the
- * same iff they have the same keys (order irrelevant) and the same values, with
- * array order significant. A value whose meaning lives in `toJSON` — a `Date`, a
- * `Map`/`Set`, a class instance — has no enumerable properties, so it collapses
- * to `{}`: measured, `canonicalJson(new Date(0)) === canonicalJson(new Date(1))
- * === "{}"`, while the seam's `assertMessagesFromLog` — which compares
- * `JSON.stringify` output — sees `"…:00.000Z"` against `"…:00.001Z"` and tells
- * them apart. The two definitions therefore disagree on exactly that class of
- * value. Deliberate, and NOT a behaviour to "fix": the model-visible surface is
- * derived from the JSON-persisted session log (tool args arrive via
- * `JSON.parse`), so nothing on this path produces such a value, and widening the
- * definition would change what `prefixKept` means for every input in order to
- * close a case nothing reaches. */
+/** Per-message prefix telemetry over already captured JSON data. Record key
+ * order is irrelevant; message/array order and native strings remain exact.
+ * This is a cache-continuity observation, not the request's context identity.
+ */
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`
@@ -65,7 +47,7 @@ export function drainHookContext(ctx: PluginContext, deps: Pick<AgentDeps, "sess
   return hookContext
 }
 
-export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentContext) {
+export function createStepInput(deps: AgentDeps & AgentConfig, _context: AgentContext) {
   // M5/D3: how many rewrite markers the log carried at the PREVIOUS request. A
   // bigger count next time means a rewrite landed in between, which is what
   // breaks the cached prefix — the absolute count is not a break, since it stays
@@ -82,38 +64,35 @@ export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentCon
   let prevFingerprints: string[] | undefined
 
 
-  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], getSteps: () => number) {
-    const messages = deriveMessages(deps.session)
-    // Invariant at the seam (audit F01-3): the model may only ever see
-    // messages that come from the session log. This passes trivially here
-    // because the loop derives-and-rechecks from the log, but it is the
-    // discipline point that keeps external producers honest.
-    assertMessagesFromLog(messages, deps.session)
+  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], getSteps: () => number, evidence: RequestEvidence) {
+    const messages = renderConversation(evidence.snapshot.conversation)
+    assertMessagesFromLog(messages, evidence.snapshot.conversation)
+    const surface = evidence.snapshot.surface
 
     const request: LLMRequest = {
       requestScope,
       retryOutput: "discard",
       ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
       messages,
-      tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
-      systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+      tools: surface.tools.map(tool => ({ ...tool, inputSchema: structuredClone(tool.inputSchema) })),
+      systemPrompt: surface.systemPrompt,
       ...(deps.sessionId === undefined ? {} : { promptCache: { key: `ih_${createHash("sha256").update(deps.sessionId).digest("hex").slice(0, 48)}` } }),
       // Preserve the host ceiling until the adapter has prepared actual input.
       // Admission derives the numeric cap on that same frozen capability.
-      ...(context.outputCap !== undefined
+      ...(surface.maxOutputTokens !== undefined
         ? {
-            maxOutputTokens: context.outputCap,
+            maxOutputTokens: surface.maxOutputTokens,
           }
         : {}),
       // M32 T3: verbatim effort passthrough (absent → the field is never set;
       // the adapter's translateReasoning owns the wire vocabulary).
-      ...(context.reasoningEffort !== undefined ? { reasoningEffort: context.reasoningEffort } : {}),
+      ...(surface.reasoningEffort !== undefined ? { reasoningEffort: surface.reasoningEffort } : {}),
       // M61: the turn's abort signal rides the request so cancel reaches the
       // transport — the loop only checks `aborted` when an event ARRIVES, so
       // a provider parked on a silent socket could not be stopped.
       ...(abort !== undefined ? { signal: abort } : {}),
     }
-    const requestRevision = context.projectionRevision()
+    const requestRevision = evidence.projectionRevision
 
     // M25: provider/call before the model stream opens.
     // Model retry lifecycle arrives through the stream as durable model/retry

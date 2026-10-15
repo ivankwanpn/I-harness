@@ -2,6 +2,7 @@ import type { ConversationCall, ConversationItem, ConversationProvenance, Conver
 import type { LLMMessage } from "../projection/types.ts"
 import type { LegacyStep } from "./legacy.ts"
 import { copyConversationMessage } from "./render.ts"
+import type { ConversationSources } from "./sources.ts"
 
 /** Mutable builders are local to one projection, never returned to a caller. */
 export interface ItemBuilder {
@@ -18,6 +19,14 @@ export interface ItemBuilder {
 
 export function itemBuilder(kind: ConversationItem["kind"], source: ConversationSourceRef, provenance: ConversationProvenance, step?: LegacyStep, stepSource?: ConversationSourceRef): ItemBuilder {
   return { id: `${source.id}:${kind}`, kind, sources: stepSource ? [stepSource, source] : [source], provenance, messages: [], calls: [], receivedResults: new Set(), ...(step ? { step, stepSource } : {}) }
+}
+
+/** Attach accepted structure while keeping unaccepted observations audit-only. */
+export function projectedItem(kind: ItemBuilder["kind"], index: number, part: string, sources: ConversationSources, step: LegacyStep | undefined, fenceIndex: number, admissionIndex?: number): ItemBuilder {
+  const unaccepted = kind === "exchange" && fenceIndex >= 0 && index > fenceIndex && !step?.acceptance
+  const item = itemBuilder(unaccepted ? "legacy-fragment" : kind, sources.ref(index, part), sources.provenance(index, part, admissionIndex), step, step ? sources.ref(step.start, "step") : undefined)
+  if (step?.acceptanceIndex !== undefined) addItemSource(item, sources.ref(step.acceptanceIndex, "acceptance"))
+  return item
 }
 
 export function addItemSource(item: ItemBuilder, source: ConversationSourceRef): void {

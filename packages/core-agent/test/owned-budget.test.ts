@@ -6,7 +6,7 @@ import { wrapPreparedRequest, type PreparedModelRequest, type ModelClient } from
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { createAgent, type AgentDeps, type AgentConfig } from "../src/index.ts"
 
-it.each(["prompt", "schema", "effort", "concrete-binding", "client"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
+it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let prompt = "original", identity: object = {}, preparations = 0, transports = 0, hooks = 0, claims = 0
@@ -34,9 +34,10 @@ it.each(["prompt", "schema", "effort", "concrete-binding", "client"] as const)("
     if (mutation === "prompt") prompt = "changed system"
     if (mutation === "schema") tools.register({ name: "new_catalogue_tool", description: "changed catalogue", inputSchema: { type: "object" }, isReadOnly: true, async execute() { return "ok" } })
     if (mutation === "effort") deps.reasoningEffort = "off"
+    if (mutation === "max-output") deps.maxOutputTokens = 1536
     if (mutation === "concrete-binding") identity = {}
     if (mutation === "client") deps.model = client()
-    expect(agent.contextBudget!()).toMatchObject({ kind: "unavailable", reason: expect.stringMatching(/surface|binding/) })
+    expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", reason: expect.stringMatching(/surface|binding/) } })
     const output = (await tools.execute({ name: "get_context_remaining", args: {} })).output
     expect(output).toMatchObject({ kind: "unavailable" })
     expect(output).not.toHaveProperty("percentage")
