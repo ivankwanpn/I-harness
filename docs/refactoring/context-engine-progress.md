@@ -7,7 +7,7 @@ Normative inputs: [design](../superpowers/specs/2026-10-15-context-engine-redesi
 | Phase | Delivery | State |
 | --- | --- | --- |
 | R0 | Six-route offline request/projection corpus and baseline | Completed commit46b7b3af; independent spec/quality approved;63baseline＋57corpus cases, e2e types0; [report](../research/2026-10-15-context-engine-r0-baseline.md) |
-| R1 | Semantic exchange/snapshot, legacy importer, source and authority boundaries | R1A completed throughb122fd9b afterfreshreview/fix1:170session＋80agent consumers＋57corpus, types0; R1B in progress: [execution plan](../superpowers/plans/2026-10-15-context-engine-r1-acceptance.md); R1C/D pending |
+| R1 | Semantic exchange/snapshot, legacy importer, source and authority boundaries | R1A completed throughb122fd9b; R1B reviewed4d09ed4f:691focused tests/types/audit, [verification](../research/2026-10-16-context-engine-r1b-verification.md); R1C starting [snapshot plan](../superpowers/plans/2026-10-16-context-engine-r1-snapshot.md); R1D shares the R3 publication foundation gate |
 | R2 | Shared measurement/policy, semantic/wire identity, protocol validators | Pending R1 interfaces |
 | R3 | Transactional reduction/summary/checkpoint, bounded attempt ownership | Pending R1/R2 |
 | R4 | Result envelope/artifact lifetime, snapshot fork and durable delivery | Pending relevant R1/R3 contracts |
@@ -19,3 +19,7 @@ Original decomposition completion stays27/43; planned full overlap9 original fil
 R0 carried minor: send the original prepared request after caller mutation as well as its cap derivative. Assigned to R1A acceptance case8; existingR0testcase does not claim future alias-regression sensitivity for both paths. First corpus run had a mock-resolution harness failure; corrected exact-source transport mocks and quarantine controls passed. All physical transports are controlled, no liveprovider/crypto/tokenizer/cold-load qualification claimed.
 
 R1A resolved that R0 minor. The fresh R1A review found an incomplete stepless legacy selectable exchange; fixb122fd9b preserves contiguouswholebundles/imagecompanions and marksinput-separatedbundlesunresolved. Three newRED cases preceded thefix; scopedreviewapproved. Current validwire remainscovered; no sessionformat/writer or fullSnapshot claim yet. [R1A report](../research/2026-10-15-context-engine-r1a-verification.md).
+
+R1B completed on2026-10-16 with fresh independent spec/quality PASS and noCritical/Important findings. MinorM1 preserves the missing fresh pre-edit JSONL-context baseline; no retrospective run is represented as that baseline. Format3/acceptance/provenance/seed/recovery are integrated, not yet the full ContextEngine. R1C will use captured request identities and retain historical budget facts with unavailable admission when stale.
+
+R1D sequencing ruling: new positional replacement production must ship with a real durable-publication owner boundary, including live-reader visibility, Stop and uncertain writes. Main-loop flush waiting alone is insufficient. The integrated R1D/R3-foundation gate may follow R2; no temporary weaker producer or false R1-complete claim is introduced.
