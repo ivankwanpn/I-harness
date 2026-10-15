@@ -56,7 +56,7 @@ interface ConversationItem {
   };
 }
 interface ConversationDiagnostic {
-  code: 'orphan-result' | 'duplicate-call-id' | 'duplicate-source-seq' |
+  code: 'orphan-result' | 'duplicate-call-id' | 'duplicate-source-seq' | 'missing-source-seq' | 'invalid-source-seq' |
         'missing-admission' | 'partial-exchange-shadow' | 'unaccepted-dispatch';
   sourceIds: readonly string[];
 }
@@ -82,7 +82,9 @@ Exchange grouping follows the repaired step-boundary semantics, including shadow
 
 Provenance rules: matching durable admission with `intent:user`, no synthetic descriptor and no contradictory source can establish recorded human-request evidence. Plugin/internal/system/synthetic records are observations, known task display metadata is child-report, summary is derived. An unattributed legacy user role is unknown. Seed-range events under a child header are inherited even when their original admission was human; do not grant child-local authority. Inherited origin is recorded only to the precision available—never fabricate a parent seq after remapping. This is context provenance, not an authorization engine.
 
-Known synthetic not-dispatched/unknown outcome error records remain those states. An arbitrary tool-result object containing a similar code string cannot become evidence of success; classify conservatively with error/dispatch/evidence and document ambiguity. Missing results produce open/unresolved metadata, not manufactured success. Diagnostics contain IDs/scalars only. Duplicate/missing legacy seq addresses can still be rendered compatibly but cannot be used as safe reduction addresses.
+Known synthetic not-dispatched/unknown outcome error records remain those states. An arbitrary tool-result object containing a similar code string cannot become evidence of success; classify conservatively with error/dispatch/evidence and document ambiguity. Missing results produce open/unresolved metadata, not manufactured success. Diagnostics contain IDs/scalars only. Duplicate/missing/invalid legacy seq addresses can still be rendered compatibly but cannot be used as safe reduction addresses. Use event-index-qualified source IDs for unsafe coordinates; missing and invalid coordinates have their own diagnostic codes, never mislabeled duplicate.
+
+R1A outcome ruling: metadata describes reported/structural evidence and never authorizes execution. A generic result with isError is error; a normal result is reported success. Canonical legacy unknown evidence (`isError:true`, output code `TOOL_OUTCOME_UNKNOWN`, `replay:false`) remains conservatively unknown, even when a legacy log lacks dispatch markers; this is not a certification of its producer. Code alone is insufficient. Not-dispatched additionally needs the matching error code, no matching dispatch and independent failed-attempt/boundary evidence consistent with the existing repair contract; contradiction with a dispatch yields unknown, absent evidence does not prove no effect. No result plus dispatch or a closed attempt is unknown; an otherwise open call can be pending, which asserts no known result, not no execution. The accepted cost of conservative classification is retaining ambiguous context longer rather than licensing replay.
 
 ## R1B–R1D constraints to preserve while implementing R1A
 
