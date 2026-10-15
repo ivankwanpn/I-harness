@@ -51,4 +51,3 @@ it.each([true, false])("retains explicit live host auto=%s authority over the mo
   await f.agent.run("continue")
   expect(f.transports).toEqual(live ? ["summary", "main"] : ["main"])
 })
-

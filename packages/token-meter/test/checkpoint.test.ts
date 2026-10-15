@@ -11,6 +11,15 @@ function input(tail = false, prefix = "prefix", shape = "shape") {
   if (tail) counter.unit("tail", "assistant", () => { counter.text("replayedReasoning", "思".repeat(40000)); counter.text("visibleText", "answer") })
   return counter.finish({ protocol: "test", modelId: "m" }, { prefix, tail }, shape)
 }
+it("normalizes original incident scalars without claiming original request parity and prices a synthetic replay suffix once", () => {
+  const first = input(), next = input(true), source = createProjectionCalibration("synthetic-owner")
+  const checkpoint = source.record(first, metadata, { inputTokens: 162, cacheReadTokens: 760448, cacheCreationTokens: 0, inputTokenSemantics: "excludes-cache", outputTokens: 587 }, 0)!
+  expect(checkpoint.reportedInputTokens).toBe(760610)
+  expect(checkpoint.reportedOutputTokens).toBe(587)
+  const suffix = projectedTokens(next) - projectedTokens(first)
+  expect(suffix).toBeGreaterThan(0)
+  expect(createProjectionCalibration("synthetic-owner", checkpoint).estimate(next, metadata, 0)).toEqual({ tokens: 760610 + suffix, calibrated: true })
+})
 it.each(["includes-cache", "excludes-cache"] as const)("normalizes %s usage and persists one scalar prefix chain, restoring its newly projected signed tail", semantics => {
   const calibration = createProjectionCalibration("s"), first = input()
   const checkpoint = calibration.record(first, metadata, { inputTokens: semantics === "includes-cache" ? 1000 : 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: semantics, outputTokens: 10 }, 0)!
