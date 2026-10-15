@@ -1,4 +1,4 @@
-import { createCompactionEngine, type CompactionConfig } from "@i-harness/compaction"
+import { createCompactionEngine, resolveCompactSpec, type CompactionConfig } from "@i-harness/compaction"
 import { deriveProjectionRewrite, type ContextBindingMetadata } from "@i-harness/core-session"
 import { mapModelRequest } from "@i-harness/llm-seam"
 import type { AgentBudgetConfig, AgentDeps, AgentConfig, Agent } from "./types.ts"
@@ -88,7 +88,9 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
   const inheritedCompact = () => inherited?.contextWindow === undefined ? undefined : { ...(deps.compact ?? {}), contextWindow: inherited.contextWindow }
   let compactor = buildCompactor(inherited ? inheritedCompact() : deps.compact, inherited ? inherited.maxOutputTokens : deps.maxOutputTokens)
   let outputCap = inherited ? inherited.maxOutputTokens : deps.maxOutputTokens
-  let compactEnabled = deps.compact?.auto ?? true
+  const automaticPolicy = (compact: CompactionConfig | undefined, binding = metadata()) => compact
+    ? resolveCompactSpec(compact, binding?.providerId, binding?.modelId).auto : true
+  let compactEnabled = automaticPolicy(deps.compact)
   // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
   // at creation above); the default matches the engine convention.
   let budgetCfg = inherited ? inherited.contextWindow === undefined ? undefined : { ...deps.budget, contextWindow: inherited.contextWindow } : deps.budget
@@ -106,6 +108,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
     budgetCfg = inherited.contextWindow === undefined ? undefined : { ...deps.budget, contextWindow: inherited.contextWindow }
     outputCap = inherited.maxOutputTokens
     compactor = buildCompactor(inheritedCompact(), outputCap)
+    compactEnabled = automaticPolicy(deps.compact)
   }
 
   return {
@@ -130,7 +133,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig) {
       compactor = next
       budgetCfg = config.budget
       outputCap = config.maxOutputTokens
-      compactEnabled = config.compact?.auto ?? true
+      compactEnabled = automaticPolicy(config.compact, "contextMetadata" in config ? config.contextMetadata : metadata())
     },
   }
 }
