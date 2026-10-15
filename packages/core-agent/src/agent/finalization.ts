@@ -31,10 +31,9 @@ export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecy
   throw error
 }
 
-export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, _request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
-  const { stepUsage, refusedThisStep, truncatedThisStep, stepText, toolCallsThisStep, thinkingBlocks, providerContinuation } = step
-  // Only the completed attempt calibrates context usage. The host captures
-  // failed-attempt billing separately below the retry wrapper.
+/** Raw counters belong to every ended response, including capped/refused ones.
+ * Reporting them does not accept that response as a context calibration. */
+export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage }: Pick<ModelStep, "stepUsage">) {
   if (Object.keys(stepUsage).length > 0) {
     deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
   }
@@ -46,6 +45,11 @@ export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">
     ...(normalized ?? {}),
     ...(measuredCacheRead ? { cacheReadTokens: cacheRead } : {}),
   } })
+}
+
+export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, _request: LLMRequest, requestRevision: number, abort: AbortSignal | undefined, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
+  const { stepUsage, refusedThisStep, truncatedThisStep, stepText, toolCallsThisStep, thinkingBlocks, providerContinuation } = step
+  reportModelUsage(deps, step)
 
   // The provider's signed continuation belongs to its tool-use message.
   // Persist it before a tool can be refused, cancelled or fail to commit;

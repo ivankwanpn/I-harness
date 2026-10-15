@@ -6,7 +6,7 @@ import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle } from "./types
 import type { AgentContext } from "./context.ts"
 import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
-import { failTurn, completeModelStep, closeStep, finishTurn } from "./finalization.ts"
+import { failTurn, completeModelStep, reportModelUsage, closeStep, finishTurn } from "./finalization.ts"
 import { createAdmission, stalePreparedInput } from "./admission.ts"
 import { createRecovery } from "./recovery.ts"
 import { modelFailureFacts } from "@i-harness/llm-seam"
@@ -83,6 +83,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       lifecycle.providerCompleted = true
       const step = streamStep.result()
       if (step.truncatedThisStep || step.refusedThisStep) {
+        reportModelUsage(deps, step)
         streamStep.discard()
         closeStep(deps, lifecycle, getSteps, step)
         throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })

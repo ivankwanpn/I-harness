@@ -790,6 +790,96 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   if (telemetry) {
     telemetry.emit({ type: "session/request", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}) } })
   }
+  const readEnding = () => {
+    // M72 Ⅱ: the run's ending, read from the DURABLE log rather than from a
+    // flag threaded down the call chain — the record the answer's reader opens
+    // and this line are then the same fact by construction. Scoped to the last
+    // turn: an earlier turn's truncation is not this run's ending (a fresh turn
+    // after it can have ended cleanly).
+    // `Math.max(…, 0)`: `lastIndexOf` answers −1 when the log carries no
+    // `turn/start` at all, and `slice(-1)` would then inspect only the final
+    // event — a silent false negative. 0 keeps the whole log in view, which is
+    // the correct scope when there is no turn boundary to scope to.
+    const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
+    const truncated = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.truncated === true)
+    // M77: the sibling ending, read the same way and to the same scope — the
+    // durable `step/end.refused` in the LAST turn. A separate predicate, not an
+    // `else`: a step can be capped AND refused, and the two then coexist.
+    const refused = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.refused === true)
+    // M80: the same reading for the empty success — the durable `step/end.empty`
+    // in the LAST turn. A separate predicate rather than a chain over the two
+    // above: the core-agent's judgment already excludes a capped or refused step
+    // (those bits are the more specific fact about that step), so all three can
+    // be read independently, and a run whose ONLY such step was capped reports
+    // only that (a turn whose capped step carried tool calls continues, so a
+    // later empty step in the same turn still prints `[empty]`).
+    const empty = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.empty === true)
+    return { ...(truncated ? { truncated: true as const } : {}), ...(refused ? { refused: true as const } : {}), ...(empty ? { empty: true as const } : {}) }
+  }
+  let outcomeReported = false
+  const reportOutcome = (ending: ReturnType<typeof readEnding>) => {
+    if (outcomeReported) return
+    outcomeReported = true
+    const { truncated, refused, empty } = ending
+    // The metrics summary, when the operator asked for observability. On STDERR
+    // because stdout carries ONLY the telemetry's NDJSON frames (the same
+    // discipline `sdk` and `acp` follow) — a summary printed to stdout would
+    // corrupt the stream it is summarising.
+    if (opts.telemetry === "jsonl") {
+      const m = metrics.snapshot()
+      const events = Object.entries(m.events).map(([k, v]) => `${k}=${v}`).join(" ")
+      const tokens = Object.entries(m.tokens).map(([k, v]) => `${k}=${v}`).join(" ")
+      // M5 T2: the provider's own numbers, NEVER merged with `tokens` above —
+      // that section is our estimate, this one is what the wire said. Read the
+      // two together with `provider/usage` in the event list: that count is the
+      // denominator, and it is what makes a `0` here mean "the provider said
+      // zero" instead of "nothing ever reported".
+      const reported = Object.entries(m.reported).map(([k, v]) => `${k}=${v}`).join(" ")
+      const tools = Object.entries(m.tools).map(([k, v]) => `${k}=${v.ok}/${v.ok + v.error}`).join(" ")
+      // M5/D3: rewritten/total, sitting next to the provider's own numbers above
+      // — the CAUSE on the left, the COST on the right.
+      const prefix = m.prefix.requests === 0
+        ? ""
+        : `${m.prefix.rewritten}/${m.prefix.requests}${m.prefix.lastCause === undefined ? "" : ` (${m.prefix.lastCause})`}`
+      // M5 T2 (second half): broke/observed — the MEASURED half of the prefix
+      // question, beside D3's attributed half above. The denominator is
+      // `observed`, NOT `requests`: the first request of a process has nothing
+      // to compare against, so it is neither kept nor broke, and a run that
+      // printed `0` there would be claiming a measurement it never made.
+      const continuity = m.prefix.requests === 0 ? "" : `${m.prefix.broke}/${m.prefix.observed}`
+      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${continuity === "" ? "" : `  prefix(broke/observed): ${continuity}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
+    }
+    // M72 Ⅱ: the truncation the operator has to know about, on STDERR for the
+    // reason the summary above is: stdout carries ONLY the telemetry's NDJSON
+    // frames and the final text. Printed unconditionally (not only when
+    // telemetry was asked for) — an incomplete answer is not an opt-in fact.
+    // The wording claims exactly what the predicate above knows: a `step/end`
+    // in this turn is truncated — NOT that `finalText` is the truncated thing
+    // (the truncation can be on a step whose output the turn did not end with).
+    if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
+    // M77: the refusal, printed for the same reason and on the same surface,
+    // with the same care about what the predicate knows — a `step/end` in this
+    // turn was refused, NOT a claim about `finalText` (which can be empty here
+    // for a different reason, or non-empty from an earlier step). The choice of
+    // ORDER when BOTH bits are set: this line follows the one above, so a step
+    // that was capped and refused reads as `[truncated]` then `[refused]` —
+    // neither line is the other's `else`, and the order is the source's.
+    if (refused) console.error("[refused] the provider refused to produce content; a step in this turn was blocked")
+    // M80: the empty success, printed for the same reason and on the same
+    // surface. This is the one that used to be SILENT — every other surface
+    // (the durable bit, the telemetry code, `HeadlessResult.empty`) is read by
+    // a program, and an operator watching a terminal saw an empty answer with
+    // no explanation at all. The wording claims exactly what the predicate
+    // knows: a `step/end` in this turn carried no answer text and no tool call —
+    // NOT that `finalText` is empty (it can carry an earlier step's text), and not a
+    // claim about WHY (the provider's reason is its own; the ten non-content
+    // gemini stop reasons are the measured population). Printed last, after the
+    // other two: this bit cannot coexist with either of them ON THE SAME STEP
+    // (the core-agent's judgment excludes a capped or refused step), so this
+    // line never displaces one of the pair above — while those two can still
+    // print together, exactly as M77 pinned.
+    if (empty) console.error("[empty] the provider returned no answer text and no tool call; a step in this turn was empty")
+  }
   try {
     // R-A7: the plan-mode proposal event must be on the log before the run
     // starts (the tool mount + prompt fragment are the assembly's do).
@@ -867,29 +957,6 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     await executor.drain()
     const derived = deriveMessages(session).at(-1)
     const finalText = typeof derived?.content === "string" ? derived.content : ""
-    // M72 Ⅱ: the run's ending, read from the DURABLE log rather than from a
-    // flag threaded down the call chain — the record the answer's reader opens
-    // and this line are then the same fact by construction. Scoped to the last
-    // turn: an earlier turn's truncation is not this run's ending (a fresh turn
-    // after it can have ended cleanly).
-    // `Math.max(…, 0)`: `lastIndexOf` answers −1 when the log carries no
-    // `turn/start` at all, and `slice(-1)` would then inspect only the final
-    // event — a silent false negative. 0 keeps the whole log in view, which is
-    // the correct scope when there is no turn boundary to scope to.
-    const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
-    const truncated = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.truncated === true)
-    // M77: the sibling ending, read the same way and to the same scope — the
-    // durable `step/end.refused` in the LAST turn. A separate predicate, not an
-    // `else`: a step can be capped AND refused, and the two then coexist.
-    const refused = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.refused === true)
-    // M80: the same reading for the empty success — the durable `step/end.empty`
-    // in the LAST turn. A separate predicate rather than a chain over the two
-    // above: the core-agent's judgment already excludes a capped or refused step
-    // (those bits are the more specific fact about that step), so all three can
-    // be read independently, and a run whose ONLY such step was capped reports
-    // only that (a turn whose capped step carried tool calls continues, so a
-    // later empty step in the same turn still prints `[empty]`).
-    const empty = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.empty === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -914,76 +981,23 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
     })
     if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
-    // The metrics summary, when the operator asked for observability. On STDERR
-    // because stdout carries ONLY the telemetry's NDJSON frames (the same
-    // discipline `sdk` and `acp` follow) — a summary printed to stdout would
-    // corrupt the stream it is summarising.
-    if (opts.telemetry === "jsonl") {
-      const m = metrics.snapshot()
-      const events = Object.entries(m.events).map(([k, v]) => `${k}=${v}`).join(" ")
-      const tokens = Object.entries(m.tokens).map(([k, v]) => `${k}=${v}`).join(" ")
-      // M5 T2: the provider's own numbers, NEVER merged with `tokens` above —
-      // that section is our estimate, this one is what the wire said. Read the
-      // two together with `provider/usage` in the event list: that count is the
-      // denominator, and it is what makes a `0` here mean "the provider said
-      // zero" instead of "nothing ever reported".
-      const reported = Object.entries(m.reported).map(([k, v]) => `${k}=${v}`).join(" ")
-      const tools = Object.entries(m.tools).map(([k, v]) => `${k}=${v.ok}/${v.ok + v.error}`).join(" ")
-      // M5/D3: rewritten/total, sitting next to the provider's own numbers above
-      // — the CAUSE on the left, the COST on the right.
-      const prefix = m.prefix.requests === 0
-        ? ""
-        : `${m.prefix.rewritten}/${m.prefix.requests}${m.prefix.lastCause === undefined ? "" : ` (${m.prefix.lastCause})`}`
-      // M5 T2 (second half): broke/observed — the MEASURED half of the prefix
-      // question, beside D3's attributed half above. The denominator is
-      // `observed`, NOT `requests`: the first request of a process has nothing
-      // to compare against, so it is neither kept nor broke, and a run that
-      // printed `0` there would be claiming a measurement it never made.
-      const continuity = m.prefix.requests === 0 ? "" : `${m.prefix.broke}/${m.prefix.observed}`
-      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${continuity === "" ? "" : `  prefix(broke/observed): ${continuity}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
-    }
-    // M72 Ⅱ: the truncation the operator has to know about, on STDERR for the
-    // reason the summary above is: stdout carries ONLY the telemetry's NDJSON
-    // frames and the final text. Printed unconditionally (not only when
-    // telemetry was asked for) — an incomplete answer is not an opt-in fact.
-    // The wording claims exactly what the predicate above knows: a `step/end`
-    // in this turn is truncated — NOT that `finalText` is the truncated thing
-    // (the truncation can be on a step whose output the turn did not end with).
-    if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
-    // M77: the refusal, printed for the same reason and on the same surface,
-    // with the same care about what the predicate knows — a `step/end` in this
-    // turn was refused, NOT a claim about `finalText` (which can be empty here
-    // for a different reason, or non-empty from an earlier step). The choice of
-    // ORDER when BOTH bits are set: this line follows the one above, so a step
-    // that was capped and refused reads as `[truncated]` then `[refused]` —
-    // neither line is the other's `else`, and the order is the source's.
-    if (refused) console.error("[refused] the provider refused to produce content; a step in this turn was blocked")
-    // M80: the empty success, printed for the same reason and on the same
-    // surface. This is the one that used to be SILENT — every other surface
-    // (the durable bit, the telemetry code, `HeadlessResult.empty`) is read by
-    // a program, and an operator watching a terminal saw an empty answer with
-    // no explanation at all. The wording claims exactly what the predicate
-    // knows: a `step/end` in this turn carried no answer text and no tool call —
-    // NOT that `finalText` is empty (it can carry an earlier step's text), and not a
-    // claim about WHY (the provider's reason is its own; the ten non-content
-    // gemini stop reasons are the measured population). Printed last, after the
-    // other two: this bit cannot coexist with either of them ON THE SAME STEP
-    // (the core-agent's judgment excludes a capped or refused step), so this
-    // line never displaces one of the pair above — while those two can still
-    // print together, exactly as M77 pinned.
-    if (empty) console.error("[empty] the provider returned no answer text and no tool call; a step in this turn was empty")
     emitSessionEnd(0)
+    const ending = readEnding()
+    reportOutcome(ending)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(empty ? { empty: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...ending, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that
     // rejected) — the assembly WAS built, so `run` and not `mount`. Before the
     // close below for the same reason as site ①.
     appendRunEnd(1, "run", err)
+    const ending = readEnding()
+    // A reporting failure cannot replace the authoritative turn/storage error.
+    try { reportOutcome(ending) } catch { /* reporting may already have begun */ }
     telemetry?.close()
     if (opts.coordinator && activeId) await opts.coordinator.flush(activeId).catch(() => {})
-    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText: "", exitCode: 1, session, ...ending, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } finally {
     // The handlers come off on EVERY exit path. A run that left them behind
     // accumulates one pair per invocation, and a host running many sessions
