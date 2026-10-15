@@ -4,7 +4,12 @@ import tailwindcss from "@tailwindcss/vite"
 import { devCspPlugin } from "./electron.csp.ts"
 
 export default defineConfig({
-  main: { build: { externalizeDeps: { exclude: ["@i-harness/sdk", "@i-harness/fs-search"] }, rollupOptions: { external: ["koffi"] } } },
+  main: {
+    build: {
+      externalizeDeps: { exclude: ["@i-harness/sdk", "@i-harness/fs-search", "@i-harness/usage-stats", "@i-harness/desktop-gateway"] },
+      rollupOptions: { external: ["koffi"] },
+    },
+  },
   // Electron sandboxed preload scripts cannot use ESM; emit one CJS bundle.
   preload: {
     build: {
