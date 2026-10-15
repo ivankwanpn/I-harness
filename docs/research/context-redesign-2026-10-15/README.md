@@ -5,6 +5,8 @@
 
 此目錄保存研究證據，沒有產品實作。基線 IH `81bca938`；所有參考副本來自使用者指定的 `D:/ih_reference_project`。參考項目無 `.git`，版本取自 manifest，不把目錄名稱當作 release 認證。
 
+`provenance.json` 保存首次研究提交 `1b605d0e` 前的文件／來源快照雜湊；其後設計與主報告的補充不回寫歷史收據。最新範圍／框架見 [拆分重合地圖](../../refactoring/2026-10-15-context-decomposition-overlap.md) 與 [開發框架](../../superpowers/specs/2026-10-15-context-engine-framework.md)。
+
 | 檔案 | 內容 |
 | --- | --- |
 | [codex-audit.md](codex-audit.md) | Codex archive／active context、usage、compaction、wire、tools／children、API key／subscription |

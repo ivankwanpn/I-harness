@@ -178,3 +178,5 @@ IH shipping 已有工具 64,000 bytes retention、child preview 2,048 bytes、ag
 推薦方案是單一 ContextEngine 管理不可變 snapshot、單一多維 budget、transactional compaction 與結果引用；協議 adapter 保留原生語義並在 physical send 前驗證。這是可供審閱的重設計，不是宣稱修復已實作。
 
 原 v0.1.13 的廣泛事件驅動、AGENTS／CLAUDE 指令載入、全專案大檔拆分仍暫停。本提案只涉及本次上下文、壓縮、傳送、工具／子代理資料交付所必需的調整。現有 candidate-wide verify:all 的歷史 FAILED 狀態也沒有因研究或窄範圍修復而改成通過。
+
+後續使用者再審補充：2026-10-15要求優先完整設計框架，並將重合拆分一併完成。[框架補充](../superpowers/specs/2026-10-15-context-engine-framework.md) 固定依賴／owner／port、共享attempt、summary不可遞迴壓縮及child branch disposition；[拆分重合地圖](../refactoring/2026-10-15-context-decomposition-overlap.md) 對照原43檔與目前量測。此範圍整合取代上段對「全部拆分暫停」的概括描述，不代表產品已實作或原pending項目已完成。

@@ -4,6 +4,8 @@
 
 依據：[來源與重現報告](../../research/2026-10-15-context-architecture-reassessment.md)。本提案取代該範圍的零散補強方向，並不重啟其他已暫停的 v0.1.13 工作。
 
+2026-10-15 使用者再審要求：接受必要開發複雜度，優先完整框架與正確性；與原拆分任務重合的責任一併交付。規範補充：[開發框架、依賴／owner／port及驗收](2026-10-15-context-engine-framework.md)、[原拆分任務重合地圖](../../refactoring/2026-10-15-context-decomposition-overlap.md)。補充中的責任邊界與完成規則適用於下列R0–R6；不把單一ContextEngine理解為一個大檔或包辦全部副作用的模組。
+
 ## 1. 選擇
 
 | 方案 | 得益 | 代價與判斷 |
@@ -177,4 +179,4 @@ UI 分開顯示上次 provider input 實測、本次預估與 confidence、輸�
 
 回退只允許舊 reader 能理解的 checkpoint/格式；已寫入不相容資料時保留原檔、選擇相容 runtime 或只讀，不無條件退版。影子比較只做純 projection，不發雙份模型請求、不派雙份工具。
 
-研究與設計不更改版本或發布新包。實作完成後沿用使用者決定的候選版流程重新 qualification；原廣泛事件驅動／AGENTS/CLAUDE／大檔拆分維持暫停。全部 delegated 實作及審查仍用 GPT 6.1 Sol。
+研究與設計不更改版本或發布新包。實作完成後沿用使用者決定的候選版流程重新 qualification；原廣泛事件驅動／AGENTS/CLAUDE及不重合的拆分維持暫停。與上下文重構重合的S/CX項目按重合地圖一併交付，功能與結構各有驗收，未完成不提前更新拆分計數。全部 delegated 實作及審查仍用 GPT 6.1 Sol。
