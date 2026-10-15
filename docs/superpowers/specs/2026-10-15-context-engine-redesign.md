@@ -26,7 +26,7 @@
 - 同一 candidate 的選區、計量、縮減、送出驗證使用同一 snapshot revision 和最終 protocol projection。
 - archive bytes、semantic token estimate、provider usage、wire bytes、累計 billing 分開。unknown 不當作 0；估算不標成實測。
 - 每個 physical request（主模型、摘要、子代理、恢復）都走相同 admission contract；UI 讀取不能觸發 prepare／auth／模型請求。
-- Stop 阻止後續模型 transport、新的 compaction 發布與 parent wake；已派發工具的結果、未知 outcome 與 child settlement 仍須完成事實記錄。已越過 durable commit point 的 checkpoint 不回滾。引導只解除等待，不取消已授權背景工作。
+- Stop 阻止後續模型 transport、尚未發出寫入的 compaction 提交與 parent wake；已派發工具的結果、未知 outcome 與 child settlement 仍須完成事實記錄。已不可逆發出寫入的同一次 checkpoint 交易只可完成或核對既有提交，不能因此開新請求／新交易；取得 durable receipt 前不進有效上下文。引導只解除等待，不取消已授權背景工作。
 - public Responses、Codex subscription、Chat、Anthropic、Gemini、Bedrock 保持獨立 capability 與 compatibility identity。
 
 ## 3. 資料邊界
@@ -115,10 +115,12 @@ output supported ceiling 和日常 preferred output 分開，不能把型錄最�
 3. **Measure**：用該 binding 的 adapter.prepare 計量候選，不能用另一套 chars/4 決定完成。
 4. **Summarize**：獨立受限 request；只允許所需的摘要能力，不執行任務工具。明確傳入來源標籤及 authority scope。保留現有最多 8 次實體摘要請求、失敗停止界線及截斷拒絕。
 5. **Validate**：檢查完成狀態、摘要品質欄位、受保護資料、工具配對、artifact 可解析性，再以完整新 request 重算是否達目標。summary length 的單位用明確 `retainedTextBytes`／估算 token budget，不再把 chars/4 命名成精確 tokens。
-6. **Commit**：當 source revision 仍適用才在原 log append checkpoint/manifest＋commit record；完成 flush 後才切換 active snapshot。對新 pending input、已提交的工具結果、child settlement、notification admission 等追加後綴，必須以穩定 ID 完整保留並重新准入；無法證明後綴可安全接合時，捨棄候選並有界重建，不能覆寫／漏交付或重跑工具。branch／binding／被摘要內容改變亦使候選失效。持久 commit record 是發布的線性化點：Stop 在此之前被觀察到則取消發布；record 已持久化，即使 Stop／崩潰發生在 flush 回覆或記憶體切換之前，重啟仍恢復該已提交 checkpoint 及後綴，只禁止後續模型呼叫與 wake。record 尚未提交的 summary candidate 不進入有效上下文。
+6. **Commit**：當 source revision 仍適用才在原 log append checkpoint/manifest＋commit record；取得確切 durable receipt 後才切換 active snapshot。對新 pending input、已提交的工具結果、child settlement、notification admission 等追加後綴，必須以穩定 ID 完整保留並重新准入；無法證明後綴可安全接合時，捨棄候選並有界重建，不能覆寫／漏交付或重跑工具。branch／binding／被摘要內容改變亦使候選失效。**2026-10-16 異步發布契約修訂：** writer 在不可逆發出寫入前以同一無 await 操作再次檢查 Stop／owner／來源／prefix，並固定 transaction ID、seq 和 bytes；此前觀察到 Stop 就取消。已發出的同一交易可能在 Stop 後才完成 fsync 或核對，這不是允許新交易或新模型工作。持久 record／receipt 是讀者可見及可恢復提交的依據；候選在此之前保持私有。寫入結果未知時暫停後續 seq 分配／發布／續跑，只核對同一 ID／digest／prefix。匹配的已發出內容可補 sync；Stop 後證明不存在的候選永久取消，不由通用 flush／close 盲目重送。已持久 record 即使遇到 Stop／崩潰或記憶體切換失敗，仍在重啟恢復，只禁止後續模型呼叫與 wake。
 7. **Continue**：以新 snapshot 生成主 request。成功是達目標／有明確 blocked reason，不能只有 `compacted:true`。
 
 建議結果型別區分 `unchanged`、`reduced-but-still-over-target`、`ready`、`blocked`。主迴圈能決定是否再做下一種縮減，所有縮減與模型 calls 共用總預算，避免失敗後每個 step 無限重新支付。
+
+上述異步契約是後續 F1/F3 的實作要求，不代表目前產品已具備。它明確區分「仍可取消寫入」、「已持久提交」與「對讀者生效」；避免把不可取消的異步檔案寫入誤稱為 Stop 後必定沒有提交，也避免讓未確認的資料提前出現在 active Session。
 
 Native checkpoint 是 adapter capability 的一種，可以保存不透明 compaction item＋相容身份；它不是可以轉成通用文字或直接挪給其他模型的摘要。身份涵蓋 adapter／route、provider／model、帳戶或租戶邊界、workspace／server reference ownership 及已知有效期限，日誌只保存安全的身份參照。Unsupported route 在仍有合法語義來源時使用 portable structured text checkpoint；若只剩 opaque checkpoint／expired server ref，且無可恢復的原始內容，必須 blocked 並說明需要兼容 route 或恢復來源，不默默丟掉歷史。跨模型切換亦先走這個相容性判斷。
 

@@ -81,7 +81,7 @@ context-engine/src/
 
 - **PreparedRequestPort**：輸入snapshot revision、binding identity、request purpose與generation policy；輸出immutable prepared handle、semantic/wire identities、measurement與validation facts。副作用free的prepare與有attempt許可的physical send分開。
 - **SummaryPort**：輸入固定source groups＋coverage manifest、current summary、摘要限制和共享attempt lease；輸出complete/blocked及source coverage。不能改session、發布checkpoint、派工具或自己重新觸發compaction。
-- **CheckpointPublicationPort**：輸入expected branch/owner generation/source revision、candidate manifest及accepted suffix接合規則；輸出committed receipt、stale或commit-unknown。writer負責compare-and-append/flush；uncertain時先按transaction ID查詢durable結果，不盲目再append。
+- **CheckpointPublicationPort**：輸入expected branch/owner generation/source revision、candidate manifest及accepted suffix接合規則；輸出committed receipt、stale或commit-unknown。writer負責compare-and-append/flush；uncertain時先按transaction ID查詢durable結果，不盲目再append。2026-10-16 明確採異步不可逆 issuance：最後一次 Stop／source／fence 檢查與固定 seq／bytes／transaction 在同一無 await 操作完成；此前可取消，此後僅完成或核對已發出的同一寫入。receipt 前候選不可見，unknown 隔離新分配／續跑。Stop 後證明不存在的候選不重送；匹配的已發出 bytes 可補 sync，不能因此取得新模型／wake 權限。
 - **ArtifactPort**：輸入owner/scope/ref/revision和明確讀取預算；輸出bounded page或retention狀態。路徑本身不授權，不因存在ref就全量讀回prompt。
 - **AttemptLeasePort**：每次physical model/count request先取得有限額reservation，送出前再次檢查fence；settlement只更新同一attempt，不因換HTTP/WS或wrapper重置次數。
 - **ContextObservationPort**：讀immutable scalar view，不帶provider實作或callback，不能產生prepare/auth/count/model call。

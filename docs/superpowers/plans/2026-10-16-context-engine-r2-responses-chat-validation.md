@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development or executing-plans. Steps use checkbox syntax for tracking.
 
-**Status:** Ready after R2B2 full-range review and scoped correction approval through45636f7aca5ba7dfaaa0d969b473c56f36e96cb7. Root rebased the concrete seam and consumers against0024423d; reviewed fix45636f7a changes only strict data/structural validation and its tests, leaving these execution APIs unchanged. Ledger records the subsequent documentation BASE before starting. One product writer only.
+**Status:** Complete through2ee26aa4d18f01f443d01fad43387682b0efac95 after fresh full-range review and original-reviewer fix1 approval. BASE385cf09444212537b1f999450d2af12a8c0d5b75. Verification: docs/research/2026-10-16-context-engine-r2c-verification.md. D/native/policy and whole-program qualification remain separate gates.
 
 **Goal:** Reject malformed final public Responses, subscription Responses and Chat requests before measurement/transport, with protocol-specific call-group rules and precise safe errors rather than treating every400 as capacity overflow.
 
@@ -31,6 +31,7 @@
 - llm-openai `request/validate.ts`, private Responses/subscription rule leaves if needed, `client.ts`, `context.ts`; llm-openai-compatible equivalent. Validators inspect literal final wire values, not call the mapper to generate expected legality.
 - seam `provider-error/{types,classify,facts}.ts`; precise local INVALID_ARGUMENT mapping and safe report propagation. Existing transport/native mapper preconditions stay, with final model/cap checks moved out of descriptor extraction.
 - core-agent `agent/{admission,budget}.ts` and the reviewed prepared-summary leaf consume selected-handle validation before reduction/capacity decisions. Source review turn/recovery without inventing a new recovery branch.
+- core-session `conversation/project.ts` only for the independently reproduced parallel-result/image companion ordering defect: an early assistant flush currently emits the user-role image before remaining sibling tool results. Preserve the existing semantic/source owner and all input/image references; do not create adapter history repair. Actual invocation-result closure is independent of any background job's later settlement.
 - SDK `server/client/protocol` and gateway/Desktop diagnostic boundaries only as needed to preserve the same sanitized modelFailure facts. Their role remains observation; no UI budget engine or new context/session format.
 - Tests: private validator literals, actual prepared/codex-subscription, seam wrappers/provider-errors/retrying-client, main protocol-recovery/owned-budget, compaction summarizer, SDK server/protocol and Desktop runtime-diagnostics; six-route corpus. Recheck exact filenames after B2.
 
@@ -40,11 +41,11 @@
 
 **Produces:** real final validators for three C routes, immutable per-derivative reports, no-send malformed requests and safe schema/order/binding/output errors across actual consumers; honest transitional unvalidated coverage for other routes/custom clients.
 
-- [ ] **Step 1: Baseline real routes and add mapper-independent RED cases.**
+- [x] **Step 1: Baseline real routes and add mapper-independent RED cases.**
 
 Reuse B2's exact applicable receipts as the unchanged baseline where they cover the final reviewed source; run only missing targeted baselines before source edits. Literal validators and actual raw override/cap callback cases must fail for missing validation, not merely for an invalid fixture or missing file. Include valid parallel/hosted/remote-prefix controls so a blanket rejection cannot satisfy the tests. Preserve the six independently reproduced BASE core-agent failures as whole-program concerns; a C selected gate is not a replacement for their R6 qualification.
 
-- [ ] **Step 2: Define one bounded report and precise rejection contract.**
+- [x] **Step 2: Define one bounded report and precise rejection contract.**
 
 ```ts
 type ValidationRule = 'shape' | 'binding' | 'tool-id' | 'tool-group' |
@@ -87,7 +88,7 @@ Add optional createPreparedPayload.validate and PreparedModelRequest.validation 
 
 The packet context is calculated once from the already-created exact HTTP serialized string or typed SDK representation in derive, before describe, and the same byte length feeds the measurement. It is not a second serializer. The discriminated union prevents an SDK estimate from certifying an HTTP size gate. C adds this actual preparation callback input for the same validator boundary used by D; it introduces no guessed body/media ceiling. Native D preflight identified this required seam because a body-only callback cannot validate an evidenced HTTP byte limit without reserialization.
 
-- [ ] **Step 3: Implement final Responses/public and subscription rules.**
+- [x] **Step 3: Implement final Responses/public and subscription rules.**
 
 Validate root/model/input/tools and known item/content alternatives with noncoercing type guards. Enforce documented field bounds only where evidenced; do not guess a universal regex/ceiling for arbitrary custom extensions. Function arguments are a string containing valid JSON for the supported client-function contract; historical argument-schema/tool permission validation is not moved here. Do not require every historical function name to remain in the current tool registry.
 
@@ -101,15 +102,21 @@ Subscription uses a separately selected route contract: current final allowlist,
 
 Move the existing body.model!==config.model rejection from describeContext into final validation with binding reason. Preserve equal-model/other supported raw overrides and all request-cap precedence. Public official minimum16 is scoped by the existing explicit official-route recognition; custom minimum1 remains a syntactic/local rule with unverified backend floor, subscription unsupported. An applied cap remains a wire fact, not proof of vendor enforcement.
 
-- [ ] **Step 4: Implement final Chat group rules.**
+- [x] **Step 4: Implement final Chat group rules.**
 
 Validate known role/content/tool shapes without global provider-name inference. Idle assistant tool_calls opens a sibling ID set; subsequent tool messages each close one in any sibling order. Unknown/duplicate tool_call_id fails; end or a non-tool message while pending fails. The initiating assistant's own content alongside calls is legal. Chat has no Responses remote-prefix exemption. Preserve explicitly supported reasoning_content and native data; portability/authenticity remain separate.
 
+Fix1 ruling from independent review: known name/audio/tool_choice envelopes require value checks even when their field names are recognized. A valid non-null assistant.audio ID references earlier remote audio: preserve it with native-unverified/remote-input-unavailable and mark the existing descriptor input incomplete/server-referenced-context-unavailable. audio:null is absence and creates no remote gap; top-level generation audio options do not imply remote input. The main/summary consumers retain their existing incomplete-input protection; no lookup, new policy or second price owner. Nonstandard reasoning/thinking/enable_thinking raw fields retain explicit partial extension coverage.
+
 Reject simultaneous max_tokens/max_completion_tokens and invalid configured cap-field values; preserve actual existing maxTokensField/raw/request precedence. Move the existing model mismatch check as above. Unknown model IDs remain usable; no catalog lookup or new current-tool membership requirement.
+
+Fix1 nullable-cap ruling: each individually documented null cap remains accepted as no effective numeric cap, with original/derived/restored and matching request-cap precedence controls. This does not broaden the previously rejected simultaneous-field combinations. Known Responses reasoning.content is an optional array, not a generic string-content site; malformed known native containers retain native-replay attribution.
 
 If an existing mapper produces an independently proven invalid group (for example a user image companion inserted before remaining sibling results), correct that encoder within its own route while preserving exchange/source associations and valid native order. Record the counterexample and semantic change. Do not make the validator repair history, synthesize results, rerun effects or delay user steering as a workaround.
 
-- [ ] **Step 5: Compose validation at preparation/confirmation and safe error boundaries.**
+Implementation ruling: the concrete image counterexample originates in the shared `conversation/project.ts:flushToolBlock`, which emits pendingToolImages before awaitingItemResults is clear. Root authorizes a narrow source-owner correction after actual-projector→Chat RED. Keep image companions and deferred input attached to their real owners until a legal whole group is assembled, but preserve them on end-of-projection/interrupted/unresolved/block-switch paths. deferredUser includes actual human text; it cannot be silently dropped or withheld from input admission. A completed invocation returning a background job handle is already a tool result and must permit new steering while the job continues. Cover both shapes; do not equate provider wire closure with waiting for a background job to finish.
+
+- [x] **Step 5: Compose validation at preparation/confirmation and safe error boundaries.**
 
 derive validates each actual final JSON-equivalent body before describe/output, freezes its report with its own handle and rejects malformed input immediately. Cap/restored-cap/repeated derivatives rerun the validator. Compose the immutable report assertion into B2's existing per-handle confirm sequence before a confirmation is emitted; do not add another guard owner, overwrite receipt/snapshot callbacks, rehash the body or duplicate the physical-send guard. C adapter direct stream, main and summary all reach the same path. Keep validation outside transport catches.
 
@@ -117,7 +124,7 @@ Main budget/admission and prepared-summary assert the selected report before cap
 
 Extend safeModelFailureFacts and its actual SDK/gateway/Desktop consumers with the same sanitized validation report and canonical explanations. Classification honors a well-formed attached local validation report before message-based context inference, while preserving auth/abort/quota/TLS precedence and real remote context-limit parsing. INVALID_ARGUMENT remains terminal even retry mode:always. Hostile error text resembling context overflow cannot defeat the typed local reason. No raw provider message or validation value appears in diagnostics. No context/budget event or session-format widening is needed.
 
-- [ ] **Step 6: Prove independent positives/negatives and actual no-send behavior.**
+- [x] **Step 6: Prove independent positives/negatives and actual no-send behavior.**
 
 Literal Responses FC(a)/FC(b)/OUT(b)/OUT(a) passes; missing output, output before a visible local call and duplicate output fail even with unknown legacy ownership. Define items directly with function_call/call_id/name/arguments and function_call_output/call_id/output, not through the mapper. Remote-prefix+output-only passes incomplete; remote-prefix+visible unclosed call fails. Earlier/later item-reference ordering, hosted/reasoning interleaving and complete versus unsupported unresolved async are distinct controls.
 
@@ -127,7 +134,7 @@ Use raw messages:null/input:[null], malformed argument text, wrong model, invali
 
 Positive direct/main/summary requests reach only fake transports; all negative cases prove zero sends, zero automatic compact and zero tool effect. Held-auth/confirmation paths retain snapshot/receipt checks. D/custom compatibility controls still execute with honest unvalidated coverage. Reports reject extra keys/types, including Object.prototype names and prototype-only required fields, stay≤4096bytes and contain none of the sentinel prompt/arg/signature/ID text. Explicitly test constructor/toString/__proto__ at nested report/issue levels and roundtrip consistency; B2's independent review found this exact class of allowlist bypass. Retain exact official15/16/custom1/subscription cap controls.
 
-- [ ] **Step 7: Run scoped gates, review and continue.**
+- [x] **Step 7: Run scoped gates, review and continue.**
 
 Run sequential maxWorkers2/minWorkers1: full Responses and Chat suites, seam full, relevant main protocol-recovery/owned-budget/final-candidate/accepted-calibration, compaction summary, SDK server/protocol, Desktop runtime-diagnostics and six-route corpus; retain D-route prepared controls as staging regressions. Typecheck all changed packages and actual consumers/e2e. Verify exact reachability and reachable acyclic graph; no baseline edits or fake readers. Refresh a phase-owned copied Gateway probe showing typed malformed-request refusal and valid direct/main route behavior, plus relevant CLI/sanitizer compatibility when changed. Do not claim an old packaged artifact exercises newly added validators.
 
