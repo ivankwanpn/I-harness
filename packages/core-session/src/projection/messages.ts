@@ -126,6 +126,12 @@ export function deriveMessages(session: Session): LLMMessage[] {
   }
   const suppressedCallIds = new Set<string>()
   const suppressedAssistantEvents = new Set<SessionEvent>()
+  // Compaction replaces model-visible content, not the step's lifecycle.
+  // A summary can shadow the current step/start before that step produces its
+  // assistant/tool response. Retain these boundaries in both stateful folds
+  // so the continuation stays attached and failed steps remain suppressed.
+  // Rewind still removes its entire abandoned branch, including boundaries.
+  const stepBoundaries = new Set(["step/start", "step/end", "step/failed", "turn/start"])
   let activeStep: { calls: string[]; assistants: SessionEvent[]; failed: boolean } | undefined
   const closeStep = () => {
     if (activeStep && (activeStep.failed || activeStep.calls.some((id) => !resolvedCallIds.has(id)))) {
@@ -135,7 +141,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
     activeStep = undefined
   }
   for (const ev of session.events) {
-    if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
+    if (ev.seq !== undefined && (hideByRewind(ev.seq) || shadowed.has(ev.seq) && !stepBoundaries.has(ev.type))) continue
     if (ev.type === "step/start") {
       closeStep()
       activeStep = { calls: [], assistants: [], failed: false }
@@ -160,7 +166,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       if (ev.images?.length) admittedImages.set(ev.inputId, ev.images)
       else admittedImages.delete(ev.inputId)
     }
-    if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
+    if (ev.seq !== undefined && (hideByRewind(ev.seq) || shadowed.has(ev.seq) && !stepBoundaries.has(ev.type))) continue
     if (ev.type === "user/message") {
       const images = ev.imageInputId === undefined ? ev.images : admittedImages.get(ev.imageInputId)
       if (ev.imageInputId !== undefined && !images?.length) {
