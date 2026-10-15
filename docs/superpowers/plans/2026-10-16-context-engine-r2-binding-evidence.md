@@ -4,7 +4,9 @@
 
 **Goal:** Separate model limits, configured generation intent and route capabilities at their real producers, then carry that evidence through actual main/child/summary snapshots without changing current admission mathematics.
 
-**Architecture:** token-meter owns numeric evidence; llm-seam owns a small adjacent ModelBudgetBinding contract; provider/provider-runtime resolve it once. core-agent and its host/child/summary composition carry the data into the reviewed R1C capture. Existing scalar public APIs remain facades and current budget owners remain until the atomic R2E cutover.
+**Architecture:** token-meter owns numeric evidence; llm-seam owns a small adjacent ModelBudgetBinding contract; provider/provider-runtime resolve it once. core-agent and its host/child/summary composition carry the data into the reviewed R1C capture. Existing scalar binding fields retain their behavior and current budget owners remain until the atomic R2E cutover.
+
+**Implementation ruling, 2026-10-16:** The initial plan retained `resolveEffectiveModelContext` as a public scalar facade. After all shipping consumers migrated, the exact reachability audit found that facade was the only new unused export (409 versus408); `@i-harness/provider` is a private workspace package. Retire that unused function/public export in this atomic unit rather than retain a dead API, fabricate a consumer, or exempt/reseed the audit. The one evidence algorithm and actual runtime scalar aliases retain precedence, values and absence semantics. This explicitly supersedes the initial facade-retention requirement; it does not authorize changing request/default/admission behavior.
 
 **Tech Stack:** Existing TypeScript/pnpm/Vitest workspace; no new package or third-party dependency.
 
@@ -23,7 +25,7 @@
 ## File map
 
 - Create `packages/token-meter/src/binding-evidence.ts`, export only real public contract consumers in its index. Create `packages/llm-seam/src/binding.ts` and public exports for ModelBudgetBinding/route constructor actually consumed by runtime.
-- Modify `packages/provider/src/catalog/context.ts` to keep one resolution algorithm; `catalog/resolve.ts` supplies existing provenance; public index exports new resolver. Add a direct token-meter workspace dependency if its types are imported. Do not change model-catalog.json numbers/names.
+- Modify `packages/provider/src/catalog/context.ts` to keep one resolution algorithm; `catalog/resolve.ts` supplies existing provenance; public index exports the evidence resolver and retires the unused scalar resolver under the ruling above. Add a direct token-meter workspace dependency if its types are imported. Do not change model-catalog.json numbers/names.
 - Modify provider-runtime `selection/{metadata,resolve}.ts` and binding types. Keep metadata-only description free of auth/client/network work; runtime resolves budget evidence from the same described selection rather than independently recomputing it.
 - Modify reviewed R1C context-engine surface type/capture, core-agent `agent/{types,context,request-snapshot,budget}.ts` at their actual reviewed responsibilities, and host `session-executor/{assembly,service}.ts` or their extracted binding leaves. Add only necessary field forwarding, not the whole S20 split in this unit.
 - Modify `apps/cli/src/run.ts` binding handoff and subagent `child/model-binding.ts`, `child/{types,assembly}.ts`, `child.ts`, `followup/resident.ts`, `index.ts`, `tools/spawn.ts`. Actual team/child-review carriers include `agent-team/src/scheduler.ts`, `scheduler/teammate-lifecycle.ts` and `guard-approval/src/guardian/reviewer.ts`. Declared-model arms must not fall back to parent evidence. Isolated guardian and title direct-stream admission remain explicitly inventoried for R2E; do not add unused dead data fields there merely to claim coverage.
@@ -49,12 +51,11 @@ const evidence = resolveEffectiveModelContextEvidence({ profile, modelId: 'gemin
 expect(evidence?.limits.contextTokens).toMatchObject({ value: 700_000, origin: 'configured-model-row' });
 expect(evidence?.limits.outputTokens).toMatchObject({ value: 65_536, origin: 'catalog' });
 expect(evidence?.generation).toMatchObject({ origin: 'configured', outputCap: { value: 8_000 } });
-expect(resolveEffectiveModelContext({ profile, modelId: 'gemini-2.5-pro',
-  userModel: { contextWindow: 700_000, maxTokens: 8_000 } }))
-  .toEqual({ contextWindow: 700_000, maxContextWindow: undefined, maxOutputTokens: 8_000 });
+expect(evidence).toMatchObject({ contextWindow: 700_000,
+  maxContextWindow: undefined, maxOutputTokens: 8_000 });
 ```
 
-The65,536 expectation is the pinned IH catalog fixture, not a live provider claim. Test all precedence tiers, catalog alias/no-match, max-output-only resolution, configured output above the catalog preserving intent, unchanged old scalar API shape, and actual replaceSubscriptionModels→resolve using configured-model-row rather than false human attribution. Record the missing API/field RED.
+The65,536 expectation is the pinned IH catalog fixture, not a live provider claim. Test all precedence tiers, catalog alias/no-match, max-output-only resolution, configured output above the catalog preserving intent, unchanged shipped scalar values/absence, and actual replaceSubscriptionModels→resolve using configured-model-row rather than false human attribution. Record the missing API/field RED. The initial scalar-facade compatibility assertion is retired with that unused internal API; retain the equivalent value/absence controls at the real producer and runtime aliases.
 
 - [ ] **Step 2: Add the concrete minimal public contracts and one resolution algorithm.**
 
@@ -110,15 +111,13 @@ export interface ResolvedModelContextEvidence extends EffectiveModelContext {
 }
 export function resolveEffectiveModelContextEvidence(input: EffectiveContextInput):
   ResolvedModelContextEvidence | undefined;
-export function resolveEffectiveModelContext(input: EffectiveContextInput):
-  EffectiveModelContext | undefined;
 export function describeRouteBudgetCapability(input: {
   protocol: Exclude<RouteKind, 'openai-responses-subscription'>;
   codexSubscription?: boolean;
 }): RouteBudgetCapability;
 ```
 
-The old resolver is a scalar-only facade over the same computation, preserving exact existing keys/absence and undefined return semantics. Window chain: configured model row > profile model override > profile > declared catalog family. Preserve maxContextWindow separately as contextCeilingTokens with profile-model/profile provenance; it is not an independently documented input-only limit and cannot be silently dropped from the new descriptor. A ceiling-only result may expose new evidence, while the old facade still returns undefined where it previously had neither window nor output cap. Add a literal ceiling-only and configured-window-above-ceiling fixture proving data preservation without new R2A enforcement. Generation chain remains configured-model-row maxTokens > catalog maxOutputTokens; configured means a stored row, not human-authenticated intent. Subscription refresh writes those rows too. The catalog arm is legacy-catalog-default, not a newly recommended preference.
+The evidence resolver is the single production computation; existing binding scalar aliases preserve values/absence without a second resolve call. Window chain: configured model row > profile model override > profile > declared catalog family. Preserve maxContextWindow separately as contextCeilingTokens with profile-model/profile provenance; it is not an independently documented input-only limit and cannot be silently dropped from the new descriptor. A ceiling-only result exposes new evidence without inventing a scalar context window or output cap. Add a literal ceiling-only and configured-window-above-ceiling fixture proving data preservation without new R2A enforcement. Generation chain remains configured-model-row maxTokens > catalog maxOutputTokens; configured means a stored row, not human-authenticated intent. Subscription refresh writes those rows too. The catalog arm is legacy-catalog-default, not a newly recommended preference.
 
 Capability table: public Responses/Chat/Gemini/Bedrock optional outputParameter; Anthropic required; subscription unsupported. Packet kind is SDK-command-estimate only for Bedrock. Mark evidence as this adapter's contract version, not a backend probe. Reject subscription:true paired with a different protocol rather than inventing another route. No count/native-compatibility feature is implied.
 
