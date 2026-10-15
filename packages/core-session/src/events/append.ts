@@ -54,8 +54,8 @@ export function append(session: Session, event: SessionEvent): void {
   const ev = { ...event, ...(imageSummaries !== undefined ? { imageSummaries } : {}), seq: session.events.length }
   validateConversationEventShape(ev, session.formatVersion)
   let cached = conversationIndexes.get(session)
-  if (!cached || cached.events !== session.events || cached.index.eventCount !== session.events.length) {
-    cached = { events: session.events, index: createConversationIndex(session.events, index => session.events[index], session.formatVersion) }
+  if (!cached || cached.formatVersion !== session.formatVersion || cached.events !== session.events || cached.index.eventCount !== session.events.length) {
+    cached = { formatVersion: session.formatVersion, events: session.events, index: createConversationIndex(session.events, index => session.events[index], session.formatVersion) }
     conversationIndexes.set(session, cached)
   }
   const staged = cached.index.stage([ev])

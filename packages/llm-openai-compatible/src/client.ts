@@ -28,13 +28,13 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         if (value !== undefined) body[field] = value
         return body
       },
-      async *execute(_actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(_actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
-        request.validateBeforeTransport?.()
+        execution.confirm(capturedConfig.executionIdentity)
         try {
           response = await (capturedConfig.fetch ?? globalThis.fetch)(`${baseUrl}/v1/chat/completions`, {
             method: "POST",

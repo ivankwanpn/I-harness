@@ -1,3 +1,4 @@
+import { type CandidateExecutionState } from "./execution.ts"
 import { sameRequestCandidate } from "./request-snapshot.ts"
 import { prepareModelRequest, type LLMRequest } from "@i-harness/llm-seam"
 import type { AgentConfig, AgentDeps } from "./types.ts"
@@ -8,7 +9,7 @@ import type { createRecovery, RecoveryAdmissionState } from "./recovery.ts"
 export function stalePreparedInput(): Error { return Object.assign(new Error("Model-visible input remained unstable during prepared admission"), { code: "CONTEXT_INPUT_STALE" }) }
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
 export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>, recovery: ReturnType<typeof createRecovery>) {
-  return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false }) {
+  return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } & CandidateExecutionState = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }) {
     while (true) {
       abort?.throwIfAborted()
       context.refreshBinding()
@@ -23,8 +24,10 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const recoveryAdmission = await recovery.admit(assessed.prepared.measurement, state, abort)
       if (recoveryAdmission === "rebuild") { state.compacted = true; continue }
       if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
-      const { prepared, snapshot } = recoveryAdmission === "authorized"
+      const finalAssessment = recoveryAdmission === "authorized"
         ? assess(true, assessed.prepared, false) : assessed
+      const { prepared, snapshot } = finalAssessment
+      if (current() && finalAssessment.disposition) context.ownedBudget.retire(finalAssessment.disposition)
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
         systemBytes: prepared.measurement.input.components.system.textUtf8Bytes,
         schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes,
@@ -72,7 +75,8 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         if (stateNow.kind === "ready" && stateNow.snapshot.recoveryRequired && !snapshot.recoveryRequired) throw new Error("prompt_too_long: provider context recovery became required before transport")
       }
       validateBeforeTransport()
-      return { request, requestRevision, prepared, validateBeforeTransport }
+      const execution = context.execution.candidate(prepared, captured, state, finalAssessment.calibrated, current, () => context.ownedBudget.retire("execution-identity-changed"))
+      return { request, requestRevision, prepared, validateBeforeTransport, captured, execution }
     }
   }
 }

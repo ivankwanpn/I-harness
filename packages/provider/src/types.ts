@@ -12,6 +12,7 @@ export interface ProviderModelContext {
 }
 
 export interface ProviderProfile {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   name: string
   /** The model-card FAMILY this route's per-model metadata comes from — a key
    * of `model-catalog.json`'s `families` (`deepseek`, `gemini`, …).
@@ -29,7 +30,7 @@ export interface ProviderProfile {
   apiKey?: string
   /** Internal account-bound route; never persisted as a bearer credential. */
   codexSubscription?: boolean
-  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string }>
+  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string; authEpoch?: string }>
   /** Task 3: credential-ref name of the route's default API key env (e.g.
    * `DEEPSEEK_API_KEY`). Surfaces as DirectoryEntry.defaultApiKeyEnv — the
    * runtime directory is the registry, so the profile is the single source. */

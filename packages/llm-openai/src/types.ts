@@ -1,11 +1,12 @@
 import type { PromptCacheConfig } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   apiKey: string
   /** Account-bound Codex subscription requests use the Codex backend. */
   codexSubscription?: boolean
   /** Resolve immediately before each request, including retries and continuations. */
-  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string }>
+  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string; authEpoch?: string }>
   baseUrl?: string
   model: string
   providerId?: string

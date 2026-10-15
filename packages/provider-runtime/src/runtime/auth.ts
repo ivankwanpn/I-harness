@@ -26,7 +26,8 @@ export function createRuntimeAuth(options: Pick<CreateProviderRuntimeOptions, "a
     async resolve(ref, context) {
       if (ref.kind !== "oauth-account-ref") return baseAuth.resolve(ref, context)
       if (!options.codex) return undefined
-      return { kind: "bearer", accessToken: (await options.codex.token(ref.accountId, context.signal)).accessToken }
+      const token = await options.codex.token(ref.accountId, context.signal)
+      return { kind: "bearer", accessToken: token.accessToken, ...(token.authEpoch ? { authEpoch: token.authEpoch } : {}) }
     },
   }
   return auth

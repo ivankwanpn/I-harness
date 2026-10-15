@@ -95,6 +95,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  ensureWritableFormat?(sessionId: string): Promise<{ formatVersion: number }>
   /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
   deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>
   deletionReceipt?(sessionId: string): Promise<{ visibility: { origin?: string; parentSession?: string }; manifest: SessionArtifactManifest } | undefined>

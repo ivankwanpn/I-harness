@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { validateConversationHistory, type SessionEvent, type InputProvenance } from "@i-harness/core-session"
+import { isContextEventType, validateConversationHistory, type SessionEvent, type InputProvenance } from "@i-harness/core-session"
 
 export class SessionForkUnavailableError extends Error {
   readonly code = "fork-unavailable" as const
@@ -85,9 +85,9 @@ function remapSeedCoordinates(event: SessionEvent, index: number, renumbered: Re
 }
 
 /** Batch semantics must precede coordinate remapping. An isolated event cannot recover a sliced fence. */
-export function remapConversationSeed(input: { source: readonly SessionEvent[]; retained: readonly SessionEvent[] }): SessionEvent[] {
+export function remapConversationSeed(input: { source: readonly SessionEvent[]; retained: readonly SessionEvent[]; sourceFormat: number }): SessionEvent[] {
   const { source, retained } = input
-  validateConversationHistory(source, 3)
+  validateConversationHistory(source, input.sourceFormat)
   const retainedSeqs = new Set(retained.map(event => event.seq))
   const calls = new Map<string, number | null>()
   for (const event of source) if (event.type === "tool/call" && event.seq !== undefined) calls.set(event.callId, calls.has(event.callId) ? null : event.seq)
@@ -106,11 +106,12 @@ export function remapConversationSeed(input: { source: readonly SessionEvent[]; 
   const seed: SessionEvent[] = []
   let fenced = false
   for (const event of retained) {
-    if (event.type === "conversation/semantics") continue
+    if (event.type === "conversation/semantics" || isContextEventType(event.type)) continue
     if (!fenced && originalFence >= 0 && (sourcePositions.get(event.seq) ?? -1) > originalFence) {
       seed.push({ ...source[originalFence]! }); fenced = true
     }
-    seed.push(event)
+    if (event.type === "model/exchange-accepted" && event.version === 2) { const { request: _request, ...structural } = event; seed.push({ ...structural, version: 1 }) }
+    else seed.push(event)
   }
   const materialized = materializeMissingImageAdmissions(source, seed)
   const renumbered = new Map<number, number>()

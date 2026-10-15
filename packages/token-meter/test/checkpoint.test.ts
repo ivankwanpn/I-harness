@@ -1,67 +1,54 @@
-import { expect, it } from "vitest"
-import { ProjectionCounter } from "../src/index.ts"
-import { createProjectionCalibration, prefixChain, projectedTokens } from "../src/checkpoint.ts"
-import type { ContextBindingMetadata } from "@i-harness/core-session"
-import { createOpenAIClient } from "../../llm-openai/src/index.ts"
-const metadata: ContextBindingMetadata = { version: 1, modelId: "m", protocol: "test", identityCoverage: "complete", bindingConfigFingerprint: "a".repeat(64) }
-function input(tail = false, prefix = "prefix", shape = "shape") {
-  const counter = new ProjectionCounter()
-  counter.text("system", "system")
-  counter.unit(prefix, "user", () => counter.text("visibleText", prefix))
-  if (tail) counter.unit("tail", "assistant", () => { counter.text("replayedReasoning", "思".repeat(40000)); counter.text("visibleText", "answer") })
-  return counter.finish({ protocol: "test", modelId: "m" }, { prefix, tail }, shape)
+import { semanticPrefix } from '../src/accepted-calibration.ts'
+import { expect, it } from 'vitest'
+import { createAcceptedCalibration, ProjectionCounter } from '../src/index.ts'
+import type { AcceptedRequestAttributionV1, ExchangeAcceptedEventV2 } from '@i-harness/core-session'
+import { createOpenAIClient } from '../../llm-openai/src/index.ts'
+const d = 'a'.repeat(64)
+const compatibility = { ownerSessionId: 'owner', observationLifetimeId: 'live', executionEpochId: 'E', branchId: d, contextEpoch: d, projectionRevision: 0 }
+function record(source: ReturnType<typeof createAcceptedCalibration>, input: ReturnType<ProjectionCounter['finish']>, usage: Parameters<typeof source.recordAccepted>[3]) {
+  const request: AcceptedRequestAttributionV1 = { version: 1, ownerSessionId: 'owner', observationLifetimeId: 'live', candidateId: 'A', sendId: 'send1', semanticId: input.semanticIdentity!.semanticId, payloadId: d, payloadKind: 'http-json-body', executionEpochId: 'E', coldCompatible: false, snapshot: { semanticRevision: d, protectionRevision: d, branchId: d, contextEpoch: d, surfaceRevision: d }, projectionRevision: 0 }
+  const accepted: ExchangeAcceptedEventV2 = { type: 'model/exchange-accepted', version: 2, seq: 3, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt', stepStartSeq: 1, assistantSeq: 2, callSeqs: [], request }
+  const result = source.recordAccepted(input, request, accepted, usage)
+  if (result.kind !== 'sample') throw Error(result.reason)
+  return result.checkpoint
 }
-it("normalizes original incident scalars without claiming original request parity and prices a synthetic replay suffix once", () => {
-  const first = input(), next = input(true), source = createProjectionCalibration("synthetic-owner")
-  const checkpoint = source.record(first, metadata, { inputTokens: 162, cacheReadTokens: 760448, cacheCreationTokens: 0, inputTokenSemantics: "excludes-cache", outputTokens: 587 }, 0)!
-  expect(checkpoint.reportedInputTokens).toBe(760610)
-  expect(checkpoint.reportedOutputTokens).toBe(587)
-  const suffix = projectedTokens(next) - projectedTokens(first)
-  expect(suffix).toBeGreaterThan(0)
-  expect(createProjectionCalibration("synthetic-owner", checkpoint).estimate(next, metadata, 0)).toEqual({ tokens: 760610 + suffix, calibrated: true })
+function input(tail = false, prefix = 'prefix', shape = 'shape') {
+  const c = new ProjectionCounter('projected-pricing-v2'); c.text('system', 'system'); c.unit(prefix, 'user', () => c.text('visibleText', prefix))
+  if (tail) c.unit('tail', 'assistant', () => { c.text('replayedReasoning', '思'.repeat(40000)); c.text('visibleText', 'answer') })
+  return c.finish({ protocol: 'test', modelId: 'm' }, { prefix, tail }, shape)
+}
+const suffix = (next: ReturnType<typeof input>, count: number) => next.units.slice(count).reduce((n, u) => n + u.heuristicTokens, 0)
+it('keeps incident arithmetic as a synthetic live observation without cold continuity', () => {
+  const first = input(), next = input(true), source = createAcceptedCalibration('owner', 'live')
+  const checkpoint = record(source, first, { inputTokens: 162, cacheReadTokens: 760448, cacheCreationTokens: 0, inputTokenSemantics: 'excludes-cache', outputTokens: 587 })
+  expect(checkpoint.reportedInputTokens).toBe(760610); expect(checkpoint.reportedOutputTokens).toBe(587)
+  expect(source.probe(next, compatibility)).toEqual({ tokens: 760610 + suffix(next, first.units.length), calibrated: true })
+  expect(JSON.parse(JSON.stringify(checkpoint)).request.coldCompatible).toBe(false)
+  expect(createAcceptedCalibration('owner', 'cold').probe(next, { ...compatibility, observationLifetimeId: 'cold' }).calibrated).toBe(false)
 })
-it.each(["includes-cache", "excludes-cache"] as const)("normalizes %s usage and persists one scalar prefix chain, restoring its newly projected signed tail", semantics => {
-  const calibration = createProjectionCalibration("s"), first = input()
-  const checkpoint = calibration.record(first, metadata, { inputTokens: semantics === "includes-cache" ? 1000 : 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: semantics, outputTokens: 10 }, 0)!
-  expect(checkpoint.reportedInputTokens).toBe(1000)
-  expect(checkpoint.inputPrefixFingerprint).toBe(prefixChain(first))
+it.each(['includes-cache','excludes-cache'] as const)('normalizes %s and persists scalar prefix facts', semantics => {
+  const source = createAcceptedCalibration('owner', 'live'), first = input(), next = input(true)
+  const checkpoint = record(source, first, { inputTokens: semantics === 'includes-cache' ? 1000 : 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: semantics, outputTokens: 10 })
+  expect(checkpoint.reportedInputTokens).toBe(1000); expect(checkpoint.prefixId).toBe(semanticPrefix(first))
   expect(JSON.stringify(checkpoint)).not.toMatch(/prefix"|units|思/)
-  const next = input(true), restored = createProjectionCalibration("s", JSON.parse(JSON.stringify(checkpoint)))
-  expect(restored.estimate(next, metadata, 0)).toEqual({ tokens: 1000 + projectedTokens(next) - projectedTokens(first), calibrated: true })
+  expect(source.probe(next, compatibility)).toEqual({ tokens: 1000 + suffix(next, first.units.length), calibrated: true })
 })
-it("invalidates restored calibration for owner, endpoint/config, partial identity, shape, rewrite and prefix edits", () => {
-  const source = createProjectionCalibration("s"), first = input()
-  const checkpoint = source.record(first, metadata, { inputTokens: 1000, inputTokenSemantics: "includes-cache" }, 0)!
-  for (const [owner, next, binding, revision] of [
-    ["child", input(true), metadata, 0], ["s", input(true), { ...metadata, bindingConfigFingerprint: "b".repeat(64) }, 0],
-    ["s", input(true), { ...metadata, identityCoverage: "partial" }, 0], ["s", input(true, "prefix", "changed"), metadata, 0],
-    ["s", input(true), metadata, 1], ["s", input(true, "changed"), metadata, 0],
-  ] as const) expect(createProjectionCalibration(owner, checkpoint).estimate(next, binding, revision).calibrated).toBe(false)
+it('rejects owner, lifetime, execution, branch, context, shape and prefix incompatibilities without probe mutation', () => {
+  const source = createAcceptedCalibration('owner', 'live'), first = input()
+  record(source, first, { inputTokens: 1000, inputTokenSemantics: 'includes-cache' })
+  for (const key of ['ownerSessionId','observationLifetimeId','executionEpochId','branchId','contextEpoch'] as const) expect(source.probe(first, { ...compatibility, [key]: 'changed' }).calibrated).toBe(false)
+  for (const next of [input(true,'changed'), input(true,'prefix','changed')]) expect(source.probe(next, compatibility).calibrated).toBe(false)
+  expect(source.probe(first, { ...compatibility, projectionRevision: 1 }).calibrated).toBe(false)
+  expect(source.probe(first, compatibility).calibrated).toBe(true)
 })
-it("prices the actual assistant suffix once and retains total reported output as billing evidence", () => {
-  const source = createProjectionCalibration("s"), first = input(), counter = new ProjectionCounter()
-  counter.text("system", "system"); counter.unit("prefix", "user", () => counter.text("visibleText", "prefix")); counter.unit("output", "assistant", () => counter.text("visibleText", "short"))
-  const next = counter.finish({ protocol: "test", modelId: "m" }, "next", "shape")
-  source.record(first, metadata, { inputTokens: 100, inputTokenSemantics: "includes-cache", outputTokens: 200 }, 0)
-  expect(source.estimate(next, metadata, 0)).toEqual({ tokens: 100 + projectedTokens(next) - projectedTokens(first), calibrated: true })
-})
-
-it.each([true, false])("actual Responses split generation prices replayed input once without charging omitted hidden output (native=%s)", async replay => {
-  const client = createOpenAIClient({ apiKey: "controlled", model: "m" })
-  const initial: Parameters<NonNullable<typeof client.prepare>>[0] = { systemPrompt: "p", tools: [], messages: [{ role: "user", content: "first" }] }
-  const first = (await client.prepare!(initial)).measurement.input
-  const next = (await client.prepare!({ ...initial, messages: [...initial.messages,
-    { role: "assistant", content: "answer", toolCalls: [{ id: "c", name: "probe", args: { x: 1 } }], providerContinuation: { kind: "openai-responses", model: replay ? "m" : "foreign", reasoningItems: [{ type: "reasoning", summary: [{ type: "summary_text", text: "plan" }], encrypted_content: "cipher" }], outputOrder: [{ kind: "reasoning", index: 0 }, { kind: "tool", index: 0 }, { kind: "text", text: "answer" }] } },
-    { role: "tool", toolCallId: "c", content: "result" }, { role: "user", content: "local tail" },
-  ] })).measurement.input
-  expect(next.units.filter(unit => unit.role === "assistant")).toHaveLength(replay ? 3 : 2)
+it.each([true,false])('prices actual Responses replay and omits hidden output9000 (native=%s)', async replay => {
+  const client = createOpenAIClient({ apiKey: 'controlled', model: 'm' })
+  const request = { systemPrompt: 'p', tools: [], messages: [{ role: 'user' as const, content: 'first' }] }
+  const first = (await client.prepare!(request)).measurement.input
+  const next = (await client.prepare!({ ...request, messages: [...request.messages, { role: 'assistant', content: 'answer', toolCalls: [{ id: 'c', name: 'probe', args: { x: 1 } }], providerContinuation: { kind: 'openai-responses', model: replay ? 'm' : 'foreign', reasoningItems: [{ type: 'reasoning', summary: [{ type: 'summary_text', text: 'plan' }], encrypted_content: 'cipher' }], outputOrder: [{ kind: 'reasoning', index: 0 }, { kind: 'tool', index: 0 }, { kind: 'text', text: 'answer' }] } }, { role: 'tool', toolCallId: 'c', content: 'result' }, { role: 'user', content: 'local tail' }] })).measurement.input
+  expect(next.units.filter(u => u.role === 'assistant')).toHaveLength(replay ? 3 : 2)
   expect(next.components.opaqueContinuation.binaryBytes).toBe(replay ? 6 : 0)
-  expect(next.components.replayedReasoning.heuristicTokens > 0).toBe(replay)
-  const responsesMetadata = { ...metadata, protocol: "openai-responses" }
-  const source = createProjectionCalibration("s")
-  const checkpoint = source.record(first, responsesMetadata, { inputTokens: 100, inputTokenSemantics: "includes-cache", outputTokens: 10000 }, 0)!
-  expect(checkpoint.reportedOutputTokens).toBe(10000)
-  const expected = 100 + projectedTokens(next) - projectedTokens(first)
-  expect(source.estimate(next, responsesMetadata, 0)).toEqual({ tokens: expected, calibrated: true })
-  expect(createProjectionCalibration("s", checkpoint).estimate(next, responsesMetadata, 0)).toEqual({ tokens: expected, calibrated: true })
+  const source = createAcceptedCalibration('owner', 'live'), checkpoint = record(source, first, { inputTokens: 100, inputTokenSemantics: 'includes-cache', outputTokens: 9000 })
+  expect(checkpoint.reportedOutputTokens).toBe(9000)
+  expect(source.probe(next, compatibility)).toEqual({ tokens: 100 + suffix(next, first.units.length), calibrated: true })
 })

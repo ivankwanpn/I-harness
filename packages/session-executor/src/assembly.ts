@@ -1,3 +1,4 @@
+import { ownedContextReadiness } from "@i-harness/session-persistence"
 // packages/session-executor/src/assembly.ts — R-C0 (engine-owned posture).
 // ONE assembly implementation. `runHeadless` (one-shot) and the web
 // `createSessionService` (multi-turn) both build through this. The branch's
@@ -542,6 +543,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // literal below).
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   const model: ModelClient = {
+    get executionIdentity() { return currentModel.executionIdentity },
     stream: (request) => currentModel.stream(request),
     prepare: (request) => {
       const selected = currentModel
@@ -1242,7 +1244,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       get contextWindow() { return opts.contextWindow },
       get budgetBinding() { return opts.budgetBinding },
       get contextMetadata() { return opts.contextMetadata },
-      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
       get reasoningEffort() { return currentReasoningEffort },
       get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
@@ -1378,7 +1380,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         get contextWindow() { return opts.contextWindow },
         get budgetBinding() { return opts.budgetBinding },
         get contextMetadata() { return opts.contextMetadata },
-        inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+        inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
         get reasoningEffort() { return currentReasoningEffort },
         get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
@@ -1430,7 +1432,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           get contextWindow() { return opts.contextWindow },
           get budgetBinding() { return opts.budgetBinding },
           get contextMetadata() { return opts.contextMetadata },
-          inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+          inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
           get reasoningEffort() { return currentReasoningEffort },
           get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
@@ -1539,6 +1541,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
     const agent = createAgent(ctx, {
       modelBindingIdentity: () => currentModel,
+      ...(opts.coordinator && opts.sessionId ? { ensureWritableContext: ownedContextReadiness(opts.coordinator, opts.sessionId, session) } : {}),
       budgetBinding: () => opts.budgetBinding,
       contextMetadata: () => opts.contextMetadata,
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),

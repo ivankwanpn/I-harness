@@ -1,3 +1,4 @@
+import { createExecutionOwner } from "./execution.ts"
 import { createCompactionEngine, resolveCompactSpec, type CompactionConfig } from "@i-harness/compaction"
 import { deriveProjectionRewrite, type ContextBindingMetadata } from "@i-harness/core-session"
 import { mapModelRequest } from "@i-harness/llm-seam"
@@ -31,6 +32,7 @@ function validateBudget(budget: AgentBudgetConfig | undefined): void {
 }
 
 export function createAgentContext(deps: AgentDeps & AgentConfig, requestSessionId: string) {
+  const execution = createExecutionOwner()
   validateBudget(deps.budget)
   const projectionRevision = (): number => deriveProjectionRewrite(deps.session).markers
     + deps.session.events.filter(event => event.type === "compaction/prune").length
@@ -49,7 +51,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
     tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), budgetBinding: budgetBinding(), rewrite: projectionRevision() })
   const captureCandidate = () => {
-    const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.() }
+    const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.(), executionIdentity: inherited?.executionIdentity ?? deps.executionIdentity?.() ?? deps.model.executionIdentity }
     const binding = metadata()
     return captureRequestCandidate(deps.session, requestSessionId, selected, {
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
@@ -59,7 +61,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
       binding, budgetBinding: budgetBinding(),
     }, projectionRevision())
   }
-  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate)
+  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.expected)
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
@@ -128,7 +130,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   }
 
   return {
-    contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint, captureCandidate,
+    execution, contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint, captureCandidate,
     readBudget: () => ownedBudget.read(bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step"),
     get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? deps.compact?.contextWindow },
     get reasoningEffort() { return reasoningEffort() },

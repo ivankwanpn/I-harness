@@ -183,12 +183,12 @@ describe("rewind/point shadow projection", () => {
     expect(deriveMessages(s2)).toEqual([])
   })
 
-  it("round-trips through JSONL with the payload intact and uses current format version 3", () => {
+  it("round-trips through JSONL with the payload intact and uses current format version 4", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "pre-rewind" })
     append(s, { type: "rewind/point", version: 1, targetTurn: 3, anchorSeq: 0, mode: "all", fileOps: [{ path: "a/b.txt", op: "delete" }, { path: "c.ts", op: "restore" }] })
     append(s, { type: "user/message", text: "post-rewind" })
-    expect(s.formatVersion).toBe(3) // additive event type: no format bump
+    expect(s.formatVersion).toBe(4) // additive event type: no format bump
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events[1]).toMatchObject({
       type: "rewind/point",

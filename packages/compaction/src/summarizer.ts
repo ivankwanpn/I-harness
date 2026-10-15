@@ -1,3 +1,4 @@
+import { summaryPieceCollector } from "./summary-observation.ts"
 import { prepareSummary, type SummaryLimits } from "./prepared-summary.ts"
 import { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
 export { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
@@ -229,10 +230,13 @@ export async function summarizeWithModel(
       check()
       attempts++; tracker.count++
       let out = "", ended = false, refused = false, truncated = false
+      let endFingerprint: string | undefined
       const usage: LLMUsage = {}
+      const collector = summaryPieceCollector(candidate)
       try {
-        for await (const event of candidate.stream({ signal: limits.signal, validateBeforeTransport: check })) {
+        for await (const event of candidate.stream({ signal: limits.signal, validateBeforeTransport: check, confirmExecution: confirmation => collector.confirm(confirmation) })) {
           limits.signal?.throwIfAborted()
+          if (ended && ["text/chunk", "reasoning", "tool_call"].includes(event.type)) throw new Error("Summary produced content after completion")
           if (event.type === "text/chunk") out += event.text
           else if (event.type === "error") throw event.error
           else if (event.type === "usage") {
@@ -242,7 +246,11 @@ export async function summarizeWithModel(
             }
             if (event.usage.inputTokenSemantics === "includes-cache" || event.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = event.usage.inputTokenSemantics
           }
-          else if (event.type === "end") { ended = true; refused = event.refused === true; truncated = event.truncated === true; break }
+          else if (event.type === "end") {
+            const fingerprint = JSON.stringify(event)
+            if (ended && endFingerprint !== fingerprint) throw new Error("Conflicting summary completion records")
+            endFingerprint = fingerprint; ended = true; refused = event.refused === true; truncated = event.truncated === true
+          }
         }
       } catch (error) {
         limits.signal?.throwIfAborted()
@@ -256,6 +264,7 @@ export async function summarizeWithModel(
         accepted = true
         break
       }
+      finally { collector.close() }
       if (Object.keys(usage).length) limits.onUsage?.(usage)
       check()
       if (refused) throw new SummaryBlockedError("refused")
@@ -266,6 +275,8 @@ export async function summarizeWithModel(
       lastLength = trimmed.length
       if (trimmed.length < minSummaryChars || trimmed.length > maxTokens * 4) continue
       // No lossy slice. Every accepted piece is a complete retained checkpoint.
+      const observation = collector.accepted()
+      if (observation) limits.onPieceAccepted?.(observation)
       running = trimmed; pending.shift(); accepted = true; break
     }
     if (!accepted) throw new SummaryBlockedError("retention-output", { chars: lastLength, floor: minSummaryChars, limit: maxTokens * 4 })

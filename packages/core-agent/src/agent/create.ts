@@ -1,3 +1,4 @@
+import { ensureWritableContext } from "./context-readiness.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { randomUUID } from "node:crypto"
 import type { Agent, AgentConfig, AgentDeps } from "./types.ts"
@@ -11,7 +12,6 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   async function track<T>(operation: () => Promise<T>): Promise<T> {
     activeOperations++
     try { return await operation() }
-    catch (error) { context.contextMeter.invalidate(); throw error }
     finally { activeOperations-- }
   }
   // Desktop turns have no arbitrary step ceiling. Explicit callers may still
@@ -32,6 +32,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     run: (task, signal, images, inputId, options) => track(() => runTurn(task, signal, images, inputId, options, "agent.run")),
     followup: (message, signal, options) => track(() => runTurn(message, signal, undefined, undefined, options, "agent.followup")),
     compact: (instructions, options) => track(async () => {
+      await ensureWritableContext(deps)
       context.refreshBinding()
       return context.compactor ? context.compactor.compact(deps.session, instructions, options) : { compacted: false, shadowedSeqs: [] }
     }),

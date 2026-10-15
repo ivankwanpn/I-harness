@@ -1,3 +1,4 @@
+import { fixtureExecutionIdentity, confirmFixtureExecution } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, fromJSONL, toJSONL } from "@i-harness/core-session"
@@ -11,7 +12,7 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let prompt = "original", identity: object = {}, preparations = 0, transports = 0, hooks = 0, claims = 0
   ctx.on("agent/pre-step", () => { hooks++ })
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
   const client = (): ModelClient => ({ async *stream() { throw new Error("unprepared") }, async prepare(request) {
     const index = ++preparations, candidate = await actual.prepare!(request)
     return wrapPreparedRequest(candidate, (_stream, control) => (async function*() {
@@ -58,7 +59,7 @@ it.each(["prepare", "execution"] as const)("refreshes inherited limits after a h
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     preparations++
     const index = preparations
-    const actual = createAnthropicClient({ apiKey: "controlled", model: modelId })
+    const actual = createAnthropicClient({ apiKey: "controlled", executionIdentity: fixtureExecutionIdentity, model: modelId })
     const candidate = await actual.prepare!(request)
     if (index === 1 && boundary === "prepare") { entered.resolve(); await release.promise }
     return wrapPreparedRequest(candidate, (_stream, control) => (async function*() {
@@ -68,7 +69,7 @@ it.each(["prepare", "execution"] as const)("refreshes inherited limits after a h
       yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
     })())
   } }
-  const agent = createAgent(ctx, { session, sessionId: "child", model, tools, systemPrompt: "child", bindingForStep: () => ({ identity, contextWindow: window, maxOutputTokens: modelId === "a" ? 2048 : 1024,
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: "child", model, tools, systemPrompt: "child", bindingForStep: () => ({ identity, contextWindow: window, maxOutputTokens: modelId === "a" ? 2048 : 1024,
     contextMetadata: { version: 1, providerId: "route", modelId, protocol: "anthropic-messages", contextWindow: window, identityCoverage: "complete", bindingConfigFingerprint: (modelId === "a" ? "a" : "b").repeat(64) } }) })
   const run = agent.run("first")
   await entered.promise
@@ -89,7 +90,7 @@ it("rebuilds descriptor evidence changed during held preparation and keeps local
     limits: { contextTokens: { value: 200000, origin: "profile" as const, sourceId: "profile-v1" } },
     generation: { origin: "configured" as const, outputCap: { value: 8000, origin: "configured-model-row" as const, sourceId: "settings-model-row-v1" } },
     capability: { version: 1 as const, route: "anthropic-messages" as const, evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required" as const, packetKind: "http-json-body" as const } }
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     const index = ++preparations, candidate = await actual.prepare!(request)
     if (index === 1) { entered.resolve(); await release.promise }
@@ -98,7 +99,7 @@ it("rebuilds descriptor evidence changed during held preparation and keeps local
       yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
     })())
   } }
-  const agent = createAgent(ctx, { session, tools, model, budgetBinding, systemPrompt: "p", budget: { contextWindow: 200000 }, maxOutputTokens: 8000,
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, tools, model, budgetBinding, systemPrompt: "p", budget: { contextWindow: 200000 }, maxOutputTokens: 8000,
     stepInputs: { claimAtStepBoundary() { claims++ } } })
   agent.updateContext!({ budget: { contextWindow: 200000 }, maxOutputTokens: 1024 })
   const pending = agent.run("continue")
@@ -117,10 +118,10 @@ it("direct updateContext replaces initial static binding metadata and explicitly
   const metadata = (modelId: string, contextWindow: number) => ({ version: 1 as const, providerId: "logical", modelId, protocol: "anthropic-messages", contextWindow, identityCoverage: "complete" as const, bindingConfigFingerprint: modelId.repeat(64) })
   let modelId = "a"
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
-    const actual = await createAnthropicClient({ model: modelId, apiKey: "controlled", providerId: "wire" }).prepare!(request)
+    const actual = await createAnthropicClient({ model: modelId, apiKey: "controlled", executionIdentity: fixtureExecutionIdentity, providerId: "wire" }).prepare!(request)
     return wrapPreparedRequest(actual, (_stream, control) => (async function*() { control?.validateBeforeTransport?.(); yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const; yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
   } }
-  const agent = createAgent(ctx, { session, sessionId: "direct", model, tools, systemPrompt: "p", contextMetadata: metadata("a", 200000), maxOutputTokens: 2048 })
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: "direct", model, tools, systemPrompt: "p", contextMetadata: metadata("a", 200000), maxOutputTokens: 2048 })
   await agent.run("first")
   modelId = "b"
   agent.updateContext!({ contextMetadata: metadata("b", 50000), budget: { contextWindow: 50000 }, maxOutputTokens: 1024 })
@@ -136,13 +137,14 @@ it("direct updateContext replaces initial static binding metadata and explicitly
 
 it("counts a 40K signed thinking tail on actual prepared Anthropic input in the next owned admission", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", options: { thinking: { type: "enabled", budget_tokens: 1024 } } })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity, options: { thinking: { type: "enabled", budget_tokens: 1024 } } })
   tools.register({ name: "probe", description: "probe", inputSchema: { type: "object" }, isReadOnly: true, async execute() { return "result" } })
   const prepared: PreparedModelRequest[] = []
   let calls = 0
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     const candidate = await actual.prepare!(request); prepared.push(candidate)
-    return wrapPreparedRequest(candidate, () => (async function*() {
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...candidate, measurement }, control)
       calls++
       yield { type: "usage", usage: { inputTokens: 20, inputTokenSemantics: "includes-cache", outputTokens: 10 } } as const
       if (calls === 1) {
@@ -151,7 +153,7 @@ it("counts a 40K signed thinking tail on actual prepared Anthropic input in the 
       } else { yield { type: "text/chunk", text: "accepted" } as const; yield { type: "end" } as const }
     })())
   } }
-  const agent = createAgent(ctx, { session, sessionId: "owned", model, tools, systemPrompt: "p", budget: { contextWindow: 200000 }, maxOutputTokens: 2048 })
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: "owned", model, tools, systemPrompt: "p", budget: { contextWindow: 200000 }, maxOutputTokens: 2048 })
   await agent.run("first")
   expect(calls).toBe(2)
   expect(prepared[1]!.measurement.input.components.replayedReasoning.heuristicTokens).toBeGreaterThan(40000)
@@ -172,7 +174,7 @@ it("flush refusal checkpoints prepared admission before zero model transport", a
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let calls = 0
   const model: ModelClient = { async *stream() { calls++; yield { type: "end" } } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000 }, flush: async () => { throw new Error("disk refused") } })
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000 }, flush: async () => { throw new Error("disk refused") } })
   await expect(agent.run("first")).rejects.toThrow(/disk refused/)
   expect(calls).toBe(0)
 })
@@ -181,12 +183,12 @@ it("a refused budget checkpoint prevents compaction summary transport as well as
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   for (let i = 0; i < 3; i++) { append(session, { type: "turn/start" }); append(session, { type: "user/message", text: "x".repeat(1000) }); append(session, { type: "assistant/message", text: "old" }); append(session, { type: "turn/end" }) }
   let transports = 0
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
   const model: ModelClient = { async *stream(request) { yield* (await model.prepare!(request)).stream() }, async prepare(request) {
     const candidate = await actual.prepare!(request)
-    return wrapPreparedRequest(candidate, (_stream, control) => (async function*() { control?.validateBeforeTransport?.(); transports++; yield { type: "text/chunk", text: "Summary retains the task and context." } as const; yield { type: "end" } as const })())
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() { confirmFixtureExecution({ ...candidate, measurement }, control); transports++; yield { type: "text/chunk", text: "Summary retains the task and context." } as const; yield { type: "end" } as const })())
   } }
-  const agent = createAgent(ctx, { session, model, tools, systemPrompt: "p", budget: { contextWindow: 1000 }, maxOutputTokens: 2048,
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, model, tools, systemPrompt: "p", budget: { contextWindow: 1000 }, maxOutputTokens: 2048,
     compact: { contextWindow: 1000, retainTokens: 0, minSummaryChars: 1, prune: false }, flush: async () => { throw new Error("budget checkpoint refused") } })
   await expect(agent.run("first")).rejects.toThrow(/budget checkpoint refused/)
   expect(transports).toBe(0)
@@ -196,14 +198,15 @@ it("model-visible changes during preparation rebuild locally without repeating h
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let prepared = 0, claims = 0, hooks = 0
   ctx.on("agent/pre-step", () => { hooks++; })
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     prepared++
     const candidate = await actual.prepare!(request)
     if (prepared === 1) append(session, { type: "user/message", text: "changed during await" })
-    return wrapPreparedRequest(candidate, () => (async function*() { yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...candidate, measurement }, control); yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
   } }
-  await createAgent(ctx, { session, model, tools, systemPrompt: "p", budget: { contextWindow: 200000 }, stepInputs: { claimAtStepBoundary() { claims++ } } }).run("first")
+  await createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, model, tools, systemPrompt: "p", budget: { contextWindow: 200000 }, stepInputs: { claimAtStepBoundary() { claims++ } } }).run("first")
   expect(prepared).toBe(2); expect(claims).toBe(1); expect(hooks).toBe(1)
 })
 
@@ -211,33 +214,33 @@ it.each([false, true])("control-only preparation events are stable; persistent i
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let preparations = 0, transports = 0, hooks = 0, claims = 0
   ctx.on("agent/pre-step", () => { hooks++ })
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity })
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     const candidate = await actual.prepare!(request); preparations++
     if (changes) append(session, { type: "user/message", text: `change ${preparations}` })
     else append(session, { type: "operator/run-end", version: 1, runId: "controlled", exitCode: 0, durationMs: 0, phase: "run" })
-    return wrapPreparedRequest(candidate, (_stream, control) => (async function*() { control?.validateBeforeTransport?.(); transports++; yield { type: "end" } as const })())
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() { confirmFixtureExecution({ ...candidate, measurement }, control); transports++; yield { type: "end" } as const })())
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", maxOutputTokens: 2048, budget: { contextWindow: 200000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
+  const agent = createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, tools, model, systemPrompt: "p", maxOutputTokens: 2048, budget: { contextWindow: 200000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
   if (changes) await expect(agent.run("first")).rejects.toMatchObject({ code: "CONTEXT_INPUT_STALE" })
   else await agent.run("first")
   expect(preparations).toBe(changes ? 4 : 1); expect(transports).toBe(changes ? 0 : 1); expect(hooks).toBe(1); expect(claims).toBe(1)
 })
 
-it("restores a scalar actual Anthropic prefix and partial identity cannot erase an owned rejection", async () => {
+it("keeps a cold scalar actual Anthropic prefix historical and partial identity cannot erase an owned rejection", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   const metadata = { version: 1 as const, providerId: "logical-route", modelId: "m", protocol: "anthropic-messages", contextWindow: 200000, identityCoverage: "complete" as const, bindingConfigFingerprint: "a".repeat(64) }
-  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", providerId: "adapter-namespace" })
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled", executionIdentity: fixtureExecutionIdentity, providerId: "adapter-namespace" })
   let transports = 0, binding = ""
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
     const candidate = await actual.prepare!(request); binding = candidate.measurement.input.bindingFingerprint
-    return wrapPreparedRequest(candidate, (_stream, control) => (async function*() { control?.validateBeforeTransport?.(); transports++; yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const; yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
+    return wrapPreparedRequest(candidate, (_stream, control, measurement) => (async function*() { confirmFixtureExecution({ ...candidate, measurement }, control); transports++; yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const; yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
   } }
-  await createAgent(ctx, { session, sessionId: "owned", model, tools, systemPrompt: "p", contextMetadata: metadata, maxOutputTokens: 2048 }).run("first")
+  await createAgent(ctx, { executionIdentity: () => fixtureExecutionIdentity, session, sessionId: "owned", model, tools, systemPrompt: "p", contextMetadata: metadata, maxOutputTokens: 2048 }).run("first")
   const restored = fromJSONL(toJSONL(session))
   const agent = createAgent(ctx, { session: restored, sessionId: "owned", model, tools, systemPrompt: "p", contextMetadata: metadata, maxOutputTokens: 2048 })
   await agent.followup("resume")
-  expect(agent.contextBudget!().kind === "ready" && (agent.contextBudget!() as { kind: "ready"; snapshot: { estimateSource: string } }).snapshot.estimateSource).toBe("provider-anchor-plus-projection")
+  expect(agent.contextBudget!().kind === "ready" && (agent.contextBudget!() as { kind: "ready"; snapshot: { estimateSource: string } }).snapshot.estimateSource).toBe("projected-heuristic")
   append(restored, { type: "context/recovery", version: 1, ownerSessionId: "owned", recoveryId: "r", logicalStepSeq: 0, bindingFingerprint: binding, rejectedInputFingerprint: "b".repeat(64), state: "required" })
   const blocked = createAgent(ctx, { session: restored, sessionId: "owned", model, tools, systemPrompt: "p", contextMetadata: { ...metadata, identityCoverage: "partial", bindingConfigFingerprint: undefined }, maxOutputTokens: 2048 })
   await expect(blocked.followup("continue")).rejects.toThrow(/prompt_too_long/)

@@ -27,7 +27,7 @@ it("admits acceptance references into an earlier durable batch", async () => {
   await coordinator.append("s", events().slice(0, 5))
   await coordinator.append("s", events().slice(5))
   expect((await coordinator.snapshot!("s")).session.events).toEqual(events())
-  expect((await backend.profile("s")).meta.formatVersion).toBe(3)
+  expect((await backend.profile("s")).meta.formatVersion).toBe(4)
   await coordinator.close()
 })
 it("rejects malformed complete format3 before any repair, retaining cause", async () => {
@@ -81,7 +81,8 @@ it.each([3, 4, 5, 6, 7])("recovers a crash after prefix length %s without accept
   expect(await readFile(path, "utf8")).toBe(before)
   const loaded = await coordinator.loadOwned("s")
   expect(loaded.session.events.slice(0, length)).toEqual(prefix)
-  expect((await readFile(path, "utf8")).startsWith(before)).toBe(true)
+  const after = await readFile(path, "utf8")
+  expect(after.slice(after.indexOf("\n") + 1).startsWith(before.slice(before.indexOf("\n") + 1))).toBe(true)
   expect(loaded.session.events.filter(event => event.type === "model/exchange-accepted")).toHaveLength(length >= 6 ? 1 : 0)
   expect(deriveMessages(loaded.session)).toHaveLength(length >= 6 ? 2 : 0)
   const once = (await backend.read("s")).events
@@ -89,8 +90,8 @@ it.each([3, 4, 5, 6, 7])("recovers a crash after prefix length %s without accept
   expect((await backend.read("s")).events).toEqual(once)
   await coordinator.close()
 })
-it("rejects actual future format4 before repairing its file", async () => {
-  const { coordinator, backend, path } = await fixture([], 4)
+it("rejects actual future format5 before repairing its file", async () => {
+  const { coordinator, backend, path } = await fixture([], 5)
   const raw = await readFile(path, "utf8"), repair = vi.spyOn(backend, "repair")
   await expect(coordinator.loadOwned("s")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
   expect(repair).not.toHaveBeenCalled(); expect(await readFile(path, "utf8")).toBe(raw)

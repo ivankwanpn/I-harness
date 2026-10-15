@@ -29,7 +29,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
-      async *execute(actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         // Bind signed responses to the lowered input that this handle sends.
         // Only producer-proven cache additions leave the native prefix.
@@ -39,7 +39,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
-        request.validateBeforeTransport?.()
+        execution.confirm(capturedConfig.executionIdentity)
         try {
           response = await fetch(`${baseUrl}/v1/messages`, {
             method: "POST",

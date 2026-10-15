@@ -48,6 +48,7 @@ export function createMutations(
   }
 
   return {
+    ensureWritableFormat(sessionId: string) { return withSessionOperation(sessionId, async () => { assertWritable(sessionId); await ensureOwnership(sessionId); await ensureWritableFormatUnlocked(backend, sessionId); conversation.invalidate(sessionId); return { formatVersion: CURRENT_FORMAT_VERSION } }) },
     assertWritable,
     invalidateConversation: (sessionId: string) => conversation.invalidate(sessionId),
     clearConversationIndexes: () => conversation.clear(),

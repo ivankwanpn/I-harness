@@ -207,7 +207,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       const raw = await readFile(path)
       const end = raw.indexOf(0x0a)

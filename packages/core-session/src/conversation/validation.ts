@@ -1,21 +1,28 @@
+import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./usage-validation.ts"
 import type { SessionEvent } from "../events/types.ts"
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
+
+interface StageOptions { readCurrentEvent?: (index: number) => SessionEvent | undefined }
 interface Step { failed: boolean; accepted: boolean; calls: number }
 export interface ConversationValidationIndex {
+  readonly formatVersion: number
   readonly eventCount: number
   readonly semanticsStartSeq: number | undefined
-  stage(events: readonly SessionEvent[]): { commit(): void }
+  stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void }
 }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
-export function createConversationValidationIndex(events: readonly SessionEvent[] = []): ConversationValidationIndex {
-  return createConversationIndex(events)
+export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number } = { formatVersion: 4 }): ConversationValidationIndex {
+  return createConversationIndex(events, undefined, options.formatVersion)
 }
 
 /** Internal append-owner port: re-read referenced structural fields, without retaining a second archive. */
-export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = 3): ConversationValidationIndex {
+export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = 4): ConversationValidationIndex {
+  const acceptances = new Map<number, AcceptanceFact>()
+  const completions = new Map<number, string>()
+  const anchors = new Map<string, UsageAnchorFact>()
   const addresses = new Map<number, Address>()
   const steps = new Map<number, Step>()
   const exchanges = new Set<string>()
@@ -24,17 +31,22 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   const callsById = new Map<string, number | null>()
   let count = 0, revision = 0
   let fence: number | undefined, activeStep: number | undefined
-  const verify = (seq: number, target: Address) => {
-    if (!read || target.index >= count) return
-    const actual = read(target.index)
+  const verify = (seq: number, target: Address, readCurrent = read) => {
+    if (!readCurrent || target.index >= count) return
+    const actual = readCurrent(target.index)
     if (!actual || actual.seq !== seq || actual.type !== target.type
       || actual.type === "step/start" && (actual.actionId !== target.actionId || actual.attemptId !== target.attemptId)
       || actual.type === "tool/call" && actual.callId !== target.callId) fail("referenced structure was mutated")
   }
   const index: ConversationValidationIndex = {
+    get formatVersion() { return formatVersion },
     get eventCount() { return count },
     get semanticsStartSeq() { return fence },
-    stage(suffix) {
+    stage(suffix, options) {
+      const readCurrent = options?.readCurrentEvent ?? read
+      const newAcceptances = new Map<number, AcceptanceFact>()
+      const newCompletions = new Map<number, string>()
+      const newAnchors = new Map<string, UsageAnchorFact>()
       const epoch = revision
       let nextFence = fence, nextStep = activeStep
       const newAddresses = new Map<number, Address>(), newSteps = new Map<number, Step>()
@@ -71,7 +83,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
           const reference = (seq: number, kind: SessionEvent["type"]): Address => {
             const target = lookup(seq)
             if (!target || target.ambiguous || target.type !== kind || target.index >= position || seq >= event.seq! || seq <= nextFence!) fail("invalid acceptance reference")
-            verify(seq, target)
+            verify(seq, target, readCurrent)
             return target
           }
           const start = reference(event.stepStartSeq, "step/start")
@@ -88,14 +100,24 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
             last = call.index
             newAccepted.add(seq)
           }
+          if (event.version === 2) newAcceptances.set(event.seq!, { index: position, exchangeId: event.exchangeId, actionId: event.actionId, attemptId: event.attemptId, stepStartSeq: event.stepStartSeq, assistantSeq: event.assistantSeq, callSeqs: JSON.stringify(event.callSeqs), request: JSON.parse(JSON.stringify(event.request)) })
           fact.accepted = true
           newExchanges.add(event.exchangeId)
+        }
+        if (event.type === "context/usage" && event.version === 2) {
+          const anchorId = event.op === "sample" ? event.checkpoint.anchorId : event.anchorId
+          const seq = event.op === "sample" ? event.checkpoint.accepted.acceptedSeq : undefined
+          const accepted = seq === undefined ? undefined : newAcceptances.get(seq) ?? acceptances.get(seq)
+          const actual = accepted && (accepted.index < count ? readCurrent?.(accepted.index) : suffix[accepted.index - count])
+          const fact = validateUsageFact(event, position, { accepted, actual, requireCurrent: !!readCurrent, anchor: newAnchors.get(anchorId) ?? anchors.get(anchorId), completedAnchorId: seq === undefined ? undefined : newCompletions.get(seq) ?? completions.get(seq) })
+          newAnchors.set(anchorId, fact)
+          if (seq !== undefined) newCompletions.set(seq, anchorId)
         }
         if (event.type === "tool/dispatch" && nextFence !== undefined) {
           const seq = event.eventSeq ?? (newCalls.has(event.callId) ? newCalls.get(event.callId) : callsById.get(event.callId))
           const call = seq == null ? undefined : lookup(seq)
           if (seq == null || !call || call.ambiguous || call.callId !== event.callId || !(acceptedCalls.has(seq) || newAccepted.has(seq))) fail("dispatch without accepted call")
-          verify(seq, call)
+          verify(seq, call, readCurrent)
         }
         if (event.type === "step/failed" && nextStep !== undefined) step(nextStep).failed = true
         if (event.type === "tool/call" && nextStep !== undefined) step(nextStep).calls++
@@ -115,6 +137,9 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       return { commit() {
         if (committed) return
         if (epoch !== revision) fail("stale staged suffix")
+        for (const [key, value] of newCompletions) completions.set(key, value)
+        for (const [key, value] of newAcceptances) acceptances.set(key, value)
+        for (const [key, value] of newAnchors) anchors.set(key, value)
         for (const [key, value] of newAddresses) addresses.set(key, value)
         for (const [key, value] of newSteps) steps.set(key, value)
         for (const [key, value] of newCalls) callsById.set(key, value)
@@ -131,5 +156,5 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
 
 export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number): void {
   for (const event of events) validateConversationEventShape(event, formatVersion)
-  createConversationValidationIndex(events)
+  createConversationValidationIndex(events, { formatVersion })
 }

@@ -1,11 +1,10 @@
 import { append } from "@i-harness/core-session"
 import type { LLMStreamEvent } from "@i-harness/llm-seam"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
-import type { AgentContext } from "./context.ts"
 import { createModelStep } from "./model-step.ts"
 export type { ModelStep } from "./model-step.ts"
 
-export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">) {
+export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry">) {
   let callSeq = 0
   const usedCallIds = new Set(deps.session.events.filter((event) => event.type === "tool/call").map((event) => event.callId))
   const reasoning: string[] = []
@@ -26,7 +25,7 @@ export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry">, 
   }
   return {
     start: (lifecycle: TurnLifecycle, startSeq: number, abort: AbortSignal | undefined, getSteps: () => number) =>
-      createModelStep(deps, context, reasoning, recordCall, lifecycle, startSeq, abort, getSteps),
+      createModelStep(deps, reasoning, recordCall, lifecycle, startSeq, abort, getSteps),
     reasoning,
   }
 }

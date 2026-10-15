@@ -40,8 +40,8 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
       stream: (control?: PreparedStreamControl) => {
         const actual = preparedControls(captured, control)
         actual.validateBeforeTransport?.()
-        const { validateBeforeTransport: _guard, ...executionControl } = actual
-        const { validateBeforeTransport: _capturedGuard, maxOutputTokens: _previousCap, ...data } = snapshotModelData(captured)
+        const { validateBeforeTransport: _guard, confirmExecution: _confirmation, ...executionControl } = actual
+        const { validateBeforeTransport: _capturedGuard, confirmExecution: _capturedConfirmation, maxOutputTokens: _previousCap, ...data } = snapshotModelData(captured)
         return client.stream({ ...data, ...(cap !== undefined ? { maxOutputTokens: cap } : {}), ...executionControl })
       },
     })

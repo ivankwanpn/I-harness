@@ -47,25 +47,26 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
   } })
 }
 
-export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, requestRevision: number, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement) {
+export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2) {
   const { stepUsage } = step
   reportModelUsage(deps, step)
 
   // Acceptance owns assistant/native persistence; this owner only reports usage
   // and calibrates the measured request that produced the completed response.
   // The caller has the accepted fact. A later Stop cannot revoke real usage.
-  context.ownedBudget.record(measurement, stepUsage, requestRevision, true)
+  context.ownedBudget.record(measurement, stepUsage, accepted)
 
 }
 
 /** The accepted fact survives an uncertain flush or Stop; tool effects still
  * wait for the awaited acceptance owner to return successfully. */
-export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "contextMeter" | "ownedBudget">, lifecycle: TurnLifecycle, requestRevision: number, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal): Promise<void> {
-  const acceptedSeq = deps.session.events.length + 1
-  try { await acceptModelExchange(deps, { identity: step.identity, step, signal }) }
+export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1): Promise<void> {
+  let written: import("@i-harness/core-session").ExchangeAcceptedEvent | undefined
+  let exactWritten: string | undefined
+  try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request, onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
   finally {
-    lifecycle.providerCompleted = deps.session.events[acceptedSeq]?.type === "model/exchange-accepted"
-    if (lifecycle.providerCompleted) completeModelStep(deps, context, requestRevision, step, measurement)
+    lifecycle.providerCompleted = !!written && deps.session.events[written.seq!] === written && JSON.stringify(written) === exactWritten
+    if (lifecycle.providerCompleted) completeModelStep(deps, context, step, measurement, written?.type === "model/exchange-accepted" && written.version === 2 ? written : undefined)
     else reportModelUsage(deps, step)
   }
 }

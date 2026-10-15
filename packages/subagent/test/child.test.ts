@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, deriveMessages, deriveSearchText, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, CURRENT_FORMAT_VERSION, deriveMessages, deriveSearchText, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -233,9 +233,10 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     enqueued,
     flushed,
     async create(meta) {
-      created.push(meta as SessionMeta)
+      created.push({ ...meta, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
       return { id: (meta as { sessionId?: string }).sessionId ?? "sess-x" }
     },
+    async ensureWritableFormat(id) { const meta = created.find(m => m.sessionId === id); if (!meta || meta.formatVersion !== CURRENT_FORMAT_VERSION) throw Error("Fixture header is not writable"); return { formatVersion: meta.formatVersion } },
     async append() {},
     enqueue(id, events) { enqueued.push({ id, events: [...events] }) },
     async load() { return { session: { formatVersion: 2, events: [] } } },

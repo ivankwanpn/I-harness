@@ -1,3 +1,4 @@
+import { ownedContextReadiness } from "@i-harness/session-persistence"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { createSession } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
@@ -46,6 +47,7 @@ export function assembleChild(
   const agent = createAgent(childCtx, {
     ...(inheritedBindingForStep ? { bindingForStep: inheritedBindingForStep } : {}),
     isSubagent: true,
+    ...(opts.childSessions && sessionId ? { ensureWritableContext: ownedContextReadiness(opts.childSessions.coordinator, sessionId, childSession) } : {}),
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     tools: childReg,

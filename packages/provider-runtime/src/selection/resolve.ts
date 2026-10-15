@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto"
+import { snapshotModelData } from "@i-harness/llm-seam"
 import type { buildModelClient } from "@i-harness/provider"
 import type { ProviderAuthResolver, ResolvedProviderAuth } from "@i-harness/credentials"
 import type { CreateProviderRuntimeOptions } from "../types.ts"
@@ -16,6 +18,7 @@ export function createModelResolver(
   buildClient: typeof buildModelClient,
   provider: (id: string) => ProviderView | undefined,
 ): Pick<ProviderRuntime, "resolveModel" | "describeModelBindingMetadata"> {
+  const runtimeId = randomUUID()
   return {
     describeModelBindingMetadata: input => describeSelection(options.settings, provider, input)?.metadata,
     async resolveModel(input) {
@@ -116,9 +119,11 @@ export function createModelResolver(
       // then the model row, then the route — see runtimeProfile.
       const listedModel = view.models.find((model) => model.id === modelId)
       const modelModalities = userModel?.inputModalities ?? listedModel?.inputModalities ?? (listedModel ? view.inputModalities : undefined)
-      const profile = described ? { ...described.profile, ...(apiKey !== undefined ? { apiKey } : {}) } : runtimeProfile(
+      const sourceProfile = described ? { ...described.profile, ...(apiKey !== undefined ? { apiKey } : {}) } : runtimeProfile(
         view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol, options.settings.get().modelRetryLimit,
       )
+      const profile = sourceProfile && snapshotModelData(sourceProfile)
+      if (profile && resolvedAuth.kind !== "ambient" && (resolvedAuth.kind === "api-key" || resolvedAuth.authEpoch)) profile.executionIdentity = Object.freeze({ version: 1, runtimeId, bindingLifetimeId: randomUUID(), authEpoch: resolvedAuth.kind === "api-key" ? randomUUID() : resolvedAuth.authEpoch!, scope: resolvedAuth.kind === "api-key" ? "binding-credential" : "managed-subscription", coldCompatible: false })
       if (profile && ref.kind === "oauth-account-ref" && options.codex) {
         profile.codexSubscription = true
         profile.baseUrl = "https://chatgpt.com/backend-api/codex"

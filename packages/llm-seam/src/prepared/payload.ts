@@ -1,3 +1,4 @@
+import { preparedExecution, type PreparedExecutionContext } from "./execution.ts"
 import { stringifyJsonData } from "@i-harness/core-session"
 import { encodeSdkCommandData, encodedProjectionDigest, type PayloadIdentityV2, type PreparedRequestMeasurement, type ProjectedInputFacts } from "@i-harness/token-meter"
 import type { LLMRequest, LLMStreamEvent } from "../index.ts"
@@ -12,7 +13,7 @@ export function createPreparedPayload<T>(options: {
   describe: (body: T, request: LLMRequest) => { input: ProjectedInputFacts; packet: Omit<PreparedRequestMeasurement["packet"], "bodyBytes" | "sdkCommandBytesEstimate"> }
   output: (body: T, request: LLMRequest) => PreparedRequestMeasurement["output"]
   cap: (body: T, cap: number | undefined) => T
-  execute: (body: T, serialized: string, control: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>
+  execute: (body: T, serialized: string, control: PreparedStreamControl, execution: PreparedExecutionContext) => AsyncIterable<LLMStreamEvent>
 }): PreparedModelRequest {
   // Lower HTTP values once: description, derivatives and send all observe the
   // same JSON semantics even when callers supplied Date/toJSON/accessors.
@@ -44,7 +45,7 @@ export function createPreparedPayload<T>(options: {
       stream(control?: PreparedStreamControl) {
         const actual = preparedControls(options.request, control)
         actual.signal?.throwIfAborted()
-        return options.execute(snapshotModelData(actualBody), serialized, actual)
+        return options.execute(snapshotModelData(actualBody), serialized, actual, preparedExecution(measurement, actual))
       },
     })
   }

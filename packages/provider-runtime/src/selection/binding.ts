@@ -11,6 +11,7 @@ export function createBindingClient(
   view: ProviderView,
   modelId: string,
 ): ModelClient {
+  profile = snapshotModelData(profile)
   const initialWait = options.settings.get().modelWait
   profile.modelWait = { firstResponseMs: initialWait.firstResponseSeconds * 1000, progressMs: initialWait.progressSeconds * 1000 }
   let activeWait = initialWait
@@ -31,5 +32,5 @@ export function createBindingClient(
     return prepareModelRequest(current, request)
   })
 
-  return client
+  return Object.assign(client, { executionIdentity: profile.executionIdentity })
 }

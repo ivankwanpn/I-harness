@@ -1,6 +1,7 @@
 import type { PromptCacheConfig } from "@i-harness/llm-seam"
 
 export interface AnthropicConfig {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   apiKey: string
   baseUrl?: string
   model: string

@@ -13,7 +13,7 @@ export interface ModelFailureFacts {
   message: string
 }
 
-export const terminalErrorCodes = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "CONTEXT_INPUT_STALE", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
+export const terminalErrorCodes = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "CONTEXT_INPUT_STALE", "EXECUTION_IDENTITY_CHANGED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
 export const canonicalErrorCodes = new Set([...terminalErrorCodes, "RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT", "EMPTY_RESPONSE", "UNKNOWN"])
 
 export function errorRecord(value: unknown): Record<string, unknown> | undefined {

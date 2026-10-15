@@ -33,14 +33,14 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         else delete body.generationConfig
         return body
       },
-      async *execute(_actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(_actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         const geminiUrl = `${baseUrl}/v1beta/models/${encodeURIComponent(capturedConfig.model)}:streamGenerateContent?alt=sse`
         let response: Response
-        request.validateBeforeTransport?.()
+        execution.confirm(capturedConfig.executionIdentity)
         try {
           response = await fetch(geminiUrl, {
             method: "POST",

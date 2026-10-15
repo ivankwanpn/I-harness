@@ -1,3 +1,4 @@
+import { captureRequestCandidate } from "../../core-agent/src/agent/request-snapshot.ts"
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
@@ -9,7 +10,6 @@ import { ContextUsage } from "../src/renderer/session/ContextUsage.tsx"
 afterEach(cleanup)
 async function projection() {
   const session = createSession()
-  const owner = createOwnedBudget(session, "owned", () => undefined, () => 0, () => ({ surface: "fixture", model: client }))
   append(session, { type: "user/message", text: "hello" })
   const client = createAnthropicClient({ model: "controlled", apiKey: "fixture", inputModalities: ["text", "image"] })
   const prepared = await client.prepare!({ systemPrompt: "Actual system", messages: [
@@ -17,7 +17,9 @@ async function projection() {
     { role: "assistant", content: "answer", toolCalls: [{ id: "c", name: "read", args: {} }], thinkingBlocks: [{ type: "thinking", thinking: "controlled replayed plan", signature: "fixture-signature" }], providerContinuation: { kind: "anthropic", model: "controlled", contentOrder: [{ kind: "reasoning", index: 0 }, { kind: "text", text: "answer" }, { kind: "tool", index: 0 }] } },
     { role: "tool", toolCallId: "c", content: "controlled result" },
   ], tools: [{ name: "read", description: "Actual schema", inputSchema: { type: "object" } }] })
-  const { snapshot } = owner.assess(prepared, 10000, 1024)
+  const capture = () => captureRequestCandidate(session, "owned", { model: client }, { systemPrompt: "Actual system", tools: [], maxOutputTokens: 1024 }, 0)
+  const owner = createOwnedBudget(session, "owned", capture, "renderer-fixture", () => ({ kind: "unclassified" }))
+  const { snapshot } = owner.assess(prepared, capture(), 10000, 1024)
   return { snapshot, owner, state: contextStateFromBudget(owner.read()) }
 }
 async function show(state: unknown) {

@@ -50,7 +50,7 @@ describe("durable exchange acceptance", () => {
   it("fences fields by format and preserves format2 context support", () => {
     expect(() => session.validateConversationHistory(fixture(), 2)).toThrow()
     expect(() => session.fromJSONL('{"formatVersion":3}\n')).not.toThrow()
-    expect(() => session.fromJSONL('{"formatVersion":4}\n')).toThrow()
+    expect(() => session.fromJSONL('{"formatVersion":5}\n')).toThrow()
   })
   it("does not promote an inherited human admission into child-local authority", () => {
     const events: SessionEvent[] = [

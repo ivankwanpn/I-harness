@@ -22,8 +22,8 @@ export type {
 } from "./events/types.ts"
 export { createSession, append } from "./events/append.ts"
 export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead, ContextRecoveryFacts, ContextEvent } from "./events/context.ts"
-export { validContextCheckpoint, validContextEvent, isContextEventType } from "./events/context.ts"
-export { deriveContextBudget, deriveContextUsage, deriveContextRecovery } from "./projection/context.ts"
+export { validContextEvent, isContextEventType } from "./events/context.ts"
+export { deriveContextBudget, deriveContextRecovery } from "./projection/context.ts"
 export { contextStateFromBudget, readSessionContextState, type SessionContextState } from "./context-state.ts"
 export { subscribe, publishTransient } from "./events/subscription.ts"
 
@@ -51,3 +51,9 @@ export type { SessionTitleView } from "./projection/title.ts"
 
 export { toJSONL, assertVersion, fromJSONL, migrate } from "./serialization/jsonl.ts"
 export { stringifyJsonData, canonicalJsonData } from "./serialization/json-data.ts"
+
+export type { AcceptedRequestAttributionV1, ContextUsageCheckpointV2, ContextUsageEventV2, CalibrationRetirementReason } from "./events/attribution.ts"
+export { validAcceptedRequest, sameAcceptedRequest } from "./events/attribution.ts"
+export type { ExchangeAcceptedEventV2 } from "./events/conversation.ts"
+
+export { contextUsageAnchorId } from "./events/usage-anchor.ts"

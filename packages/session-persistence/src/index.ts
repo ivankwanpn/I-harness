@@ -41,6 +41,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   return {
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
     ...(backend.deleteOwnedSession ? { deleteOwnedSession: lifecycle.deleteOwnedSession } : {}),
+    ensureWritableFormat: mutations.ensureWritableFormat,
     create: mutations.create,
     append: mutations.append,
     enqueue: mutations.enqueue,
@@ -60,3 +61,5 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     releaseOwnership: mutations.releaseOwnership,
   }
 }
+
+export { ownedContextReadiness } from "./context-readiness.ts"

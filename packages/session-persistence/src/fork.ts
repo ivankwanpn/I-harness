@@ -30,7 +30,7 @@ export async function forkSession(
     coordinator.load(sourceSessionId),
     coordinator.profile(sourceSessionId),
   ])
-  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq)
+  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion)
   const title = options.title ?? profile.meta.title
   const workspaceId = options.workspaceId ?? profile.meta.workspaceId
   const { id } = await coordinator.create({
@@ -52,6 +52,7 @@ export function completedTurnPrefix(
   events: readonly SessionEvent[],
   sourceSessionId: string,
   atSeq: number | undefined,
+  sourceFormat = CURRENT_FORMAT_VERSION,
 ): SessionEvent[] {
   let boundaryIndex = -1
   if (atSeq === undefined) {
@@ -126,7 +127,7 @@ export function completedTurnPrefix(
   // into the dropped region disappear with the events they named.
   const cuts = rewindCuts({ formatVersion: CURRENT_FORMAT_VERSION, events: [...events] })
   const carriesMarker = prefix.some((event) => event.type === "rewind/point")
-  if (cuts.length === 0 && !carriesMarker) return remapConversationSeed({ source: events, retained: prefix })
+  if (cuts.length === 0 && !carriesMarker) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
   const hidden = new Set<number>()
   for (const window of cuts) {
     let from = window.cutFrom
@@ -146,6 +147,6 @@ export function completedTurnPrefix(
     event.type !== "rewind/point"
     && !isContextEventType(event.type)
     && (isCompactionMarker(event.type) || event.seq === undefined || !hidden.has(event.seq)))
-  if (kept.length === prefix.length) return remapConversationSeed({ source: events, retained: prefix })
-  return remapConversationSeed({ source: events, retained: kept })
+  if (kept.length === prefix.length) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
+  return remapConversationSeed({ sourceFormat, source: events, retained: kept })
 }

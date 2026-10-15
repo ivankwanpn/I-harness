@@ -14,6 +14,7 @@ export class SessionFormatUnsupportedError extends Error {
 export const upgrades = new Map<number, (events: SessionEvent[]) => SessionEvent[]>()
 upgrades.set(1, events => events)
 upgrades.set(2, events => events)
+upgrades.set(3, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }

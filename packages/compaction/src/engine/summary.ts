@@ -51,6 +51,7 @@ export function requestSummary(
     signal, maxSummaryCalls: options?.maxSummaryCalls, beforeTransport: deps.flush ? () => deps.flush!() : undefined,
     validateBeforeTransport: prepared.validateBeforeTransport,
     onMeasurement: facts => deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: { operation: "summary", providerId: binding?.providerId, modelId: binding?.modelId, ...facts } }),
+    onPieceAccepted: observation => deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: { operation: observation.kind, purpose: observation.purpose, origin: observation.origin, candidateId: observation.receipt.candidateId, sendId: observation.receipt.sendId } }),
     onUsage: usage => deps.telemetry?.emit({ type: "compaction/usage", ts: Date.now(), data: { ...usage } }),
   }, { session, shadowedSeqs })
 }

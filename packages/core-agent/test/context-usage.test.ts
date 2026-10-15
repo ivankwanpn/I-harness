@@ -1,3 +1,4 @@
+import { classifiedFixtureClient } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession } from "@i-harness/core-session"
@@ -18,7 +19,7 @@ it("enforces the next step budget using completed cache-inclusive usage instead 
     } else yield { type: "text/chunk", text: "done" }
     yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false }, maxTurns: 2 })
+  const agent = createAgent(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false }, maxTurns: 2 })
   await expect(agent.run("檢查")).rejects.toThrow(/prompt_too_long/)
   expect(requests).toHaveLength(1)
 })
@@ -31,7 +32,7 @@ it("clears a previous usage anchor when the model binding context is updated", a
     if (calls === 1) yield { type: "usage", usage: { inputTokens: 899, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
+  const agent = createAgent(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
   await agent.run("first")
   agent.updateContext!({ budget: { contextWindow: 1000, resetWindow: false } })
   await agent.followup!("new model")
@@ -44,8 +45,8 @@ it("reports component bytes and a measured cache ratio separately from raw provi
     yield { type: "usage", usage: { inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: "excludes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  await createAgent(ctx, { session, tools, model, systemPrompt: "中文", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
-  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "neutral-only" })
+  await createAgent(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "中文", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
+  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "projected-heuristic" })
   expect(events.find(event => event.type as string === "provider/cache")?.data).toEqual({ cacheReadReported: true, totalInputTokens: 1000, cacheReadTokens: 900, cacheReadRatio: .9 })
   expect(events.find(event => event.type === "provider/usage")?.data).toMatchObject({ inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80 })
 })
@@ -56,7 +57,7 @@ it("leaves cache measurements absent when the provider only reports ordinary inp
     yield { type: "usage", usage: { inputTokens: 100, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  await createAgent(ctx, { session, tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
+  await createAgent(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
   expect(events.find(event => event.type as string === "provider/cache")?.data).toEqual({ cacheReadReported: false, totalInputTokens: 100 })
 })
 
@@ -68,7 +69,7 @@ it("invalidates the usage anchor after an append-only reset even if the input pr
     if (calls === 1) yield { type: "usage", usage: { inputTokens: 899, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
+  const agent = createAgent(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
   await agent.run("first")
   append(session, { type: "compaction/reset", removedSeqs: [] })
   await agent.followup("continue")
@@ -89,7 +90,7 @@ it("starts auto compaction from calibrated usage and returns to a fresh estimate
     else yield { type: "text/chunk", text: "continued" }
     yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, sessionId: "child-session", tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 1000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
+  const agent = createAgent(ctx, { session, sessionId: "child-session", tools, model: classifiedFixtureClient(model), systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 1000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
   await agent.run("first")
   await agent.followup("continue")
   expect(session.events.some(event => event.type === "compaction/summary")).toBe(true)

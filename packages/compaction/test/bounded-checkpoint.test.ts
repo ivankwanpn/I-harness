@@ -103,7 +103,7 @@ describe("bounded durable checkpoints", () => {
       ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(""))
     })
     const model = createAnthropicClient({ apiKey: "controlled", model: "claude-3-7-sonnet", options: { thinking: { type: "enabled", budget_tokens: 8192 } } })
-    const engine = createCompactionEngine({ model, maxOutputTokens: 384000, config: { contextWindow: 500000 }, telemetry: { emit(event) { if (event.type === "provider/context") budget = event.data }, close() {} } })
+    const engine = createCompactionEngine({ model, maxOutputTokens: 384000, config: { contextWindow: 500000 }, telemetry: { emit(event) { if (event.type === "provider/context" && event.data.operation === "summary") budget = event.data }, close() {} } })
     expect((await engine.compact(session())).compacted).toBe(true)
     expect(sent.max_tokens).toBe(9216)
     expect(sent.thinking).toEqual({ type: "enabled", budget_tokens: 8192 })

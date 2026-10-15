@@ -362,7 +362,7 @@ describe("session ownership lease", () => {
       // OS-level proof the lease was truly released (not just dropped from
       // the map): another coordinator can acquire it.
       const b = tracked(shared, { lock: { enabled: true, lockRoot: root }, ...FAST })
-      await shared.create("sess-m2", { formatVersion: 2, sessionId: "sess-m2", createdAt: "fixture" })
+      await shared.create("sess-m2", { formatVersion: 4, sessionId: "sess-m2", createdAt: "fixture" })
       await b.adoptOwnership("sess-m2")
       expect(b.ownerOf("sess-m2")).toBe(true)
     })

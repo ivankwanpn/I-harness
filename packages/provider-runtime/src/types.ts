@@ -156,7 +156,7 @@ export interface CreateProviderRuntimeOptions {
   readModelRetryLimit?: () => Promise<number>
   codex?: {
     state(): Promise<{ accountId?: string; status: string }>
-    token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string }>
+    token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string; authEpoch?: string }>
     models(accountId: string): Promise<ModelDescriptor[]>
   }
 }

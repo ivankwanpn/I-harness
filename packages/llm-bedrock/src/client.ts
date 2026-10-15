@@ -36,12 +36,12 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
-      async *execute(actualBody, _serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(actualBody, _serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
         // kill a parked Converse call, not wait for the first event.
         let output: ConverseStreamCommandOutput
-        request.validateBeforeTransport?.()
+        execution.confirm(capturedConfig.executionIdentity)
         try {
           output = await client.send(
             new ConverseStreamCommand(actualBody),

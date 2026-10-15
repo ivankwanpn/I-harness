@@ -1,6 +1,7 @@
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass } from "@aws-sdk/client-bedrock-runtime"
 
 export interface BedrockConfig {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
   model: string
   providerId?: string

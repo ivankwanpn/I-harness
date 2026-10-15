@@ -36,6 +36,8 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  ensureWritableContext?: () => Promise<void>
+  executionIdentity?: () => import("@i-harness/llm-seam").LiveExecutionIdentity | undefined
   /** Pure inherited host descriptor. Each Agent copies its own limits and calibration. */
   bindingForStep?: () => ModelContextBindingDescriptor
   /** Current concrete binding behind a stable host handle. Read only, never resolves a client. */
@@ -85,6 +87,7 @@ export interface AgentDeps {
 }
 
 export interface ModelContextBindingDescriptor {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   identity: object
   budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: ContextBindingMetadata

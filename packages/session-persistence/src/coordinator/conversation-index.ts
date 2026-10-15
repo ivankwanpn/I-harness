@@ -12,10 +12,10 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
     clear() { indexes.clear() },
     async stage(id: string, events: SessionEvent[]) {
       let index = indexes.get(id)
-      const loaded = await ensureWritableFormatUnlocked(backend, id, !index)
+      const loaded = await ensureWritableFormatUnlocked(backend, id)
       let suffix = events
-      if (!index) {
-        index = createConversationValidationIndex(loaded.events)
+      if (!index || index.formatVersion !== CURRENT_FORMAT_VERSION || index.eventCount !== loaded.events.length) {
+        index = createConversationValidationIndex(loaded.events, { formatVersion: CURRENT_FORMAT_VERSION })
         indexes.set(id, index)
         // A retained write-behind batch may already be durable after an uncertain
         // append. Compare actual persisted records once on reload; never cache bodies.
@@ -31,7 +31,7 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
       }
       preflightBatchShape(CURRENT_FORMAT_VERSION, suffix)
       try {
-        const staged = index.stage(suffix)
+        const staged = index.stage(suffix, { readCurrentEvent: position => loaded.events[position] })
         return { events: suffix, commit: () => staged.commit() }
       } catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation suffix", { cause }) }
     },

@@ -44,3 +44,13 @@ it("attributes replacement subscription rows to stored configuration and keeps p
   const state = await runtime.resolveModel({}); if (state.status !== "ready") throw new Error(JSON.stringify(state))
   expect(state.binding.budgetBinding).toMatchObject({ limits: { contextTokens: { value: 500_000, origin: "configured-model-row" } }, generation: { origin: "provider-managed" }, capability: { outputParameter: "unsupported" } })
 })
+
+it("gives each resolved captured binding a nonsecret independent live identity", async () => {
+  const { runtime, build } = await fixture("gemini")
+  const a = await runtime.resolveModel({}), b = await runtime.resolveModel({})
+  if (a.status !== "ready" || b.status !== "ready") throw new Error("no binding")
+  const profiles = build.mock.calls as unknown as [any][]
+  expect(profiles[0]![0].executionIdentity).toMatchObject({ version: 1, scope: "binding-credential", coldCompatible: false })
+  expect(profiles[0]![0].executionIdentity.authEpoch).not.toBe(profiles[1]![0].executionIdentity.authEpoch)
+  expect(JSON.stringify(profiles[0]![0].executionIdentity)).not.toMatch(/controlled|SYNTHETIC/)
+})

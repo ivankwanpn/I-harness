@@ -14,6 +14,7 @@ export interface SummaryLimits {
   beforeTransport?: () => Promise<void>
   validateBeforeTransport?: () => void
   onMeasurement?: (facts: { inputTokens: number; contextWindow?: number; outputReserve: number; effectiveCap?: number; capSupport: string; minimumCap: number; reasoningBudget?: number; defaultFloorAdjusted: boolean; coverage: string; estimateSource: "projected-heuristic"; uncertainties: readonly string[] }) => void
+  onPieceAccepted?: (observation: import("./summary-observation.ts").SummaryPieceObservation) => void
   onUsage?: (usage: LLMUsage) => void
 }
 

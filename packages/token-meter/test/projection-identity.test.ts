@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { expect, it } from "vitest"
 import { ProjectionCounter, projectionFingerprint, semanticProjectionDigest } from "../src/index.ts"
-import { createProjectionCalibration } from "../src/checkpoint.ts"
+import { createAcceptedCalibration } from "../src/index.ts"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 
 it("versions semantic pricing, canonically binds options, and rotates legacy compatibility", () => {
@@ -25,16 +25,13 @@ it("separates hash domains even for the same literal data", () => {
   expect(semanticProjectionDigest("unit", "same")).toBe(expected)
   for (const domain of ["binding", "shape", "input", "prefix-seed", "prefix-link"] as const) expect(semanticProjectionDigest(domain, "same")).not.toBe(expected)
 })
-it("rejects restored v1 prices and reasoning changes inside the same v2 pricing version", async () => {
+it("does not convert v1 projection prices or changed reasoning into v2 identity", async () => {
   const client = createAnthropicClient({ apiKey: "controlled", model: "m" })
   const request = { systemPrompt: "sys", messages: [{ role: "user" as const, content: "中" }], tools: [] }
   const current = (await client.prepare!(request)).measurement.input
   const v1 = { ...current, semanticIdentity: undefined, shapeFingerprint: projectionFingerprint({ system: "sys", tools: [] }) }
-  const metadata = { version: 1 as const, modelId: "m", protocol: "anthropic-messages", identityCoverage: "complete" as const, bindingConfigFingerprint: "a".repeat(64) }
-  const old = createProjectionCalibration("owner").record(v1, metadata, { inputTokens: 90, inputTokenSemantics: "includes-cache" }, 0)!
-  expect(createProjectionCalibration("owner", old).estimate(current, metadata, 0).calibrated).toBe(false)
+  expect(createAcceptedCalibration("owner", "live").recordAccepted(v1, {} as never, {} as never, { inputTokens: 90, inputTokenSemantics: "includes-cache" })).toMatchObject({ kind: "ignored" })
   const changed = (await client.prepare!({ ...request, reasoningEffort: "high" })).measurement.input
   expect(changed.semanticIdentity?.pricingVersion).toBe(current.semanticIdentity?.pricingVersion)
-  const checkpoint = createProjectionCalibration("owner").record(current, metadata, { inputTokens: 90, inputTokenSemantics: "includes-cache" }, 0)!
-  expect(createProjectionCalibration("owner", checkpoint).estimate(changed, metadata, 0).calibrated).toBe(false)
+  expect(changed.semanticIdentity?.shapeId).not.toBe(current.semanticIdentity?.shapeId)
 })

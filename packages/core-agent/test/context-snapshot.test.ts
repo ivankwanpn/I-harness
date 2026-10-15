@@ -1,3 +1,4 @@
+import { confirmFixtureExecution, fixtureExecutionIdentity } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, type BudgetRead } from "@i-harness/core-session"
@@ -18,13 +19,13 @@ it.each(["prepare", "execution", "flush"].flatMap(boundary => ["pending", "prune
     else append(session, { type: "rewind/point", version: 1, targetTurn: 0, anchorSeq: session.events.findLast(event => event.type === "step/start")!.seq!, mode: "conversation", fileOps: [] })
   }
   ctx.on("agent/pre-step", () => { hooks++ })
-  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("unprepared") }, async prepare(request) {
     preparations++
     const prepared = await actual.prepare!(request)
     if (boundary === "prepare") change()
-    return wrapPreparedRequest(prepared, (_stream, control) => (async function*() {
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
       if (boundary === "execution") change()
-      control?.validateBeforeTransport?.(); transports++
+      confirmFixtureExecution({ ...prepared, measurement }, control); transports++
       yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
     })())
   } }
@@ -38,7 +39,7 @@ it("unsupported visible graphs fail before prepare and preserve original mutabil
   let reads = 0, prepares = 0
   const native = Object.defineProperty({}, "private", { enumerable: true, get() { reads++; return "secret" } })
   append(session, { type: "assistant/message", text: "old", providerContinuation: native as never })
-  const model: ModelClient = { async *stream() { throw Error("transport") }, async prepare() { prepares++; throw Error("prepare") } }
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("transport") }, async prepare() { prepares++; throw Error("prepare") } }
   await expect(createAgent(ctx, { session, tools, model, systemPrompt: "s" }).run("anchor")).rejects.toMatchObject({ code: "CONTEXT_SNAPSHOT_UNSUPPORTED" })
   expect(reads).toBe(0); expect(prepares).toBe(0); expect(Object.isFrozen(native)).toBe(false)
 })
@@ -50,11 +51,12 @@ it("samples one request surface and preserves measured identity/binding after ac
   let promptReads = 0, schemaReads = 0
   const requests: LLMRequest[] = []
   const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
-  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("unprepared") }, async prepare(request) {
     expect(promptReads).toBe(1); expect(schemaReads).toBe(1)
     requests.push(request)
-    return wrapPreparedRequest(await actual.prepare!(request), (_stream, control) => (async function*() {
-      control?.validateBeforeTransport?.()
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control)
       binding = { ...metadata, bindingConfigFingerprint: "b".repeat(64) }
       yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const
       yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
@@ -70,7 +72,7 @@ it("samples one request surface and preserves measured identity/binding after ac
   expect(last.snapshot.requestContext).toEqual(initial.snapshot.requestContext)
   expect(last.snapshot.neutralFingerprint).toBe(initial.snapshot.neutralFingerprint)
   expect(last.snapshot.bindingConfigFingerprint).toBe("a".repeat(64))
-  expect(session.events.find(event => event.type === "context/usage")).toMatchObject({ checkpoint: { bindingConfigFingerprint: "a".repeat(64) } })
+  expect(session.events.find(event => event.type === "context/usage")).toMatchObject({ version: 2, checkpoint: { request: { executionEpochId: "fixture-E", snapshot: { surfaceRevision: initial.snapshot.requestContext!.surfaceRevision } } } })
   expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", admissionInputTokens: initial.snapshot.admissionInputTokens, requestContext: initial.snapshot.requestContext } })
   expect(requests).toHaveLength(1)
 })
@@ -80,8 +82,10 @@ it("retains accepted measured usage when Stop arrives during the acceptance flus
   let effects = 0
   tools.register({ name: "probe", description: "probe", inputSchema: { type: "object" }, async execute() { effects++; return "effect" } })
   const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
-  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
-    return wrapPreparedRequest(await actual.prepare!(request), () => (async function*() {
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("unprepared") }, async prepare(request) {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control)
       yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const
       yield { type: "tool_call", call: { id: "c", name: "probe", args: {} } } as const; yield { type: "end" } as const
     })())
@@ -112,9 +116,11 @@ it("a failed post-response observation preserves accepted usage and blocks the n
   let preparations = 0
   const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
   const unsupported = new (class { opaque = "not JSON" })()
-  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("unprepared") }, async prepare(request) {
     preparations++
-    return wrapPreparedRequest(await actual.prepare!(request), () => (async function*() {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control)
       yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const
       yield { type: "text/chunk", text: "accepted" } as const
       yield { type: "end", providerContinuation: unsupported as never } as const
@@ -136,10 +142,11 @@ it("does not restore a historical read to fit when a changed surface is restored
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
   let prompt = "original", preparations = 0, transports = 0
-  const model: ModelClient = { async *stream() { throw Error("unprepared") }, async prepare(request) {
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error("unprepared") }, async prepare(request) {
     preparations++
-    return wrapPreparedRequest(await actual.prepare!(request), (_stream, control) => (async function*() {
-      entered.resolve(); await release.promise; control?.validateBeforeTransport?.(); transports++
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      entered.resolve(); await release.promise; confirmFixtureExecution({ ...prepared, measurement }, control); transports++
       yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
     })())
   } }

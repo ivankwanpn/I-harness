@@ -1,3 +1,4 @@
+import { validContextUsageV2, type ContextUsageEventV2 } from "./attribution.ts"
 /** Owned scalar facts only. Protocol payloads and prefix unit vectors are ephemeral. */
 export interface ContextBindingMetadata {
   version: 1; providerId?: string; modelId: string; protocol: string
@@ -38,7 +39,7 @@ export interface ContextRecoveryFacts {
   inputCost?: number; inputBytes?: number; retryConsumed?: boolean
   retryInputFingerprint?: string
 }
-export type ContextEvent =
+export type ContextEvent = ContextUsageEventV2
   | { type: "context/budget"; version: 1; snapshot: RequestBudgetSnapshot; seq?: number }
   | { type: "context/usage"; version: 1; checkpoint: ContextUsageCheckpoint; seq?: number }
   | ({ type: "context/recovery"; seq?: number } & ContextRecoveryFacts)
@@ -72,6 +73,7 @@ export function validBudgetSnapshot(value: unknown): value is RequestBudgetSnaps
 export function isContextEventType(type: string): boolean { return ["context/budget", "context/usage", "context/recovery"].includes(type) }
 export function validContextEvent(value: unknown): value is ContextEvent {
   if (!object(value) || new TextEncoder().encode(JSON.stringify(value)).byteLength > 4096) return false
+  if (value.type === "context/usage" && value.version === 2) return validContextUsageV2(value)
   const envelope = { version: one, seq: integer }
   if (value.type === "context/budget") return fields(value, { type: enumOf("context/budget"), version: one, snapshot: validBudgetSnapshot }, { seq: integer })
   if (value.type === "context/usage") return fields(value, { type: enumOf("context/usage"), version: one, checkpoint: validContextCheckpoint }, { seq: integer })

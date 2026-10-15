@@ -125,7 +125,7 @@ it("preserves actual image uncertainty through the shared SDK contract without i
   append(session, { type: "user/message", text: "controlled image" })
   const client = createAnthropicClient({ model: "controlled", apiKey: "fixture", inputModalities: ["text", "image"] })
   const evidence = captureRequestCandidate(session, "image", { model: client }, { systemPrompt: "Controlled image context", tools: [], maxOutputTokens: 2048 }, 0)
-  const owner = createOwnedBudget(session, "image", () => evidence)
+  const owner = createOwnedBudget(session, "image", () => evidence, "sdk-image-lifetime", () => ({ kind: "unclassified" }))
   try {
     const prepared = await client.prepare!({ systemPrompt: "Controlled image context", tools: [], maxOutputTokens: 2048,
       messages: [{ role: "user", content: [{ type: "image", image: { mediaType: "image/png", dataBase64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" } }] }] })

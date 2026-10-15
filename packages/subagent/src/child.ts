@@ -24,7 +24,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   // Allocate inherited seed and read depth before resolving the model.
   const turns = opts.forkTurns ?? "none"
-  const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns)
+  const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns, opts.parentSession.formatVersion)
 
   let childSession: ReturnType<typeof createSession>
   let sessionId: string | undefined

@@ -30,9 +30,19 @@ export function snapshotModelData<T>(value: T, exclude: readonly string[] = []):
   }
   return result as T
 }
+const composedCallbacks = new WeakMap<Function, readonly Function[]>()
+function compose<T extends unknown[]>(a: ((...args: T) => void) | undefined, b: ((...args: T) => void) | undefined): ((...args: T) => void) | undefined {
+  if (!a || a === b) return b ?? a
+  if (!b) return a
+  const callbacks = [...new Set([...(composedCallbacks.get(a) ?? [a]), ...(composedCallbacks.get(b) ?? [b])])] as ((...args: T) => void)[]
+  const result = (...args: T) => { for (const callback of callbacks) callback(...args) }
+  composedCallbacks.set(result, callbacks)
+  return result
+}
 export function preparedControls(request: PreparedStreamControl, control?: PreparedStreamControl): PreparedStreamControl {
   return {
-    validateBeforeTransport: control?.validateBeforeTransport ?? request.validateBeforeTransport,
+    validateBeforeTransport: compose(request.validateBeforeTransport, control?.validateBeforeTransport),
+    confirmExecution: compose(request.confirmExecution, control?.confirmExecution),
     signal: control?.signal ?? request.signal,
     onStreamActivity: control?.onStreamActivity ?? request.onStreamActivity,
     onTerminalResponse: control?.onTerminalResponse ?? request.onTerminalResponse,
@@ -58,6 +68,7 @@ export function withPreparedRequests(client: ModelClient, wrap: (inner: ModelCli
 }
 export function mapModelRequest(client: ModelClient, map: (request: LLMRequest) => LLMRequest): ModelClient {
   return {
+    get executionIdentity() { return client.executionIdentity },
     stream: request => client.stream(map(request)),
     prepare: request => prepareModelRequest(client, map(request)),
   }

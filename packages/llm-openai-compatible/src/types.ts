@@ -1,6 +1,7 @@
 import type { PromptCacheConfig } from "@i-harness/llm-seam"
 
 export interface OpenAICompatibleConfig {
+  executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   apiKey: string
   /** Trusted per-client transport; absent uses the process fetch at call time. */
   fetch?: typeof globalThis.fetch

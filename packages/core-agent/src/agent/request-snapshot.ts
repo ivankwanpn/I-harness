@@ -4,6 +4,7 @@ import { projectionFingerprint } from "@i-harness/token-meter"
 import type { ModelClient } from "@i-harness/llm-seam"
 
 export interface RequestEvidence {
+  readonly executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   readonly snapshot: ContextSnapshot
   readonly model: ModelClient
   readonly bindingIdentity?: object
@@ -13,7 +14,7 @@ export interface RequestEvidence {
 }
 
 /** Capture synchronously after the logical hooks/claim, before any await. */
-export function captureRequestCandidate(session: Session, ownerSessionId: string, selected: { model: ModelClient; bindingIdentity?: object }, surface: RequestSurfaceInput, projectionRevision: number): RequestEvidence {
+export function captureRequestCandidate(session: Session, ownerSessionId: string, selected: { model: ModelClient; bindingIdentity?: object; executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity }, surface: RequestSurfaceInput, projectionRevision: number): RequestEvidence {
   const result = captureContextSnapshot(session, { ownerSessionId, surface })
   if (result.kind === "unsupported") throw Object.assign(new Error(`${result.code}: ${result.component}`), { code: result.code, component: result.component, sourceIds: result.sourceIds })
   const snapshot = result.snapshot

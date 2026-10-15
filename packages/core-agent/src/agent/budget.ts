@@ -1,12 +1,14 @@
-import { append, deriveContextRecovery, deriveContextUsage, type BudgetRead, type Session } from "@i-harness/core-session"
-import { checkBudget, createContextMeter, type PreparedRequestMeasurement } from "@i-harness/token-meter"
+import { append, deriveContextRecovery, type BudgetRead, type Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason } from "@i-harness/core-session"
+import { checkBudget, createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { readContextCoordinates } from "@i-harness/context-engine"
 import { sameRequestCandidate, requestContextIdentity, type RequestEvidence } from "./request-snapshot.ts"
 import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
-export function createOwnedBudget(session: Session, ownerSessionId: string, freshness: () => RequestEvidence) {
-  const calibration = createContextMeter({ ownerSessionId, restored: deriveContextUsage(session, ownerSessionId) })
+export function createOwnedBudget(session: Session, ownerSessionId: string, freshness: () => RequestEvidence, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation) {
+  const calibration = createAcceptedCalibration(ownerSessionId, observationLifetimeId)
+  const compatibility = (evidence: RequestEvidence): Parameters<ReturnType<typeof createAcceptedCalibration>["probe"]>[1] => { const expected = expectedExecution(evidence.executionIdentity); return { ownerSessionId, observationLifetimeId, executionEpochId: expected.kind === "known" ? expected.identity.authEpoch : undefined, branchId: evidence.snapshot.coordinates.branchId, contextEpoch: evidence.snapshot.coordinates.contextEpoch, projectionRevision: evidence.projectionRevision } }
+  const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) append(session, event) }
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
   let bindingRevision = 0
   let captured: RequestEvidence | undefined
@@ -15,8 +17,9 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
     ? { kind: "ready", snapshot: { ...latest.snapshot, admission: "unavailable", reason } } : latest
   return {
     ownerSessionId,
-    invalidateCalibration() { calibration.invalidate() },
-    invalidate() { calibration.invalidate(); invalidated = "Model context binding changed"; bindingRevision++ },
+    invalidateCalibration() { retire("context-rewritten") },
+    retire,
+    invalidate() { retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
     read(reason?: string): BudgetRead {
       if (latest.kind !== "ready") return latest
       let unavailable = reason ?? invalidated
@@ -43,7 +46,7 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       let { input, output } = prepared.measurement
       const binding = evidence.metadata
       if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: prepared input does not match owned model binding")
-      let estimate = calibration.estimate(input, binding, evidence.projectionRevision)
+      let estimate = calibration.probe(input, compatibility(evidence))
       const safetyMargin = window === undefined ? 0 : Math.ceil(window * (1 - reserveRatio))
       let available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
       let ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
@@ -55,7 +58,7 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       // A changed semantic shape can retire a provisional legacy anchor here.
       ;({ input, output } = candidate.measurement)
       if (binding && input.coverage !== "neutral-only" && (binding.modelId !== input.modelId || binding.protocol !== input.protocol)) throw new Error("MODEL_BINDING_MISMATCH: selected input does not match owned model binding")
-      estimate = calibration.estimate(input, binding, evidence.projectionRevision)
+      estimate = calibration.probe(input, compatibility(evidence))
       available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
       ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
       const recovery = deriveContextRecovery(session, ownerSessionId, { ...input, providerId: binding?.providerId ?? input.providerId })
@@ -82,13 +85,14 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       latest = { kind: "ready", snapshot: freezePreparedFacts(snapshot) }
       captured = evidence
       invalidated = undefined
-      return { prepared: candidate, snapshot }
+      return { prepared: candidate, snapshot, disposition: estimate.disposition, calibrated: estimate.calibrated }
     },
     checkpoint() { if (latest.kind === "ready") append(session, { type: "context/budget", version: 1, snapshot: latest.snapshot }) },
-    record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.record>[2], requestRevision: number, accepted: boolean) {
-      if (!accepted) { calibration.invalidate(); return }
-      const checkpoint = calibration.record(measurement.input, captured?.metadata, usage, requestRevision)
-      if (checkpoint) append(session, { type: "context/usage", version: 1, checkpoint })
+    record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined) {
+      if (accepted && session.events[accepted.seq!] === accepted) {
+        const sample = calibration.recordAccepted(measurement.input, accepted.request, accepted, usage)
+        if (sample.kind === "sample") append(session, { type: "context/usage", version: 2, op: "sample", checkpoint: sample.checkpoint })
+      }
       // Accepted provider output belongs to this owned attempt. A subsequent
       // local edit becomes unavailable until admission measures it again.
       let postResponseContextRevision: string | undefined

@@ -1,3 +1,4 @@
+import { ownedContextReadiness } from "@i-harness/session-persistence"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ChildAgentEntry } from "../agent-table.ts"
@@ -109,6 +110,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const agent = createAgent(childCtx, {
     ...(declared === undefined && deps.inheritedBindingForStep ? { bindingForStep: deps.inheritedBindingForStep } : {}),
     isSubagent: true,
+    ...(childCoordinator && childSessionId ? { ensureWritableContext: ownedContextReadiness(childCoordinator, childSessionId, entry.session) } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
     budgetBinding,

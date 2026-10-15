@@ -3,18 +3,18 @@ import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
 import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
-import type { AgentContext } from "./context.ts"
 import { createStepReasoning } from "./reasoning.ts"
 import { TOOL_ABORTED_BEFORE_DISPATCH } from "@i-harness/core-tools"
 import { randomUUID } from "node:crypto"
 
-export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
+export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
   const initialStart = deps.session.events[initialStartSeq]
   const actionId = initialStart?.type === "step/start" ? initialStart.actionId! : ""
   let attemptId = initialStart?.type === "step/start" ? initialStart.attemptId! : ""
   let reopenedRetry: string | undefined
   let endFingerprint: string | undefined
+  let receipt: (import("@i-harness/llm-seam").ExecutionReceipt & { actionId: string; attemptId: string }) | undefined
   let stepText = ""
   let toolCallsThisStep = 0
   // Reports merge within this attempt; a discarded retry resets usage.
@@ -33,7 +33,6 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
   let providerEnded = false
   function discard(notDispatched: boolean) {
     modelFailed = true
-    context.contextMeter.invalidate()
     stepReasoning.flush()
     if (stepText || thinkingBlocks?.length || providerContinuation || truncatedThisStep || refusedThisStep) {
       append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
@@ -50,6 +49,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
     lifecycle.stepFailed = true
   }
   return {
+    confirm(received: import("@i-harness/llm-seam").ExecutionReceipt) { receipt = { ...received, actionId, attemptId } },
     discard() { discard(true) },
     accept(ev: LLMStreamEvent) {
       stepReasoning.checkPublication()
@@ -76,6 +76,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             toolCallsThisStep = 0
             batch.length = 0
             stepUsage = {}
+            receipt = undefined
             reasoning.length = reasoningStart
             stepReasoning.resetBlockIndex()
             truncatedThisStep = false
@@ -84,7 +85,6 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             providerContinuation = undefined
             providerEnded = false
             endFingerprint = undefined
-            context.contextMeter.invalidate()
             stepStartSeq = deps.session.events.length
             attemptId = randomUUID()
             append(deps.session, { type: "step/start", actionId, attemptId })
@@ -153,7 +153,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
       }
       stepReasoning.flush()
     },
-    result() { return { stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
+    result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
   }
 }
 

@@ -1,7 +1,7 @@
 import type { Session, SessionEvent } from "./types.ts"
 import type { ConversationValidationIndex } from "../conversation/validation.ts"
 
-export const conversationIndexes = new WeakMap<Session, { events: SessionEvent[]; index: ConversationValidationIndex }>()
+export const conversationIndexes = new WeakMap<Session, { formatVersion: number; events: SessionEvent[]; index: ConversationValidationIndex }>()
 
 // Optional per-session append observer (M4 persistence mirror). Stored in a
 // WeakMap so the Session shape itself is unchanged.

@@ -339,6 +339,7 @@ export interface LLMRequestScope {
 }
 
 export interface LLMRequest {
+  confirmExecution?: (confirmation: import("./prepared/execution.ts").ExecutionConfirmation) => void
   /** Internal owner guard; wrappers forward it to each physical transport boundary. */
   validateBeforeTransport?: () => void
   /** Host-only conversation scope; never serialize into a provider body. */
@@ -383,6 +384,7 @@ export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, in
 }
 
 export interface ModelClient {
+  readonly executionIdentity?: import("./prepared/execution.ts").LiveExecutionIdentity
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
   prepare?(request: LLMRequest): Promise<import("./prepared/types.ts").PreparedModelRequest>
 }
@@ -622,3 +624,6 @@ export function createRetryingClient(client: ModelClient, policy: ResolvedRetryP
   return withPreparedRequests(client, inner => createRetryingExecution(inner, policy, metadata))
 }
 export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./binding.ts"
+
+export type { LiveExecutionIdentity, ExecutionConfirmation, ExecutionReceipt, PreparedExecutionContext } from "./prepared/execution.ts"
+export { sameExecutionIdentity, validExecutionIdentity } from "./prepared/execution.ts"

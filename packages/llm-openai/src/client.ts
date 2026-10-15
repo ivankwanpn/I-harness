@@ -44,10 +44,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (value !== undefined) body.max_output_tokens = value
         return body
       },
-      async *execute(_actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(_actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         let accessToken: string
         let accountId: string | undefined
+        let executionIdentity = capturedConfig.executionIdentity
         try {
           request.signal?.throwIfAborted()
           if (codexSubscription && !capturedConfig.resolveCodexAuth) throw new Error("Codex subscription account credentials are unavailable")
@@ -56,18 +57,19 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             if (!auth || typeof auth.accessToken !== "string" || !auth.accessToken.trim() || typeof auth.accountId !== "string" || !auth.accountId.trim()) throw new Error("Codex account credentials are unavailable")
             accessToken = auth.accessToken
             accountId = auth.accountId
+            executionIdentity = auth.authEpoch && capturedConfig.executionIdentity ? { ...capturedConfig.executionIdentity, authEpoch: auth.authEpoch } : undefined
           } else accessToken = capturedConfig.apiKey
           request.signal?.throwIfAborted()
         } catch (error) {
           if (request.signal?.aborted) throw error
-          yield { type: "error", error: error instanceof Error ? error : new Error("Unable to resolve account credentials") }
+          yield { type: "error", error: Object.assign(error instanceof Error ? error : new Error("Unable to resolve account credentials"), { code: "AUTH" }) }
           return
         }
         // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
         let response: Response
-        request.validateBeforeTransport?.()
+        execution.confirm(executionIdentity)
         const routing = affinity?.prepare(scope, accountId!, body.prompt_cache_key, cacheMode === "off", scopeIdentity)
         try {
           response = await (codexSubscription ? systemFetch : fetch)(endpoint, {

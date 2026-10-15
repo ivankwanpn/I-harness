@@ -1,3 +1,4 @@
+import { ensureWritableContext } from "./context-readiness.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, type ImageInput } from "@i-harness/core-session"
 import { randomUUID } from "node:crypto"
@@ -17,11 +18,12 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
   // This budget and both subordinate owners persist across run/followup calls.
   let steps = 0
   const getSteps = () => steps
-  const modelLoop = createModelLoop(deps, context)
+  const modelLoop = createModelLoop(deps)
   const prepareRequest = createStepInput(deps, context)
   const recovery = createRecovery(deps, context)
   const admit = createAdmission(deps, context, prepareRequest, recovery)
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions, producer = "agent.run"): Promise<AgentResult> {
+    await ensureWritableContext(deps)
     const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
     const abort = signal ?? deps.signal
     const input = prepareTurnInput(deps.session, { message, images, inputId, options, producer })
@@ -45,21 +47,27 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       drainHookContext(ctx, deps)
-      const candidateState = { staleRebuilds: 0, compacted: false }
+      const candidateState: import("./execution.ts").CandidateExecutionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
       let candidate: Awaited<ReturnType<typeof admit>>
       let streamStep: ReturnType<typeof modelLoop.start>
       while (true) {
         candidate = await admit(abort, requestScope, getSteps, candidateState)
         streamStep = modelLoop.start(lifecycle, physicalStepStartSeq, abort, getSteps)
+        const activeCandidate = candidate, activeStep = streamStep
         let physicalAttempts = 0, observed = false, rebuild = false
         try {
-          for await (const ev of candidate.prepared.stream({ validateBeforeTransport: () => { candidate.validateBeforeTransport(); physicalAttempts++ } })) {
-            if (ev.type !== "activity" && ev.type !== "retry") observed = true
+          for await (const ev of candidate.prepared.stream({ confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: () => { activeCandidate.validateBeforeTransport(); physicalAttempts++; candidateState.hasStartedSend = true } })) {
+            if (["text/chunk", "tool_call", "reasoning", "end"].includes(ev.type)) { observed = true; candidateState.hasObservedOutput = true }
             streamStep.accept(ev)
           }
         } catch (error) {
           const failure = modelFailureFacts(error)
-          if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
+          if (["AUTH", "INVALID_API_KEY"].includes(failure?.code ?? (error as { code?: string })?.code ?? "")) context.ownedBudget.retire("execution-identity-changed")
+          const handoff = candidate.execution.handoff()
+          if ((error as { code?: string })?.code === "EXECUTION_IDENTITY_CHANGED" && handoff && !candidateState.hasStartedSend && !candidateState.hasObservedOutput && candidateState.epochRebuilds++ === 0) {
+            candidateState.handoff = handoff
+            rebuild = true
+          } else if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
             if (++candidateState.staleRebuilds > 3) streamStep.fail(stalePreparedInput())
             rebuild = true
           } else if (!streamStep.result().providerEnded && failure?.code === "CONTEXT_WINDOW_EXCEEDED" && failure.reason === "context-limit") {
@@ -73,10 +81,10 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
             append(deps.session, { type: "step/start", actionId: failedStart?.type === "step/start" ? failedStart.actionId : randomUUID(), attemptId: randomUUID() }); lifecycle.stepOpen = true; lifecycle.stepFailed = false
             rebuild = true
           } else streamStep.fail(error)
-        } finally { streamStep.settle() }
+        } finally { candidate.execution.close(); streamStep.settle() }
         if (!rebuild) break
       }
-      const { requestRevision, prepared } = candidate
+      const { prepared } = candidate
       const step = streamStep.result()
       if (!step.providerEnded) streamStep.fail(Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" }))
       if (step.truncatedThisStep || step.refusedThisStep) {
@@ -85,7 +93,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         closeStep(deps, lifecycle, getSteps, step)
         throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
       }
-      await acceptCompletedModelStep(deps, context, lifecycle, requestRevision, step, prepared.measurement, abort)
+      await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt))
       await recovery.resolve(prepared.measurement, abort)
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
