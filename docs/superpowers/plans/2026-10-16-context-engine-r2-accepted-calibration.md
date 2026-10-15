@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development or executing-plans. Steps use checkbox syntax for tracking.
 
-**Status:** Ready after R2B1 correction review PASS at72a98ef5706ae48e2a052cb5747ed2ac51843288. Root rebased actual PreparedModelRequest/createPreparedPayload and ProjectedInputFacts/semanticIdentity/payloadIdentity APIs; correction changed no public B1 contract. Bounded design preflight's epoch-handoff, durable-format readiness and current-reference index gaps were explicitly closed in the steps below. The ledger will record exact subsequent documentation BASE. No other product writer may run concurrently.
+**Status:** Complete through45636f7aca5ba7dfaaa0d969b473c56f36e96cb7 after fresh full-range review and scoped fix1 approval. Original BASE a7b60c646c2b18118c9a9c4b5a508ac5298366b0. Verification: docs/research/2026-10-16-context-engine-r2b2-verification.md. Whole-program, native authority, cold calibration and R3 guarantees remain outside this completed task gate.
 
 **Goal:** Calibrate only from an attributable accepted request, preserve useful compatible samples across pure candidate probes, and stop reuse after an actual owner/context/binding change without inventing account or lease evidence.
 
@@ -11,6 +11,8 @@
 **Tech Stack:** Existing TypeScript/pnpm/Vitest, random nonsecret process-local IDs, shared core-session data encoding, current format migration/coordinator gates. No new registry dependency.
 
 **Spec/evidence:** redesign/framework, reviewed R1C and R2A, R2B1 plan; `.tmp/context-redesign-20261015/r2b2-root-ruling.md`, `r2b2-attribution-integration.md`, `r2b-identity-contracts.md`. Product planning evidence is pinned to38a2da0b; no claim that proposals are implemented. Root accepts the live-only observation-lifetime contract below, not the earlier proposal's nonexistent executor ownerGeneration.
+
+**Implementation audit ruling, 2026-10-16:** Owned v1 migration removed the last production consumers of private-workspace facade exports deriveContextUsage, validContextCheckpoint and createContextMeter (including its no-argument overload). Root verified both packages are private:true and authorizes retiring those newly orphaned exports; tests alone are not a shipping compatibility requirement. Preserve the actual historical v1 decoder through validContextEvent. Remove the dead no-argument production algorithm if no real consumer remains, rather than create a test-only compatibility module to keep obsolete API tests green. Retain applicable normalization/hash/lineage controls against actual retained/new implementations and disclose removed API-only scenarios. New implementation helpers/types need not be publicly exported without real consumers. No audit waiver, fake consumer or baseline reseed.
 
 ## Global Constraints
 
@@ -24,7 +26,7 @@
 ## File/owner map and exact retirement
 
 - core-session `events/conversation.ts`, `events/context.ts`, `conversation/validation.ts`, `projection/context.ts`, `serialization/jsonl.ts`, `events/types.ts`, `index.ts`. Extract shared data-only attribution/usage validator leaves to keep size/cohesion. Extend the existing staged structural index, not another index with a second raw log.
-- token-meter checkpoint/calibration normalization and public factory exports. R2B1 semantic/pricing identities are consumed directly. Owned callers stop reading/writing v1 checkpoints together; existing no-argument legacy meter remains only its explicitly separate compatibility API.
+- token-meter checkpoint/calibration normalization and actual consumed factory exports. R2B1 semantic/pricing identities are consumed directly. Owned callers stop reading/writing v1 checkpoints together; the unused private no-argument facade/algorithm is retired under the implementation ruling above, while historical v1 decoding remains at its real consumer.
 - llm-seam request/stream controls, prepared wrappers/controls, retry terminal classification; adapter clients bind receipt at their existing transport invocation. Provider profile/build forwarding uses public package contracts. No receipt in wire JSON.
 - provider-runtime `runtime/auth.ts`, `selection/{resolve,binding}.ts`, types; credentials bearer result metadata only; coding-plans `codex-management.ts` token boundary plus a private live-identity leaf. Avoid extra authentication calls. Actual model-binding carriers in assembly/CLI/children carry only safe lifetime data where consumed.
 - core-agent `agent/{context,request-snapshot,admission,turn,model-step,exchange,finalization,budget}.ts`. Replace mutable latest-budget/boolean acceptance attribution with exact immutable selected candidate and successful receipt.
@@ -37,11 +39,11 @@
 
 **Produces:** format4-fenced accepted request attribution and usage references; process-local execution receipts; pure candidate calibration probing with explicit retirement; main/child live reuse and honest cold/summary limits.
 
-- [ ] **Step 1: Record baseline and add independent attribution/epoch RED fixtures.**
+- [x] **Step 1: Record baseline and add independent attribution/epoch RED fixtures.**
 
 Record baseline for affected checkpoint/normalization, conversation-format/accepted-exchange/seed, retry wrappers, main owned-budget/context-usage, real runtime/Codex-token fixture and summary tests where no source-equivalent receipt exists. Do not exercise real credentials. Add missing/mismatched accepted-reference, probe-A-miss/B-match, missing-usage preservation and pretransport epoch-change controls first. Keep actual failed receipts, fixture mistakes and corrected RED distinguished.
 
-- [ ] **Step 2: Version causal attribution at the existing acceptance owner.**
+- [x] **Step 2: Version causal attribution at the existing acceptance owner.**
 
 Use bounded data-only contracts in core-session, with no seam/runtime imports:
 
@@ -107,7 +109,7 @@ Extend the existing structural index to validate sample→prior accepted-v2 refe
 
 Concrete index seam: `createConversationValidationIndex(events, { formatVersion })` and `stage(suffix, { readCurrentEvent })`, with the private append-owner constructor adapted to those same inputs. Full-history validation supplies its actual format; live append reads its current Session array; coordinator stage supplies a callback over the **current operation's freshly read durable prefix**, not the first load captured forever. Verify referenced accepted attribution and structural fields against indexed facts. Index/session caches include formatVersion and are rebuilt after format migration; stage cannot silently retain a3 index beneath4. Do not retain another raw event array in the index or add a separate v2 validator disconnected from real append/load paths.
 
-- [ ] **Step 3: Fence format4 and preserve truthful seed/fork history.**
+- [x] **Step 3: Fence format4 and preserve truthful seed/fork history.**
 
 Upgrade CURRENT_FORMAT_VERSION to4, retaining1/2/3 readers and registered stepwise migration. A header4 barrier must be durable under current owned writable-format gates before any accepted-v2/context-v2 append. Older headers refuse new fields/versions; old runtime refuses4 before repair/write. A backend unable to upgrade refuses writing. No ignorable markers or rewrite of original sequence/history/usage values. Keep event4096-byte guard and reject oversized DTOs.
 
@@ -119,7 +121,7 @@ Pass the actual format through both public/full history validation and the incre
 
 Central remapConversationSeed handles every fork path, including no-rewind shortcuts: remove operational context samples/retirements; convert inherited accepted-v2 to structural v1 before namespacing/remapping action/attempt/exchange/sequence. Retain existing full-bundle validation/inherited provenance. Do not namespace a parent's send/epoch into apparent child execution. Original archive keeps the original evidence; new child sends create their own v2 records. Accept source format explicitly; no format4 data decoded under a guessed3.
 
-- [ ] **Step 4: Produce safe live identities at existing runtime/auth owners.**
+- [x] **Step 4: Produce safe live identities at existing runtime/auth owners.**
 
 Use a narrow seam contract with version1, runtimeId, bindingLifetimeId, authEpoch, scope(binding-credential or managed-subscription) and coldCompatible:false. Mint observationLifetimeId once per real Agent context/session-owner lifetime, not per turn. This is not an executor lease generation: coordinator.ownerOf is boolean and locking optional. R3 still must provide real reservations/fencing.
 
@@ -131,7 +133,7 @@ At the actual transport invocation, after existing late auth and immediately bef
 
 Concrete seam boundary: extend prepared execution with a fourth, private-per-handle `PreparedExecutionContext` argument whose `confirm(identity?: LiveExecutionIdentity): void` closure owns the final frozen semantic/payload facts. It generates a fresh sendId for that invocation and invokes optional `PreparedStreamControl.confirmExecution(confirmation)`, then the existing immediate pretransport guard. Adapters call it once after actual auth and immediately before their fetch/send, replacing the prior direct guard call without duplicating it. This avoids rehashing a body or trusting caller-supplied payload IDs. Confirmation carries version/sendId/final semanticId/payloadId/payloadKind and optional actual identity; the candidate-local collector adds its own bound candidateId and validates the facts against its selected handle. Preserve equivalent request-level control composition through wrappers. If no collector is installed, direct clients retain their ordinary execution behavior with no invented attribution. Neutral custom preparation has no fabricated protocol facts/receipt; finalization uses structural v1 acceptance and no calibrated sample when classified receipt evidence is absent.
 
-- [ ] **Step 5: Bind receipts to the exact successful step and bounded local rebuild.**
+- [x] **Step 5: Bind receipts to the exact successful step and bounded local rebuild.**
 
 Allocate candidateId for the selected final prepared handle; a derivative/rebuild gets its own ID. Retain immutable RequestEvidence and measurement with it. Adapter receipts are execution data, not mutation of frozen prepared facts. The per-candidate turn closure associates the send with the current model-step action/attempt; model-step clears receipt alongside content/usage when an actual retry opens another attempt, then returns the successful receipt with end/usage. Wrappers preserve all callback compositions and cannot reuse send1's receipt for send2.
 
@@ -147,7 +149,7 @@ Distinguish reliance on calibration from an unanchored estimate. A first/unancho
 
 Hidden SDK retries remain one locally observed invocation until R3 integrates their real attempts; report that limitation. sendId is not a durable reservation. No frame in this task may claim F09 complete.
 
-- [ ] **Step 6: Implement one probe/retirement state and remove owned v1 calibration.**
+- [x] **Step 6: Implement one probe/retirement state and remove owned v1 calibration.**
 
 The new calibration owner keeps empty/live/retired state. `probe(input, capturedCompatibility)` is pure: it returns heuristic/calibrated facts and a compatibility disposition without erasing a sample. Probing initial uncapped A may miss while selected derivative B matches; the final candidate is validated independently before use. Actual observed owner/branch/epoch/rewrite/prune/rebind/native/source changes retire the sample through the existing execution owner. Pure scalar getters do not append events/prepare/auth. R1C's historical budget-read latch stays separate.
 
@@ -159,11 +161,11 @@ Normalize once with safe nonnegative counters/overflow checks: includes-cache100
 
 Read v1 samples as historical legacy facts only; owned main/child code ceases v1 restore/record in this same activation. Keep no dual write/fallback. Current-process v2 reuse requires the same actual owner observation lifetime, execution/binding epoch and valid prefix/shape/branch/epoch/pricing. Cold records cross-check accepted lineage but remain historical because coldCompatible is false; matching configuration alone does not establish account continuity. First new admission uses honest projected estimation and can re-anchor after acceptance. No misleading calibrated label on restart.
 
-Retire unused private-workspace projected-v1 factory overloads/public exports when all real consumers migrate, following the R2A ruling. Keep the actual no-argument legacy meter and historical v1 event decoder where still consumed; do not retain dead compatibility exports merely to satisfy an earlier planning assumption or add fake consumers to satisfy the audit. Explain exact removals and real call-site migration in the report.
+Retire unused private-workspace projected-v1 factory overloads/public exports when all real consumers migrate, following the R2A ruling and the concrete implementation audit ruling above. Keep the historical v1 event decoder where actually consumed; do not retain dead compatibility exports or algorithms merely to satisfy an earlier planning assumption or add fake consumers to satisfy the audit. Explain exact removals, obsolete API-only test removal and real call-site migration in the report.
 
 Summary invocation/piece uses its own purpose/origin/candidate/receipt and may report an in-memory summary-piece-accepted observation only after complete/end/quality checks. It never forges model/exchange-accepted, feeds main calibration or claims durable transaction coverage. Child Agents own independent lifetimes/samples even on inherited client bindings. Preserve summary≤8 tracker and split bounds; a no-send epoch reprepare uses its existing charged slot without refund/reset, and after-send change is terminal. Durable summary sample acceptance is explicitly assigned to R3 transaction publication.
 
-- [ ] **Step 7: Run independent causality/migration controls and affected gates.**
+- [x] **Step 7: Run independent causality/migration controls and affected gates.**
 
 Required literal oracles:
 
