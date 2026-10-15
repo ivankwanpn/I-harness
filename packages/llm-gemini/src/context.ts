@@ -38,9 +38,12 @@ export function describeContext(body: Record<string, unknown>, config: GeminiCon
   if (referenced)
     counter.uncertainties.add("external-cached-content")
   const excluded = new Set(["contents", "systemInstruction", "tools", "generationConfig", "cachedContent"])
-  const generation = { ...(body.generationConfig as Record<string, unknown> ?? {}) }
-  delete generation.maxOutputTokens
-  const other = { ...Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key))), ...(Object.keys(generation).length ? { generationConfig: generation } : {}) }
+  let generation = body.generationConfig
+  if (generation !== null && typeof generation === "object" && !Array.isArray(generation)) {
+    const { maxOutputTokens: _cap, ...semanticOptions } = generation as Record<string, unknown>
+    generation = Object.keys(semanticOptions).length ? semanticOptions : undefined
+  }
+  const other = { ...Object.fromEntries(Object.entries(body).filter(([key]) => !excluded.has(key))), ...(generation !== undefined ? { generationConfig: generation } : {}) }
   counter.structured("otherInput", other)
   const overrides: ("model" | "system" | "messages" | "tools")[] = []
   for (const [wire, field] of [["model", "model"], ["systemInstruction", "system"], ["contents", "messages"], ["tools", "tools"]] as const)

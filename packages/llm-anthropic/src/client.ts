@@ -2,6 +2,7 @@ import { invalidPreparedRequest, preparedModelClient, snapshotModelData, createP
 import type { AnthropicConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
 import { fingerprintPrefix } from "./request/messages.ts"
+import { describeCachedBody } from "./request/cache-evidence.ts"
 import { mergeConfiguredHeaders } from "./request/headers.ts"
 import { createAnthropicFold } from "./stream/fold.ts"
 import { decodeAnthropicStream } from "./stream/decode.ts"
@@ -21,15 +22,19 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     if ("error" in prepared) {
       throw invalidPreparedRequest(prepared.error.message)
     }
-    const { body, payload, cacheEvidence } = prepared
+    const { payload, cacheEvidence } = prepared
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
       body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
-      async *execute(_actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
+      async *execute(actualBody, serialized, control): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
+        // Bind signed responses to the lowered input that this handle sends.
+        // Only producer-proven cache additions leave the native prefix.
+        const { semantic } = describeCachedBody(actualBody, cacheEvidence)
+        const prefix = fingerprintPrefix(semantic.system, semantic.tools, semantic.messages)
         // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
@@ -53,7 +58,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return
         }
         reportStreamActivity(request, "response-start")
-        const fold = createAnthropicFold(capturedConfig, () => fingerprintPrefix(body.system, body.tools, body.messages), () => reportStreamActivity(request, "tool-arguments"))
+        const fold = createAnthropicFold(capturedConfig, () => prefix, () => reportStreamActivity(request, "tool-arguments"))
         yield* decodeAnthropicStream(response.body, fold, request)
       },
     })

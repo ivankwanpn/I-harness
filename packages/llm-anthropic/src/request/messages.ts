@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto"
+import { projectionFingerprint } from "@i-harness/token-meter"
 import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMMessage, type LLMRequest } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "../types.ts"
 
 export function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
-  return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
+  return projectionFingerprint({ system, tools, messages })
 }
 
 // Shape LLM content parts into Anthropic Messages content blocks. String

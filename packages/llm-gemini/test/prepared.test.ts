@@ -2,6 +2,30 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createGeminiClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it("preserves final string, object, null and array generationConfig distinctions", async () => {
+  const sent: unknown[] = []
+  vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => { sent.push(JSON.parse(String(init.body)).generationConfig); return new Response("") })
+  const shapes = new Set<string>(), inputs = new Set<string>()
+  const values = ["x", { "0": "x" }, null, ["x"], [], {}]
+  for (const value of values) {
+    let calls = 0
+    const prepared = await createGeminiClient({ apiKey: "controlled", model: "fixture", options: { generationConfig: { toJSON() { calls++; return value } } } }).prepare!({ systemPrompt: "", tools: [], messages: [{ role: "user", content: "controlled" }] })
+    expect(calls).toBe(1)
+    shapes.add(prepared.measurement.input.semanticIdentity!.shapeId)
+    inputs.add(prepared.measurement.input.semanticIdentity!.semanticId)
+    for await (const _event of prepared.stream()) {}
+    expect(calls).toBe(1)
+  }
+  expect(sent).toEqual(["x", { "0": "x" }, null, ["x"], [], {}])
+  expect(shapes.size).toBe(6); expect(inputs.size).toBe(6)
+})
+it("removes only a record's explicit generation cap from semantic input", async () => {
+  const prepared = await createGeminiClient({ apiKey: "controlled", model: "fixture", options: { generationConfig: { temperature: .2, thinkingConfig: { thinkingBudget: 4096 }, maxOutputTokens: 64 } } }).prepare!({ systemPrompt: "", tools: [], messages: [] })
+  const capped = prepared.withOutputCap(32)
+  expect(capped.measurement.input.semanticIdentity).toEqual(prepared.measurement.input.semanticIdentity)
+  expect(capped.measurement.output).toMatchObject({ effectiveCap: 32, reasoningBudget: 4096 })
+  expect(capped.measurement.payloadIdentity).not.toEqual(prepared.measurement.payloadIdentity)
+})
 it.each([1.5, Infinity, -Infinity, NaN, "4096", null, true, {}, -2, Number.MAX_SAFE_INTEGER + 1])("rejects malformed raw thinking budget %s before publishing facts or transport", async budget => {
   let sends = 0
   vi.stubGlobal("fetch", async () => { sends++; return new Response("") })
