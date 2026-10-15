@@ -33,6 +33,13 @@ it("real service pushes a child's actual unflushed tool result while the parent 
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
   })
   const assembly = await service.assemblyFor("parent")
+  const actualFlush = coordinator.flush.bind(coordinator)
+  // Hold the required next-admission checkpoint after the real tool result,
+  // before it reaches disk. The live observer must not request another flush.
+  coordinator.flush = async id => {
+    if (id.startsWith("child-") && assembly.liveChildSession!(id)?.events.some(event => event.type === "tool/result" && event.callId === "child-list")) { entered(); await hold }
+    await actualFlush(id)
+  }
   const changed = vi.fn(), catalog = createDesktopSubagents(coordinator, service, { onChanged: changed })
   let turn: Promise<unknown> | undefined
   try {

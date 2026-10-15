@@ -95,6 +95,6 @@ it("starts auto compaction from calibrated usage and returns to a fresh estimate
   expect(session.events.some(event => event.type === "compaction/summary")).toBe(true)
   expect(requests).toHaveLength(3)
   expect(requests.map(request => request.sessionId)).toEqual(["child-session", "child-session", "child-session"])
-  expect(events.filter(event => event.type === "compaction/usage").map(event => event.data)).toEqual([{ inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" }])
+  expect(events.filter(event => event.type === "compaction/usage").map(event => event.data)).toEqual([{ sessionId: "child-session", inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" }])
   expect(events.filter(event => event.type === "provider/usage")).toHaveLength(1)
 })

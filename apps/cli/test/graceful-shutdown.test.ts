@@ -60,6 +60,7 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     const sigtermBefore = process.listenerCount("SIGTERM")
 
     const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    await coordinator.create({ sessionId: "s-shutdown" })
     const { model, release, started } = gatedModel()
     const controller = new AbortController()
 
@@ -71,7 +72,7 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
       signal: controller.signal,
     })
 
-    await started
+    await Promise.race([started, running.then(result => { throw new Error(`Run ended before model entry: ${result.error ?? result.exitCode}`) })])
     // (2) INSTALLED while the run is live — the handlers that make a real SIGINT
     //     unwind rather than kill. Before the fix these counts did not move.
     expect(process.listenerCount("SIGINT")).toBe(sigintBefore + 1)

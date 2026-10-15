@@ -78,6 +78,7 @@ it("the summarizer's fail-soft report is the ambient handle's, at phase turn / l
   expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
   expect(lines).toHaveLength(1)
   expect(parsed(lines)[0]).toMatchObject({ phase: "turn", level: "warn", run: "r15" })
-  expect(parsed(lines)[0]!.msg).toContain("compaction summarizer failed (fail-soft, retrying next step): model exploded")
+  expect(parsed(lines)[0]!.msg).toBe("[i-harness] compaction summarizer failed (fail-soft, retrying next step): Summary request failed.")
+  expect(JSON.stringify(parsed(lines))).not.toContain("model exploded")
   expect(warn).not.toHaveBeenCalled()
 })

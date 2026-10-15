@@ -403,9 +403,10 @@ describe("headless CLI (M2)", () => {
 
   describe("headless CLI M11 compaction", () => {
     it("auto-compacts a long session and completes normally", async () => {
-      // Production-representative shape: maxTokens (20) << threshold (50), so
-      // the summary alone can never re-cross the threshold — no hot loop.
-      const compact: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 20 }
+      // The declared window contains the actual shipped system and schemas.
+      // The retained checkpoint clears the 500-character quality floor and
+      // stays far below the pressure threshold after replacement.
+      const compact: CompactionConfig = { contextWindow: 100_000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 256 }
       // Inline structural model: every stream() call (agent turn OR the shared
       // summarizer call) yields the same long text, so the e2e is deterministic
       // (a script-based createMockClient would be consumed by the summarizer).
@@ -415,7 +416,7 @@ describe("headless CLI (M2)", () => {
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("z".repeat(300), { // ~75 tokens ≥ 50 threshold at step 1
+      const result = await runHeadless("z".repeat(200_000), {
         workspace: dir, approveAll: true, compact, model,
       })
       expect(result.exitCode).toBe(0)
@@ -652,7 +653,7 @@ describe("headless CLI M24b skills + workflow mount", () => {
       const outJson = JSON.stringify(out?.output)
       expect(outJson).toContain("wf hello from step")
       expect(outJson).toContain("[step 1/1 greet] ok")
-      expect(outJson).toContain("[status: completed]")
+      expect((out!.output as { status: string }).status).toBe("completed")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1126,12 +1127,12 @@ describe("headless CLI durable child sessions (M8)", () => {
     try {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
-      // Deterministic driver. The spawned child shares the model client, so the
-      // first stream AFTER spawn (n=1) is the CHILD's own stream (M3-C race) —
-      // it must be text, not a tool call. The main agent's send_message is n=2.
+      // Parent and child share the client but have distinct durable owners.
+      // Their scheduling order is not part of the messaging contract.
       let calls = 0
       const model: ModelClient = {
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper" } } }
@@ -1139,11 +1140,6 @@ describe("headless CLI durable child sessions (M8)", () => {
             return
           }
           if (n === 1) {
-            yield { type: "text/chunk", text: "child done" }
-            yield { type: "end" }
-            return
-          }
-          if (n === 2) {
             yield { type: "tool_call", call: { name: "send_message", args: { target: "root/helper", message: "ping" } } }
             yield { type: "end" }
             return
@@ -1171,18 +1167,18 @@ describe("headless CLI multi-turn subagents (M9)", () => {
     try {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
-      // Deterministic driver: n=0 spawn_agent (fork none), n=2 followup_task,
-      // every other stream (child turns + main) is text.
+      // Route by owner; a background child's first request may race the parent.
       let calls = 0
       const model: ModelClient = {
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
             yield { type: "end" }
             return
           }
-          if (n === 2) {
+          if (n === 1) {
             yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
             yield { type: "end" }
             return
@@ -1214,13 +1210,14 @@ describe("headless CLI multi-turn subagents (M9)", () => {
       let calls = 0
       const run1Model: ModelClient = {
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
             yield { type: "end" }
             return
           }
-          if (n === 2) {
+          if (n === 1) {
             yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
             yield { type: "end" }
             return
@@ -1237,6 +1234,7 @@ describe("headless CLI multi-turn subagents (M9)", () => {
       let resumeCalls = 0
       const run2Model: ModelClient = {
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = resumeCalls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "resume_agent", args: { target: "root/helper" } } }
@@ -1597,16 +1595,16 @@ describe("M11 runHeadless compaction contract", () => {
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("work ".repeat(400), {
+      const result = await runHeadless("work ".repeat(40_000), {
         workspace: dir,
         approveAll: true,
         model,
         // No provider binding here (a model client was supplied), so the window
         // arrives ONLY from the config — the same shape the CLI now produces.
-        compact: { contextWindow: 100, auto: true },
+        compact: { contextWindow: 100_000, thresholdRatio: .5, retainTokens: 0, maxTokens: 256, auto: true },
       })
       expect(result.exitCode).toBe(0)
-      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(true)
+      expect(result.session?.events.some((e) => e.type === "compaction/summary")).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1623,11 +1621,11 @@ describe("M11 runHeadless compaction contract", () => {
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("work ".repeat(400), {
+      const result = await runHeadless("work ".repeat(40_000), {
         workspace: dir,
         approveAll: true,
         model,
-        compact: { contextWindow: 100, auto: false },
+        compact: { contextWindow: 100_000, thresholdRatio: .5, retainTokens: 0, maxTokens: 256, auto: false },
       })
       expect(result.exitCode).toBe(0)
       expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
@@ -2020,9 +2018,8 @@ describe("M19 CLI team integration", () => {
   // sessions. The mock model (SHARED with the child) calls spawn_teammate; the
   // roster → realSpawnChild bridge → subagent spawnChild creates a REAL child
   // agent that runs its own (mock-model) turn — the happy-path real spawn that
-  // Task 10's lifecycle test only stubbed. The child shares the model client,
-  // so its initial turn consumes the NEXT script step (M3-C race — same as
-  // M8's durable-child test), then the lead produces its final message.
+  // Task 10's lifecycle test only stubbed. Route the shared client by durable
+  // owner so background scheduling does not consume another agent's reply.
   // RED phase: HeadlessOptions.team is unknown → spawn_teammate never mounts
   // → the call fails with "unknown tool" → exitCode 1.
   it("runHeadless mounts team tools and the agent can use spawn_teammate", async () => {
@@ -2030,18 +2027,19 @@ describe("M19 CLI team integration", () => {
     try {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
+      let parentRequests = 0
       const result = await runHeadless("use the team", {
         workspace: dir,
         approveAll: true,
         team: {},
         sessionId: id,
         coordinator,
-        mockScript: [
-          { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
-          // step consumed by the spawned child's own (mock-model) turn
-          { role: "assistant", text: "child done" },
-          { role: "assistant", text: "done" },
-        ],
+        model: { async *stream(request) {
+          if (request.sessionId !== id) yield { type: "text/chunk", text: "child done" }
+          else if (++parentRequests === 1) yield { type: "tool_call", call: { name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } } }
+          else yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        } },
       })
       expect(result.exitCode).toBe(0)
       expect(result.finalText).toBe("done")
