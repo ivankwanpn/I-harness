@@ -100,16 +100,16 @@ function assertNative(route: CorpusRoute, body: Wire, compatible = true): void {
   }
 }
 
-function assertPolicyToolsCap(route: CorpusRoute, body: Wire): void {
+function assertPolicyToolsCap(route: CorpusRoute, body: Wire, cap = 2048): void {
   if (route === "chat") {
     expect(body.messages[0]).toEqual({ role: "system", content: "Inspect the two fixture files." })
     expect(body.tools).toEqual([{ type: "function", function: { name: "read", description: "Read a fixture file.", parameters: schema } }])
-    expect(body.max_tokens).toBe(2048)
+    expect(body.max_tokens).toBe(cap)
   } else if (route === "responses" || route === "subscription") {
     expect(body.instructions).toBe("Inspect the two fixture files.")
     const tool = { type: "function", name: "read", description: "Read a fixture file.", parameters: schema }
     expect(body.tools).toEqual(route === "subscription" ? [{ type: "namespace", name: "ih", description: "I-harness local tools", tools: [tool] }] : [tool])
-    expect(body.max_output_tokens).toBe(route === "subscription" ? undefined : 2048)
+    expect(body.max_output_tokens).toBe(route === "subscription" ? undefined : cap)
     if (route === "subscription") {
       expect(body).not.toHaveProperty("max_tokens")
       expect(body).not.toHaveProperty("max_completion_tokens")
@@ -121,15 +121,15 @@ function assertPolicyToolsCap(route: CorpusRoute, body: Wire): void {
   } else if (route === "anthropic") {
     expect(body.system).toBe("Inspect the two fixture files.")
     expect(body.tools).toEqual([{ name: "read", description: "Read a fixture file.", input_schema: schema }])
-    expect(body.max_tokens).toBe(2048)
+    expect(body.max_tokens).toBe(cap)
   } else if (route === "gemini") {
     expect(body.systemInstruction).toEqual({ parts: [{ text: "Inspect the two fixture files." }] })
     expect(body.tools).toEqual([{ functionDeclarations: [{ name: "read", description: "Read a fixture file.", parameters: schema }] }])
-    expect(body.generationConfig.maxOutputTokens).toBe(2048)
+    expect(body.generationConfig.maxOutputTokens).toBe(cap)
   } else {
     expect(body.system).toEqual([{ text: "Inspect the two fixture files." }])
     expect(body.toolConfig).toEqual({ tools: [{ toolSpec: { name: "read", description: "Read a fixture file.", inputSchema: { json: schema } } }] })
-    expect(body.inferenceConfig.maxTokens).toBe(2048)
+    expect(body.inferenceConfig.maxTokens).toBe(cap)
   }
 }
 
@@ -179,7 +179,7 @@ function loseNative(route: CorpusRoute, body: Wire): void {
 
 describe.each(corpusRoutes)("real prepared adapter: %s", route => {
   // Rejects serializer loss of authority/schema/call pairings and mutable caller aliases.
-  it("physically sends frozen inputs and native order through an output-cap derivative", async () => {
+  it("physically sends original and output-cap handles with frozen inputs and native order after caller mutation", async () => {
     const transport = installTransport(route)
     const options = { text: { verbosity: "low" } }
     const client = makeClient(route, transport, { options })
@@ -203,7 +203,20 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     request.tools[0].inputSchema = { MUTATED: true }
     request.tools.length = 0
     options.text.verbosity = "MUTATED"
+    // Both handles must independently own their prepared input. Sending only
+    // the derivative could mask an original-handle alias behind its clone.
+    const originalBody = await send(prepared, transport.captures)
+    assertPolicyToolsCap(route, originalBody, 1024)
+    assertGroupedWire(route, originalBody)
+    assertNative(route, originalBody)
+    expect(route === "bedrock" ? originalBody.additionalModelRequestFields.text : originalBody.text).toEqual({ verbosity: "low" })
+    expect(JSON.stringify(originalBody)).not.toContain("MUTATED")
+    expect(JSON.stringify(originalBody)).toContain("Continue with the current input.")
+    const originalCapture = transport.captures[0]
     const body = await send(capped, transport.captures)
+    expect(transport.captures).toHaveLength(2)
+    expect(transport.captures[1]).not.toBe(originalCapture)
+    expect(body).not.toBe(originalBody)
     assertPolicyToolsCap(route, body)
     assertGroupedWire(route, body)
     assertNative(route, body)
@@ -211,7 +224,7 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     expect(JSON.stringify(body)).not.toContain("MUTATED")
     expect(JSON.stringify(body)).toContain("Continue with the current input.")
     expect(toJSONL(session)).toBe(source)
-    expect(transport.authCalls()).toBe(route === "subscription" ? 1 : 0)
+    expect(transport.authCalls()).toBe(route === "subscription" ? 2 : 0)
   })
 
   // Rejects replaying native blocks against a different model's provenance.

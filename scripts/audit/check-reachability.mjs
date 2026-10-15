@@ -490,6 +490,9 @@ const CORE_SESSION_SOURCE_UNIT = new Set([
   "packages/core-session/src/projection/rewind.ts",
   "packages/core-session/src/projection/rewrite.ts",
   "packages/core-session/src/projection/messages.ts",
+  // R1A moves the existing rewind visibility read here. It is still the
+  // former entry's internal use, not a new consumer of the public RewindCut.
+  "packages/core-session/src/conversation/visibility.ts",
   "packages/core-session/src/projection/search.ts",
   "packages/core-session/src/projection/plan.ts",
   "packages/core-session/src/projection/title.ts",
