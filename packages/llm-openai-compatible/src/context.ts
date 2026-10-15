@@ -10,6 +10,10 @@ export function describeContext(body: Record<string, unknown>, config: OpenAICom
     for (const value of body.messages) {
       const item = value as Record<string, unknown>, category = item.role === "system" || item.role === "developer" ? "system" : item.role === "tool" ? "toolResults" : "visibleText"
       const visit = () => {
+        if (item.role === 'assistant' && item.audio != null) {
+          unknownInput = true
+          counter.uncertainties.add('server-referenced-context-unavailable')
+        }
         if (Array.isArray(item.content))
           for (const part of item.content) {
             if (part.type === "image_url") {

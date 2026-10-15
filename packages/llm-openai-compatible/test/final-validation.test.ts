@@ -4,6 +4,58 @@ const request = { systemPrompt: '', messages: [], tools: [] }
 const calls = { role: 'assistant', content: 'narration', tool_calls: ['a', 'b'].map(id => ({ id, type: 'function', function: { name: 'old_tool', arguments: '{}' } })) }
 const out = (id: string) => ({ role: 'tool', tool_call_id: id, content: 'result' })
 afterEach(() => vi.unstubAllGlobals())
+it.each([
+  { messages: [{ role: 'assistant', content: 'x', audio: 42 }] },
+  { messages: [{ role: 'assistant', content: 'x', audio: {} }] },
+  { messages: [{ role: 'assistant', content: 'x', audio: { id: 42 } }] },
+  { messages: [{ role: 'user', content: 'x', name: 42 }] },
+  { tool_choice: 42 }, { tool_choice: {} }, { tool_choice: { type: 'function' } },
+  { tool_choice: { type: 'function', function: { name: 42 } } },
+  { tool_choice: { type: 'custom', custom: {} } },
+  { tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: 42 } } },
+  { stream_options: { include_usage: 42 } }, { response_format: { type: 42 } },
+  { n: 'bad' }, { stop: [42] }, { logprobs: 42 }, { logit_bias: { '1': 'bad' } },
+  { top_logprobs: 'bad' }, { seed: 'bad' }, { user: 42 }, { service_tier: 42 },
+  { reasoning_effort: 42 }, { prompt_cache_key: 42 }, { prompt_cache_retention: 42 },
+  { prompt_cache_options: 42 },
+])('rejects malformed known Chat envelopes before preparation or direct send: %j', async options => {
+  const transport = vi.fn(); vi.stubGlobal('fetch', transport)
+  const client = createOpenAICompatibleClient({ apiKey: '', model: 'm', options })
+  await expect(client.prepare!(request)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'schema', validation: { status: 'invalid' } } })
+  const events = []; for await (const event of client.stream(request)) events.push(event)
+  expect(events).toEqual([{ type: 'error', error: expect.objectContaining({ code: 'INVALID_ARGUMENT' }) }])
+  expect(transport).not.toHaveBeenCalled()
+})
+it.each([
+  { messages: [{ role: 'assistant', content: 'x', audio: null, name: 'assistant' }] },
+  { messages: [{ role: 'assistant', content: 'x', audio: { id: 'captured-audio' } }] },
+  { messages: [{ role: 'user', content: 'x', name: 'human' }], tool_choice: 'auto' },
+  { tool_choice: 'none' }, { tool_choice: 'required' },
+  { tool_choice: { type: 'function', function: { name: 'old' } } },
+  { tool_choice: { type: 'custom', custom: { name: 'custom' } } },
+  { tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ type: 'function', function: { name: 'old' } }] } } },
+  { stream: null, parallel_tool_calls: null, logprobs: null, n: null, stop: null, seed: null, top_logprobs: null },
+  { stream_options: { include_usage: true }, response_format: { type: 'json_object' } },
+  { response_format: { type: 'json_schema', json_schema: { name: 'answer', schema: { type: 'object' } } } },
+  { tool_choice: { type: 'future_choice', value: { opaque: true } }, thinking: 42 },
+  { tool_choice: { type: 'allowed_tools', allowed_tools: { mode: 'auto', tools: [{ future_selector: 'opaque' }] } } },
+  { audio: { format: 'wav', voice: 'alloy' } },
+  { messages: [{ role: 'assistant', content: 'x', function_call: null }] },
+])('retains independently constructed Chat optional/native/choice alternatives: %j', async options => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('') })
+  const prepared = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options }).prepare!(request)
+  for await (const _ of prepared.stream()) {}
+  expect(body).toMatchObject(options)
+  expect(prepared.validation?.issues).toEqual([])
+  const remoteAudio = options.messages?.some(message => 'audio' in message && message.audio !== null)
+  expect(prepared.measurement.input.coverage).toBe(remoteAudio ? 'incomplete' : 'complete')
+  if (remoteAudio) {
+    expect(prepared.validation).toMatchObject({ native: 'unverified', gaps: expect.arrayContaining(['native-origin-unknown', 'remote-input-unavailable']) })
+    expect(prepared.measurement.input.uncertainties).toContain('server-referenced-context-unavailable')
+  } else expect(prepared.validation?.gaps).not.toContain('remote-input-unavailable')
+  if ('thinking' in options) expect(prepared.validation?.gaps).toContain('extension-unchecked')
+})
 it('direct Chat streaming refuses the final malformed body with zero sends', async () => {
   const transport = vi.fn(); vi.stubGlobal('fetch', transport)
   const events = []; for await (const event of createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).stream(request)) events.push(event)

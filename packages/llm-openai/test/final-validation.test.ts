@@ -5,6 +5,30 @@ const request = { systemPrompt: '', messages: [], tools: [] }
 const call = (id: string) => ({ type: 'function_call', call_id: id, name: 'historic_tool', arguments: '{"x":1}' })
 const out = (id: string) => ({ type: 'function_call_output', call_id: id, output: 'sentinel-output' })
 afterEach(() => vi.unstubAllGlobals())
+it.each([
+  { summary: [], content: 'wrong-container' }, { summary: [], content: {} },
+  { summary: [], content: [null] }, { summary: [null] },
+  { summary: [], content: [{ type: 'reasoning_text', text: 42 }] },
+  { summary: [{ type: 'summary_text', text: 42 }] },
+  { summary: [], content: [{ type: 'refusal', refusal: 42 }] },
+  { summary: [{ type: 'input_image', image_url: 42 }] },
+])('rejects malformed known reasoning with native attribution and zero direct sends: %j', async native => {
+  const transport = vi.fn(); vi.stubGlobal('fetch', transport)
+  const client = createOpenAIClient({ apiKey: '', model: 'm', options: { input: [{ type: 'reasoning', id: 'r', ...native }] } })
+  await expect(client.prepare!(request)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'native-replay', validation: { issues: [{ rule: 'native-replay', site: 'native' }] } } })
+  const events = []; for await (const event of client.stream(request)) events.push(event)
+  expect(events).toEqual([{ type: 'error', error: expect.objectContaining({ code: 'INVALID_ARGUMENT', modelFailure: expect.objectContaining({ reason: 'native-replay' }) }) }])
+  expect(transport).not.toHaveBeenCalled()
+})
+it.each([{ summary: [] }, { summary: [], content: [{ type: 'reasoning_text', text: 'retained' }] }])('retains valid absent/array reasoning content: %j', async native => {
+  let body: any
+  vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('') })
+  const item = { type: 'reasoning', id: 'r', ...native }
+  const prepared = await createOpenAIClient({ apiKey: '', model: 'm', options: { input: [item] } }).prepare!(request)
+  for await (const _ of prepared.stream()) {}
+  expect(body.input).toEqual([item])
+  expect(prepared.validation).toMatchObject({ native: 'unverified', issues: [] })
+})
 it('direct streaming emits the same typed local rejection without a physical send', async () => {
   const transport = vi.fn(); vi.stubGlobal('fetch', transport)
   const events = []; for await (const event of createOpenAIClient({ apiKey: '', model: 'm', options: { input: [null] } }).stream(request)) events.push(event)

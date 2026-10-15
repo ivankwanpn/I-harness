@@ -2,6 +2,24 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createOpenAICompatibleClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it.each(['max_tokens', 'max_completion_tokens'] as const)('preserves single nullable raw %s across original, cap and restored derivatives', async field => {
+  const bodies: Record<string, unknown>[] = []
+  vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body))); return new Response('') })
+  const request: LLMRequest = { systemPrompt: '', messages: [], tools: [] }
+  const client = createOpenAICompatibleClient({ apiKey: '', model: 'm', maxTokensField: field, options: { [field]: null } })
+  const original = await client.prepare!(request), capped = original.withOutputCap(32), restored = capped.withOutputCap(undefined)
+  const explicit = await client.prepare!({ ...request, maxOutputTokens: 64 })
+  for (const prepared of [original, capped, restored, explicit]) for await (const _ of prepared.stream()) {}
+  expect(bodies.map(body => body[field])).toEqual([null, 32, null, 64])
+  expect([original, capped, restored, explicit].map(prepared => prepared.measurement.output.effectiveCap)).toEqual([undefined, 32, undefined, 64])
+  for (const prepared of [original, capped, restored, explicit]) expect(prepared.validation?.issues).toEqual([])
+  const other = field === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens'
+  await expect(createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { [field]: null } }).prepare!(request)).resolves.toBeDefined()
+  await expect(createOpenAICompatibleClient({ apiKey: '', model: 'm', maxTokensField: other, options: { [field]: null } }).prepare!({ ...request, maxOutputTokens: 64 })).rejects.toMatchObject({ modelFailure: { reason: 'schema' } })
+})
+it.each([{ max_tokens: null, max_completion_tokens: 32 }, { max_tokens: 32, max_completion_tokens: null }, { max_tokens: null, max_completion_tokens: null }])('keeps the existing simultaneous cap-field conflict: %j', async options => {
+  await expect(createOpenAICompatibleClient({ apiKey: '', model: 'm', options }).prepare!({ systemPrompt: '', messages: [], tools: [] })).rejects.toMatchObject({ modelFailure: { reason: 'schema', validation: { issues: [{ rule: 'parameter-conflict', site: 'generation' }] } } })
+})
 it("captures nested image data and options before image validation suspends preparation", async () => {
   const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
   const imageInput = { mediaType: "image/png" as const, dataBase64: image }

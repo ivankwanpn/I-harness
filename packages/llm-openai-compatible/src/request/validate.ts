@@ -2,19 +2,97 @@ import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAICompatibleConfig } from '../types.ts'
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
-const known = new Set(['model', 'messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'n', 'stop', 'presence_penalty', 'frequency_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format', 'seed', 'user', 'service_tier', 'reasoning_effort', 'reasoning', 'thinking', 'enable_thinking', 'prompt_cache_key', 'prompt_cache_retention', 'prompt_cache_options'])
+type Checks = ReturnType<typeof validationCollector>
+const known = new Set(['model', 'messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'n', 'stop', 'presence_penalty', 'frequency_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format', 'seed', 'user', 'service_tier', 'reasoning_effort', 'prompt_cache_key', 'prompt_cache_retention', 'prompt_cache_options'])
+function extras(value: Record<string, unknown>, fields: readonly string[], check: Checks): void {
+  if (Object.keys(value).some(key => !fields.includes(key))) check.gap('extension-unchecked')
+}
+function namedChoice(value: unknown, check: Checks): void {
+  if (!record(value) || !text(value.type)) { check.issue('shape', 'tools'); return }
+  if (value.type === 'function' || value.type === 'custom') {
+    const field = value.type, target = value[field]
+    extras(value, ['type', field], check)
+    if (!record(target) || !text(target.name)) check.issue('shape', 'tools')
+    else extras(target, ['name'], check)
+  } else check.gap('extension-unchecked')
+}
+function toolChoice(value: unknown, check: Checks): void {
+  if (value === undefined) return
+  if (typeof value === 'string') {
+    if (!['none', 'auto', 'required'].includes(value)) check.gap('extension-unchecked')
+    return
+  }
+  if (!record(value)) { check.issue('parameter-type', 'tools'); return }
+  if (value.type !== 'allowed_tools') { namedChoice(value, check); return }
+  extras(value, ['type', 'allowed_tools'], check)
+  const allowed = value.allowed_tools
+  if (!record(allowed) || !text(allowed.mode) || !Array.isArray(allowed.tools)) { check.issue('shape', 'tools'); return }
+  extras(allowed, ['mode', 'tools'], check)
+  if (!['auto', 'required'].includes(allowed.mode)) check.gap('extension-unchecked')
+  for (const tool of allowed.tools) {
+    if (!record(tool)) check.issue('shape', 'tools')
+    else if (tool.type === 'function' || tool.type === 'custom') namedChoice(tool, check)
+    else check.gap('extension-unchecked')
+  }
+}
+/** Check known generation envelopes without interpreting schemas or inventing
+ * backend/model capability bounds. Undeclared alternatives stay partial. */
+function parameters(body: Record<string, unknown>, check: Checks): void {
+  toolChoice(body.tool_choice, check)
+  for (const key of ['n', 'seed', 'top_logprobs']) if (body[key] != null && !Number.isSafeInteger(body[key])) check.issue('parameter-type', 'generation')
+  if (body.logprobs != null && typeof body.logprobs !== 'boolean') check.issue('parameter-type', 'generation')
+  for (const key of ['user', 'service_tier', 'reasoning_effort', 'prompt_cache_key', 'prompt_cache_retention']) if (body[key] != null && typeof body[key] !== 'string') check.issue('parameter-type', 'request')
+  if (body.stop != null && typeof body.stop !== 'string' && (!Array.isArray(body.stop) || !body.stop.every(value => typeof value === 'string'))) check.issue('parameter-type', 'generation')
+  if (body.logit_bias != null && (!record(body.logit_bias) || Object.values(body.logit_bias).some(value => typeof value !== 'number' || !Number.isFinite(value)))) check.issue('parameter-type', 'generation')
+  if (record(body.stream_options)) {
+    extras(body.stream_options, ['include_usage', 'include_obfuscation'], check)
+    for (const key of ['include_usage', 'include_obfuscation']) if (body.stream_options[key] !== undefined && typeof body.stream_options[key] !== 'boolean') check.issue('parameter-type', 'request')
+  }
+  const format = body.response_format
+  if (record(format)) {
+    if (!text(format.type)) check.issue('shape', 'generation')
+    else if (format.type === 'json_schema') {
+      extras(format, ['type', 'json_schema'], check)
+      const schema = format.json_schema
+      if (!record(schema) || !text(schema.name)) check.issue('shape', 'generation')
+      else {
+        extras(schema, ['name', 'description', 'schema', 'strict'], check)
+        if (schema.schema !== undefined && !record(schema.schema) || schema.description !== undefined && typeof schema.description !== 'string' || schema.strict != null && typeof schema.strict !== 'boolean') check.issue('shape', 'generation')
+      }
+    } else if (['text', 'json_object'].includes(format.type)) extras(format, ['type'], check)
+    else check.gap('extension-unchecked')
+  }
+  if (body.prompt_cache_options != null) {
+    if (!record(body.prompt_cache_options)) check.issue('parameter-type', 'request')
+    else {
+      extras(body.prompt_cache_options, ['mode', 'ttl'], check)
+      for (const key of ['mode', 'ttl']) if (body.prompt_cache_options[key] !== undefined && typeof body.prompt_cache_options[key] !== 'string') check.issue('parameter-type', 'request')
+    }
+  }
+}
+function messageFields(message: Record<string, unknown>, check: Checks): void {
+  if (message.name !== undefined && typeof message.name !== 'string') check.issue('shape', 'messages')
+  if (message.audio !== undefined) {
+    if (message.role !== 'assistant' || message.audio !== null && (!record(message.audio) || !text(message.audio.id))) check.issue('shape', 'messages')
+    if (record(message.audio)) {
+      extras(message.audio, ['id'], check)
+      check.native(); check.gap('remote-input-unavailable')
+    }
+  }
+}
 export function chatValidator(config: Pick<OpenAICompatibleConfig, 'model' | 'maxTokensField'>): FinalValidator<unknown> {
   return body => {
     const check = validationCollector('openai-compatible')
-    const extensions = (value: Record<string, unknown>, fields: readonly string[]) => { if (Object.keys(value).some(key => !fields.includes(key))) check.gap('extension-unchecked') }
+    const extensions = (value: Record<string, unknown>, fields: readonly string[]) => extras(value, fields, check)
     if (!record(body)) { check.issue('shape', 'request'); return check.finish() }
     if (!text(body.model)) check.issue('shape', 'model')
     else if (body.model !== config.model) check.issue('binding', 'model', 'binding')
     if (Object.keys(body).some(key => !known.has(key))) check.gap('extension-unchecked')
     check.gap('limit-unverified')
+    parameters(body, check)
     if (body.max_tokens !== undefined && body.max_completion_tokens !== undefined) check.issue('parameter-conflict', 'generation')
-    for (const key of ['max_tokens', 'max_completion_tokens'] as const) if (body[key] !== undefined && (!Number.isSafeInteger(body[key]) || (body[key] as number) < 1)) check.issue('output-range', 'generation', 'output-limit')
-    for (const key of ['stream', 'parallel_tool_calls'] as const) if (body[key] !== undefined && typeof body[key] !== 'boolean') check.issue('parameter-type', 'request')
+    for (const key of ['max_tokens', 'max_completion_tokens'] as const) if (body[key] != null && (!Number.isSafeInteger(body[key]) || (body[key] as number) < 1)) check.issue('output-range', 'generation', 'output-limit')
+    for (const key of ['stream', 'parallel_tool_calls'] as const) if (body[key] != null && typeof body[key] !== 'boolean') check.issue('parameter-type', 'request')
     for (const key of ['temperature', 'top_p', 'presence_penalty', 'frequency_penalty'] as const) if (body[key] != null && (typeof body[key] !== 'number' || !Number.isFinite(body[key]))) check.issue('parameter-type', 'generation')
     for (const key of ['stream_options', 'response_format'] as const) if (body[key] != null && !record(body[key])) check.issue('parameter-type', 'request')
     if (body.tools !== undefined) {
@@ -33,6 +111,7 @@ export function chatValidator(config: Pick<OpenAICompatibleConfig, 'model' | 'ma
     for (const message of body.messages) {
       if (!record(message) || !['system', 'developer', 'user', 'assistant', 'tool', 'function'].includes(message.role as string)) { check.issue('shape', 'messages'); continue }
       extensions(message, ['role', 'content', 'name', 'tool_calls', 'tool_call_id', 'reasoning_content', 'function_call', 'refusal', 'audio'])
+      messageFields(message, check)
       if (pending.size && message.role !== 'tool') check.issue('tool-group', 'messages', 'message-order')
       if (legacyPending !== undefined && message.role !== 'function') check.issue('tool-group', 'messages', 'message-order')
       if (message.role === 'function') {
@@ -59,7 +138,7 @@ export function chatValidator(config: Pick<OpenAICompatibleConfig, 'model' | 'ma
       }
       if (message.refusal !== undefined && message.refusal !== null && (message.role !== 'assistant' || typeof message.refusal !== 'string')) check.issue('shape', 'messages')
       if (message.tool_call_id !== undefined && message.role !== 'tool') check.issue('shape', 'messages')
-      if (message.function_call !== undefined) {
+      if (message.function_call != null) {
         check.gap('extension-unchecked')
         if (message.tool_calls !== undefined) check.issue('parameter-conflict', 'messages')
         const call = message.function_call

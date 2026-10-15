@@ -4,6 +4,25 @@ vi.mock("@i-harness/http-transport", () => ({ systemFetch: vi.fn(async () => new
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
+it.each([false, true])('validates retained native reasoning arrays without dropping bytes (subscription=%s)', async codexSubscription => {
+  let auth = 0
+  const client = createOpenAIClient({ apiKey: '', model: 'm', codexSubscription, resolveCodexAuth: async () => { auth++; return { accessToken: 'fake', accountId: 'fake' } } })
+  const request: LLMRequest = { systemPrompt: '', tools: [], messages: [{ role: 'assistant', content: '', providerContinuation: { kind: 'openai-responses', model: 'm', reasoningItems: [{ type: 'reasoning', id: 'r', summary: [], content: [{ type: 'reasoning_text', text: 'native retained' }], encrypted_content: 'captured-private-bytes' }] } }] }
+  const valid = await client.prepare!(request)
+  expect(valid.validation).toMatchObject({ native: 'unverified', issues: [] })
+  const item = request.messages[0]!
+  if (item.role !== 'assistant' || item.providerContinuation?.kind !== 'openai-responses') throw Error('fixture')
+  item.providerContinuation.reasoningItems[0]!.content = 'wrong-container'
+  await expect(client.prepare!(request)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'native-replay' } })
+  expect(auth).toBe(0)
+  expect(JSON.stringify(valid.validation)).not.toContain('captured-private-bytes')
+  if (!codexSubscription) {
+    let body: any
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => { body = JSON.parse(String(init.body)); return new Response('') })
+    for await (const _ of valid.stream()) {}
+    expect(body.input).toEqual([{ type: 'reasoning', id: 'r', summary: [], content: [{ type: 'reasoning_text', text: 'native retained' }], encrypted_content: 'captured-private-bytes' }, { role: 'assistant', content: '' }])
+  }
+})
 it("excludes generated subscription affinity only and retains raw and request keys", async () => {
   const request: LLMRequest = { systemPrompt: "", tools: [], messages: [{ role: "user", content: "中" }], requestScope: { sessionId: "s", turnId: "t" } }
   const create = (options?: Record<string, unknown>) => createOpenAIClient({ apiKey: "", model: "fixture", codexSubscription: true, options })

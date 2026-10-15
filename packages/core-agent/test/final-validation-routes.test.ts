@@ -8,6 +8,18 @@ import { summarizeWithModel } from '../../compaction/src/summarizer.ts'
 import { createAgent } from '../src/index.ts'
 const image = { mediaType: 'image/png' as const, dataBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' }
 afterEach(() => vi.unstubAllGlobals())
+it('keeps a valid remote assistant-audio reference unavailable to owned main/summary without sending or compacting', async () => {
+  let sends = 0, effects = 0, compacts = 0
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  vi.stubGlobal('fetch', async () => { sends++; return new Response('') })
+  tools.register({ name: 'effect', description: '', inputSchema: {}, execute: async () => { effects++; return 'done' } })
+  const model = createOpenAICompatibleClient({ model: 'm', apiKey: '', options: { messages: [{ role: 'assistant', content: 'previous answer', audio: { id: 'remote-audio' } }] } })
+  const agent = createAgent(ctx, { session, tools, model, systemPrompt: '', compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'summary' }; yield { type: 'end' } } } } })
+  await expect(agent.run('retained new human input')).rejects.toThrow(/unpriced fixed provider references/)
+  await expect(summarizeWithModel(model, 'summary source', 1024)).rejects.toThrow(/unpriced provider references/)
+  expect(sends).toBe(0); expect(effects).toBe(0); expect(compacts).toBe(0)
+  expect(session.events.find(event => event.type === 'user/message')).toMatchObject({ text: 'retained new human input' })
+})
 it('encodes a parallel result image after both sibling outcomes when the first assistant flush is late', async () => {
   const session = createSession()
   for (const event of [

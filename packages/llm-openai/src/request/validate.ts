@@ -14,18 +14,20 @@ function jsonArguments(value: unknown): boolean {
 const inputParts = ['input_text', 'input_image', 'input_file']
 const knownParts = [...inputParts, 'output_text', 'summary_text', 'reasoning_text', 'refusal']
 function content(value: unknown, check: Checks, allowed = inputParts, native = false): void {
-  if (typeof value === 'string') return
-  if (!Array.isArray(value)) { check.issue('shape', 'input'); return }
+  const malformed = () => native ? check.issue('native-replay', 'native', 'native-replay') : check.issue('shape', 'input')
+  if (typeof value === 'string' && !native) return
+  if (!Array.isArray(value)) { malformed(); return }
   for (const part of value) {
-    if (!record(part) || !text(part.type)) { check.issue('shape', 'input'); continue }
+    if (!record(part) || !text(part.type)) { malformed(); continue }
     if (knownParts.includes(part.type) && !allowed.includes(part.type)) {
       if (native) check.issue('native-replay', 'native', 'native-replay')
       else check.issue('shape', 'input')
+      continue
     }
     extensions(part, ['type', 'text', 'annotations', 'logprobs', 'refusal', 'image_url', 'file_id', 'detail', 'file_url', 'file_data', 'filename', 'prompt_cache_breakpoint'], check)
     switch (part.type) {
       case 'input_text': case 'output_text': case 'summary_text': case 'reasoning_text':
-        if (typeof part.text !== 'string') check.issue('shape', 'input')
+        if (typeof part.text !== 'string') malformed()
         break
       case 'refusal':
         if (typeof part.refusal !== 'string') check.issue('shape', 'input')
