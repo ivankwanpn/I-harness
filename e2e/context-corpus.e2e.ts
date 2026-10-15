@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { append, createSession, deriveMessages, renderConversation, fromJSONL, toJSONL } from "../packages/core-session/src/index.ts"
 import { captureContextSnapshot } from "../packages/context-engine/src/index.ts"
-import type { LLMRequest, PreparedModelRequest } from "../packages/llm-seam/src/index.ts"
+import { describeRouteBudgetCapability, type ModelBudgetBinding, type LLMRequest, type PreparedModelRequest } from "../packages/llm-seam/src/index.ts"
 import { systemFetch as quarantinedSystemFetch } from "../packages/http-transport/src/system-fetch.ts"
 import { corpusRoutes, makeCompactedToolRound, makeToolRound, png, type CorpusRoute } from "./fixtures/context-corpus.ts"
 import { installTransport, makeClient, type CapturedRequest } from "./fixtures/context-transports.ts"
@@ -186,7 +186,11 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     const client = makeClient(route, transport, { options })
     const { session, request } = makeToolRound(route)
     const source = toJSONL(session)
-    const captured = captureContextSnapshot(session, { ownerSessionId: `corpus-${route}`, surface: { systemPrompt: request.systemPrompt, tools: request.tools, reasoningEffort: request.reasoningEffort, maxOutputTokens: request.maxOutputTokens } })
+    const protocol = route === "chat" ? "openai-compatible" : route === "responses" || route === "subscription" ? "openai-responses" : route === "anthropic" ? "anthropic-messages" : route
+    const budgetBinding: ModelBudgetBinding = { version: 1, metadata: { version: 1, modelId: "fixture", protocol: route === "subscription" ? "openai-responses-subscription" : protocol, identityCoverage: "partial" },
+      limits: { contextTokens: { value: 200000, origin: "configured-model-row", sourceId: "settings-model-row-v1" } }, generation: { origin: "configured", outputCap: { value: 1024, origin: "configured-model-row", sourceId: "settings-model-row-v1" } },
+      capability: describeRouteBudgetCapability({ protocol, codexSubscription: route === "subscription" }) }
+    const captured = captureContextSnapshot(session, { ownerSessionId: `corpus-${route}`, surface: { budgetBinding, systemPrompt: request.systemPrompt, tools: request.tools, reasoningEffort: request.reasoningEffort, maxOutputTokens: request.maxOutputTokens } })
     expect(captured.kind).toBe("captured")
     if (captured.kind !== "captured") throw Error("corpus snapshot required")
     const { surface, conversation } = captured.snapshot
@@ -200,6 +204,7 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     expect(prepared.measurement.output.effectiveCap).toBe(route === "subscription" ? undefined : 1024)
     expect(capped.measurement.output.effectiveCap).toBe(route === "subscription" ? undefined : 2048)
     if (route === "subscription") expect(capped.measurement.output.capSupport).toBe("unsupported")
+    ;(budgetBinding.limits.contextTokens as { sourceId: string }).sourceId = "MUTATED"
     request.systemPrompt = "MUTATED"
     const assistant = request.messages.find(m => m.role === "assistant")!
     if (assistant.role !== "assistant") throw new Error("fixture missing assistant")
@@ -220,7 +225,7 @@ describe.each(corpusRoutes)("real prepared adapter: %s", route => {
     assertGroupedWire(route, originalBody)
     assertNative(route, originalBody)
     expect(route === "bedrock" ? originalBody.additionalModelRequestFields.text : originalBody.text).toEqual({ verbosity: "low" })
-    expect(JSON.stringify(originalBody)).not.toContain("MUTATED")
+    expect(JSON.stringify(originalBody)).not.toMatch(/MUTATED|budgetBinding|settings-model-row-v1|adapter-budget-v1/)
     expect(JSON.stringify(originalBody)).toContain("Continue with the current input.")
     const originalCapture = transport.captures[0]
     const body = await send(capped, transport.captures)

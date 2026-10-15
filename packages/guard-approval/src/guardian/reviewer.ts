@@ -49,6 +49,7 @@ export interface GuardianReviewDeps {
    * spawn below, which is deliberate and not symmetric with the two fields
    * above. Absent → no key written. */
   contextWindow?: SpawnOptions["contextWindow"]
+  budgetBinding?: SpawnOptions["budgetBinding"]
   contextMetadata?: SpawnOptions["contextMetadata"]
   reasoningEffort?: SpawnOptions["reasoningEffort"]
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
@@ -187,7 +188,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     // wrong number, which is worse than an absent one. So: inherited arms get
     // them, configured ones stay absent (and are recorded as a residual).
     ...(deps.model === undefined && deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
-    ...(deps.model === undefined ? { contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort, inheritedBindingForStep: deps.inheritedBindingForStep } : {}),
+    ...(deps.model === undefined ? { budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort, inheritedBindingForStep: deps.inheritedBindingForStep } : {}),
     ...(deps.model === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,

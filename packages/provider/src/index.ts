@@ -2,7 +2,7 @@
 
 export type { ProviderProtocol, ProviderModelContext, ProviderProfile, ModelDescriptor, ProbeRequest, Probe, ProviderRegistry, WireClientConfig } from "./types.ts"
 export type { ModelCard, ModelCatalogRow, ModelCatalogFamilySource, ModelCatalogProvenance } from "./catalog/load.ts"
-export { resolveModelContext, resolveEffectiveModelContext, type EffectiveContextInput, type EffectiveModelContext } from "./catalog/context.ts"
+export { resolveModelContext, resolveEffectiveModelContextEvidence } from "./catalog/context.ts"
 export { resolveModelCard, resolveModelCatalogProvenance, listModelCatalogFamily } from "./catalog/resolve.ts"
 export { probeCandidatePaths } from "./probe/http.ts"
 export { createProviderRegistry, defaultProviderRegistry } from "./probe/registry.ts"

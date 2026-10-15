@@ -24,6 +24,7 @@ export interface ModelCompactionPolicy {
   maxTokens?: number
   summaryMaxOutputTokens?: number
   summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   summaryMetadata?: ContextBindingMetadata
   summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
@@ -39,6 +40,7 @@ export interface CompactionConfig {
   summaryMaxOutputTokens?: number
   /** Limits resolved for an explicitly selected summary client, never the main client. */
   summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   summaryMetadata?: ContextBindingMetadata
   summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
@@ -103,6 +105,7 @@ export interface ResolvedCompactionConfig {
   summaryMaxOutputTokens: number
   summaryOutputCapExplicit: boolean
   summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   summaryMetadata?: ContextBindingMetadata
   summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
@@ -165,6 +168,7 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
     summaryMaxOutputTokens,
     summaryOutputCapExplicit: config.summaryMaxOutputTokens !== undefined,
     summaryLimits: config.summaryLimits,
+    summaryBudgetBinding: config.summaryBudgetBinding,
     summaryMetadata: config.summaryMetadata,
     summaryReasoningEffort: config.summaryReasoningEffort,
     auto,
@@ -214,6 +218,7 @@ export function resolveCompactSpec(
     maxTokens: policy.maxTokens ?? config.maxTokens,
     summaryMaxOutputTokens: policy.summaryMaxOutputTokens ?? config.summaryMaxOutputTokens,
     summaryLimits: policy.summaryLimits ?? config.summaryLimits,
+    summaryBudgetBinding: policy.summaryBudgetBinding ?? config.summaryBudgetBinding,
     summaryMetadata: policy.summaryMetadata ?? config.summaryMetadata,
     summaryReasoningEffort: policy.summaryReasoningEffort ?? config.summaryReasoningEffort,
     summarizationModel: policy.summarizationModel ?? config.summarizationModel,

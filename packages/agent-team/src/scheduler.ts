@@ -61,6 +61,7 @@ export interface TeamSubagentDeps {
    * window and cap — the roster's spawn and the spawn_agent tool must not
    * disagree about what the same session's budget is. Absent → no key written. */
   contextWindow?: SpawnOptions["contextWindow"]
+  budgetBinding?: SpawnOptions["budgetBinding"]
   contextMetadata?: SpawnOptions["contextMetadata"]
   reasoningEffort?: SpawnOptions["reasoningEffort"]
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]

@@ -6,7 +6,7 @@ import { wrapPreparedRequest, type PreparedModelRequest, type ModelClient } from
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { createAgent, type AgentDeps, type AgentConfig } from "../src/index.ts"
 
-it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
+it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client", "budget-evidence"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let prompt = "original", identity: object = {}, preparations = 0, transports = 0, hooks = 0, claims = 0
@@ -21,6 +21,7 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
     })())
   } })
   const deps: AgentDeps & AgentConfig = { session, tools, model: client(), systemPrompt: () => prompt, reasoningEffort: "high",
+    budgetBinding: { version: 1, metadata: { version: 1, modelId: "m", protocol: "anthropic-messages", identityCoverage: "partial" }, limits: { contextTokens: { value: 200000, origin: "profile", sourceId: "profile-v1" } }, generation: { origin: "unspecified" }, capability: { version: 1, route: "anthropic-messages", evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required", packetKind: "http-json-body" } },
     modelBindingIdentity: () => identity, budget: { contextWindow: 200000 }, maxOutputTokens: 2048,
     stepInputs: { claimAtStepBoundary() { claims++ } } }
   const agent = createAgent(ctx, deps)
@@ -37,6 +38,7 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
     if (mutation === "max-output") deps.maxOutputTokens = 1536
     if (mutation === "concrete-binding") identity = {}
     if (mutation === "client") deps.model = client()
+    if (mutation === "budget-evidence") (deps.budgetBinding as { limits: { contextTokens: { sourceId: string } } }).limits.contextTokens.sourceId = "profile-revised-v1"
     expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", reason: expect.stringMatching(/surface|binding/) } })
     const output = (await tools.execute({ name: "get_context_remaining", args: {} })).output
     expect(output).toMatchObject({ kind: "unavailable" })
@@ -75,6 +77,39 @@ it.each(["prepare", "execution"] as const)("refreshes inherited limits after a h
   expect(preparations).toBe(2); expect(transports).toBe(1); expect(caps).toEqual([1024]); expect(hooks).toBe(1)
   const state = agent.contextBudget!()
   expect(state.kind === "ready" && state.snapshot).toMatchObject({ ownerSessionId: "child", modelId: "b", contextWindow: 50000, identityCoverage: "complete" })
+})
+
+it("rebuilds descriptor evidence changed during held preparation and keeps local output intent separate", async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let preparations = 0, transports = 0, hooks = 0, claims = 0
+  const caps: (number | undefined)[] = []
+  ctx.on("agent/pre-step", () => { hooks++ })
+  const budgetBinding = { version: 1 as const, metadata: { version: 1 as const, modelId: "m", protocol: "anthropic-messages", identityCoverage: "partial" as const },
+    limits: { contextTokens: { value: 200000, origin: "profile" as const, sourceId: "profile-v1" } },
+    generation: { origin: "configured" as const, outputCap: { value: 8000, origin: "configured-model-row" as const, sourceId: "settings-model-row-v1" } },
+    capability: { version: 1 as const, route: "anthropic-messages" as const, evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required" as const, packetKind: "http-json-body" as const } }
+  const actual = createAnthropicClient({ model: "m", apiKey: "controlled" })
+  const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare(request) {
+    const index = ++preparations, candidate = await actual.prepare!(request)
+    if (index === 1) { entered.resolve(); await release.promise }
+    return wrapPreparedRequest(candidate, (_stream, control) => (async function* () {
+      control?.validateBeforeTransport?.(); transports++; caps.push(request.maxOutputTokens)
+      yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const
+    })())
+  } }
+  const agent = createAgent(ctx, { session, tools, model, budgetBinding, systemPrompt: "p", budget: { contextWindow: 200000 }, maxOutputTokens: 8000,
+    stepInputs: { claimAtStepBoundary() { claims++ } } })
+  agent.updateContext!({ budget: { contextWindow: 200000 }, maxOutputTokens: 1024 })
+  const pending = agent.run("continue")
+  await entered.promise
+  budgetBinding.limits.contextTokens.sourceId = "profile-revised-v1"
+  release.resolve(); await pending
+  expect(preparations).toBe(2); expect(transports).toBe(1); expect(hooks).toBe(1); expect(claims).toBe(1)
+  expect(caps).toEqual([1024]); expect(budgetBinding.generation.outputCap.value).toBe(8000)
+  const events = session.events.filter(event => event.type.startsWith("context/"))
+  expect(JSON.stringify(events)).not.toMatch(/budgetBinding|profile-revised-v1|adapter-budget-v1/)
+  for (const event of events) expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(4096)
 })
 
 it("direct updateContext replaces initial static binding metadata and explicitly clears it", async () => {

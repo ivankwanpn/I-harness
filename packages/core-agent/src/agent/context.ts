@@ -7,7 +7,7 @@ import { captureRequestCandidate } from "./request-snapshot.ts"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import { snapshotModelData } from "@i-harness/llm-seam"
 
-const scalarIdentity = (binding: ModelContextBindingDescriptor) => projectionFingerprint({ contextMetadata: binding.contextMetadata, contextWindow: binding.contextWindow, maxOutputTokens: binding.maxOutputTokens, reasoningEffort: binding.reasoningEffort })
+const scalarIdentity = (binding: ModelContextBindingDescriptor) => projectionFingerprint({ contextMetadata: binding.contextMetadata, budgetBinding: binding.budgetBinding, contextWindow: binding.contextWindow, maxOutputTokens: binding.maxOutputTokens, reasoningEffort: binding.reasoningEffort })
 function inheritedBindingCurrent(current: ModelContextBindingDescriptor | undefined, inherited: ModelContextBindingDescriptor | undefined, scalars: string | undefined): boolean {
   return !current || !!inherited && current.identity === inherited.identity && scalarIdentity(current) === scalars
 }
@@ -36,15 +36,18 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     + deps.session.events.filter(event => event.type === "compaction/prune").length
   let inherited = deps.bindingForStep?.()
   let inheritedScalars = inherited && scalarIdentity(inherited)
-  if (inherited) inherited = { ...inherited, contextMetadata: snapshotModelData(inherited.contextMetadata) }
+  if (inherited) inherited = { ...inherited, contextMetadata: snapshotModelData(inherited.contextMetadata), budgetBinding: snapshotModelData(inherited.budgetBinding) }
   let hasMetadataOverride = false
   let metadataOverride: ContextBindingMetadata | undefined
+  let hasBudgetBindingOverride = false
+  let budgetBindingOverride: import("@i-harness/llm-seam").ModelBudgetBinding | undefined
   const metadata = () => inherited ? inherited.contextMetadata : hasMetadataOverride ? metadataOverride : typeof deps.contextMetadata === "function" ? deps.contextMetadata() : deps.contextMetadata
+  const budgetBinding = () => inherited ? inherited.budgetBinding : hasBudgetBindingOverride ? budgetBindingOverride : typeof deps.budgetBinding === "function" ? deps.budgetBinding() : deps.budgetBinding
   const reasoningEffort = () => inherited ? inherited.reasoningEffort : deps.reasoningEffort
   // Pure live request surface, shared by admission and scalar freshness. History
   // has its own accepted fingerprint so output does not require a shadow prepare.
   const requestSurfaceFingerprint = () => projectionFingerprint({ system: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
-    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), rewrite: projectionRevision() })
+    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), effort: reasoningEffort(), binding: metadata(), budgetBinding: budgetBinding(), rewrite: projectionRevision() })
   const captureCandidate = () => {
     const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.() }
     const binding = metadata()
@@ -53,7 +56,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), reasoningEffort: reasoningEffort(),
       maxOutputTokens: inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
       contextWindow: inherited ? inherited.contextWindow : binding ? binding.contextWindow : budgetCfg?.contextWindow ?? deps.compact?.contextWindow,
-      binding,
+      binding, budgetBinding: budgetBinding(),
     }, projectionRevision())
   }
   const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate)
@@ -66,7 +69,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   // summarizer falls back to its text form and the whole conversation is re-read
   // at full price; with it, the call is a byte-prefix of the main request and the
   // provider's cache serves it.
-  function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined, binding = metadata()) {
+  function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined, binding = metadata(), budget = budgetBinding()) {
     if (!compact) return undefined
     const attributedModel = deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId }))
     return createCompactionEngine({
@@ -78,6 +81,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
         // own producer/consumer contract at this factory boundary.
         ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
         contextMetadata: binding,
+        budgetBinding: budget,
         reasoningEffort: reasoningEffort(),
         signal: deps.signal,
         flush: deps.flush,
@@ -115,7 +119,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     if (!current || bindingIsCurrent()) return
     validateBudget(current.contextWindow === undefined ? undefined : { contextWindow: current.contextWindow })
     inheritedScalars = scalarIdentity(current)
-    inherited = { ...current, contextMetadata: snapshotModelData(current.contextMetadata) }
+    inherited = { ...current, contextMetadata: snapshotModelData(current.contextMetadata), budgetBinding: snapshotModelData(current.budgetBinding) }
     ownedBudget.invalidate()
     budgetCfg = inherited.contextWindow === undefined ? undefined : { ...deps.budget, contextWindow: inherited.contextWindow }
     outputCap = inherited.maxOutputTokens
@@ -137,10 +141,14 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
       contextMeter.invalidate()
       ownedBudget.invalidate()
       if (config.maxOutputTokens !== undefined && (!Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens < 1)) throw new Error("invalid output cap")
-      const next = buildCompactor(config.compact, config.maxOutputTokens, "contextMetadata" in config ? config.contextMetadata : metadata())
+      const next = buildCompactor(config.compact, config.maxOutputTokens, "contextMetadata" in config ? config.contextMetadata : metadata(), "budgetBinding" in config ? config.budgetBinding : budgetBinding())
       if ("contextMetadata" in config) {
         hasMetadataOverride = true
         metadataOverride = snapshotModelData(config.contextMetadata)
+      }
+      if ("budgetBinding" in config) {
+        hasBudgetBindingOverride = true
+        budgetBindingOverride = snapshotModelData(config.budgetBinding)
       }
       compactor = next
       budgetCfg = config.budget

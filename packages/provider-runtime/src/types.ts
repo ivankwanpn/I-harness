@@ -38,6 +38,7 @@ export interface ProviderPatch {
 }
 
 export interface SessionModelBinding {
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   client: ModelClient
   providerId: string

@@ -621,3 +621,4 @@ import { withPreparedRequests } from "./prepared/wrappers.ts"
 export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
   return withPreparedRequests(client, inner => createRetryingExecution(inner, policy, metadata))
 }
+export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./binding.ts"

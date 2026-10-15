@@ -25,6 +25,7 @@ export interface RequestSurfaceInput {
   maxOutputTokens?: number
   contextWindow?: number
   binding?: ContextBindingMetadata
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
 }
 export type CapturedRequestSurface = Captured<RequestSurfaceInput>
 export interface ContextSnapshot {

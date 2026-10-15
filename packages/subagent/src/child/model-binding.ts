@@ -45,6 +45,7 @@ export interface RoleModelHost {
    * DECLARED model — that binding resolves at spawn and carries its own
    * (RoleModelState's ready arm below). Absent → no key is written. */
   contextWindow?: number
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   reasoningEffort?: ReasoningEffort
   maxOutputTokens?: number
@@ -120,4 +121,4 @@ export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleM
 export type RoleModelState =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }

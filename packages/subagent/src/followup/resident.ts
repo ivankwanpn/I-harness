@@ -42,6 +42,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // same model at the adapter default.
   let model = deps.parentModel
   let reasoningEffort: ReasoningEffort | undefined = deps.reasoningEffort
+  let budgetBinding = deps.budgetBinding
   let contextMetadata = deps.contextMetadata
   // M73: the same two numbers spawnChild carries, from the same two sources —
   // a rebuild is a spawn with a restored log, and a budget that appeared only
@@ -55,6 +56,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     reasoningEffort = state.binding.reasoningEffort
     contextWindow = state.binding.contextWindow
     maxOutputTokens = state.binding.maxOutputTokens
+    budgetBinding = state.binding.budgetBinding
     contextMetadata = state.binding.contextMetadata
   }
   if (entry.closing || deps.table.get(entry.path) !== entry) {
@@ -109,6 +111,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     isSubagent: true,
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
+    budgetBinding,
     contextMetadata,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),

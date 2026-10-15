@@ -18,6 +18,7 @@ export function prepareSummary(session: Session, shadowedSeqs: number[], config:
     catch { return projectionFingerprint(renderShadowed(session, activeEvents(session).flatMap(event => event.seq === undefined ? [] : [event.seq]))) }
   }
   const ownBinding = (currentShape = shape) => ({
+    budgetBinding: inherited ? deps.budgetBinding : config.summaryBudgetBinding ?? deps.summaryBudgetBinding,
     metadata: inherited ? deps.contextMetadata : config.summaryMetadata ?? deps.summaryMetadata,
     effort: inherited ? deps.reasoningEffort : config.summaryReasoningEffort ?? deps.summaryReasoningEffort,
     limits: inherited ? { contextWindow: config.contextWindow, maxOutputTokens: deps.maxOutputTokens } : config.summaryLimits,

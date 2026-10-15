@@ -1,5 +1,4 @@
-import { ANTHROPIC_MAX_TOKENS_FALLBACK } from "@i-harness/llm-seam"
-import { resolveEffectiveModelContext, type buildModelClient } from "@i-harness/provider"
+import type { buildModelClient } from "@i-harness/provider"
 import type { ProviderAuthResolver, ResolvedProviderAuth } from "@i-harness/credentials"
 import type { CreateProviderRuntimeOptions } from "../types.ts"
 import type { ProviderView } from "../directory/types.ts"
@@ -134,34 +133,17 @@ export function createModelResolver(
           modelId,
         )
       }
-      const effective = described?.metadata ?? resolveEffectiveModelContext({
-        profile,
-        modelId,
-        ...(userModel !== undefined ? { userModel } : {}),
-      })
-      const contextWindow = effective?.contextWindow
-      // M72 Ⅱ: the same resolution already produced the output cap — it was
-      // thrown away one line after being computed. Both numbers travel: the
-      // window is what the host compacts against, the cap is what the request
-      // must actually carry.
-      // M72 Ⅲ: Anthropic's Messages API REQUIRES `max_tokens`, so its fallback
-      // must be resolved HERE — where the protocol is known — or the value the
-      // adapter invents never meets core-agent's clamp (the phase-Ⅱ record's
-      // I1: `input 100K + 128000 > 200K` was a 400 on exactly the request that
-      // ran because the context was nearly full). With nothing resolved above,
-      // this is the value the chain supplies; it travels like any other cap.
-      // `profile.protocol` is the ADAPTER spelling (adapterProtocol maps
-      // openai-completions → openai-compatible and passes the rest through), so
-      // an anthropic route reads exactly as declared.
-      const maxOutputTokens = effective?.maxOutputTokens
-        ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
+      // Aliases are projections of this same metadata-only descriptor.
+      const budgetBinding = described?.budgetBinding
+      const contextWindow = budgetBinding?.limits.contextTokens?.value
+      const maxOutputTokens = budgetBinding?.generation.outputCap?.value
 
       try {
         const client = createBindingClient(options, buildClient, profile, view, modelId)
         return {
           status: "ready",
           binding: {
-            ...(described ? { contextMetadata: described.metadata } : {}),
+            ...(described ? { contextMetadata: described.metadata, budgetBinding: described.budgetBinding } : {}),
             client,
             providerId,
             modelId,

@@ -705,6 +705,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      contextMetadata: providerBinding?.contextMetadata,
+      budgetBinding: providerBinding?.budgetBinding,
       resolveRoleModel: roleModelResolverFor(runtimeNow),
       // The role-model gate, from whoever supplied the run (the CLI's main()
       // reads it from the settings store). Omitted when the caller passed

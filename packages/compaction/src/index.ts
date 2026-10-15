@@ -93,9 +93,11 @@ export function createCompactionEngine(deps: {
   /** Main binding's known output limit. Only inherited summaries use this as
    * a hard model upper bound; their preferred wire cap is independently4096. */
   maxOutputTokens?: number
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: ContextBindingMetadata
   reasoningEffort?: ReasoningEffort
   /** Explicit summary metadata/effort belong to the distinct summary client. */
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   summaryMetadata?: ContextBindingMetadata
   summaryReasoningEffort?: ReasoningEffort
   signal?: AbortSignal

@@ -12,6 +12,7 @@ export function assembleChild(
   sessionId: string | undefined, childPath: string, model: ModelClient,
   reasoningEffort: ReasoningEffort | undefined, contextWindow: number | undefined, maxOutputTokens: number | undefined,
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata,
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding,
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"],
 ) {
   // child registry: register the role's allowed tools (resolved from the parent).
@@ -51,6 +52,7 @@ export function assembleChild(
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),
     model,
+    budgetBinding,
     contextMetadata,
     // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
     // delegation/changed-files+test reporting/result delivery). Human and

@@ -54,7 +54,7 @@ export function createTeammateSpawner(
       // M73: same two options, same rule — the teammate's window and cap come
       // from the session the roster belongs to, and an absent one writes no key.
       ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),
-      contextMetadata: sub.contextMetadata, reasoningEffort: sub.reasoningEffort, inheritedBindingForStep: sub.inheritedBindingForStep,
+      budgetBinding: sub.budgetBinding, contextMetadata: sub.contextMetadata, reasoningEffort: sub.reasoningEffort, inheritedBindingForStep: sub.inheritedBindingForStep,
       ...(sub.maxOutputTokens !== undefined ? { maxOutputTokens: sub.maxOutputTokens } : {}),
       jobs: teamJobs,
       table: sub.table,

@@ -54,6 +54,7 @@ export type SessionModelBindingResult =
   | {
       status: "ready"
       binding: {
+        budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
         contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
         model: ModelClient
         providerId: string
@@ -580,6 +581,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             modelLabel: binding.label,
             contextWindow: binding.contextWindow,
             maxOutputTokens: binding.maxOutputTokens,
+            budgetBinding: binding.budgetBinding,
             contextMetadata: binding.contextMetadata,
             reasoningEffort: binding.reasoningEffort,
             compact,

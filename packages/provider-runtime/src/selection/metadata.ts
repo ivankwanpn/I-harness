@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
-import { resolveEffectiveModelContext } from "@i-harness/provider"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK } from "@i-harness/llm-seam"
+import { resolveEffectiveModelContextEvidence } from "@i-harness/provider"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeRouteBudgetCapability, type ModelBudgetBinding } from "@i-harness/llm-seam"
 import type { ContextBindingMetadata } from "@i-harness/core-session"
 import type { SettingsStoreSurface } from "@i-harness/settings"
 import type { ProviderView } from "../directory/types.ts"
@@ -28,9 +28,15 @@ export function describeSelection(settings: SettingsStoreSurface, provider: (id:
     profile.codexSubscription = true
     profile.baseUrl = "https://chatgpt.com/backend-api/codex"
   }
-  const effective = resolveEffectiveModelContext({ profile, modelId: selection.modelId, ...(userModel ? { userModel } : {}) })
-  const contextWindow = effective?.contextWindow
-  const maxOutputTokens = effective?.maxOutputTokens ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
+  if (profile.codexSubscription && profile.protocol !== "openai-responses") return undefined
+  const effective = resolveEffectiveModelContextEvidence({ profile, modelId: selection.modelId, ...(userModel ? { userModel } : {}) })
+  const limits = effective?.limits ?? {}
+  const generation: ModelBudgetBinding["generation"] = effective?.generation.outputCap ? effective.generation
+    : profile.protocol === "anthropic-messages" ? { origin: "adapter-default", outputCap: { value: ANTHROPIC_MAX_TOKENS_FALLBACK, origin: "adapter-default", sourceId: "anthropic-fallback-v1" } }
+    : { origin: profile.codexSubscription ? "provider-managed" : "unspecified" }
+  const capability = describeRouteBudgetCapability(profile)
+  const contextWindow = limits.contextTokens?.value
+  const maxOutputTokens = generation.outputCap?.value
   const reasoningEffort = normalizeReasoningEffort(selection.reasoningEffort)
   if (selection.reasoningEffort !== undefined && reasoningEffort === undefined) return undefined
   // Unknown header values/account affinity/opaque options are never equality evidence.
@@ -48,10 +54,11 @@ export function describeSelection(settings: SettingsStoreSurface, provider: (id:
   const content = { schema: 1, provider: selection.providerId, model: selection.modelId, protocol: profile.codexSubscription ? "openai-responses-subscription" : profile.protocol,
     endpoint, catalog: profile.catalog, contextWindow, maxOutputTokens, reasoningEffort, inputModalities: profile.inputModalities,
     maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, promptCache: profile.promptCache,
-    revision: settings.getSectionRevision("llm") }
+    limits, generation, capability, revision: settings.getSectionRevision("llm") }
   const metadata: ContextBindingMetadata = { version: 1, providerId: selection.providerId, modelId: selection.modelId, protocol: content.protocol,
     ...(contextWindow !== undefined ? { contextWindow } : {}), ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}), ...(reasoningEffort ? { reasoningEffort } : {}),
     identityCoverage: partial ? "partial" : "complete",
     ...(partial ? {} : { bindingConfigFingerprint: createHash("sha256").update(JSON.stringify(canonical(content))).digest("hex") }) }
-  return { selection, view, profile, metadata }
+  const budgetBinding: ModelBudgetBinding = { version: 1, metadata, limits, generation, capability, ...(reasoningEffort ? { reasoningEffort } : {}) }
+  return { selection, view, profile, metadata, budgetBinding }
 }

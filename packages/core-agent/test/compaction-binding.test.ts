@@ -94,7 +94,7 @@ it("rebuilds an inherited summary retargeted during actual subscription auth wit
   expect(session.events.filter(event => event.type === "compaction/summary")).toHaveLength(1)
 })
 
-it.each(["history", "distinct metadata"])("rejects held summary %s changes before checkpoint commit", async change => {
+it.each(["history", "distinct metadata", "distinct budget", "parent budget"])("checks only the selected summary binding for held %s changes", async change => {
   const ctx = createContext(), session = createSession(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   append(session, { type: "user/message", text: "old work" })
   vi.stubGlobal("fetch", async () => {
@@ -103,15 +103,21 @@ it.each(["history", "distinct metadata"])("rejects held summary %s changes befor
   })
   const model = createAnthropicClient({ apiKey: "controlled", model: "summary" })
   const summaryMetadata = { version: 1 as const, modelId: "summary", protocol: "anthropic-messages", contextWindow: 100000, identityCoverage: "complete" as const, bindingConfigFingerprint: "a".repeat(64) }
+  const summaryBudgetBinding = { version: 1 as const, metadata: summaryMetadata, limits: { contextTokens: { value: 100000, origin: "profile" as const, sourceId: "profile-v1" } }, generation: { origin: "unspecified" as const }, capability: { version: 1 as const, route: "anthropic-messages" as const, evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required" as const, packetKind: "http-json-body" as const } }
+  const parentBudgetBinding = { ...summaryBudgetBinding, metadata: { ...summaryMetadata, modelId: "main" }, limits: { contextTokens: { value: 500000, origin: "profile" as const, sourceId: "profile-main-v1" } } }
   const agent = createAgent(ctx, { session, model: { async *stream() { throw new Error("main must not transport") } }, tools: createToolRegistry(ctx), systemPrompt: "main authority",
-    compact: { contextWindow: 100000, summarizationModel: model, summaryMetadata } })
+    budgetBinding: parentBudgetBinding,
+    compact: { contextWindow: 100000, summarizationModel: model, summaryMetadata, ...(change === "parent budget" ? {} : { summaryBudgetBinding }) } })
   const pending = agent.compact!()
   await entered.promise
   if (change === "history") append(session, { type: "user/message", text: "new authority while held" })
-  else summaryMetadata.bindingConfigFingerprint = "b".repeat(64)
+  else if (change === "distinct metadata") summaryMetadata.bindingConfigFingerprint = "b".repeat(64)
+  else if (change === "distinct budget") summaryBudgetBinding.limits.contextTokens.sourceId = "profile-revised-v1"
+  else parentBudgetBinding.limits.contextTokens.sourceId = "parent-revised-v1"
   release.resolve()
-  await expect(pending).rejects.toMatchObject({ code: "CONTEXT_INPUT_STALE" })
-  expect(session.events.some(event => event.type === "compaction/summary")).toBe(false)
+  if (change === "parent budget") expect((await pending).compacted).toBe(true)
+  else await expect(pending).rejects.toMatchObject({ code: "CONTEXT_INPUT_STALE" })
+  expect(session.events.some(event => event.type === "compaction/summary")).toBe(change === "parent budget")
 })
 
 it("bounds repeatedly stale summary work to three local rebuilds without hook or inbox replay", async () => {

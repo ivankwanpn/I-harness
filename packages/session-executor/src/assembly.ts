@@ -120,7 +120,7 @@ export class ModelUnavailableError extends Error {
 type RoleModelResolution =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata } }
 
 /** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
  * holds, and what subagent's own `RoleModelSelection` is: named here so the
@@ -257,6 +257,7 @@ export interface AssemblyOptions {
    * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
    * get_context_remaining is NOT registered (fail-closed). */
   contextWindow?: number
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
   /** M72 Ⅱ: the resolved output cap for this session's model (the binding's
    * `maxOutputTokens`). Moved VERBATIM — nothing here defaults or clamps it;
@@ -371,7 +372,7 @@ export interface SessionAssembly {
    * `SessionService.rebindModel`, not by this call. Identity of `model` does NOT
    * change, which is deliberate: a rebind is one assignment, never a re-wiring. */
   setModel(client: ModelClient): void
-  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata }, compact?: CompactionRequest): void
+  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding; contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata }, compact?: CompactionRequest): void
   /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
    * `setModel` rather than an optional second parameter on it, deliberately:
    * `undefined` here means "the new selection names no effort — clear it", and
@@ -1239,8 +1240,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // subagentDeps → tools.ts's spawn_agent), so the values are only ever as
       // present as the host made them.
       get contextWindow() { return opts.contextWindow },
+      get budgetBinding() { return opts.budgetBinding },
       get contextMetadata() { return opts.contextMetadata },
-      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
       get reasoningEffort() { return currentReasoningEffort },
       get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
@@ -1374,9 +1376,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // session's numbers describe the model this review will run on. It
         // passes them on the INHERITED arm alone.
         get contextWindow() { return opts.contextWindow },
-      get contextMetadata() { return opts.contextMetadata },
-      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
-      get reasoningEffort() { return currentReasoningEffort },
+        get budgetBinding() { return opts.budgetBinding },
+        get contextMetadata() { return opts.contextMetadata },
+        inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+        get reasoningEffort() { return currentReasoningEffort },
         get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
@@ -1425,9 +1428,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // field) — a teammate that inherits runs on the session's own model
           // and must carry its window and cap.
           get contextWindow() { return opts.contextWindow },
-      get contextMetadata() { return opts.contextMetadata },
-      inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
-      get reasoningEffort() { return currentReasoningEffort },
+          get budgetBinding() { return opts.budgetBinding },
+          get contextMetadata() { return opts.contextMetadata },
+          inheritedBindingForStep: () => ({ identity: currentModel, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+          get reasoningEffort() { return currentReasoningEffort },
           get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
@@ -1535,6 +1539,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
     const agent = createAgent(ctx, {
       modelBindingIdentity: () => currentModel,
+      budgetBinding: () => opts.budgetBinding,
       contextMetadata: () => opts.contextMetadata,
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       session, tools, model,
@@ -1614,6 +1619,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         overheadOverride = compact?.overheadTokens
         const overhead = estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
         agent.updateContext!({
+          budgetBinding: binding.budgetBinding,
           contextMetadata: binding.contextMetadata,
           ...(binding.contextWindow === undefined ? {} : {
             budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
@@ -1626,6 +1632,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         currentReasoningEffort = binding.reasoningEffort
         opts.contextWindow = binding.contextWindow
         opts.maxOutputTokens = binding.maxOutputTokens
+        opts.budgetBinding = binding.budgetBinding
         opts.contextMetadata = binding.contextMetadata
         tools.unregister("get_context_remaining")
         if (binding.contextWindow !== undefined) registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session, budgetRead })

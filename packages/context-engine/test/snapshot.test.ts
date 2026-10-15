@@ -1,6 +1,23 @@
 import { expect, it } from "vitest"
 import { append, createSession, renderConversation } from "@i-harness/core-session"
 import { captureContextSnapshot } from "../src/index.ts"
+import type { ModelBudgetBinding } from "@i-harness/llm-seam"
+
+it("owns nested model evidence and changes the surface digest when only provenance changes", () => {
+  const budgetBinding: ModelBudgetBinding = { version: 1, metadata: { version: 1, modelId: "m", protocol: "gemini", identityCoverage: "partial" },
+    limits: { contextTokens: { value: 1000, origin: "profile", sourceId: "profile-v1" } }, generation: { origin: "unspecified" },
+    capability: { version: 1, route: "gemini", evidenceId: "adapter-budget-v1:gemini", outputParameter: "optional", packetKind: "http-json-body" } }
+  const session = createSession(), surface = { systemPrompt: "p", tools: [], budgetBinding }
+  const first = captureContextSnapshot(session, { ownerSessionId: "owner", surface })
+  if (first.kind !== "captured") throw new Error("capture required")
+  ;(budgetBinding.limits.contextTokens as { sourceId: string }).sourceId = "profile-revised-v1"
+  const second = captureContextSnapshot(session, { ownerSessionId: "owner", surface })
+  if (second.kind !== "captured") throw new Error("capture required")
+  expect(first.snapshot.surface.budgetBinding?.limits.contextTokens).toEqual({ value: 1000, origin: "profile", sourceId: "profile-v1" })
+  expect(Object.isFrozen(first.snapshot.surface.budgetBinding?.limits.contextTokens)).toBe(true)
+  expect(Object.isFrozen(budgetBinding.limits.contextTokens)).toBe(false)
+  expect(second.snapshot.surfaceRevision).not.toBe(first.snapshot.surfaceRevision)
+})
 
 it("publishes a detached recursively immutable request and fresh renderer copies", () => {
   const session = createSession()

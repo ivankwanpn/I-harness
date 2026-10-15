@@ -40,6 +40,7 @@ export interface AgentDeps {
   bindingForStep?: () => ModelContextBindingDescriptor
   /** Current concrete binding behind a stable host handle. Read only, never resolves a client. */
   modelBindingIdentity?: () => object
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding | (() => import("@i-harness/llm-seam").ModelBudgetBinding | undefined)
   contextMetadata?: ContextBindingMetadata | (() => ContextBindingMetadata | undefined)
   session: Session
   tools: ToolRegistry
@@ -85,6 +86,7 @@ export interface AgentDeps {
 
 export interface ModelContextBindingDescriptor {
   identity: object
+  budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
   contextMetadata?: ContextBindingMetadata
   contextWindow?: number
   maxOutputTokens?: number
@@ -111,7 +113,7 @@ export interface Agent {
   // M33 §5: optional `instructions` are threaded to the summarizer (the
   // session-compact command surface).
   compact?(instructions?: string, options?: CompactionRunOptions): Promise<CompactionResult>
-  updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata }): void
+  updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding }): void
 }
 export interface AgentInputOptions { provenance: InputProvenance }
 
