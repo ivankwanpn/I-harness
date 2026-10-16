@@ -41,10 +41,15 @@ it("captures nested image data and options before image validation suspends prep
   expect(sent).toContain("frozen")
   expect(sent).not.toContain("changed")
 })
-it("counts Bedrock native reasoning retained by its order fallback and preserves raw cap options", async () => {
-  const runtime = { async send() { return { stream: [] } }, destroy() { } } as unknown as BedrockRuntimeFace
+it("refuses stale signed order, counts valid native bytes and preserves model-specific raw cap options", async () => {
+  let sent: Record<string, any> = {}
+  const runtime = { async send(command: { input: Record<string, unknown> }) { sent = command.input; return { stream: [] } }, destroy() { } } as unknown as BedrockRuntimeFace
   const client = createBedrockClient({ model: "fixture" }, runtime)
-  const request: LLMRequest = { systemPrompt: "", tools: [], messages: [{ role: "assistant", content: "answer", toolCalls: [{ id: "c", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "fixture", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }, { redactedContentBase64: "AQID" }], contentOrder: [{ kind: "text", text: "stale" }] } }] }
+  const request: LLMRequest = { systemPrompt: "", tools: [], messages: [{ role: "assistant", content: "answer", toolCalls: [{ id: "c", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "fixture", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }, { redactedContentBase64: "AQID" }], contentOrder: [{ kind: "text", text: "stale" }] } }, { role: 'tool', toolCallId: 'c', content: 'done' }] }
+  await expect(client.prepare!(request)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'native-replay' } })
+  const assistant = request.messages[0]!
+  if (assistant.role !== 'assistant' || assistant.providerContinuation?.kind !== 'bedrock') throw new Error('fixture')
+  assistant.providerContinuation.contentOrder = [{ kind: 'reasoning', index: 0 }, { kind: 'reasoning', index: 1 }, { kind: 'text', text: 'answer' }, { kind: 'tool', index: 0 }]
   const prepared = await client.prepare!(request)
   expect(prepared.measurement.input.components.replayedReasoning.textUtf8Bytes).toBe(4)
   expect(prepared.measurement.packet.signatureBytes).toBe(3)
@@ -52,11 +57,15 @@ it("counts Bedrock native reasoning retained by its order fallback and preserves
   const message = request.messages[0]!
   if (message.role !== "assistant")
     throw new Error("fixture")
-  const foreign = await client.prepare!({ ...request, messages: [{ ...message, providerContinuation: { kind: "bedrock", model: "other", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }] } }] })
+  const foreign = await client.prepare!({ ...request, messages: [{ ...message, providerContinuation: { kind: "bedrock", model: "other", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }] } }, request.messages[1]!] })
   expect(foreign.measurement.input.components.replayedReasoning.heuristicTokens).toBe(0)
   const raw = await createBedrockClient({ model: "fixture", options: { max_tokens: 100 } }, runtime).prepare!({ systemPrompt: "", tools: [], messages: [] })
-  expect(raw.measurement.output).toMatchObject({ configuredCap: 100, effectiveCap: 100, source: "route" })
-  expect(() => raw.withOutputCap(80)).toThrow(/conflicting/)
+  expect(raw.measurement.output).toMatchObject({ configuredCap: undefined, effectiveCap: undefined, source: "provider-default" })
+  const capped = raw.withOutputCap(80)
+  expect(capped.measurement.output.effectiveCap).toBe(80)
+  for await (const _ of capped.stream()) {}
+  expect(sent.inferenceConfig).toEqual({ maxTokens: 80 })
+  expect(sent.additionalModelRequestFields).toEqual({ max_tokens: 100 })
 })
 it("restores the protocol default when an explicit cap is removed", async () => {
   const runtime = { async send() { return { stream: [] } }, destroy() { } } as unknown as BedrockRuntimeFace

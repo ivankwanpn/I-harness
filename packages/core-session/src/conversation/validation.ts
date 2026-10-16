@@ -1,5 +1,6 @@
 import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./usage-validation.ts"
 import type { SessionEvent } from "../events/types.ts"
+import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
@@ -14,12 +15,12 @@ export interface ConversationValidationIndex {
 }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
-export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number } = { formatVersion: 4 }): ConversationValidationIndex {
+export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number } = { formatVersion: CURRENT_FORMAT_VERSION }): ConversationValidationIndex {
   return createConversationIndex(events, undefined, options.formatVersion)
 }
 
 /** Internal append-owner port: re-read referenced structural fields, without retaining a second archive. */
-export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = 4): ConversationValidationIndex {
+export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = CURRENT_FORMAT_VERSION): ConversationValidationIndex {
   const acceptances = new Map<number, AcceptanceFact>()
   const completions = new Map<number, string>()
   const anchors = new Map<string, UsageAnchorFact>()

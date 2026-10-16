@@ -1,4 +1,4 @@
-import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMRequest, type ProviderContinuation } from "@i-harness/llm-seam"
+import { canReplayContinuation, replayBlockOrder, stringifyJsonData, type LLMContentPart, type LLMRequest, type ProviderContinuation } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 
 // Shape LLM content parts into GenAI content part objects. String content
@@ -18,7 +18,7 @@ function toGeminiParts(content: string | LLMContentPart[]): unknown[] {
 // else becomes { output: <text> }.
 function toFunctionResponse(content: string | LLMContentPart[]): unknown {
   if (typeof content !== "string") {
-    content = content.map((p) => (p.type === "text" ? p.text : "[image]")).join("\n")
+    content = content.filter(p => p.type === 'text').map(p => p.text).join("\n")
   }
   if (content.trim() !== "") {
     try {
@@ -56,7 +56,7 @@ function geminiCallsMatch(
   if (!continuation.callBindings) return calls.length === 0 || continuation.partOrder === undefined
   return continuation.callBindings.length === calls.length && continuation.callBindings.every((binding, index) => {
     const call = calls[index]
-    return call !== undefined && binding.name === call.name && binding.argsJson === JSON.stringify(call.args)
+    return call !== undefined && binding.name === call.name && binding.argsJson === stringifyJsonData(call.args)
       && (binding.id === undefined || binding.id === call.id)
   })
 }
@@ -74,6 +74,11 @@ export function toGeminiContents(messages: LLMRequest["messages"], config: Gemin
   }
   const contents: { role: "user" | "model"; parts: unknown[] }[] = []
   let functionResponses: unknown[] | undefined
+  let toolImages: unknown[] = []
+  const flushImages = () => {
+    if (toolImages.length) contents.push({ role: 'user', parts: toolImages })
+    toolImages = []
+  }
   for (const m of messages) {
     if (m.role === "tool") {
       if (functionResponses === undefined) {
@@ -83,10 +88,12 @@ export function toGeminiContents(messages: LLMRequest["messages"], config: Gemin
       functionResponses.push({ functionResponse: {
         id: m.toolCallId,
         name: namesByCallId.get(m.toolCallId) ?? "",
-        response: toFunctionResponse(m.content),
+        response: m.isError ? { error: toFunctionResponse(m.content) } : toFunctionResponse(m.content),
       } })
+      if (Array.isArray(m.content)) toolImages.push(...toGeminiParts(m.content.filter(part => part.type === 'image')))
       continue
     }
+    flushImages()
     functionResponses = undefined
     if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
       const continuation = m.providerContinuation?.kind === "gemini" && canReplayContinuation(m.providerContinuation, config)
@@ -121,5 +128,6 @@ export function toGeminiContents(messages: LLMRequest["messages"], config: Gemin
     }
     contents.push({ role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) })
   }
+  flushImages()
   return contents
 }

@@ -1,8 +1,9 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type LLMRequest } from "@i-harness/llm-seam"
 import { translateReasoning } from "./request/reasoning.ts"
 import type { AnthropicConfig } from "./types.ts"
 import { describeCachedBody, type CacheEvidence } from "./request/cache-evidence.ts"
+import { anthropicCapabilities, hasInterleavedBeta } from "./request/capabilities.ts"
 export function describeContext(actualBody: Record<string, unknown>, config: AnthropicConfig, cacheEvidence: CacheEvidence) {
   const { semantic: body, metadataBytes } = describeCachedBody(actualBody, cacheEvidence)
   const counter = new ProjectionCounter("projected-pricing-v2")
@@ -65,17 +66,16 @@ export function describeContext(actualBody: Record<string, unknown>, config: Ant
   return { input, packet: { sizeKind: "http-json-body" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
 export function outputFacts(body: Record<string, unknown>, request: LLMRequest, config: AnthropicConfig) {
-  if (typeof body.max_tokens !== "number")
-    throw invalidPreparedRequest("Anthropic output cap is invalid")
   const thinking = body.thinking as {
     type?: string
     budget_tokens?: number
   } | undefined
   const managed = request.reasoningEffort !== undefined && request.reasoningEffort !== "off"
   const budget = thinking?.type === "enabled" ? thinking.budget_tokens : undefined
-  if (budget !== undefined && (!Number.isSafeInteger(budget) || budget < 1024))
-    throw invalidPreparedRequest("Anthropic reasoning budget is invalid")
-  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : undefined), effectiveCap: typeof body.max_tokens === "number" ? body.max_tokens : undefined, minimumCap: budget === undefined ? 1 : managed ? 1025 : budget + 1, reasoningBudget: budget, source: request.maxOutputTokens !== undefined ? "request" as const : config.options?.max_tokens !== undefined ? "route" as const : "adapter-default" as const }
+  const capability = anthropicCapabilities(config)
+  const ordinaryManual = capability?.modes.includes("enabled") && !(capability.manualInterleaving && hasInterleavedBeta(config.headers))
+  const minimumCap = budget === undefined ? 1 : managed ? 1025 : ordinaryManual ? budget + 1 : 1
+  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : undefined), effectiveCap: typeof body.max_tokens === "number" ? body.max_tokens : undefined, minimumCap, reasoningBudget: budget, source: request.maxOutputTokens !== undefined ? "request" as const : config.options?.max_tokens !== undefined ? "route" as const : "adapter-default" as const }
 }
 export function capBody(body: Record<string, unknown>, cap: number | undefined, request: LLMRequest, config: AnthropicConfig) {
   cap ??= typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK

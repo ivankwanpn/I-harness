@@ -4,7 +4,7 @@ import type { PreparedModelRequest } from './types.ts'
 export type ValidationRule = 'shape' | 'binding' | 'tool-id' | 'tool-group' | 'native-replay' | 'parameter-type' | 'parameter-conflict' | 'unsupported-parameter' | 'output-range' | 'body-limit' | 'media-limit'
 export type ValidationSite = 'request' | 'model' | 'messages' | 'input' | 'tools' | 'native' | 'generation' | 'media'
 export type CoverageGap = 'legacy-tool-ownership' | 'native-origin-unknown' | 'native-contract-unavailable' | 'protocol-contract-unavailable' | 'extension-unchecked' | 'limit-unverified' | 'remote-input-unavailable' | 'custom-client'
-export type FinalRejectionReason = 'schema' | 'message-order' | 'unsupported-parameter' | 'binding' | 'native-replay' | 'output-limit'
+export type FinalRejectionReason = 'schema' | 'message-order' | 'unsupported-parameter' | 'binding' | 'native-replay' | 'output-limit' | 'media-limit'
 export interface PreparedValidation {
   version: 1
   route: RouteKind | 'custom'
@@ -28,6 +28,7 @@ const sites: readonly ValidationSite[] = ['request', 'model', 'messages', 'input
 const gaps: readonly CoverageGap[] = ['legacy-tool-ownership', 'native-origin-unknown', 'native-contract-unavailable', 'protocol-contract-unavailable', 'extension-unchecked', 'limit-unverified', 'remote-input-unavailable', 'custom-client']
 const reasonRules: Record<FinalRejectionReason, readonly ValidationRule[]> = {
   schema: ['shape', 'parameter-type', 'parameter-conflict', 'body-limit', 'media-limit'],
+  'media-limit': ['media-limit'],
   'message-order': ['tool-id', 'tool-group'], 'unsupported-parameter': ['unsupported-parameter'],
   binding: ['binding'], 'native-replay': ['native-replay'], 'output-limit': ['output-range'],
 }
@@ -110,7 +111,12 @@ export function validationCollector(route: PreparedValidation['route']) {
       else omittedIssueCount = Math.min(65535, omittedIssueCount + 1)
     },
     gap(gap: CoverageGap) { missing.add(gap) },
-    native(value: PreparedValidation['native'] = 'unverified') { native = value; if (value === 'unverified') missing.add('native-origin-unknown') },
+    native(value: PreparedValidation['native'] = 'unverified') {
+      if (native === 'incompatible') return
+      native = value
+      if (value === 'unverified') missing.add('native-origin-unknown')
+      else if (value === 'preserved') missing.delete('native-origin-unknown')
+    },
     finish(): FinalValidation {
       const report = createPreparedValidation({ version: 1, route, contract: contracts.get(route)!, status: issues.length ? 'invalid' : missing.size ? 'partial' : 'checked', coverage: route === 'custom' ? 'neutral-only' : 'final-protocol', native, issues, gaps: [...missing], omittedIssueCount })
       return issues.length ? { kind: 'rejected', reason, report } : { kind: 'accepted', report }

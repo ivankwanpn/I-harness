@@ -6,6 +6,9 @@ import { buildConverseBody } from "./request/body.ts"
 import { iterateConverseStream } from "./stream/iterate.ts"
 
 import { describeContext, outputFacts, capBody } from "./context.ts"
+import { bedrockValidator } from './request/validate.ts'
+import { converseInputWitness } from './request/validate-native.ts'
+import { assertNativeProducerWitnesses } from '@i-harness/llm-seam'
 
 export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRuntimeFace): ModelClient {
   const runtimeRegion = runtime === undefined ? resolveBedrockRegion(config.region, process.env) : undefined
@@ -16,6 +19,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     ...(config.profile !== undefined ? { profile: config.profile } : {}),
   })
   return preparedModelClient(async originalRequest => {
+    assertNativeProducerWitnesses(originalRequest.messages, 'bedrock')
     const request = snapshotModelData(originalRequest)
     const capturedConfig = snapshotModelData(config, ["region", "profile"])
     // Region is a transport/diagnostic setting, not model-visible input.
@@ -25,7 +29,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     // M14 negative capability: text-only routes never see image bytes.
     const vision = capturedConfig.inputModalities?.includes("image") ?? false
     const messages = await projectImagesForProvider(request.messages, vision, request.signal)
-    const mapped = buildConverseBody(capturedConfig, request, messages)
+    const mapped = buildConverseBody(capturedConfig, request, messages, runtime === undefined)
     if (mapped.error !== undefined) {
       throw invalidPreparedRequest(mapped.error.message)
     }
@@ -34,13 +38,15 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     const capturedRequest = request
     return createPreparedPayload({
       body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
-      output: (body, request) => outputFacts(body, request, capturedConfig),
+      validate: bedrockValidator(capturedConfig, runtime === undefined, messages),
+      output: (body, request) => outputFacts(body, request),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
       async *execute(actualBody, _serialized, control, execution): AsyncIterable<LLMStreamEvent> {
         const request = { ...capturedRequest, ...control }
         // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
         // kill a parked Converse call, not wait for the first event.
         let output: ConverseStreamCommandOutput
+        const inputWitness = converseInputWitness(actualBody)
         execution.confirm(capturedConfig.executionIdentity)
         try {
           output = await client.send(
@@ -57,7 +63,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
           return
         }
         reportStreamActivity(request, "response-start")
-        yield* iterateConverseStream(output, capturedConfig, request)
+        yield* iterateConverseStream(output, capturedConfig, request, inputWitness)
       },
     })
   })

@@ -1,9 +1,9 @@
-import { type LLMStreamEvent, type ProviderThinkingBlock, type ProviderBlockOrderEntry, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { stringifyJsonData, type LLMStreamEvent, type ProviderThinkingBlock, type ProviderBlockOrderEntry, type RetryableErrorCode, type ProviderContinuation } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
 /** One response owns all pending blocks, tool bindings, block order and terminal flags. */
-export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "providerId">, prefixFingerprint: () => string, onToolArguments: () => void) {
+export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "providerId">, prefixFingerprint: () => string, onToolArguments: () => void, producerWitness?: Extract<ProviderContinuation, { kind: 'anthropic' }>['producerWitness']) {
   // M72 Ⅱ: the wire's own truncation literal (`stop_reason: "max_tokens"`)
   // — set in `handleEvent` below, read once at the ending. Absent stays
   // absent: only `true` writes the field.
@@ -77,7 +77,7 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
         pendingToolUses.set(index, {
           ...(block.id ? { id: block.id } : {}),
           name: block.name ?? "",
-          argsBuffer: hasInlineInput ? JSON.stringify(input) : "",
+          argsBuffer: hasInlineInput ? stringifyJsonData(input)! : "",
           ordinal,
         })
       } else if (block?.type === "thinking") {
@@ -134,7 +134,7 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
         }
         try {
           const args = JSON.parse(pending.argsBuffer) as unknown
-          toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: JSON.stringify(args) }
+          toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: stringifyJsonData(args)! }
           return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
         } catch {
           return [{ type: "error", error: new Error("anthropic malformed tool_use input") }]
@@ -164,7 +164,15 @@ export function createAnthropicFold(config: Pick<AnthropicConfig, "model" | "pro
       previousRank = Math.max(previousRank, current)
       return outOfOrder
     })
-    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}), ...(thinkingBlocks.length || interleaved ? { providerContinuation: { kind: "anthropic", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(interleaved ? { contentOrder } : {}), ...(thinkingBlocks.length ? { prefixFingerprint: prefixFingerprint() } : {}), ...(toolBindings.length ? { toolBindings } : {}) } as const } : {}) }
+    const ids = new Set<string>()
+    const bindingsComplete = toolBindings.length === toolOrdinal && [...toolBindings].every(binding => {
+      if (!binding || !binding.id || ids.has(binding.id) || !/^[a-zA-Z0-9_-]{1,64}$/.test(binding.name)) return false
+      ids.add(binding.id)
+      const input: unknown = JSON.parse(binding.inputJson)
+      return input !== null && typeof input === 'object' && !Array.isArray(input)
+    })
+    const capturedWitness = producerWitness && !truncated && !refused && !pendingThinking.size && !pendingToolUses.size && bindingsComplete ? producerWitness : undefined
+    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}), ...(thinkingBlocks.length || interleaved ? { providerContinuation: { kind: "anthropic", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(interleaved ? { contentOrder } : {}), ...(thinkingBlocks.length ? { prefixFingerprint: prefixFingerprint(), ...(capturedWitness ? { producerWitness: capturedWitness } : {}) } : {}), ...(toolBindings.length ? { toolBindings } : {}) } as const } : {}) }
   }
   return { handleEvent, finish }
 }

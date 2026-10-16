@@ -8,7 +8,7 @@ export function finalValidationError(reason: FinalRejectionReason, validation: P
 export function assertPreparedValidation(prepared: Pick<PreparedModelRequest, 'validation' | 'measurement'>): void {
   const report = readPreparedValidation(prepared)
   if (report.status !== 'invalid') return
-  const reasons: FinalRejectionReason[] = ['binding', 'message-order', 'native-replay', 'unsupported-parameter', 'output-limit', 'schema']
+  const reasons: FinalRejectionReason[] = ['binding', 'message-order', 'native-replay', 'unsupported-parameter', 'output-limit', 'media-limit', 'schema']
   throw finalValidationError(reasons.find(reason => coherentRejection(reason, report))!, report)
 }
 export function preparedBindingError(prepared: Pick<PreparedModelRequest, 'validation' | 'measurement'>): Error {

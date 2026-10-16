@@ -2,11 +2,11 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createGeminiClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
-it("preserves final string, object, null and array generationConfig distinctions", async () => {
+it("preserves lowered valid generationConfig values and rejects malformed containers", async () => {
   const sent: unknown[] = []
   vi.stubGlobal("fetch", async (_url: unknown, init: RequestInit) => { sent.push(JSON.parse(String(init.body)).generationConfig); return new Response("") })
   const shapes = new Set<string>(), inputs = new Set<string>()
-  const values = ["x", { "0": "x" }, null, ["x"], [], {}]
+  const values = [{ "0": "x" }, null, {}]
   for (const value of values) {
     let calls = 0
     const prepared = await createGeminiClient({ apiKey: "controlled", model: "fixture", options: { generationConfig: { toJSON() { calls++; return value } } } }).prepare!({ systemPrompt: "", tools: [], messages: [{ role: "user", content: "controlled" }] })
@@ -16,8 +16,9 @@ it("preserves final string, object, null and array generationConfig distinctions
     for await (const _event of prepared.stream()) {}
     expect(calls).toBe(1)
   }
-  expect(sent).toEqual(["x", { "0": "x" }, null, ["x"], [], {}])
-  expect(shapes.size).toBe(6); expect(inputs.size).toBe(6)
+  expect(sent).toEqual([{ "0": "x" }, null, {}])
+  expect(shapes.size).toBe(2); expect(inputs.size).toBe(2)
+  for (const value of ['x', ['x'], []]) await expect(createGeminiClient({ apiKey: 'controlled', model: 'fixture', options: { generationConfig: { toJSON: () => value } } }).prepare!({ systemPrompt: '', tools: [], messages: [] })).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'schema' } })
 })
 it("removes only a record's explicit generation cap from semantic input", async () => {
   const prepared = await createGeminiClient({ apiKey: "controlled", model: "fixture", options: { generationConfig: { temperature: .2, thinkingConfig: { thinkingBudget: 4096 }, maxOutputTokens: 64 } } }).prepare!({ systemPrompt: "", tools: [], messages: [] })
@@ -26,15 +27,19 @@ it("removes only a record's explicit generation cap from semantic input", async 
   expect(capped.measurement.output).toMatchObject({ effectiveCap: 32, reasoningBudget: 4096 })
   expect(capped.measurement.payloadIdentity).not.toEqual(prepared.measurement.payloadIdentity)
 })
-it.each([1.5, Infinity, -Infinity, NaN, "4096", null, true, {}, -2, Number.MAX_SAFE_INTEGER + 1])("rejects malformed raw thinking budget %s before publishing facts or transport", async budget => {
+it.each([1.5, true, {}, -2, Number.MAX_SAFE_INTEGER + 1])("rejects malformed raw thinking budget %s before publishing facts or transport", async budget => {
   let sends = 0
   vi.stubGlobal("fetch", async () => { sends++; return new Response("") })
   const client = createGeminiClient({ apiKey: "test", model: "gemini-2.5-flash", options: { generationConfig: { thinkingConfig: { thinkingBudget: budget } } } })
   await expect(client.prepare!({ systemPrompt: "", tools: [], messages: [] })).rejects.toMatchObject({
     code: "INVALID_ARGUMENT",
-    modelFailure: { code: "INVALID_ARGUMENT", reason: "output-limit" },
+    modelFailure: { code: "INVALID_ARGUMENT", reason: "schema" },
   })
   expect(sends).toBe(0)
+})
+it.each([Infinity, -Infinity, NaN, '4096', null])('honors actual ProtoJSON null/unset or numeric-string budget %s', async thinkingBudget => {
+  const prepared = await createGeminiClient({ apiKey: 'controlled', model: 'gemini-2.5-flash', options: { generationConfig: { thinkingConfig: { thinkingBudget } } } }).prepare!({ systemPrompt: '', tools: [], messages: [] })
+  expect(prepared.measurement.output.reasoningBudget).toBe(thinkingBudget === '4096' ? 4096 : undefined)
 })
 it.each([-1, 0, 4096])("preserves the raw automatic/disabled/numeric thinking budget %s on every derivative", async budget => {
   let sent: Record<string, any> = {}

@@ -3,10 +3,11 @@ import { describeTransportError, type LLMRequest, type LLMStreamEvent } from "@i
 import type { BedrockConfig } from "../types.ts"
 import { resolveBedrockRegion } from "../region.ts"
 import { createBedrockFold } from "./fold.ts"
+import type { ConverseInputWitness } from '../request/validate-native.ts'
 
 /** The SDK already decodes members; for-await owns its iterator lifecycle. */
-export async function* iterateConverseStream(output: ConverseStreamCommandOutput, config: BedrockConfig, request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-  const fold = createBedrockFold(config, request)
+export async function* iterateConverseStream(output: ConverseStreamCommandOutput, config: BedrockConfig, request: LLMRequest, witness?: ConverseInputWitness): AsyncIterable<LLMStreamEvent> {
+  const fold = createBedrockFold(config, request, witness)
   try {
     for await (const member of output.stream ?? []) {
       const events = fold.handleMember(member)

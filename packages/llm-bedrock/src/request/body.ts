@@ -4,7 +4,7 @@ import type { BedrockConfig } from "../types.ts"
 import { translateReasoning } from "./reasoning.ts"
 import { toConverseMessages } from "./messages.ts"
 
-export function buildConverseBody(config: BedrockConfig, request: LLMRequest, messages: LLMRequest["messages"]): { body: ConverseStreamCommandInput; error?: never } | { error: Error; body?: never } {
+export function buildConverseBody(config: BedrockConfig, request: LLMRequest, messages: LLMRequest["messages"], official = false): { body: ConverseStreamCommandInput; error?: never } | { error: Error; body?: never } {
   // M32: request-level effort wins over config.options (explicit per-request intent).
   const reasoning = translateReasoning(config.model, request.reasoningEffort)
   const legacyThinking = reasoning?.thinking?.type === "enabled" ? reasoning.thinking : undefined
@@ -15,7 +15,7 @@ export function buildConverseBody(config: BedrockConfig, request: LLMRequest, me
   const effectiveReasoning = legacyThinking && outputLimit !== undefined
     ? { ...reasoning, thinking: { type: "enabled" as const, budget_tokens: Math.min(legacyThinking.budget_tokens, outputLimit - 1) } }
     : reasoning
-  const wireMessages = toConverseMessages(config, messages)
+  const wireMessages = toConverseMessages(config, messages, official)
   const body: ConverseStreamCommandInput = {
     modelId: config.model,
     ...(request.systemPrompt.trim() !== "" ? { system: [{ text: request.systemPrompt }] } : {}),

@@ -25,11 +25,11 @@ async function store(version = 3) {
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000 })
   return { backend, coordinator, path }
 }
-it('makes backend3 durable4 before memory4 can append v2 and cold-loads exact lineage', async () => {
+it('makes backend3 durable5 before memory5 can append v2 and cold-loads exact lineage', async () => {
   const { backend, coordinator } = await store(), { session, sample } = history()
   const calls = vi.spyOn(backend, 'upgradeSessionFormat')
   await ownedContextReadiness(coordinator, 's', session)()
-  expect((await backend.profile('s')).meta.formatVersion).toBe(4); expect(calls).toHaveBeenCalledTimes(1)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(5); expect(calls).toHaveBeenCalledTimes(1)
   await coordinator.append('s', session.events); await coordinator.append('s', [sample])
   const cold = (await coordinator.snapshot!('s')).session
   expect(cold.events[4]).toEqual(sample)
@@ -71,13 +71,13 @@ it('rebuilds an already cached format3 Session index after its durable owner upg
   expect(cached.index.formatVersion).toBe(3)
   await backend.append('s', session.events)
   await ownedContextReadiness(coordinator, 's', session)()
-  expect(session.formatVersion).toBe(4)
-  expect((await backend.profile('s')).meta.formatVersion).toBe(4)
+  expect(session.formatVersion).toBe(5)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(5)
   expect(conversationIndexes.get(session)).toBe(cached)
   append(session, prepared.session.events[3]!)
   append(session, prepared.sample)
   expect(conversationIndexes.get(session)).not.toBe(cached)
-  expect(conversationIndexes.get(session)?.index.formatVersion).toBe(4)
+  expect(conversationIndexes.get(session)?.index.formatVersion).toBe(5)
   await coordinator.append('s', session.events.slice(3))
   expect((await coordinator.snapshot!('s')).session.events).toEqual(session.events)
   await coordinator.close()

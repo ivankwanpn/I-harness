@@ -247,4 +247,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 4
+export const CURRENT_FORMAT_VERSION = 5

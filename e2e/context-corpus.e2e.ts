@@ -141,9 +141,11 @@ async function send(prepared: PreparedModelRequest, capture: CapturedRequest[]):
   expect(report.status).not.toBe('invalid')
   expect(Object.isFrozen(report)).toBe(true)
   expect(Buffer.byteLength(JSON.stringify(report))).toBeLessThanOrEqual(4096)
+  expect(report.coverage).toBe('final-protocol')
   if (['anthropic-messages', 'gemini', 'bedrock'].includes(report.route)) {
-    expect(report).toMatchObject({ status: 'partial', coverage: 'unvalidated-protocol', gaps: ['protocol-contract-unavailable'] })
-  } else expect(report.coverage).toBe('final-protocol')
+    expect(report.status).toBe('partial')
+    expect(report.gaps).toContain('limit-unverified')
+  }
   const before = capture.length
   const events = []
   for await (const event of prepared.stream()) events.push(event)

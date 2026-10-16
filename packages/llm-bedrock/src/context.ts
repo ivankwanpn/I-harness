@@ -1,5 +1,5 @@
 import { ProjectionCounter } from "@i-harness/token-meter"
-import { invalidPreparedRequest, type LLMRequest } from "@i-harness/llm-seam"
+import { type LLMRequest } from "@i-harness/llm-seam"
 import type { ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockConfig } from "./types.ts"
 import { translateReasoning } from "./request/reasoning.ts"
@@ -23,8 +23,15 @@ export function describeContext(body: ConverseStreamCommandInput, config: Bedroc
         }
         else if (part.toolUse)
           counter.structured("toolArguments", part.toolUse)
-        else if (part.toolResult)
-          counter.structured("toolResults", part.toolResult)
+        else if (part.toolResult) {
+          const result = part.toolResult
+          counter.structured('framing', { toolUseId: result.toolUseId, status: result.status })
+          for (const resultPart of result.content ?? []) {
+            if (resultPart.image) counter.image(resultPart.image.source?.bytes)
+            else if (resultPart.text !== undefined) counter.text('toolResults', resultPart.text)
+            else counter.structured('toolResults', resultPart)
+          }
+        }
         else if (part.text !== undefined)
           counter.text("visibleText", part.text)
         else
@@ -32,7 +39,7 @@ export function describeContext(body: ConverseStreamCommandInput, config: Bedroc
       }
     })
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined
-  const additionalInput = Object.fromEntries(Object.entries(additional ?? {}).filter(([key]) => !["max_tokens", "maxTokens", "max_completion_tokens"].includes(key)))
+  const additionalInput = additional ?? {}
   const inference = { ...body.inferenceConfig }
   delete inference.maxTokens
   const root = Object.fromEntries(Object.entries(body).filter(([key]) => !["modelId", "system", "messages", "toolConfig", "inferenceConfig", "additionalModelRequestFields", "requestMetadata"].includes(key)))
@@ -41,22 +48,15 @@ export function describeContext(body: ConverseStreamCommandInput, config: Bedroc
   const input = counter.finish({ protocol: "bedrock", providerId: config.providerId, modelId: config.model, expectedModelId: config.model }, { system: body.system, tools: body.toolConfig, messages: body.messages, other }, { system: body.system, tools: body.toolConfig, other })
   return { input, packet: { sizeKind: "sdk-command-estimate" as const, inlineBinaryBytes: counter.inlineBinaryBytes, cacheMetadataBytes: counter.cacheMetadataBytes, signatureBytes: counter.signatureBytes } }
 }
-export function outputFacts(body: ConverseStreamCommandInput, request: LLMRequest, config: BedrockConfig) {
+export function outputFacts(body: ConverseStreamCommandInput, request: LLMRequest) {
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined
   const thinking = additional?.thinking as {
     type?: string
     budget_tokens?: number
   } | undefined
   const budget = thinking?.type === "enabled" ? thinking.budget_tokens : undefined
-  if (budget !== undefined && (!Number.isSafeInteger(budget) || budget < 1024))
-    throw invalidPreparedRequest("Bedrock reasoning budget is invalid")
-  const rawCaps = [additional?.max_tokens, additional?.maxTokens, additional?.max_completion_tokens].filter(value => value !== undefined)
-  if (rawCaps.length > 1 || rawCaps.length > 0 && body.inferenceConfig?.maxTokens !== undefined)
-    throw invalidPreparedRequest("Bedrock request contains conflicting output cap fields")
-  const raw = rawCaps[0]
-  if (raw !== undefined && (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < 1))
-    throw invalidPreparedRequest("Bedrock raw output cap is invalid")
-  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens ?? (typeof raw === "number" ? raw : undefined), effectiveCap: body.inferenceConfig?.maxTokens ?? (typeof raw === "number" ? raw : undefined), minimumCap: budget === undefined ? 1 : request.reasoningEffort !== undefined && request.reasoningEffort !== "off" ? 1025 : budget + 1, reasoningBudget: budget, source: request.maxOutputTokens !== undefined ? "request" as const : raw !== undefined ? "route" as const : budget !== undefined ? "adapter-default" as const : config.options ? "provider-default" as const : "provider-default" as const }
+  const managed = request.reasoningEffort !== undefined && request.reasoningEffort !== 'off'
+  return { capSupport: "supported" as const, configuredCap: request.maxOutputTokens, effectiveCap: body.inferenceConfig?.maxTokens, minimumCap: budget !== undefined && managed ? 1025 : 1, reasoningBudget: typeof budget === 'number' && Number.isSafeInteger(budget) && budget >= 0 ? budget : undefined, source: request.maxOutputTokens !== undefined ? "request" as const : budget !== undefined && managed ? "adapter-default" as const : "provider-default" as const }
 }
 export function capBody(body: ConverseStreamCommandInput, cap: number | undefined, request: LLMRequest, config: BedrockConfig): ConverseStreamCommandInput {
   const additional = body.additionalModelRequestFields as Record<string, unknown> | undefined

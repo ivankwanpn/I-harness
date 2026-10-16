@@ -96,16 +96,30 @@ it("prices projected image bytes separately and quarantines text-only input", as
   expect(textOnly.measurement.packet.inlineBinaryBytes).toBe(0)
   expect(textOnly.measurement.input.inputFingerprint).not.toBe(prepared.measurement.input.inputFingerprint)
 })
-it("retains managed reasoning floors and validates a larger raw reasoning floor", async () => {
+it("retains managed reasoning floors without inventing an unknown-model raw floor", async () => {
   const request: LLMRequest = { systemPrompt: "", tools: [], messages: [], reasoningEffort: "high", maxOutputTokens: 4096 }
   const managed = await createAnthropicClient({ apiKey: "test", model: "claude-3-7-sonnet" }).prepare!(request)
   expect(managed.measurement.output).toMatchObject({ minimumCap: 1025, reasoningBudget: 4095 })
   expect(() => managed.withOutputCap(1024)).toThrow()
   expect(managed.withOutputCap(1025).measurement.output).toMatchObject({ effectiveCap: 1025, reasoningBudget: 1024 })
   const raw = await createAnthropicClient({ apiKey: "test", model: "claude-3-7-sonnet", options: { thinking: { type: "enabled", budget_tokens: 2048 } } }).prepare!({ ...request, reasoningEffort: undefined })
-  expect(raw.measurement.output.minimumCap).toBe(2049)
-  expect(() => raw.withOutputCap(2048)).toThrow()
+  expect(raw.measurement.output.minimumCap).toBe(1)
+  expect(raw.withOutputCap(2048).measurement.output.effectiveCap).toBe(2048)
   expect(raw.withOutputCap(2049).measurement.output.reasoningBudget).toBe(2048)
+})
+it("reports the raw manual floor only where the effective capability proves it", async () => {
+  const request: LLMRequest = { systemPrompt: "", tools: [], messages: [] }
+  const config = { apiKey: "controlled", model: "claude-sonnet-4-6", options: { thinking: { type: "enabled", budget_tokens: 8192 } } }
+  const ordinary = await createAnthropicClient(config).prepare!(request)
+  expect(ordinary.measurement.output).toMatchObject({ minimumCap: 8193, reasoningBudget: 8192 })
+  expect(() => ordinary.withOutputCap(8192)).toThrow()
+  const interleaved = await createAnthropicClient({ ...config, headers: { "anthropic-beta": "interleaved-thinking-2025-05-14" } }).prepare!(request)
+  expect(interleaved.measurement.output.minimumCap).toBe(1)
+  expect(interleaved.withOutputCap(4096).measurement.output.reasoningBudget).toBe(8192)
+  const ignoredBeta = await createAnthropicClient({ ...config, model: "claude-opus-4-6", headers: { "anthropic-beta": "interleaved-thinking-2025-05-14" } }).prepare!(request)
+  expect(ignoredBeta.measurement.output.minimumCap).toBe(8193)
+  const custom = await createAnthropicClient({ ...config, baseUrl: "https://custom.invalid" }).prepare!(request)
+  expect(custom.measurement.output.minimumCap).toBe(1)
 })
 it("freezes input before the image projection await", async () => {
   let body: Record<string, unknown> = {}

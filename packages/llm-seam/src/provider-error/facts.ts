@@ -4,10 +4,11 @@ import { localValidationRejection, sanitizePreparedValidation } from '../prepare
 
 const providerNames = /^(?:context_length_exceeded|context_window_exceeded|CONTEXT_TOO_LONG|invalid_request_error|invalid_argument|not_found_error|request_too_large|rate_limit_exceeded|rate_limit_error|server_error|api_error|overloaded_error|server_is_overloaded|server_overloaded|insufficient_quota|billing_hard_limit_reached|quota_exceeded|invalid_api_key|authentication_error|permission_error|permission_denied|ValidationException|ServiceQuotaExceededException|AccessDeniedException|UnrecognizedClientException|ThrottlingException|TooManyRequestsException|ServiceUnavailableException|InternalServerException|ModelStreamErrorException|INVALID_ARGUMENT|RESOURCE_EXHAUSTED|UNAUTHENTICATED|PERMISSION_DENIED|INTERNAL|UNAVAILABLE)$/i
 const parameters = new Set(["messages", "input", "prompt", "tools", "max_tokens", "max_output_tokens", "max_completion_tokens", "generationConfig.maxOutputTokens", "model", "temperature", "thinking", "thinking.budget_tokens"])
-const reasons = new Set<ModelFailureFacts["reason"]>(["context-limit", "output-limit", "request-size", "schema", "message-order", "unsupported-parameter", 'binding', 'native-replay', "unknown"])
+const reasons = new Set<ModelFailureFacts["reason"]>(["context-limit", "output-limit", "request-size", 'media-limit', "schema", "message-order", "unsupported-parameter", 'binding', 'native-replay', "unknown"])
 const explanations: Record<string, string> = {
   "context-limit": "Model input exceeds the context window.", "output-limit": "Requested model output exceeds the output limit.",
   "request-size": "Model request exceeds the request size limit.", schema: "Model request schema is invalid.",
+  'media-limit': 'Model request exceeds a media limit.',
   "message-order": "Model request message order is invalid.", "unsupported-parameter": "Model request contains an unsupported parameter.",
   binding: 'Model request does not match its selected binding.', 'native-replay': 'Model request native replay is incompatible.',
   AUTH: "Model authentication failed.", INVALID_API_KEY: "Model authentication failed.", QUOTA: "Model quota is exhausted.",

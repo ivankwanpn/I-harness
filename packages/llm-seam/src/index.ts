@@ -618,6 +618,8 @@ export { prepareModelRequest } from "./prepared/fallback.ts"
 export { wrapPreparedRequest, withPreparedRequests, mapModelRequest, snapshotModelData, preparedControls, freezePreparedFacts, invalidPreparedRequest, validateOutputCap } from "./prepared/wrappers.ts"
 export { createPreparedPayload } from "./prepared/payload.ts"
 export type { PreparedValidation, FinalValidator, FinalRejectionReason } from './prepared/validation.ts'
+export { assertNativeProducerWitnesses } from './prepared/native-witness.ts'
+export { stringifyJsonData } from '@i-harness/core-session'
 export { validationCollector, readPreparedValidation } from './prepared/validation.ts'
 export { assertPreparedValidation, preparedBindingError } from './prepared/rejection.ts'
 export { preparedModelClient } from "./prepared/wrappers.ts"

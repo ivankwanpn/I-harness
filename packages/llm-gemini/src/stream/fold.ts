@@ -1,4 +1,4 @@
-import { reportStreamActivity, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import { reportStreamActivity, stringifyJsonData, type LLMRequest, type LLMStreamEvent, type ProviderBlockOrderEntry } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
@@ -79,7 +79,7 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
     if (typeof args === "object" && args !== null) {
       if (Object.keys(args).length > 0) reportStreamActivity(request, "tool-arguments")
       call.rawArgs.push(args as Record<string, unknown>)
-      call.argsJson += JSON.stringify(args)
+      call.argsJson += stringifyJsonData(args)!
     }
   }
   const handleFunctionCall = (fc: { id?: string; name?: string; args?: unknown }, signature?: string): void => {
@@ -106,7 +106,7 @@ export function createGeminiFold(request: LLMRequest, config: GeminiConfig) {
         // merge the pieces (docs' spread accumulation).
         args = call.rawArgs.length > 0 ? Object.assign({}, ...call.rawArgs) : {}
       }
-      callBindings.push({ ...(call.id ? { id: call.id } : {}), name: call.name, argsJson: JSON.stringify(args) })
+      callBindings.push({ ...(call.id ? { id: call.id } : {}), name: call.name, argsJson: stringifyJsonData(args)! })
       if (yield { type: "tool_call", call: { ...(call.id ? { id: call.id } : {}), name: call.name, args } }) return true
     }
     pendingCalls.length = 0

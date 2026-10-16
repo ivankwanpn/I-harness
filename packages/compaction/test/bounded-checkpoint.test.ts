@@ -42,7 +42,7 @@ describe("bounded durable checkpoints", () => {
   it("blocks a raw Claude thinking floor conflict without changing effort", async () => {
     let calls = 0
     vi.stubGlobal("fetch", async () => { calls++; return new Response("") })
-    const model = createAnthropicClient({ apiKey: "controlled", model: "claude-3-7-sonnet", options: { thinking: { type: "enabled", budget_tokens: 8192 } } })
+    const model = createAnthropicClient({ apiKey: "controlled", model: "claude-sonnet-4-6", options: { thinking: { type: "enabled", budget_tokens: 8192 } } })
     expect((await createCompactionEngine({ model, config: { contextWindow: 100000, summaryMaxOutputTokens: 4096 } }).compact(session())).compacted).toBe(false)
     expect(calls).toBe(0)
   })
@@ -102,7 +102,7 @@ describe("bounded durable checkpoints", () => {
         { type: "message_stop" },
       ].map(event => `data: ${JSON.stringify(event)}\n\n`).join(""))
     })
-    const model = createAnthropicClient({ apiKey: "controlled", model: "claude-3-7-sonnet", options: { thinking: { type: "enabled", budget_tokens: 8192 } } })
+    const model = createAnthropicClient({ apiKey: "controlled", model: "claude-sonnet-4-6", options: { thinking: { type: "enabled", budget_tokens: 8192 } } })
     const engine = createCompactionEngine({ model, maxOutputTokens: 384000, config: { contextWindow: 500000 }, telemetry: { emit(event) { if (event.type === "provider/context" && event.data.operation === "summary") budget = event.data }, close() {} } })
     expect((await engine.compact(session())).compacted).toBe(true)
     expect(sent.max_tokens).toBe(9216)

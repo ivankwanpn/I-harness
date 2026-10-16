@@ -1,5 +1,6 @@
 import { canReplayContinuation, replayBlockOrder, type LLMContentPart, type LLMRequest } from "@i-harness/llm-seam"
 import type { BedrockConfig } from "../types.ts"
+import { bedrockCapabilities } from './capabilities.ts'
 
 // Shape LLM content parts into Converse content blocks. String content stays
 // one text block (byte-identical). Images use the Converse ImageBlock
@@ -22,9 +23,10 @@ function imageFormatOf(mediaType: string): "png" | "jpeg" | "gif" | "webp" {
 // A Converse toolResult content block: valid-JSON object content is passed
 // through as { json }, anything else becomes a { text } block.
 function toolResultContent(content: string | LLMContentPart[]): unknown[] {
+  if (Array.isArray(content)) return toConverseContent(content)
   const raw = typeof content === "string"
     ? content
-    : content.map((p) => (p.type === "text" ? p.text : "[image]")).join("\n")
+    : ''
   if (raw.trim() !== "") {
     try {
       const parsed = JSON.parse(raw) as unknown
@@ -36,36 +38,34 @@ function toolResultContent(content: string | LLMContentPart[]): unknown[] {
   return [{ text: raw }]
 }
 
-// Converse's ToolResultBlock.status is accepted only by Nova and Claude 3/4.
-// Other Bedrock models still receive the error text, without an unsupported field.
-function supportsToolResultStatus(model: string): boolean {
-  // Converse accepts both foundation-model IDs and inference-profile IDs,
-  // including regional/global prefixes and ARN resource suffixes.
-  const resource = model.split("/").at(-1) ?? model
-  const id = resource.replace(/^[a-z][a-z0-9-]*\.(?=(?:anthropic|amazon)\.)/, "")
-  return /^amazon\.nova(?:[-.]|$)/.test(id)
-    || /^anthropic\.claude-(?:3(?:-|$)|(?:haiku|sonnet|opus)-[34](?:-|$))/.test(id)
-}
-
-export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["messages"]): { role: "user" | "assistant"; content: unknown[] }[] {
+export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["messages"], official = false): { role: "user" | "assistant"; content: unknown[] }[] {
   const wireMessages: { role: "user" | "assistant"; content: unknown[] }[] = []
   let toolResults: unknown[] | undefined
+  let toolImages: unknown[] = []
+  const capability = bedrockCapabilities(config.model, official)
+  const flushImages = () => { if (toolImages.length) wireMessages.push({ role: 'user', content: toolImages }); toolImages = [] }
   for (const m of messages) {
     if (m.role === "tool") {
       if (toolResults === undefined) {
         toolResults = []
         wireMessages.push({ role: "user", content: toolResults })
       }
-      toolResults.push({ toolResult: { toolUseId: m.toolCallId, content: toolResultContent(m.content), ...(m.isError === true && supportsToolResultStatus(config.model) ? { status: "error" } : {}) } })
+      const content = Array.isArray(m.content) && !capability.toolImage ? m.content.filter(part => part.type !== 'image') : m.content
+      const annotation = m.isError && !capability.status ? [{ json: { isError: true } }] : []
+      const relocatedOnly = Array.isArray(m.content) && m.content.some(part => part.type === 'image') && Array.isArray(content) && content.length === 0
+      const representation = relocatedOnly ? [{ text: '[Adapter representation: image content from this tool result is supplied in the following user image companion.]' }] : []
+      toolResults.push({ toolResult: { toolUseId: m.toolCallId, content: [...annotation, ...representation, ...toolResultContent(content)], ...(m.isError === true && capability.status ? { status: "error" } : {}) } })
+      if (Array.isArray(m.content) && !capability.toolImage) toolImages.push(...toConverseContent(m.content.filter(part => part.type === 'image')))
       continue
     }
+    flushImages()
     toolResults = undefined
-    if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+    if (m.role === "assistant" && (m.toolCalls?.length || m.providerContinuation?.kind === 'bedrock')) {
       const continuation = m.providerContinuation?.kind === "bedrock" && canReplayContinuation(m.providerContinuation, config)
         ? m.providerContinuation : undefined
       const blocks = continuation
         ? continuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
-      const tools = m.toolCalls.map((c) => ({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } }))
+      const tools = (m.toolCalls ?? []).map((c) => ({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } }))
       const content: unknown[] = replayBlockOrder<unknown>(continuation?.contentOrder, m.content, blocks, tools, (text) => ({ text }))
         ?? [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : []), ...tools]
       wireMessages.push({ role: "assistant", content })
@@ -73,5 +73,6 @@ export function toConverseMessages(config: BedrockConfig, messages: LLMRequest["
     }
     wireMessages.push({ role: m.role, content: toConverseContent(m.content) })
   }
+  flushImages()
   return wireMessages
 }

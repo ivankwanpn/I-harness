@@ -5,6 +5,7 @@ export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynt
 export { CURRENT_FORMAT_VERSION } from "./events/types.ts"
 export type { InputProvenance, ConversationSemanticsEvent, ExchangeAcceptedEvent } from "./events/conversation.ts"
 export { validateConversationEventShape } from "./events/conversation.ts"
+export { validNativeProducerWitness } from './projection/native-witness.ts'
 export { createConversationValidationIndex, validateConversationHistory } from "./conversation/validation.ts"
 export type { ConversationValidationIndex } from "./conversation/validation.ts"
 export type {

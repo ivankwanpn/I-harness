@@ -8,10 +8,14 @@ import { createAnthropicFold } from "./stream/fold.ts"
 import { decodeAnthropicStream } from "./stream/decode.ts"
 
 import { describeContext, outputFacts, capBody } from "./context.ts"
+import { anthropicValidator } from './request/validate.ts'
+import { anthropicWitness } from './request/validate-native.ts'
+import { assertNativeProducerWitnesses } from '@i-harness/llm-seam'
 
 export function createAnthropicClient(config: AnthropicConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://api.anthropic.com"
   return preparedModelClient(async originalRequest => {
+    assertNativeProducerWitnesses(originalRequest.messages, 'anthropic-messages')
     const request = snapshotModelData(originalRequest)
     const capturedConfig = snapshotModelData(config)
     request.signal?.throwIfAborted()
@@ -27,6 +31,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     const capturedRequest = request
     return createPreparedPayload({
       body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
+      validate: anthropicValidator(capturedConfig, messages, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
       async *execute(actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
@@ -35,6 +40,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // Only producer-proven cache additions leave the native prefix.
         const { semantic } = describeCachedBody(actualBody, cacheEvidence)
         const prefix = fingerprintPrefix(semantic.system, semantic.tools, semantic.messages)
+        const inputWitness = anthropicWitness(actualBody, capturedConfig)
         // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
         // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
         // TCP / TLS / proxy. Surface the cause chain instead.
@@ -58,7 +64,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return
         }
         reportStreamActivity(request, "response-start")
-        const fold = createAnthropicFold(capturedConfig, () => prefix, () => reportStreamActivity(request, "tool-arguments"))
+        const fold = createAnthropicFold(capturedConfig, () => prefix, () => reportStreamActivity(request, "tool-arguments"), inputWitness)
         yield* decodeAnthropicStream(response.body, fold, request)
       },
     })

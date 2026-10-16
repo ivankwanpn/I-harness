@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { isContextEventType, validateConversationHistory, type SessionEvent, type InputProvenance } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validateConversationHistory, type SessionEvent, type InputProvenance } from "@i-harness/core-session"
 
 export class SessionForkUnavailableError extends Error {
   readonly code = "fork-unavailable" as const
@@ -126,7 +126,7 @@ export function remapConversationSeed(input: { source: readonly SessionEvent[]; 
     if (mapped.type === "user/message") mapped = { ...mapped, provenance: inherit(mapped.provenance), ...(mapped.input ? { input: { ...mapped.input, provenance: inherit(mapped.input.provenance) } } : {}) }
     return mapped
   })
-  try { validateConversationHistory(result, 3) }
+  try { validateConversationHistory(result, CURRENT_FORMAT_VERSION) }
   catch (cause) { throw new SessionForkUnavailableError("retained seed cannot preserve conversation semantics", { cause }) }
   return result
 }

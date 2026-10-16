@@ -32,6 +32,7 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
+  validateNativeWitness(event, formatVersion)
   const e = event as SessionEvent & { provenance?: unknown; actionId?: unknown; attemptId?: unknown }
   if ((event.type === "model/exchange-accepted" || event.type === "context/usage") && event.version === 2 && formatVersion < 4) conversationFormatError("fields require format 4")
   const explicit = event.type === "conversation/semantics" || event.type === "model/exchange-accepted"
@@ -50,3 +51,4 @@ export function validateConversationEventShape(event: SessionEvent, formatVersio
     || !Array.isArray(event.callSeqs) || !event.callSeqs.every(conversationSeq) || new Set(event.callSeqs).size !== event.callSeqs.length
     || !fields(event, ["type", "version", "seq", "exchangeId", "actionId", "attemptId", "stepStartSeq", "assistantSeq", "callSeqs", "ignorable", ...(event.version === 2 ? ["request"] : [])])) conversationFormatError("invalid acceptance payload")
 }
+import { validateNativeWitness } from '../projection/native-witness.ts'

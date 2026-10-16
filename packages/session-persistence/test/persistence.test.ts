@@ -81,7 +81,7 @@ describe("session coordinator", () => {
     // this test pins the round-trip itself, not torn-tail repair.
     await coordinator.append(id, [{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
     const { session } = await coordinator.load(id)
-    expect(session.formatVersion).toBe(4)
+    expect(session.formatVersion).toBe(5)
     expect(session.events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }, { type: "turn/end" }])
   })
 
@@ -94,7 +94,7 @@ describe("session coordinator", () => {
     await backend.append("old", [{ type: "turn/start" }])
     const coordinator = createSessionCoordinator(backend)
     const { session } = await coordinator.load("old")
-    expect(session.formatVersion).toBe(4)
+    expect(session.formatVersion).toBe(5)
     expect(session.events[0]).toMatchObject({ type: "turn/start", migrated: true })
   })
 

@@ -154,6 +154,7 @@ it("keeps injected construction lazy and freezes input config/callbacks at prepa
   model = "terminal-model"; providerId = "terminal-route"
   expect((await iterator.next()).value).toEqual({ type: "end", providerContinuation: {
     kind: "bedrock", model: "anthropic.claude-sonnet-4-6", providerId: "initial", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "sig" } }],
+    contentOrder: [{ kind: 'reasoning', index: 0 }], producerWitness: { version: 1, messagesPrefixId: expect.stringMatching(/^[a-f0-9]{64}$/), inputSurfaceId: expect.stringMatching(/^[a-f0-9]{64}$/), callsId: expect.stringMatching(/^[a-f0-9]{64}$/), callCount: 0 },
   } })
   expect(reads).toHaveLength(5)
   await iterator.next()

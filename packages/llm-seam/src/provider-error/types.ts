@@ -6,7 +6,7 @@ export interface ModelFailureFacts {
   providerType?: string
   parameter?: string
   requestId?: string
-  reason?: "context-limit" | "output-limit" | "request-size" | "schema" | "message-order" | "unsupported-parameter" | "binding" | "native-replay" | "unknown"
+  reason?: "context-limit" | "output-limit" | "request-size" | "media-limit" | "schema" | "message-order" | "unsupported-parameter" | "binding" | "native-replay" | "unknown"
   validation?: import('../prepared/validation.ts').PreparedValidation
   inputTokens?: number
   contextLimit?: number
