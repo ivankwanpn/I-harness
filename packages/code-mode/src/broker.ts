@@ -1,17 +1,10 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append } from "@i-harness/core-session"
-import { isPolicyRefusal, ToolArgsError, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { isPolicyRefusal, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
-
-interface Cell { tools: Map<string, Tool>; stop: AbortController; seen: Set<string> }
-interface Queued {
-  call: CodeModeInvocation; tool: Tool; signal: AbortSignal; eventSeq?: number
-  resolve(value: unknown): void; reject(error: unknown): void; unsubscribe(): void
-  admitted(): void; finished: boolean; recorded: boolean
-}
-const message = (e: unknown) => e instanceof Error ? e.message : String(e)
-const fatal = (e: unknown) => Object.assign(new Error(message(e)), { policyRefusal: true as const })
+import type { Cell, Queued } from './broker/types.ts'
+import { createCodeModeRecords, message, fatal } from './broker/records.ts'
 
 /** Only dispatch bodies overlap. Captured cell authority survives yields. */
 export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) {
@@ -19,17 +12,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   const stop = new AbortController(), parallel = Math.min(16, Math.max(1, options.maxParallel ?? 4))
   let pumping = false, disposed = false, exclusive = false
   let finalizers: Promise<void> = Promise.resolve()
-  function record(item: Queued, output: unknown, error = false) {
-    if (item.recorded) return
-    item.recorded = true
-    append(options.session, { type: "code/result", cellId: item.call.cellId, callId: item.call.invocationId, name: item.call.name, output, ...(error ? { isError: true } : {}) })
-  }
-  function settle(item: Queued, outcome: { value: unknown } | { error: unknown }) {
-    if (item.finished) return
-    item.finished = true; item.unsubscribe()
-    if ("error" in outcome) item.reject(outcome.error)
-    else item.resolve(outcome.value)
-  }
+  const { record, settle } = createCodeModeRecords(options)
   function retireCell(id: string) {
     const cell = cells.get(id)
     cells.delete(id); cell?.stop.abort()
