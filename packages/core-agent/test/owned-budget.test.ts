@@ -6,8 +6,50 @@ import { createToolRegistry, registerContextRemaining } from "@i-harness/core-to
 import { wrapPreparedRequest, type PreparedModelRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { createAgent, type AgentDeps, type AgentConfig } from "../src/index.ts"
+import { createAgentContext } from '../src/agent/context.ts'
+import { buildContextRequest } from '../src/agent/request-input.ts'
 
-it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client", "budget-evidence"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
+it('keeps accepted calibration, execution observation and installed facts through a failed hypothetical assessment', async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const model = createAnthropicClient({ model: 'm', apiKey: 'controlled', executionIdentity: fixtureExecutionIdentity })
+  const context = createAgentContext({ session, tools, model, executionIdentity: () => fixtureExecutionIdentity, systemPrompt: 'system', budget: { contextWindow: 20000 }, maxOutputTokens: 600 }, 'owner')
+  append(session, { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1' })
+  append(session, { type: 'turn/start' }); append(session, { type: 'user/message', text: 'task' })
+  append(session, { type: 'step/start', actionId: 'action', attemptId: 'attempt' })
+  const evidence = context.captureCandidate(), prepared = await model.prepare!(buildContextRequest(evidence.snapshot, {}))
+  const first = context.ownedBudget.assess(prepared, evidence, 20000)
+  const candidate = context.execution.candidate(first.prepared, evidence, { epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }, false, () => true, () => { throw Error('unexpected retirement') })
+  const F = { ...fixtureExecutionIdentity, authEpoch: 'F' }
+  const receipt = candidate.confirm({ version: 1, sendId: 'send', semanticId: first.prepared.measurement.input.semanticIdentity!.semanticId,
+    payloadId: first.prepared.measurement.payloadIdentity!.id, payloadKind: first.prepared.measurement.payloadIdentity!.kind, identity: F })
+  const request = candidate.attribution(receipt)!
+  append(session, { type: 'assistant/message', text: 'accepted' })
+  append(session, { type: 'model/exchange-accepted', version: 2, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt', stepStartSeq: 3, assistantSeq: 4, callSeqs: [], request })
+  const accepted = session.events.at(-1)!
+  if (accepted.type !== 'model/exchange-accepted' || accepted.version !== 2) throw Error('accepted v2 required')
+  await context.ownedBudget.record(first.prepared.measurement, { inputTokens: 100, inputTokenSemantics: 'includes-cache' }, accepted)
+  candidate.close()
+  const current = context.captureCandidate(), final = await model.prepare!(buildContextRequest(current.snapshot, {}))
+  const installed = context.ownedBudget.assess(final, current, 20000)
+  expect(installed.calibrated).toBe(true)
+  const before = context.ownedBudget.read(), events = JSON.stringify(session.events)
+  const invalid: PreparedModelRequest = { ...final, validation: { version: 1, route: 'anthropic-messages', contract: 'anthropic-v1', status: 'invalid', coverage: 'final-protocol', native: 'absent', issues: [{ rule: 'output-range', site: 'generation' }], gaps: [], omittedIssueCount: 0 } }
+  const provisional: PreparedModelRequest = { ...final, measurement: { ...final.measurement, input: { ...final.measurement.input, modelId: 'hypothetical' } }, withOutputCap: () => invalid }
+  const hypothetical = { ...current, executionIdentity: { ...fixtureExecutionIdentity, bindingLifetimeId: 'another-lifetime' } }
+  expect(() => context.ownedBudget.assess(provisional, hypothetical, 20000)).toThrow()
+  expect(context.ownedBudget.read()).toEqual(before)
+  expect(context.execution.peekExpected(fixtureExecutionIdentity)).toEqual({ kind: 'known', identity: F })
+  expect(context.ownedBudget.assess(final, current, 20000)).toMatchObject({ calibrated: true, disposition: undefined })
+  expect(JSON.stringify(session.events)).toBe(events)
+  expect(session.events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'sample')).toHaveLength(1)
+  // A real committed rewrite uses the existing calibration invalidation owner.
+  append(session, { type: 'compaction/prune', version: 1, pruned: [] })
+  context.contextMeter.invalidate(); context.contextMeter.invalidate()
+  await context.ownedBudget.checkpoint()
+  expect(session.events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'retire')).toHaveLength(1)
+})
+
+it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client", "budget-evidence", "effort-getter", "max-output-getter", "client-getter"] as const)("owned reads detect a %s change during a held stream without shadow preparation", async mutation => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let prompt = "original", identity: object = {}, preparations = 0, transports = 0, hooks = 0, claims = 0
@@ -25,6 +67,10 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
     budgetBinding: { version: 1, metadata: { version: 1, modelId: "m", protocol: "anthropic-messages", identityCoverage: "partial" }, limits: { contextTokens: { value: 200000, origin: "profile", sourceId: "profile-v1" } }, generation: { origin: "unspecified" }, capability: { version: 1, route: "anthropic-messages", evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required", packetKind: "http-json-body" } },
     modelBindingIdentity: () => identity, budget: { contextWindow: 200000 }, maxOutputTokens: 2048,
     stepInputs: { claimAtStepBoundary() { claims++ } } }
+  let effort = deps.reasoningEffort, cap = deps.maxOutputTokens, currentClient = deps.model
+  if (mutation === 'effort-getter') Object.defineProperty(deps, 'reasoningEffort', { enumerable: true, get: () => effort })
+  if (mutation === 'max-output-getter') Object.defineProperty(deps, 'maxOutputTokens', { enumerable: true, get: () => cap })
+  if (mutation === 'client-getter') Object.defineProperty(deps, 'model', { enumerable: true, get: () => currentClient })
   const agent = createAgent(ctx, deps)
   registerContextRemaining(ctx, tools, { budgetRead: () => agent.contextBudget!() })
   const run = agent.run("first")
@@ -39,6 +85,9 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
     if (mutation === "max-output") deps.maxOutputTokens = 1536
     if (mutation === "concrete-binding") identity = {}
     if (mutation === "client") deps.model = client()
+    if (mutation === 'effort-getter') effort = 'off'
+    if (mutation === 'max-output-getter') cap = 1536
+    if (mutation === 'client-getter') currentClient = client()
     if (mutation === "budget-evidence") (deps.budgetBinding as { limits: { contextTokens: { sourceId: string } } }).limits.contextTokens.sourceId = "profile-revised-v1"
     expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", reason: expect.stringMatching(/surface|binding/) } })
     const output = (await tools.execute({ name: "get_context_remaining", args: {} })).output

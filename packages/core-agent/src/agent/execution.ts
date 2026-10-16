@@ -11,12 +11,17 @@ const sameLifetime = (a: LiveExecutionIdentity | undefined, b: LiveExecutionIden
 export function createExecutionOwner() {
   const observationLifetimeId = randomUUID()
   let observed: { base: LiveExecutionIdentity; value: EpochObservation } | undefined
+  const peekExpected = (base: LiveExecutionIdentity | undefined): EpochObservation => {
+    if (observed && sameLifetime(base, observed.base)) return observed.value
+    return validExecutionIdentity(base) ? { kind: 'known', identity: base } : { kind: 'unclassified' }
+  }
   return {
     observationLifetimeId,
+    peekExpected,
     expected(base: LiveExecutionIdentity | undefined): EpochObservation {
-      if (observed && sameLifetime(base, observed.base)) return observed.value
-      observed = undefined
-      return validExecutionIdentity(base) ? { kind: 'known', identity: base } : { kind: 'unclassified' }
+      const expected = peekExpected(base)
+      if (observed && !sameLifetime(base, observed.base)) observed = undefined
+      return expected
     },
     candidate(prepared: PreparedModelRequest, evidence: RequestEvidence, state: CandidateExecutionState, calibrated: boolean, current: () => boolean, retire: () => void) {
       const candidateId = randomUUID(), base = evidence.executionIdentity

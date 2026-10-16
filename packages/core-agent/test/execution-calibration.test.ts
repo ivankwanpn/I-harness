@@ -5,7 +5,33 @@ import { createToolRegistry } from '@i-harness/core-tools'
 import { createPreparedPayload, createRetryingClient, resolveRetryPolicy, type LiveExecutionIdentity, type ModelClient, type ExecutionConfirmation, type LLMUsage } from '@i-harness/llm-seam'
 import { ProjectionCounter } from '@i-harness/token-meter'
 import { createAgent } from '../src/index.ts'
+import { createExecutionOwner } from '../src/agent/execution.ts'
+import { captureRequestCandidate } from '../src/agent/request-snapshot.ts'
 const E: LiveExecutionIdentity = { version: 1, runtimeId: 'runtime', bindingLifetimeId: 'binding', authEpoch: 'E', scope: 'managed-subscription', coldCompatible: false }
+it('peeks another lifetime without clearing observed F and retains mutating execution ownership', () => {
+  const owner = createExecutionOwner(), F = { ...E, authEpoch: 'F' }, M = { ...E, bindingLifetimeId: 'M' }
+  const request = { messages: [{ role: 'user' as const, content: 'task' }], tools: [], systemPrompt: '' }
+  const prepared = createPreparedPayload({ body: { task: 'task' }, request,
+    describe(body) { const c = new ProjectionCounter('projected-pricing-v2'); c.unit('task', 'user', () => c.text('visibleText', body.task)); return { input: c.finish({ protocol: 'test', modelId: 'm' }, body, 'shape'), packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } } },
+    output: () => ({ capSupport: 'unsupported', minimumCap: 1, source: 'request' }), cap: b => b,
+    async *execute() { throw Error('no transport') },
+  })
+  const model: ModelClient = { async *stream() { throw Error('no transport') } }
+  const evidence = captureRequestCandidate(createSession(), 'owner', { model, executionIdentity: E }, { systemPrompt: '', tools: [] }, 0)
+  const state = { epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
+  const candidate = owner.candidate(prepared, evidence, state, false, () => true, () => { throw Error('unexpected retirement') })
+  const confirmation: ExecutionConfirmation = { version: 1, sendId: 'send', semanticId: prepared.measurement.input.semanticIdentity!.semanticId,
+    payloadId: prepared.measurement.payloadIdentity!.id, payloadKind: prepared.measurement.payloadIdentity!.kind, identity: F }
+  expect(candidate.confirm(confirmation)).toBeDefined()
+  expect(owner.peekExpected(M)).toEqual({ kind: 'known', identity: M })
+  expect(owner.peekExpected(E)).toEqual({ kind: 'known', identity: F })
+  const stale = owner.candidate(prepared, evidence, state, true, () => false, () => { throw Error('unexpected retirement') })
+  expect(() => stale.confirm(confirmation)).toThrow(/Candidate changed/)
+  candidate.close(); expect(candidate.confirm({ ...confirmation, identity: { ...E, authEpoch: 'G' } })).toBeUndefined()
+  expect(owner.peekExpected(E)).toEqual({ kind: 'known', identity: F })
+  owner.expected(M)
+  expect(owner.peekExpected(E)).toEqual({ kind: 'known', identity: E })
+})
 function fixture(session = createSession(), retry = false) {
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let identity: LiveExecutionIdentity | undefined = E, confirms = 0, sends = 0, hooks = 0, claims = 0

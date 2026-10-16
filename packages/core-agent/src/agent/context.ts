@@ -62,7 +62,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
       binding, budgetBinding: budgetBinding(),
     }, projectionRevision())
   }
-  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.expected, () => agentFacts(deps), () => deps.sourceFacts)
+  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.peekExpected, () => agentFacts(deps), () => deps.sourceFacts)
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
