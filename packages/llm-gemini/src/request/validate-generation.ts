@@ -29,7 +29,14 @@ export function validateGeminiGeneration(value: unknown, capability: ReturnType<
   const schema = field(value, 'responseSchema'), jsonSchema = field(value, 'responseJsonSchema')
   if (schema !== undefined && !record(schema)) check.issue('parameter-type', 'generation')
   if (schema !== undefined && jsonSchema !== undefined) check.issue('parameter-conflict', 'generation')
-  if (schema !== undefined || jsonSchema !== undefined) { check.gap('extension-unchecked'); if (mime !== 'application/json') check.issue('parameter-conflict', 'generation') }
+  if (schema !== undefined || jsonSchema !== undefined) {
+    check.gap('extension-unchecked')
+    // Google's controlled_generation.py demonstrates STRING enums with
+    // text/x.enum. REST's JSON-only schema prose is not exhaustive. Reject
+    // the proven plain/default MIME conflict, not every other output mode;
+    // schema details and future MIME compatibility stay explicitly partial.
+    if (mime === undefined || mime === '' || mime === 'text/plain') check.issue('parameter-conflict', 'generation')
+  }
   const thinking = field(value, 'thinkingConfig')
   if (thinking === undefined) return
   if (!record(thinking)) { check.issue('parameter-type', 'generation'); return }
