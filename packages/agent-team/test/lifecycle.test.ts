@@ -14,7 +14,8 @@ import { describe, expect, it, vi } from "vitest"
 import { mountAgentTeams, type TeamDeps } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession, type SessionEvent } from "@i-harness/core-session"
+import { createSession, decodeFactBatch, isNondurableSession } from "@i-harness/core-session"
+import { ownedTeamFixture } from './owned-fixture.ts'
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
 import { snapshotState } from "../../subagent/src/persist.ts"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
@@ -24,7 +25,6 @@ import { registerExec } from "@i-harness/exec"
  * @i-harness/subagent's child.test.ts. */
 const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
 
 const TEAM_TOOL_NAMES = [
   "spawn_teammate", "list_members", "send_message", "followup_task", "wait_agent", "interrupt_agent",
@@ -56,17 +56,94 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it("recovery reads live parent admission after the target flush and acknowledges before tool publication", async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx)
+    const f = await ownedTeamFixture([{ type: "team/message/queued", version: 1, teamId: "lead-order", message: {
+      id: "msg-order", senderId: "child-helper", senderName: "helper", targetId: "lead-order", delivery: "quiet", content: "recovered",
+    } }])
+    const parentSession = f.document.view
+    const flushed = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), order: string[] = []
+    const actual = f.backend.appendOwnedBatch!
+    f.backend.appendOwnedBatch = async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events
+      const result = await actual(...args)
+      expect(tools.get('send_message')).toBeUndefined()
+      if (events.some(event => event.type === 'subagent/inbox')) {
+        order.push('target-receipt')
+        expect(parentSession.events.some(event => event.type === 'subagent/inbox')).toBe(false)
+        flushed.resolve(); await release.promise
+      } else if (events.some(event => event.type === 'team/message/delivered')) order.push('ack-receipt')
+      return result
+    }
+    const oldAdmission = { admit: vi.fn(async () => {}), wake: vi.fn() }
+    const currentAdmission = {
+      async admit(input: { text: string }) {
+        expect(this).toBe(currentAdmission)
+        expect(input.text).toBe("Team message <msg-order> from <helper>:\nrecovered")
+        expect(parentSession.events.some(event => event.type === "team/message/delivered")).toBe(false)
+        order.push("admit")
+      },
+      wake() { expect(this).toBe(currentAdmission); order.push("wake") },
+    }
+    const deps = makeDeps({ parentSession, factOwner: f.document, parentNotify: oldAdmission })
+    deps.subagents.childSessions = { coordinator: f.coordinator, parentSessionId: "parent" }
+    const mounting = mountAgentTeams(ctx, tools, deps)
+    await flushed.promise
+    deps.parentNotify = currentAdmission
+    release.resolve()
+    const handle = await mounting
+    try {
+      expect(order).toEqual(["target-receipt", "admit", "wake", "ack-receipt"])
+      expect(oldAdmission.admit).not.toHaveBeenCalled()
+      expect(tools.get("send_message")).toBeDefined()
+      await handle.drainLeadMessages!()
+      expect(order).toHaveLength(4)
+    } finally { release.resolve(); await handle.unmount(); await f.coordinator.close() }
+  })
+
+  it("unmount releases waiters while child disposal is blocked and restores tools after disposal settles", async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const release = Promise.withResolvers<void>(), disposing = Promise.withResolvers<void>(), order: string[] = []
+    const previous = { name: "wait_agent", description: "original", inputSchema: { type: "object" }, execute: async () => "original" }
+    tools.register(previous)
+    if(!isNondurableSession(deps.parentSession))throw new Error('Standalone fixture expected')
+    deps.parentSession.events.push(
+      { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } },
+      { type: "team/member", version: 1, teamId: "lead-unmount-order", member: { id: "helper", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "child" } },
+    )
+    const controller = new AbortController()
+    deps.subagents.table.add("lead/helper", { path: "lead/helper", status: "running", session: createSession(), controller, mailbox: [],
+      async dispose() { order.push("dispose"); disposing.resolve(); await release.promise; order.push("disposed") },
+    })
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    const teamWait = tools.get("wait_agent")!
+    const waiting = teamWait.execute({ timeout_ms: 30_000 }, {}).then(result => { order.push("wait-released"); return result })
+    const closing = handle.unmount()
+    try {
+      expect(await waiting).toMatchObject({ timedOut: false })
+      await disposing.promise
+      expect(order).toEqual(["dispose", "wait-released"])
+      expect(controller.signal.aborted).toBe(true)
+      expect(tools.get("wait_agent")).toBe(teamWait)
+      expect(deps.subagents.roles.get("teammate")).toBeDefined()
+      release.resolve(); await closing
+      expect(order).toEqual(["dispose", "wait-released", "disposed"])
+      expect(tools.get("wait_agent")).toBe(previous)
+      expect(deps.subagents.roles.get("teammate")).toBeUndefined()
+    } finally { release.resolve(); await closing }
+  })
+
   it("publishes a closing barrier before draining a teammate and preserves a replacement", async () => {
     const deps = makeDeps(), ctx = createContext(), release = Promise.withResolvers<void>()
     const table = deps.subagents.table
     const original = { path: "lead/helper", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], followupChain: release.promise }
     table.add(original.path, original)
     const handle = await mountAgentTeams(ctx, createToolRegistry(ctx), deps)
-    const seen: unknown[] = []
-    table.subscribe(change => seen.push({ kind: change.kind, closing: change.entry.closing }))
+    const seen: unknown[] = [], closingEntered = Promise.withResolvers<void>()
+    table.subscribe(change => { seen.push({ kind: change.kind, closing: change.entry.closing }); if (change.entry.closing) closingEntered.resolve() })
     const closing = handle.unmount()
     try {
-      await Promise.resolve()
+      await closingEntered.promise
       expect(seen).toEqual([{ kind: "update", closing: true }])
       const replacement = { ...original, controller: new AbortController() }
       table.add(original.path, replacement)
@@ -175,15 +252,16 @@ describe("mountAgentTeams lifecycle", () => {
       { type: "team/member", version: 1, teamId: "lead-t", member: { id: "child-abc", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active", sessionId: "sess-1" } },
     )
     const table = createAgentTable()
-    const entrySession = createSession()
-    table.add("lead/helper", { path: "lead/helper", status: "waiting", session: entrySession, controller: new AbortController(), mailbox: [], sessionId: "sess-1" })
+    const child = await ownedTeamFixture([], 'sess-1')
+    const entrySession = child.document.view
+    table.add("lead/helper", { path: "lead/helper", status: "waiting", session: entrySession, factOwner: child.document, controller: new AbortController(), mailbox: [], sessionId: "sess-1" })
     // coordinator whose flush fails ONLY on the CHILD session ("sess-1") —
     // the parent session log must still commit (that is the queue's
     // durability), while the deliver write-behind durability point fails
     // (write-behind durability failure on the target).
-    const failingCoordinator = {
-      flush: async (sessionId: string) => { if (sessionId === "sess-1") throw new Error("disk full") },
-    } as unknown as SessionCoordinator
+    const actualAppend = child.backend.appendOwnedBatch!
+    child.backend.appendOwnedBatch = async (...args) => decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox')
+      ? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' } : actualAppend(...args)
     const deps = makeDeps({
       parentSession,
       subagents: {
@@ -193,7 +271,7 @@ describe("mountAgentTeams lifecycle", () => {
         agents: createAgentRegistry(),
         exec: registerExec(createContext()),
         resolveModel: noRoleModel,
-        childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
+        childSessions: { coordinator: child.coordinator, parentSessionId: "lead-parent" },
       },
     })
     const handle = await mountAgentTeams(ctx, tools, deps)
@@ -206,8 +284,11 @@ describe("mountAgentTeams lifecycle", () => {
       // will retry it (durability failure is not treated as delivered)
       expect(parentSession.events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
       expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(0)
+      expect(entrySession.events).toEqual([])
     } finally {
+      child.backend.appendOwnedBatch = actualAppend
       await handle.unmount()
+      await child.coordinator.close()
     }
   })
 
@@ -244,14 +325,16 @@ describe("mountAgentTeams lifecycle", () => {
     // message stays queued for the next recoverRoot.
     const ctx = createContext()
     const tools = createToolRegistry(ctx)
-    const parentSession = createSession()
-    parentSession.events.push({
+    const owned = await ownedTeamFixture([{
       type: "team/message/queued", version: 1, teamId: "lead-abc",
       message: { id: "msg-old", senderId: "child-z", senderName: "helper", targetId: "lead-abc", delivery: "wakeup", content: "report" },
-    })
-    const failingCoordinator = { flush: async () => { throw new Error("disk full") } } as unknown as SessionCoordinator
+    }])
+    const parentSession = owned.document.view, actualAppend = owned.backend.appendOwnedBatch!
+    owned.backend.appendOwnedBatch = async (...args) => decodeFactBatch(args[3].bytes).events.some(event => event.type === 'subagent/inbox')
+      ? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' } : actualAppend(...args)
     const deps = makeDeps({
       parentSession,
+      factOwner: owned.document,
       subagents: {
         table: createAgentTable(),
         jobs: createJobRegistry(),
@@ -259,7 +342,7 @@ describe("mountAgentTeams lifecycle", () => {
         agents: createAgentRegistry(),
         exec: registerExec(createContext()),
         resolveModel: noRoleModel,
-        childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
+        childSessions: { coordinator: owned.coordinator, parentSessionId: "lead-parent" },
       },
     })
     const handle = await mountAgentTeams(ctx, tools, deps)
@@ -271,7 +354,9 @@ describe("mountAgentTeams lifecycle", () => {
       expect(deliv).toHaveLength(0)
       expect(parentSession.events.filter((e) => e.type === "team/message/queued")).toHaveLength(1)
     } finally {
+      owned.backend.appendOwnedBatch = actualAppend
       await handle.unmount()
+      await owned.coordinator.close()
     }
   })
 
@@ -367,26 +452,8 @@ describe("mountAgentTeams lifecycle", () => {
     const tools = createToolRegistry(ctx)
     const parentSession = createSession()
 
-    const memSessions = new Map<string, SessionEvent[]>()
-    const coordinator = {
-      create: async (meta?: { sessionId?: string }) => {
-        const id = meta?.sessionId ?? `mem-${memSessions.size}`
-        memSessions.set(id, [])
-        return { id }
-      },
-      append: async (sessionId: string, events: SessionEvent[]) => { memSessions.get(sessionId)?.push(...events) },
-      enqueue: (sessionId: string, events: SessionEvent[]) => {
-        const list = memSessions.get(sessionId) ?? []
-        list.push(...events)
-        memSessions.set(sessionId, list)
-      },
-      snapshot: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
-      list: async () => [...memSessions.keys()],
-      flush: async () => {},
-      close: async () => {},
-      putDocument: async () => {},
-      getDocument: async () => undefined,
-    } as unknown as SessionCoordinator
+    const owned = await ownedTeamFixture([], 'sess-parent')
+    const coordinator = owned.coordinator
 
     // The child's turn blocks on the gate, so it is provably still RUNNING
     // while wait_agent below registers (spawn returns after the agent started,
@@ -427,6 +494,7 @@ describe("mountAgentTeams lifecycle", () => {
       expect(res.timedOut).toBe(false)
     } finally {
       await handle.unmount()
+      await coordinator.close()
     }
   })
 
@@ -491,7 +559,7 @@ describe("mountAgentTeams lifecycle", () => {
       expect(entrySession.events.filter((e) => e.type === "subagent/inbox")).toHaveLength(1)
       expect(parentSession.events.filter((e) => e.type === "team/message/delivered")).toHaveLength(1)
       // the wakeup drive ran a followup turn on the REBUILT resident agent
-      await vi.waitFor(() => expect(followup).toHaveBeenCalledWith(expect.stringContaining("wake"), expect.any(AbortSignal)))
+      await vi.waitFor(() => expect(followup).toHaveBeenCalledWith(expect.stringContaining("wake"), expect.any(AbortSignal), { provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }))
     } finally {
       await handle.unmount()
     }
@@ -552,26 +620,8 @@ describe("mountAgentTeams lifecycle", () => {
     // Durable child sessions are a roster precondition (spawn must return a
     // sessionId and the checkpoint must pass) — an in-memory coordinator keeps
     // the REAL bridge under test.
-    const memSessions = new Map<string, SessionEvent[]>()
-    const coordinator = {
-      create: async (meta?: { sessionId?: string }) => {
-        const id = meta?.sessionId ?? `mem-${memSessions.size}`
-        memSessions.set(id, [])
-        return { id }
-      },
-      append: async (sessionId: string, events: SessionEvent[]) => { memSessions.get(sessionId)?.push(...events) },
-      enqueue: (sessionId: string, events: SessionEvent[]) => {
-        const list = memSessions.get(sessionId) ?? []
-        list.push(...events)
-        memSessions.set(sessionId, list)
-      },
-      load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
-      list: async () => [...memSessions.keys()],
-      flush: async () => {},
-      close: async () => {},
-      putDocument: async () => {},
-      getDocument: async () => undefined,
-    } as unknown as SessionCoordinator
+    const owned = await ownedTeamFixture([], 'sess-parent')
+    const coordinator = owned.coordinator
     const calls: Array<{ provider: string; model: string }> = []
     const handle = await mountAgentTeams(ctx, tools, makeDeps({
       childSessionHoldsPrompt: async () => true,
@@ -595,6 +645,7 @@ describe("mountAgentTeams lifecycle", () => {
       expect(calls).toEqual([{ provider: "gw", model: "small" }])
     } finally {
       await handle.unmount()
+      await coordinator.close()
     }
   }, 15_000)
 })

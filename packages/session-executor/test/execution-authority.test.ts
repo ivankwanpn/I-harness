@@ -73,7 +73,7 @@ it("refuses unknown actual dispatch identity before the tool body", async () => 
 it("binds durable child and nested Code Mode receipts and permits only trusted parent visibility", async () => {
   const parent = resolve(".tmp"); mkdirSync(parent, { recursive: true })
   const root = mkdtempSync(resolve(parent, "sandbox-redesign-caller-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "main" })
   const receipts: ExecutionReceipt[] = []
   let exec!: ExecService

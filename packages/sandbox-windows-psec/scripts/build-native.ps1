@@ -62,7 +62,14 @@ foreach ($noticeFile in @('CYGWIN_LICENSE','COPYING.LIB','COPYING','SOURCES.md')
   Copy-Item -LiteralPath (Join-Path $packageRoot ('native/msys/notices/' + $noticeFile)) -Destination $noticePath -Force
   $noticeHashes['msys-notices/' + $noticeFile] = (Get-FileHash -Algorithm SHA256 -LiteralPath $noticePath).Hash.ToLowerInvariant()
 }
-$sourceFiles = @('native/Cargo.toml','native/Cargo.lock') + @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'native/src') -File | ForEach-Object { 'native/src/' + $_.Name }) + @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'native/msys') -File | ForEach-Object { 'native/msys/' + $_.Name })
+$nativeSourceRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'native/src')).TrimEnd('\') + '\'
+$nativeSourceFiles = @(Get-ChildItem -LiteralPath $nativeSourceRoot -File -Recurse | ForEach-Object {
+  $sourcePath = [IO.Path]::GetFullPath($_.FullName)
+  if (!$sourcePath.StartsWith($nativeSourceRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Native source path escaped native/src.' }
+  # Substring works on Windows PowerShell 5 / .NET Framework; GetRelativePath does not.
+  'native/src/' + $sourcePath.Substring($nativeSourceRoot.Length).Replace('\', '/')
+})
+$sourceFiles = @('native/Cargo.toml','native/Cargo.lock') + $nativeSourceFiles + @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'native/msys') -File | ForEach-Object { 'native/msys/' + $_.Name })
 $sourceHashes = [ordered]@{}
 foreach ($relative in ($sourceFiles | Sort-Object)) { $sourceHashes[$relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageRoot $relative)).Hash.ToLowerInvariant() }
 $provenance = [ordered]@{

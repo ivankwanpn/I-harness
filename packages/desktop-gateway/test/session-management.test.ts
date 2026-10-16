@@ -16,12 +16,39 @@ import { RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { sessionOwnedDocuments } from "../src/session-artifacts.ts"
 import { desktopInputReceiptDocumentKey } from "../src/input.ts"
 import { createSessionManagementFence } from "../src/session-management-fence.ts"
+import { createSessionService } from '@i-harness/session-executor'
+import { deriveMessages, type SessionEvent } from '@i-harness/core-session'
+
+it('forks actual managed replacement history through Gateway management with no model calls', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f2-management-')); roots.push(root)
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  let sends = 0
+  const service = createSessionService({ workspace: root, coordinator, model: { async *stream() { sends++; yield { type: 'end' } } } })
+  const { id } = await coordinator.create({ sessionId: 'parent' }), document = await coordinator.openManagedDocument(id)
+  const inherited = { kind: 'inherited' as const, authority: 'observation' as const, scope: 'turn' as const, producer: 'session.seed' }
+  const events: SessionEvent[] = [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H', provenance: inherited },
+    { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+    { type: 'compaction/replacement', version: 1, seq: 6, replacementId: 'management', text: 'S', coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }], insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+  ]
+  try {
+    expect(await document.importSeed(events)).toMatchObject({ kind: 'committed' })
+    const original = await readFile(join(root, 'parent.jsonl'))
+    const manager = createSessionManagement(coordinator, service, createConversationVisibility(coordinator))
+    const result = await manager.mutate('parent', 'fork') as { sessionId: string }
+    const child = await coordinator.openManagedDocument(result.sessionId)
+    expect(deriveMessages(child.view).map(message => message.content)).toEqual(['H', 'S'])
+    expect(child.view.header).toMatchObject({ parentSession: 'parent', seedLength: 7 })
+    expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', receipt: { owner: { sessionId: result.sessionId } } })
+    expect(sends).toBe(0); expect(await readFile(join(root, 'parent.jsonl'))).toEqual(original)
+  } finally { await service.close(); await coordinator.close() }
+})
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
-async function setup() {
+async function setup(owned = false) {
   const root = await mkdtemp(join(tmpdir(), "session-management-")); roots.push(root)
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), owned ? { lock: { enabled: true } } : undefined)
   await coordinator.create({ sessionId: "s1", title: "First" })
   await coordinator.create({ sessionId: "s2", title: "Second" })
   const service = { queueState: () => ({ running: false, queued: 0 }), tasks: () => [] } as unknown as SessionService
@@ -46,7 +73,7 @@ describe("session navigation metadata", () => {
     await coordinator.close()
   })
   it("refuses an actual yielded cell or live owned PTY even with an idle runtime queue", async () => {
-    const { root, coordinator, service } = await setup()
+    const { root, coordinator, service } = await setup(true)
     const session = await createDurableSessionLoader(coordinator)("s1")
     const heldCell = Promise.withResolvers<void>()
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "s1", coordinator, session, modelPolicy: "test-mock", sandbox: "danger-full-access", codeMode: { mode: "mixed" },
@@ -169,7 +196,7 @@ describe("session navigation metadata", () => {
     } finally { await coordinator.close() }
   })
   it("forks a completed conversation visibly and persists its project owner without cached SDK authority", async () => {
-    const { root, coordinator, service } = await setup()
+    const { root, coordinator, service } = await setup(true)
     const second = join(root, "second"); await mkdir(second)
     const broker = createProjectScopeBroker(coordinator, root)
     await broker.configure({ id: "p1", name: "Both folders", roots: [root, second], primaryRoot: root })
@@ -178,6 +205,8 @@ describe("session navigation metadata", () => {
     try {
       await expect(manager.mutate("s1", "fork")).rejects.toThrow(/completed turn/)
       expect(await coordinator.list()).toHaveLength(2)
+      await coordinator.closeManagedDocument('s1')
+      await coordinator.releaseOwnership('s1')
       await coordinator.append("s1", [
         { type: "turn/start", seq: 0 }, { type: "user/message", seq: 1, text: "first task" },
         { type: "assistant/message", seq: 2, text: "done" }, { type: "turn/end", seq: 3 },

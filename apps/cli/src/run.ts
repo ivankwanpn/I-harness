@@ -1,4 +1,4 @@
-import { append, createSession, deriveMessages, derivePlanMode, type Session } from "@i-harness/core-session"
+import { committedFactSeqs, deriveMessages, derivePlanMode, type SessionView as Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
 import type { CompactionRequest, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
@@ -23,6 +23,7 @@ import { maybeAutoTitle } from "@i-harness/session-title"
 import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
+  openExecutorDocument, actionMetadataFacts,
   type AssemblyOptions,
   type ModelPolicy,
   type ReasoningEffort,
@@ -119,8 +120,10 @@ export async function handleSessionCompactCommand(
 
 /** Keeps the exact failed assembly/coordinator reachable for an explicit host retry. */
 export class HeadlessCleanupError extends Error {
-  constructor(cause: unknown, readonly retryCleanup: () => Promise<void>) {
-    super("Headless process cleanup incomplete; retryCleanup retains its owner", { cause })
+  constructor(cause: unknown, readonly retryCleanup: () => Promise<void>, primaryFailure?: unknown) {
+    const reason = primaryFailure instanceof Error ? primaryFailure.message : primaryFailure === undefined ? '' : String(primaryFailure)
+    const combined = primaryFailure === undefined ? cause : new AggregateError([primaryFailure, cause], 'Headless action and cleanup failed', { cause: primaryFailure })
+    super(`Headless process cleanup incomplete; retryCleanup retains its owner${reason ? `; ${reason}` : ''}`, { cause: combined })
     this.name = "HeadlessCleanupError"
   }
 }
@@ -388,11 +391,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   const emitSessionEnd = (exitCode: number): void => {
     telemetry?.emit({ type: "session/end", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}), exitCode } })
   }
-  const session = opts.session ?? createSession((ev) => {
-    if (!opts.coordinator || !activeId) return
-    opts.coordinator.enqueue(activeId, [ev])
-    if (ev.type === "turn/end") void opts.coordinator.flush(activeId).catch(() => {})
-  })
+  let attachment: Awaited<ReturnType<typeof openExecutorDocument>>
+  try { attachment = await openExecutorDocument({ coordinator: opts.coordinator, sessionId: activeId, session: opts.session }) }
+  catch (err) {
+    emitSessionEnd(1); telemetry?.close()
+    return { finalText: '', exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId ? { sessionId: activeId } : {}) }
+  }
+  const { session, factOwner } = attachment
+  const metadata = actionMetadataFacts(factOwner)
 
   // M3 §3.4: the durable run-end record. Written while the coordinator is still
   // open — the success path closes it before `emitSessionEnd` fires, which is
@@ -402,39 +408,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // Appended through `append`, so it rides the same mirror as every other event
   // (the coordinator enqueue in the callback above) and the record's `seq` is
   // assigned like any other's; its identity is the single `runId` minted above.
-  const appendRunEnd = (exitCode: number, phase: DiagnosticPhase, err?: unknown): void => {
+  const appendRunEnd = async (exitCode: number, phase: DiagnosticPhase, err?: unknown): Promise<void> => {
     if (!opts.coordinator || activeId === undefined) return
     const error = err !== undefined && opts.redactor !== undefined ? fromError(err, opts.redactor).message : undefined
-    append(session, {
+    committedFactSeqs(await metadata.admit({
       type: "operator/run-end", version: 1,
       runId,
       exitCode, durationMs: Date.now() - runStartedAt, phase,
       ...(error !== undefined ? { error } : {}),
-    })
+    }))
   }
 
   // Resume: restore the persisted history into the session WITHOUT re-appending
   // it (it is already durable); subsequent appends continue from this history.
   // A missing/corrupt session id must surface as a clean result (exitCode 1 +
   // message), not an unhandled rejection before the try/catch below.
-  if (opts.resumeSessionId && opts.coordinator) {
-    try {
-      const { session: restored } = await opts.coordinator.loadOwned(opts.resumeSessionId)
-      session.events.push(...restored.events)
-      session.formatVersion = restored.formatVersion
-      // M24a (G7): restore the lineage header too — it is the authoritative
-      // carrier of delegationDepth/origin/parentSession (the subagent
-      // max_depth guard reads header.delegationDepth), and without it a
-      // resumed session would always present as root-depth.
-      session.header = restored.header
-      // loadOwned acquired the long-term writer lease before reading and made
-      // any crash-tail recovery canonical before this live mirror continues.
-    } catch (err) {
-      emitSessionEnd(1)
-      telemetry?.close()
-      return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
-    }
-  }
 
   // M6: restore subagent state (jobs/agent-table/roles) from the coordinator
   // document API on resume; settled only, running→error handled by restoreState.
@@ -705,6 +693,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      contextMetadata: providerBinding?.contextMetadata,
+      budgetBinding: providerBinding?.budgetBinding,
       resolveRoleModel: roleModelResolverFor(runtimeNow),
       // The role-model gate, from whoever supplied the run (the CLI's main()
       // reads it from the settings store). Omitted when the caller passed
@@ -782,7 +772,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // (the model resolution above is the shipped trigger). `mount` — no turn
     // ever ran. The append must precede the close below: a closed coordinator
     // drains what it holds, it does not accept new events.
-    appendRunEnd(1, "mount", err)
+    await appendRunEnd(1, "mount", err)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
@@ -790,83 +780,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   if (telemetry) {
     telemetry.emit({ type: "session/request", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}) } })
   }
-  try {
-    // R-A7: the plan-mode proposal event must be on the log before the run
-    // starts (the tool mount + prompt fragment are the assembly's do).
-    if (opts.planMode) enterPlanMode(session, task)
-    // R-A1/R-A2: the session's serial lane. The initial task flows through the
-    // executor (idle drain → one turn); host commands can submit additional
-    // tiers during the run — they are promoted FIFO and drained serially. The
-    // lane's inbox comes from the assembly (agent step-boundary steer claims
-    // read the same inbox).
-    const executor: SessionExecutor = (executorRef = createSessionExecutor({
-      session,
-      agent: assembly.agent,
-      inbox: assembly.inbox,
-      // The seam already existed (`SessionExecutorDeps.signal`, checked at the
-      // pump head); nothing had ever passed one.
-      signal: runSignal,
-    }))
-    registerCommand(assembly.ctx, {
-      name: "session-send",
-      execute: async (input) => {
-        const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "send", text })
-        return JSON.stringify({ queued: true })
-      },
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-followup",
-      execute: async (input) => {
-        const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "followup", text })
-        return JSON.stringify({ queued: true })
-      },
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-steer",
-      execute: async (input) => {
-        const { text } = JSON.parse(input) as { text: string }
-        executor.submit({ tier: "steer", text })
-        return JSON.stringify({ queued: true })
-      },
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-inject",
-      execute: async (input) => {
-        const { text, description, scope } = JSON.parse(input) as { text: string; description: string; scope: "turn" | "session" }
-        executor.submit({ tier: "inject", text, description, scope })
-        return JSON.stringify({ queued: true })
-      },
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-cancel",
-      execute: async (input) => {
-        const { inputId } = JSON.parse(input) as { inputId: string }
-        return JSON.stringify(executor.cancel(inputId))
-      },
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-pending",
-      execute: async () => JSON.stringify(executor.pending().map((p) => ({ inputId: p.inputId, text: p.text, delivery: p.delivery }))),
-    })
-    registerCommand(assembly.ctx, {
-      name: "session-compact",
-      description: "compact the session now (shadow + summary; optional instructions)",
-      argumentHints: "{ instructions?: string }",
-      execute: (input) => handleSessionCompactCommand(
-        { compactNow: (instructions) => assembly.compactNow(instructions), isRunning: () => executor.isRunning() },
-        input,
-      ),
-    })
-    // Initial task through the executor (serial lane; a resumed session's
-    // recovered pending inputs precede it FIFO). drain REJECTS on the first
-    // turn failure — thrown into the catch below → exitCode 1 (the CLI's
-    // exit-code contract).
-    executor.submit({ tier: "followup", text: task })
-    await executor.drain()
-    const derived = deriveMessages(session).at(-1)
-    const finalText = typeof derived?.content === "string" ? derived.content : ""
+  const readEnding = () => {
     // M72 Ⅱ: the run's ending, read from the DURABLE log rather than from a
     // flag threaded down the call chain — the record the answer's reader opens
     // and this line are then the same fact by construction. Scoped to the last
@@ -890,30 +804,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // only that (a turn whose capped step carried tool calls continues, so a
     // later empty step in the same turn still prints `[empty]`).
     const empty = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.empty === true)
-    // Site ②: the success exit. Appended BEFORE the flush — this is the one
-    // path that closes the coordinator only later (`maybeAutoTitle` runs in
-    // between), so this append is what makes the record's own durability the
-    // same event as every other event's: it rides the flush below.
-    appendRunEnd(0, "run")
-    if (opts.coordinator) {
-      // flush first: this is the durability-failure signal (rejects on a durable
-      // write failure → exitCode 1); close() then drains everything best-effort.
-      if (activeId) await opts.coordinator.flush(activeId)
-    }
-    // R-A6: first-prompt auto title after a successful run (fail-soft — LLM
-    // failure degrades to the deterministic fallback; a coordinator document
-    // mirror only when a session id is known).
-    await maybeAutoTitle({
-      session, model: assembly.model,
-      // M73 (fix wave, I3): the title request is built by session-title and runs
-      // on the session's model, so it gets the session model's resolved pair —
-      // the same two numbers the binding above produced, read at call time
-      // (absent stays absent: a test-mock run resolves no binding at all).
-      ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-      ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
-    })
-    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
+    return { ...(truncated ? { truncated: true as const } : {}), ...(refused ? { refused: true as const } : {}), ...(empty ? { empty: true as const } : {}) }
+  }
+  let outcomeReported = false
+  const reportOutcome = (ending: ReturnType<typeof readEnding>) => {
+    if (outcomeReported) return
+    outcomeReported = true
+    const { truncated, refused, empty } = ending
     // The metrics summary, when the operator asked for observability. On STDERR
     // because stdout carries ONLY the telemetry's NDJSON frames (the same
     // discipline `sdk` and `acp` follow) — a summary printed to stdout would
@@ -972,18 +869,132 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // line never displaces one of the pair above — while those two can still
     // print together, exactly as M77 pinned.
     if (empty) console.error("[empty] the provider returned no answer text and no tool call; a step in this turn was empty")
+  }
+  let primaryRunFailure: unknown
+  try {
+    // R-A7: the plan-mode proposal event must be on the log before the run
+    // starts (the tool mount + prompt fragment are the assembly's do).
+    if (opts.planMode) await enterPlanMode(session, task, metadata)
+    // R-A1/R-A2: the session's serial lane. The initial task flows through the
+    // executor (idle drain → one turn); host commands can submit additional
+    // tiers during the run — they are promoted FIFO and drained serially. The
+    // lane's inbox comes from the assembly (agent step-boundary steer claims
+    // read the same inbox).
+    const executor: SessionExecutor = (executorRef = createSessionExecutor({
+      session,
+      agent: assembly.agent,
+      inbox: assembly.inbox,
+      // The seam already existed (`SessionExecutorDeps.signal`, checked at the
+      // pump head); nothing had ever passed one.
+      signal: runSignal,
+    }))
+    registerCommand(assembly.ctx, {
+      name: "session-send",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "send", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-followup",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "followup", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-steer",
+      execute: async (input) => {
+        const { text } = JSON.parse(input) as { text: string }
+        executor.submit({ tier: "steer", text, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-inject",
+      execute: async (input) => {
+        const { text, description, scope } = JSON.parse(input) as { text: string; description: string; scope: "turn" | "session" }
+        executor.submit({ tier: "inject", text, description, scope })
+        return JSON.stringify({ queued: true })
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-cancel",
+      execute: async (input) => {
+        const { inputId } = JSON.parse(input) as { inputId: string }
+        return JSON.stringify(executor.cancel(inputId))
+      },
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-pending",
+      execute: async () => JSON.stringify(executor.pending().map((p) => ({ inputId: p.inputId, text: p.text, delivery: p.delivery }))),
+    })
+    registerCommand(assembly.ctx, {
+      name: "session-compact",
+      description: "compact the session now (shadow + summary; optional instructions)",
+      argumentHints: "{ instructions?: string }",
+      execute: (input) => handleSessionCompactCommand(
+        { compactNow: (instructions) => assembly.compactNow(instructions), isRunning: () => executor.isRunning() },
+        input,
+      ),
+    })
+    // Initial task through the executor (serial lane; a resumed session's
+    // recovered pending inputs precede it FIFO). drain REJECTS on the first
+    // turn failure — thrown into the catch below → exitCode 1 (the CLI's
+    // exit-code contract).
+    executor.submit({ tier: "followup", text: task, provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
+    await executor.drain()
+    const derived = deriveMessages(session).at(-1)
+    const finalText = typeof derived?.content === "string" ? derived.content : ""
+    // Site ②: the success exit. Appended BEFORE the flush — this is the one
+    // path that closes the coordinator only later (`maybeAutoTitle` runs in
+    // between), so this append is what makes the record's own durability the
+    // same event as every other event's: it rides the flush below.
+    await appendRunEnd(0, "run")
+    if (opts.coordinator) {
+      // flush first: this is the durability-failure signal (rejects on a durable
+      // write failure → exitCode 1); close() then drains everything best-effort.
+      if (activeId) await opts.coordinator.flush(activeId)
+    }
+    // R-A6: first-prompt auto title after a successful run (fail-soft — LLM
+    // failure degrades to the deterministic fallback; a coordinator document
+    // mirror only when a session id is known).
+    if (assembly.factOwner.view !== session) throw Object.assign(new Error('Title action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    const titleAction = assembly.factOwner.beginAction(runSignal)
+    try {
+      await maybeAutoTitle({
+        session, model: assembly.model,
+        action: { view: session, signal: titleAction.signal, assertOpen: titleAction.assertOpen, facts: { metadata: titleAction.facts.metadata } },
+        // M73 (fix wave, I3): the title request is built by session-title and runs
+        // on the session's model, so it gets the session model's resolved pair —
+        // the same two numbers the binding above produced, read at call time
+        // (absent stays absent: a test-mock run resolves no binding at all).
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
+      })
+    } finally { titleAction.finish() }
+    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
     emitSessionEnd(0)
+    const ending = readEnding()
+    reportOutcome(ending)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(empty ? { empty: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...ending, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
+    primaryRunFailure = err
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that
     // rejected) — the assembly WAS built, so `run` and not `mount`. Before the
     // close below for the same reason as site ①.
-    appendRunEnd(1, "run", err)
+    await appendRunEnd(1, "run", err)
+    const ending = readEnding()
+    // A reporting failure cannot replace the authoritative turn/storage error.
+    try { reportOutcome(ending) } catch { /* reporting may already have begun */ }
     telemetry?.close()
     if (opts.coordinator && activeId) await opts.coordinator.flush(activeId).catch(() => {})
-    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText: "", exitCode: 1, session, ...ending, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } finally {
     // The handlers come off on EVERY exit path. A run that left them behind
     // accumulates one pair per invocation, and a host running many sessions
@@ -1008,7 +1019,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // success is acknowledged only after the assembly's native owners drain.
     try { await assembly?.dispose() }
     catch (cause) {
-      throw new HeadlessCleanupError(cause, async () => { await assembly?.dispose(); await opts.coordinator?.close() })
+      throw new HeadlessCleanupError(cause, async () => { await assembly?.dispose(); await opts.coordinator?.close() }, primaryRunFailure)
     }
     // Disposal joins task/notification save queues and may schedule registry
     // metadata writes. The final store barrier must follow those producers.

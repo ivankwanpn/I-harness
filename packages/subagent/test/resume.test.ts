@@ -1,3 +1,8 @@
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 // M23 Task 6: `ensureResidentAgent` lazy rebuild (M19 Minor-4 wakeup no-op fix).
 //
 // On resume the subagent Agent registry is fresh-empty (entries are registered
@@ -10,7 +15,8 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { append, createSession } from "@i-harness/core-session"
+import { createSession, type SessionView } from "@i-harness/core-session"
+import { appendStandalone as append } from './standalone-fixture.ts'
 import { createMockClient } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
@@ -62,6 +68,27 @@ function restoredEntry(sessionId: string, roleName: string | undefined): ChildAg
 }
 
 describe("ensureResidentAgent", () => {
+  it("S18: resident prompts read the current host callback with the restored child session on every turn", async () => {
+    const { deps, table, agents } = setup(), entry = restoredEntry("live-prompt", "general")
+    const prompts: string[] = [], sessions: SessionView[] = []
+    deps.parentModel = { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+    deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context one" }
+    table.add(entry.path, entry)
+    try {
+      expect(await ensureResidentAgent(deps, entry)).toBe(true)
+      const resident = agents.get(entry.sessionId!)!
+      await resident.followup("first")
+      deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context two" }
+      await resident.followup("second")
+      expect(prompts).toHaveLength(2)
+      expect(prompts[0]).toContain("restored context one")
+      expect(prompts[1]).toContain("restored context two")
+      expect(prompts[1]).not.toContain("restored context one")
+      expect(sessions.length).toBeGreaterThanOrEqual(2)
+      expect(sessions.every(session => session === entry.session)).toBe(true)
+    } finally { await entry.dispose?.(); await deps.parentCtx.scope.unmount() }
+  })
+
   it("rejects a stale rebuild after model resolution without publishing or registering it", async () => {
     const { deps, table, agents } = setup(), original = restoredEntry("old-child", "general")
     const replacement = restoredEntry("new-child", "general")
@@ -313,7 +340,7 @@ describe("ensureResidentAgent", () => {
       },
     }
     const rebuilt: SubagentToolDeps = {
-      ...deps,
+      ...deps, autoCompactionEnabled: () => false,
       allowSubagentModelSelection: true,
       roleSelectionFor: () => ({ provider: "gw", model: "big" }),
       // The SESSION's window rides beside the binding's — a different model's,
@@ -356,7 +383,7 @@ describe("ensureResidentAgent", () => {
       },
     }
     const rebuilt: SubagentToolDeps = {
-      ...deps, parentModel: parentClient,
+      ...deps, autoCompactionEnabled: () => false, parentModel: parentClient,
       contextWindow: 1_000, maxOutputTokens: 4_242,
     }
 
@@ -383,8 +410,8 @@ describe("ensureResidentAgent", () => {
     // selection and the reset walk read those numbers.
     for (let i = 0; i < 12; i++) {
       append(entry.session, { type: "turn/start" })
-      append(entry.session, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
-      append(entry.session, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(entry.session, { type: "user/message", text: `q${i} ` + "filler ".repeat(600) })
+      append(entry.session, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(600) })
       append(entry.session, { type: "turn/end" })
     }
     append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
@@ -400,7 +427,11 @@ describe("ensureResidentAgent", () => {
         yield { type: "end" }
       },
     }
-    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 2_000 }
+    // The current independent summary output default is 4096. The old 2000-token
+    // fixture exhausted the shared eight-call budget before retaining a usable
+    // checkpoint. Give directives/source/output coherent headroom while keeping
+    // real over-window pressure by increasing restored history with the window.
+    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 16_000 }
 
     await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
 
@@ -410,6 +441,9 @@ describe("ensureResidentAgent", () => {
     expect(entry.finalText).toBe("rebuilt done")
     // …and it was the rebuilt child's OWN compactor that rescued it
     expect(requests.length).toBeGreaterThan(1)
+    expect(entry.session.events.filter(e => e.type === "user/message" && e.text.startsWith("q"))).toHaveLength(12)
+    expect(entry.session.events.some(e => e.type === "compaction/summary")).toBe(true)
+    expect(requests.some(request => request.maxOutputTokens === 4096)).toBe(true)
   }, 15_000)
 
   // M73, the declared arm's window precedence in the OTHER direction: a binding
@@ -571,22 +605,10 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     }
   }
 
-  function mockCoordinator(over?: Partial<Record<"load" | "loadOwned" | "enqueue" | "flush", unknown>>) {
-    return {
-      load: vi.fn(async () => {
-        throw new Error("missing log")
-      }),
-      loadOwned: vi.fn(async () => {
-        throw new Error("missing log")
-      }),
-      putDocument: vi.fn(async () => {}),
-      getDocument: vi.fn(async () => undefined),
-      enqueue: vi.fn(),
-      flush: vi.fn(async () => {}),
-      ...over,
-    } as unknown as SessionCoordinator & Record<"load" | "loadOwned" | "enqueue" | "flush", ReturnType<typeof vi.fn>>
+  async function mockCoordinator() {
+    const root = await mkdtemp(join(tmpdir(), 'ih-f1-resume-consumer-'))
+    return createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   }
-
   function registerWith(coordinator: SessionCoordinator, restoredState: SubagentStateSnapshot) {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
@@ -600,49 +622,53 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     })
   }
 
-  it("registerSubagent rebuilds the hooked child mirror after restore (G1a) — append enqueues durably", async () => {
-    const loadedSession = {
-      formatVersion: 1,
-      events: [{ type: "user/message", text: "old", seq: 0 }] as unknown[],
-      header: { origin: "subagent", parentSession: "main" },
-    }
-    let releaseLoad: (value: { session: typeof loadedSession }) => void = () => {}
-    const coordinator = mockCoordinator({
-      loadOwned: vi.fn(() => new Promise<{ session: typeof loadedSession }>((resolve) => { releaseLoad = resolve })),
+  it("registerSubagent restores the exact owned child view behind ready and persists its inbox through receipts", async () => {
+    const coordinator = await mockCoordinator()
+    await coordinator.create({ sessionId: 'child-abc', origin: 'subagent', parentSession: 'main' })
+    const original = await coordinator.openManagedDocument('child-abc')
+    await original.inputs.start(undefined, { type: 'user/message', text: 'old' })
+    await original.agent.lifecycle({ type: 'turn/end' })
+    await original.close()
+    await coordinator.releaseOwnership('child-abc')
+    const actualOpen = coordinator.openManagedDocument.bind(coordinator)
+    const releaseLoad = Promise.withResolvers<void>()
+    const open = vi.spyOn(coordinator, 'openManagedDocument').mockImplementation(async id => {
+      await releaseLoad.promise
+      return actualOpen(id)
     })
     const subagent = registerWith(coordinator, restoreFixture())
-    // The async mirror rebuild is IN FLIGHT: owned load was called, `ready` pending.
-    const originalSession = subagent.table.get("root/helper")!.session
+    const originalSession = subagent.table.get('root/helper')!.session
     const changes: { status: string; session: unknown; closing?: boolean }[] = []
     subagent.table.subscribe(change => changes.push({ status: change.entry.status, session: change.entry.session, closing: change.entry.closing }))
-    expect(coordinator.loadOwned).toHaveBeenCalledWith("child-abc")
-    let readyResolved = false
-    void subagent.ready.then(() => { readyResolved = true })
-    expect(readyResolved).toBe(false) // ready does NOT resolve before the mirror loads
-
-    releaseLoad({ session: loadedSession })
-    await subagent.ready
-    expect(readyResolved).toBe(true)
-
-    // G1a: the durable child log was rebuilt into the entry's mirror session
-    const entry = subagent.table.get("root/helper")!
-    expect(entry.status).toBe("waiting") // load succeeded → not failed-visible
-    expect(entry.session.events.some((e) => e.type === "user/message" && e.text === "old")).toBe(true)
-    expect(entry.session.header).toEqual({ origin: "subagent", parentSession: "main" })
-    expect(changes).toEqual([{ status: "waiting", session: entry.session, closing: undefined }])
-    expect(entry.session).not.toBe(originalSession)
-    // The mirror is HOOKED: appends flow into the durable write-behind ...
-    append(entry.session, { type: "subagent/inbox", messageId: "m1", message: "hi" })
-    expect(coordinator.enqueue).toHaveBeenCalledWith("child-abc", [expect.objectContaining({ type: "subagent/inbox", message: "hi" })])
-    // ... and a turn/end triggers the flush hook
-    append(entry.session, { type: "turn/end" })
-    expect(coordinator.flush).toHaveBeenCalledWith("child-abc")
-    await subagent.dispose()
-    expect(changes.at(-1)).toMatchObject({ closing: true, session: entry.session })
+    try {
+      expect(open).toHaveBeenCalledWith('child-abc')
+      let readyResolved = false
+      void subagent.ready.then(() => { readyResolved = true })
+      expect(readyResolved).toBe(false)
+      releaseLoad.resolve()
+      await subagent.ready
+      expect(readyResolved).toBe(true)
+      const entry = subagent.table.get('root/helper')!
+      const document = await actualOpen('child-abc')
+      expect(entry.status).toBe('waiting')
+      expect(entry.session).toBe(document.view)
+      expect(entry.factOwner).toBe(document)
+      expect(entry.session.events.some(event => event.type === 'user/message' && event.text === 'old')).toBe(true)
+      expect(entry.session.header).toMatchObject({ origin: 'subagent', parentSession: 'main' })
+      expect(changes).toEqual([{ status: 'waiting', session: entry.session, closing: undefined }])
+      expect(entry.session).not.toBe(originalSession)
+      await document.delivery.record({ type: 'subagent/inbox', messageId: 'm1', message: 'hi' })
+      expect((await coordinator.snapshot!('child-abc')).session.events.at(-1)).toMatchObject({ type: 'subagent/inbox', message: 'hi' })
+      await subagent.dispose()
+      expect(changes.at(-1)).toMatchObject({ closing: true, session: entry.session })
+    } finally {
+      releaseLoad.resolve()
+      await subagent.dispose().catch(() => {})
+      await coordinator.close()
+    }
   }, 10_000)
-
   it("fails visible when a child log is unavailable after resume (G1a)", async () => {
-    const coordinator = mockCoordinator() // owned load rejects by default
+    const coordinator = await mockCoordinator() // actual missing owned log rejects
     const subagent = registerWith(coordinator, restoreFixture())
     const changes: unknown[] = []
     subagent.table.subscribe(change => changes.push({ status: change.entry.status, error: change.entry.error }))
@@ -732,13 +758,13 @@ describe("M26-D1 recovery classification on cold restore", () => {
       },
       load: async (sid: string) => {
         if (sid === "child-done") {
-          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+          return { session: { formatVersion: 2, header: { seedLength: 0 }, events: [
             { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
             { type: "assistant/message", text: "final answer", seq: 2 }, { type: "turn/end", seq: 3 },
           ] } }
         }
         if (sid === "child-ambiguous") {
-          return { session: { formatVersion: 1, header: { seedLength: 0 }, events: [
+          return { session: { formatVersion: 2, header: { seedLength: 0 }, events: [
             { type: "turn/start", seq: 0 }, { type: "user/message", text: "p", seq: 1 },
           ] } }
         }

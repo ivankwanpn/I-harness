@@ -452,6 +452,389 @@ function withoutReExportStatements(text) {
  *      names (`tui-core` 31, `fs-lock` 2, `sandbox-policy` 2,
  *      `session-persistence` 2, `attachment` 1, `core-agent` 1), and 0 of the
  *      39 appears in the row set. */
+// S1 relocates one declaring source unit into these exact modules. Keep that
+// unit's original exclusion boundary: normalization and internal imports were
+// not external consumers before the move, and must not retire findings now.
+// sections.ts and context-subsystems.ts remain independent source owners.
+const SETTINGS_SOURCE_UNIT = new Set([
+  "packages/settings/src/index.ts",
+  "packages/settings/src/schema/types.ts",
+  "packages/settings/src/schema/defaults.ts",
+  "packages/settings/src/normalize/primitives.ts",
+  "packages/settings/src/normalize/providers.ts",
+  "packages/settings/src/normalize/execution.ts",
+  "packages/settings/src/normalize/tui.ts",
+  "packages/settings/src/normalize/settings.ts",
+  "packages/settings/src/storage/contracts.ts",
+  "packages/settings/src/storage/layers.ts",
+  "packages/settings/src/storage/revision.ts",
+  "packages/settings/src/storage/json-patch.ts",
+  "packages/settings/src/storage/single-store.ts",
+  "packages/settings/src/storage/layered-store.ts",
+  "packages/settings/src/observation/watch-settings.ts",
+])
+
+// S2 similarly relocates declarations and their internal reads out of the
+// original core-session entry. Inbox was already a separate source owner and
+// remains a real consumer; only these exact extracted modules share the entry's
+// former exclusion boundary. Do not treat an internal import as newly wired use.
+const CORE_SESSION_SOURCE_UNIT = new Set([
+  "packages/core-session/src/index.ts",
+  "packages/core-session/src/events/types.ts",
+  "packages/core-session/src/events/state.ts",
+  "packages/core-session/src/events/append.ts",
+  "packages/core-session/src/events/subscription.ts",
+  "packages/core-session/src/images.ts",
+  "packages/core-session/src/projection/types.ts",
+  "packages/core-session/src/projection/pruning.ts",
+  "packages/core-session/src/projection/rewind.ts",
+  "packages/core-session/src/projection/rewrite.ts",
+  "packages/core-session/src/projection/messages.ts",
+  // R1A moves the existing rewind visibility read here. It is still the
+  // former entry's internal use, not a new consumer of the public RewindCut.
+  "packages/core-session/src/conversation/visibility.ts",
+  "packages/core-session/src/projection/search.ts",
+  "packages/core-session/src/projection/plan.ts",
+  "packages/core-session/src/projection/title.ts",
+  "packages/core-session/src/serialization/jsonl.ts",
+])
+
+// S3 keeps the registry/catalogue and per-session runtime as SEPARATE logical
+// owners. These exact modules came from their package entries; imports between
+// them must not erase findings. Pre-existing file-runtime.ts and video-audio.ts
+// stay independent consumers, as do future unmapped modules.
+const PROVIDER_SOURCE_UNIT = new Set([
+  "packages/provider/src/index.ts",
+  "packages/provider/src/types.ts",
+  "packages/provider/src/values.ts",
+  "packages/provider/src/catalog/load.ts",
+  "packages/provider/src/catalog/resolve.ts",
+  "packages/provider/src/catalog/context.ts",
+  "packages/provider/src/probe/errors.ts",
+  "packages/provider/src/probe/http.ts",
+  "packages/provider/src/probe/normalization.ts",
+  "packages/provider/src/probe/registry.ts",
+  "packages/provider/src/clients/build.ts",
+  "packages/provider/src/clients/validation.ts",
+  "packages/provider/src/web-search/registry.ts",
+])
+const PROVIDER_RUNTIME_SOURCE_UNIT = new Set([
+  "packages/provider-runtime/src/index.ts",
+  "packages/provider-runtime/src/types.ts",
+  "packages/provider-runtime/src/directory/types.ts",
+  "packages/provider-runtime/src/directory/view.ts",
+  "packages/provider-runtime/src/directory/profile.ts",
+  "packages/provider-runtime/src/directory/merge.ts",
+  "packages/provider-runtime/src/configuration/store.ts",
+  "packages/provider-runtime/src/configuration/validation.ts",
+  "packages/provider-runtime/src/configuration/routes.ts",
+  "packages/provider-runtime/src/configuration/models.ts",
+  "packages/provider-runtime/src/configuration/credentials.ts",
+  "packages/provider-runtime/src/selection/choice.ts",
+  "packages/provider-runtime/src/selection/binding.ts",
+  "packages/provider-runtime/src/selection/resolve.ts",
+  "packages/provider-runtime/src/runtime/auth.ts",
+  "packages/provider-runtime/src/runtime/discovery.ts",
+  "packages/provider-runtime/src/runtime/media.ts",
+  "packages/provider-runtime/src/runtime/create-runtime.ts",
+])
+
+// S4a relocates only the original Responses entry. The pre-existing affinity.ts
+// owns its own declarations; future modules and other adapters stay consumers.
+const OPENAI_RESPONSES_SOURCE_UNIT = new Set([
+  "packages/llm-openai/src/index.ts",
+  "packages/llm-openai/src/types.ts",
+  "packages/llm-openai/src/client.ts",
+  "packages/llm-openai/src/request/messages.ts",
+  "packages/llm-openai/src/request/body.ts",
+  "packages/llm-openai/src/request/headers.ts",
+  "packages/llm-openai/src/stream/decode.ts",
+  "packages/llm-openai/src/stream/fold.ts",
+  "packages/llm-openai/src/stream/usage.ts",
+])
+
+// S4b relocates only the original Chat Completions entry. Its new internal
+// reads retain the former declaration boundary; no other protocol shares it.
+const OPENAI_COMPATIBLE_SOURCE_UNIT = new Set([
+  "packages/llm-openai-compatible/src/index.ts",
+  "packages/llm-openai-compatible/src/types.ts",
+  "packages/llm-openai-compatible/src/client.ts",
+  "packages/llm-openai-compatible/src/request/messages.ts",
+  "packages/llm-openai-compatible/src/request/reasoning.ts",
+  "packages/llm-openai-compatible/src/request/body.ts",
+  "packages/llm-openai-compatible/src/request/headers.ts",
+  "packages/llm-openai-compatible/src/stream/decode.ts",
+  "packages/llm-openai-compatible/src/stream/fold.ts",
+  "packages/llm-openai-compatible/src/stream/usage.ts",
+])
+
+// S4c relocates only the original Anthropic Messages entry. Its internal reads
+// retain the original declaration boundary; future modules remain consumers.
+const ANTHROPIC_SOURCE_UNIT = new Set([
+  "packages/llm-anthropic/src/index.ts",
+  "packages/llm-anthropic/src/types.ts",
+  "packages/llm-anthropic/src/client.ts",
+  "packages/llm-anthropic/src/request/messages.ts",
+  "packages/llm-anthropic/src/request/reasoning.ts",
+  "packages/llm-anthropic/src/request/body.ts",
+  "packages/llm-anthropic/src/request/headers.ts",
+  "packages/llm-anthropic/src/stream/decode.ts",
+  "packages/llm-anthropic/src/stream/fold.ts",
+  "packages/llm-anthropic/src/stream/usage.ts",
+])
+
+// S4d relocates only the original Gemini entry. Internal reads preserve its
+// declaration owner; unmapped modules and other protocols remain consumers.
+const GEMINI_SOURCE_UNIT = new Set([
+  "packages/llm-gemini/src/index.ts",
+  "packages/llm-gemini/src/types.ts",
+  "packages/llm-gemini/src/client.ts",
+  "packages/llm-gemini/src/request/messages.ts",
+  "packages/llm-gemini/src/request/reasoning.ts",
+  "packages/llm-gemini/src/request/body.ts",
+  "packages/llm-gemini/src/request/headers.ts",
+  "packages/llm-gemini/src/stream/decode.ts",
+  "packages/llm-gemini/src/stream/fold.ts",
+  "packages/llm-gemini/src/stream/usage.ts",
+])
+
+// S4e relocates only the original Converse entry. SDK iteration and request
+// mapping share that former owner; future modules and other protocols do not.
+const BEDROCK_SOURCE_UNIT = new Set([
+  "packages/llm-bedrock/src/index.ts",
+  "packages/llm-bedrock/src/types.ts",
+  "packages/llm-bedrock/src/region.ts",
+  "packages/llm-bedrock/src/client.ts",
+  "packages/llm-bedrock/src/request/messages.ts",
+  "packages/llm-bedrock/src/request/reasoning.ts",
+  "packages/llm-bedrock/src/request/body.ts",
+  "packages/llm-bedrock/src/stream/iterate.ts",
+  "packages/llm-bedrock/src/stream/fold.ts",
+  "packages/llm-bedrock/src/stream/usage.ts",
+])
+
+// S5 splits the original Plugin scope only. Its internal registration/dispatch
+// types are not new external consumers; keep their original exclusion boundary.
+// Pre-existing and future unmapped files remain independent source owners.
+const CORE_PLUGIN_SOURCE_UNIT = new Set([
+  "packages/core-plugin/src/index.ts",
+  "packages/core-plugin/src/types.ts",
+  "packages/core-plugin/src/redispatch.ts",
+  "packages/core-plugin/src/scope/types.ts",
+  "packages/core-plugin/src/scope/promise.ts",
+  "packages/core-plugin/src/scope/services.ts",
+  "packages/core-plugin/src/scope/listeners.ts",
+  "packages/core-plugin/src/scope/waterfall.ts",
+  "packages/core-plugin/src/scope/cascade.ts",
+  "packages/core-plugin/src/scope/dispose.ts",
+  "packages/core-plugin/src/scope/create-scope.ts",
+])
+
+// S6 extracts only the original tool-registry entry. Internal imports keep that
+// owner's original reachability evidence; its existing separate entrypoints and
+// all future unmapped files still count as independent production consumers.
+const CORE_TOOLS_SOURCE_UNIT = new Set([
+  "packages/core-tools/src/index.ts",
+  "packages/core-tools/src/types.ts",
+  "packages/core-tools/src/registry/catalog.ts",
+  "packages/core-tools/src/registry/prepare.ts",
+  "packages/core-tools/src/registry/dispatch.ts",
+  "packages/core-tools/src/registry/finalize.ts",
+  "packages/core-tools/src/approval/identity.ts",
+  "packages/core-tools/src/approval/arguments.ts",
+  "packages/core-tools/src/approval/decision.ts",
+])
+
+// S7 moves the original Hooks entry's registry contracts and implementation.
+// Existing types/trust/runner/Claude modules keep their separate source owners.
+// Only the listed extraction paths share the original entry's logical owner.
+const HOOKS_SOURCE_UNIT = new Set([
+  "packages/hooks/src/index.ts",
+  "packages/hooks/src/registry-types.ts",
+  "packages/hooks/src/registry.ts",
+  "packages/hooks/src/configuration/load.ts",
+  "packages/hooks/src/configuration/validation.ts",
+  "packages/hooks/src/configuration/matchers.ts",
+  "packages/hooks/src/execution/handlers.ts",
+  "packages/hooks/src/execution/permissions.ts",
+  "packages/hooks/src/execution/runtime.ts",
+  "packages/hooks/src/lifecycle/session.ts",
+  "packages/hooks/src/lifecycle/mount.ts",
+])
+
+// S8 moves a NON-entry source owner. Only the original supervisor and these
+// exact private modules share its boundary. The package entry, scheduler,
+// client, bridge and OAuth files remain independent production consumers.
+const MCP_SUPERVISOR_SOURCE_UNIT = new Set([
+  "packages/mcp-client/src/supervisor.ts",
+  "packages/mcp-client/src/supervisor/types.ts",
+  "packages/mcp-client/src/supervisor/status.ts",
+  "packages/mcp-client/src/supervisor/generation.ts",
+  "packages/mcp-client/src/supervisor/catalogue.ts",
+  "packages/mcp-client/src/supervisor/recovery.ts",
+  "packages/mcp-client/src/supervisor/disposal.ts",
+])
+
+// S9 relocates only the original coordinator/format owner. Existing repair,
+// write-behind, fork and store-root files still count as independent readers.
+const PERSISTENCE_COORDINATOR_SOURCE_UNIT = new Set([
+  "packages/session-persistence/src/index.ts",
+  "packages/session-persistence/src/coordinator/types.ts",
+  "packages/session-persistence/src/coordinator/load.ts",
+  "packages/session-persistence/src/coordinator/ownership.ts",
+  "packages/session-persistence/src/coordinator/documents.ts",
+  "packages/session-persistence/src/coordinator/mutations.ts",
+  // R1B's derived prefix index is an internal coordinator validation owner;
+  // its use of the existing format error is not an external API consumer.
+  "packages/session-persistence/src/coordinator/conversation-index.ts",
+  "packages/session-persistence/src/coordinator/lifecycle.ts",
+  "packages/session-persistence/src/format/registry.ts",
+  "packages/session-persistence/src/format/validation.ts",
+])
+
+// S10 moves only the non-entry file-backed query owner. The existing package
+// index (legacy query implementation) and warning filter remain independent.
+const FILE_BACKED_QUERY_SOURCE_UNIT = new Set([
+  "packages/session-query/src/file-backed.ts",
+  "packages/session-query/src/file-backed/contracts.ts",
+  "packages/session-query/src/file-backed/database.ts",
+  "packages/session-query/src/file-backed/schema.ts",
+  "packages/session-query/src/file-backed/inspection.ts",
+  "packages/session-query/src/file-backed/index-refresh.ts",
+  "packages/session-query/src/file-backed/query.ts",
+])
+
+// S11 extracts only the original compaction entry. Existing config, region,
+// slices, summarizer and tokens retain independent declaration/reader owners.
+const COMPACTION_SOURCE_UNIT = new Set([
+  "packages/compaction/src/index.ts",
+  "packages/compaction/src/engine/contracts.ts",
+  "packages/compaction/src/engine/admission.ts",
+  "packages/compaction/src/engine/prune.ts",
+  "packages/compaction/src/engine/summary.ts",
+  "packages/compaction/src/engine/commit.ts",
+  "packages/compaction/src/projection/shadowed.ts",
+  "packages/compaction/src/projection/window.ts",
+])
+
+// S12 moves only the original Shell entry. Exact extraction paths share its
+// declaration boundary; unmapped future files remain independent consumers.
+const SHELL_SOURCE_UNIT = new Set([
+  "packages/shell/src/index.ts",
+  "packages/shell/src/types.ts",
+  "packages/shell/src/discovery/windows.ts",
+  "packages/shell/src/discovery/environment.ts",
+  "packages/shell/src/command/resolve.ts",
+  "packages/shell/src/command/argv.ts",
+  "packages/shell/src/command/identity.ts",
+  "packages/shell/src/tools/policy.ts",
+  "packages/shell/src/tools/background.ts",
+  "packages/shell/src/tools/retention.ts",
+  "packages/shell/src/tools/foreground.ts",
+  "packages/shell/src/tools/selected.ts",
+  "packages/shell/src/tools/registration.ts",
+])
+
+// S13 has TWO original non-entry owners. Only their exact extracted paths
+// share each boundary; the public entry, admission, spill, retained-output,
+// caller scope, backends and every unmapped future module remain independent.
+const EXEC_SERVICE_SOURCE_UNIT = new Set([
+  "packages/exec/src/service.ts",
+  "packages/exec/src/execution-host.ts",
+  "packages/exec/src/transport-launch.ts",
+  "packages/exec/src/capture/contracts.ts",
+  "packages/exec/src/capture/input.ts",
+  "packages/exec/src/capture/output.ts",
+  "packages/exec/src/capture/retention.ts",
+  "packages/exec/src/capture/completion.ts",
+  "packages/exec/src/jobs/contracts.ts",
+  "packages/exec/src/jobs/records.ts",
+  "packages/exec/src/jobs/observation.ts",
+  "packages/exec/src/jobs/views.ts",
+])
+const EXEC_SUPERVISOR_SOURCE_UNIT = new Set([
+  "packages/exec/src/execution-supervisor.ts",
+  "packages/exec/src/supervision/contracts.ts",
+  "packages/exec/src/supervision/ownership.ts",
+  "packages/exec/src/supervision/admission.ts",
+  "packages/exec/src/supervision/retirement.ts",
+  "packages/exec/src/supervision/reconciliation.ts",
+])
+
+// S17 keeps the original agent entry and batch implementation as two owners.
+// Only their exact descendants share those boundaries. The existing executor,
+// other original owner, outside readers and future modules remain independent.
+const CORE_AGENT_SOURCE_UNIT = new Set([
+  "packages/core-agent/src/index.ts",
+  "packages/core-agent/src/agent/types.ts",
+  "packages/core-agent/src/agent/create.ts",
+  "packages/core-agent/src/agent/registry.ts",
+  "packages/core-agent/src/agent/context.ts",
+  "packages/core-agent/src/agent/turn.ts",
+  "packages/core-agent/src/agent/step-input.ts",
+  "packages/core-agent/src/agent/model-loop.ts",
+  "packages/core-agent/src/agent/model-step.ts",
+  "packages/core-agent/src/agent/reasoning.ts",
+  "packages/core-agent/src/agent/finalization.ts",
+])
+const CORE_AGENT_BATCH_SOURCE_UNIT = new Set([
+  "packages/core-agent/src/execute-tool-calls.ts",
+  "packages/core-agent/src/tool-batch/types.ts",
+  "packages/core-agent/src/tool-batch/prepare.ts",
+  "packages/core-agent/src/tool-batch/dispatch.ts",
+  "packages/core-agent/src/tool-batch/join.ts",
+  "packages/core-agent/src/tool-batch/record.ts",
+  "packages/core-agent/src/tool-batch/cancel.ts",
+])
+
+// S19 preserves the original non-entry scheduler boundary. Existing domain
+// owners and any future/unlisted scheduler modules remain independent.
+const TEAM_SCHEDULER_SOURCE_UNIT = new Set([
+  "packages/agent-team/src/scheduler.ts",
+  "packages/agent-team/src/scheduler/admission.ts",
+  "packages/agent-team/src/scheduler/teammate-lifecycle.ts",
+  "packages/agent-team/src/scheduler/task-delivery.ts",
+  "packages/agent-team/src/scheduler/completion.ts",
+  "packages/agent-team/src/scheduler/recovery.ts",
+])
+
+// The reliability repair extracts only the original llm-seam error owner.
+// Unlisted/future seam modules and every adapter remain independent readers.
+const LLM_SEAM_ERROR_SOURCE_UNIT = new Set([
+  "packages/llm-seam/src/index.ts",
+  "packages/llm-seam/src/provider-error/types.ts",
+  "packages/llm-seam/src/provider-error/classify.ts",
+  "packages/llm-seam/src/provider-error/facts.ts",
+  "packages/llm-seam/src/provider-error/http.ts",
+])
+
+function declarationOwner(rel) {
+  if (LLM_SEAM_ERROR_SOURCE_UNIT.has(rel)) return "packages/llm-seam/src/index.ts"
+  if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
+  if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
+  if (PROVIDER_SOURCE_UNIT.has(rel)) return "packages/provider/src/index.ts"
+  if (PROVIDER_RUNTIME_SOURCE_UNIT.has(rel)) return "packages/provider-runtime/src/index.ts"
+  if (OPENAI_RESPONSES_SOURCE_UNIT.has(rel)) return "packages/llm-openai/src/index.ts"
+  if (OPENAI_COMPATIBLE_SOURCE_UNIT.has(rel)) return "packages/llm-openai-compatible/src/index.ts"
+  if (ANTHROPIC_SOURCE_UNIT.has(rel)) return "packages/llm-anthropic/src/index.ts"
+  if (GEMINI_SOURCE_UNIT.has(rel)) return "packages/llm-gemini/src/index.ts"
+  if (BEDROCK_SOURCE_UNIT.has(rel)) return "packages/llm-bedrock/src/index.ts"
+  if (CORE_PLUGIN_SOURCE_UNIT.has(rel)) return "packages/core-plugin/src/index.ts"
+  if (CORE_TOOLS_SOURCE_UNIT.has(rel)) return "packages/core-tools/src/index.ts"
+  if (HOOKS_SOURCE_UNIT.has(rel)) return "packages/hooks/src/index.ts"
+  if (MCP_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/mcp-client/src/supervisor.ts"
+  if (PERSISTENCE_COORDINATOR_SOURCE_UNIT.has(rel)) return "packages/session-persistence/src/index.ts"
+  if (FILE_BACKED_QUERY_SOURCE_UNIT.has(rel)) return "packages/session-query/src/file-backed.ts"
+  if (COMPACTION_SOURCE_UNIT.has(rel)) return "packages/compaction/src/index.ts"
+  if (SHELL_SOURCE_UNIT.has(rel)) return "packages/shell/src/index.ts"
+  if (EXEC_SERVICE_SOURCE_UNIT.has(rel)) return "packages/exec/src/service.ts"
+  if (EXEC_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/exec/src/execution-supervisor.ts"
+  if (CORE_AGENT_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/index.ts"
+  if (CORE_AGENT_BATCH_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/execute-tool-calls.ts"
+  if (TEAM_SCHEDULER_SOURCE_UNIT.has(rel)) return "packages/agent-team/src/scheduler.ts"
+  return rel
+}
+
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
@@ -469,7 +852,8 @@ function scanUnusedExports(files) {
     const entryText = withoutReExportStatements(commentFree.get(entry.rel))
     for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.rel === entry.rel ? entryText : commentFree.get(f.rel)))
+      const owners = new Set([...origins].map(declarationOwner))
+      const used = prod.some((f) => !owners.has(declarationOwner(f.rel)) && word.test(f.rel === entry.rel ? entryText : commentFree.get(f.rel)))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -853,8 +1237,8 @@ function scanUnconsultedSettings(files) {
     for (const key of keys) {
       const leaf = key.slice(key.lastIndexOf(".") + 1).replace(/[$]/g, "\\$")
       const prop = new RegExp(`\\.\\s*${leaf}\\b`)
-      const read = prod.some((f) => f !== decl && (f.text.includes(`"${key}"`) || f.text.includes(`'${key}'`) || prop.test(f.text)))
-      if (!read) findings.push({ kind: "unconsulted-setting", subject: key, evidence: decl.rel })
+      const read = prod.some((f) => declarationOwner(f.rel) !== declarationOwner(decl.rel) && (f.text.includes(`"${key}"`) || f.text.includes(`'${key}'`) || prop.test(f.text)))
+      if (!read) findings.push({ kind: "unconsulted-setting", subject: key, evidence: declarationOwner(decl.rel) })
     }
   }
   return findings
@@ -982,6 +1366,979 @@ SELF_TEST_CASES.push({
   name: "class 5: a settings key with a schema entry and no reader is a finding",
   expect: ["compaction.auto", "realKey", "ui.fontSizePx", "xiKey"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
+})
+
+// The same two findings must survive a source-only split. The normalized
+// property's read and the internal symbol import are deliberately present;
+// excluding only the physical declaring file would incorrectly retire both.
+function settingsRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/settings/src/index.ts", [
+    "export const UnusedSettingExport = 1",
+    "const SETTINGS_DEFAULTS = { fontSize: 14 }",
+    "const normalize = raw => ({ fontSize: raw.fontSize, hint: UnusedSettingExport })",
+  ].join("\n"))]
+  return [
+    file("packages/settings/src/index.ts", 'export { UnusedSettingExport } from "./schema/types.ts"'),
+    file("packages/settings/src/schema/types.ts", "export const UnusedSettingExport = 1"),
+    file("packages/settings/src/schema/defaults.ts", "const SETTINGS_DEFAULTS = { fontSize: 14 }"),
+    file("packages/settings/src/normalize/settings.ts", [
+      'import { UnusedSettingExport } from "../schema/types.ts"',
+      "const normalize = raw => ({ fontSize: raw.fontSize, hint: UnusedSettingExport })",
+    ].join("\n")),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S1: unused exports and unconsulted settings survive the source split with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/settings#UnusedSettingExport\tpackages/settings/src/index.ts",
+    "before:unconsulted-setting\tfontSize\tpackages/settings/src/index.ts",
+    "split:unused-export\t@i-harness/settings#UnusedSettingExport\tpackages/settings/src/index.ts",
+    "split:unconsulted-setting\tfontSize\tpackages/settings/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => {
+      const files = settingsRelocationFixtureFiles(split)
+      return [...scanUnusedExports(files), ...scanUnconsultedSettings(files)]
+        .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`)
+    })
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S1: outside readers and the two existing settings domains remain real consumers",
+  expect: ["outside=0", "sections=0", "context=0"],
+  run() {
+    return [
+      ["outside", "packages/settings-consumer/src/index.ts"],
+      ["sections", "packages/settings/src/sections.ts"],
+      ["context", "packages/settings/src/context-subsystems.ts"],
+    ].map(([label, rel]) => {
+      const files = [...settingsRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import { UnusedSettingExport } from "@i-harness/settings"\nconst read = settings => settings.fontSize + UnusedSettingExport',
+      }]
+      return `${label}=${scanUnusedExports(files).length + scanUnconsultedSettings(files).length}`
+    })
+  },
+})
+
+function coreSessionRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/core-session/src/index.ts", [
+    "export interface RewindCut { cutFrom: number; markerSeq: number }",
+    "export function derivePruneSubstitutes(session) { return new Map() }",
+    "const deriveMessages = session => { const cuts: RewindCut[] = []; return derivePruneSubstitutes(session) }",
+  ].join("\n"))]
+  return [
+    file("packages/core-session/src/index.ts", [
+      'export type { RewindCut } from "./projection/rewind.ts"',
+      'export { derivePruneSubstitutes } from "./projection/pruning.ts"',
+    ].join("\n")),
+    file("packages/core-session/src/projection/rewind.ts", "export interface RewindCut { cutFrom: number; markerSeq: number }"),
+    file("packages/core-session/src/projection/pruning.ts", "export function derivePruneSubstitutes(session) { return new Map() }"),
+    file("packages/core-session/src/projection/messages.ts", [
+      'import type { RewindCut } from "./rewind.ts"',
+      'import { derivePruneSubstitutes } from "./pruning.ts"',
+      "const deriveMessages = session => { const cuts: RewindCut[] = []; return derivePruneSubstitutes(session) }",
+    ].join("\n")),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S2: original unused-export findings survive internal projection imports with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/core-session#RewindCut\tpackages/core-session/src/index.ts",
+    "before:unused-export\t@i-harness/core-session#derivePruneSubstitutes\tpackages/core-session/src/index.ts",
+    "split:unused-export\t@i-harness/core-session#RewindCut\tpackages/core-session/src/index.ts",
+    "split:unused-export\t@i-harness/core-session#derivePruneSubstitutes\tpackages/core-session/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(coreSessionRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S2: pre-existing Inbox and other unmapped modules remain real consumers",
+  expect: ["inbox=0", "other=0", "outside=0"],
+  run() {
+    return [
+      ["inbox", "packages/core-session/src/inbox.ts"],
+      ["other", "packages/core-session/src/other.ts"],
+      ["outside", "packages/core-session-consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...coreSessionRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import { derivePruneSubstitutes, type RewindCut } from "@i-harness/core-session"\nconst read = (session, cut: RewindCut) => derivePruneSubstitutes(session)',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function providerRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [
+    file("packages/provider/src/index.ts", [
+      "export interface ProviderModelContext { contextWindow?: number }",
+      "export interface ProbeRequest { signal?: AbortSignal }",
+      "const resolveContext = (context: ProviderModelContext) => context",
+      "const probe = (request: ProbeRequest) => request",
+    ].join("\n")),
+    file("packages/provider-runtime/src/index.ts", [
+      "export type ModelResolutionState = { status: string }",
+      "const resolve = (): ModelResolutionState => ({ status: 'ready' })",
+    ].join("\n")),
+  ]
+  return [
+    file("packages/provider/src/index.ts", 'export type { ProviderModelContext, ProbeRequest } from "./types.ts"'),
+    file("packages/provider/src/types.ts", [
+      "export interface ProviderModelContext { contextWindow?: number }",
+      "export interface ProbeRequest { signal?: AbortSignal }",
+    ].join("\n")),
+    file("packages/provider/src/catalog/context.ts", 'import type { ProviderModelContext } from "../types.ts"\nconst resolveContext = (context: ProviderModelContext) => context'),
+    file("packages/provider/src/probe/http.ts", 'import type { ProbeRequest } from "../types.ts"\nconst probe = (request: ProbeRequest) => request'),
+    file("packages/provider-runtime/src/index.ts", 'export type { ModelResolutionState } from "./types.ts"'),
+    file("packages/provider-runtime/src/types.ts", "export type ModelResolutionState = { status: string }"),
+    file("packages/provider-runtime/src/selection/choice.ts", 'import type { ModelResolutionState } from "../types.ts"\nconst resolve = (): ModelResolutionState => ({ status: "ready" })'),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S3: original provider/runtime findings survive internal imports with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/provider#ProviderModelContext\tpackages/provider/src/index.ts",
+    "before:unused-export\t@i-harness/provider#ProbeRequest\tpackages/provider/src/index.ts",
+    "before:unused-export\t@i-harness/provider-runtime#ModelResolutionState\tpackages/provider-runtime/src/index.ts",
+    "split:unused-export\t@i-harness/provider#ProviderModelContext\tpackages/provider/src/index.ts",
+    "split:unused-export\t@i-harness/provider#ProbeRequest\tpackages/provider/src/index.ts",
+    "split:unused-export\t@i-harness/provider-runtime#ModelResolutionState\tpackages/provider-runtime/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(providerRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S3: file host, media adapter and unmapped modules remain real consumers",
+  expect: ["file=0", "media=0", "provider-other=0", "runtime-other=0", "outside=0"],
+  run() {
+    return [
+      ["file", "packages/provider-runtime/src/file-runtime.ts"],
+      ["media", "packages/provider-runtime/src/video-audio.ts"],
+      ["provider-other", "packages/provider/src/other.ts"],
+      ["runtime-other", "packages/provider-runtime/src/other.ts"],
+      ["outside", "packages/provider-consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...providerRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import type { ProviderModelContext, ProbeRequest } from "@i-harness/provider"\nimport type { ModelResolutionState } from "@i-harness/provider-runtime"\nconst read = (context: ProviderModelContext, request: ProbeRequest, state: ModelResolutionState) => [context, request, state]',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S3: the registry and session runtime keep separate logical owners",
+  expect: ["provider-to-runtime=0", "runtime-to-provider=0"],
+  run() {
+    return [
+      ["provider-to-runtime", "provider-runtime", "packages/provider/src/clients/build.ts", "ModelResolutionState"],
+      ["runtime-to-provider", "provider", "packages/provider-runtime/src/selection/resolve.ts", "ProviderModelContext, ProbeRequest"],
+    ].map(([label, target, rel, names]) => {
+      const files = providerRelocationFixtureFiles(true).filter(file => file.rel.startsWith(`packages/${target}/`))
+      files.push({ rel, test: false, text: `import type { ${names} } from "@i-harness/${target}"` })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function openaiResponsesRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-openai/src/index.ts", [
+    "export interface OpenAIConfig { model: string }",
+    "const createClient = (config: OpenAIConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-openai/src/index.ts", 'export type { OpenAIConfig } from "./types.ts"'),
+    file("packages/llm-openai/src/types.ts", "export interface OpenAIConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-openai/src/${path}`, 'import type { OpenAIConfig } from "@i-harness/llm-openai"\nconst read = (config: OpenAIConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4a: Responses config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-openai#OpenAIConfig\tpackages/llm-openai/src/index.ts",
+    "split:unused-export\t@i-harness/llm-openai#OpenAIConfig\tpackages/llm-openai/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(openaiResponsesRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4a: affinity, unmapped modules, other protocols and outside readers remain independent",
+  expect: ["affinity=0", "unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["affinity", "packages/llm-openai/src/affinity.ts"],
+      ["unmapped", "packages/llm-openai/src/future.ts"],
+      ["other-protocol", "packages/llm-openai-compatible/src/index.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...openaiResponsesRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { OpenAIConfig } from "@i-harness/llm-openai"\nconst read = (config: OpenAIConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function openaiCompatibleRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-openai-compatible/src/index.ts", [
+    "export interface OpenAICompatibleConfig { model: string }",
+    "const createClient = (config: OpenAICompatibleConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-openai-compatible/src/index.ts", 'export type { OpenAICompatibleConfig } from "./types.ts"'),
+    file("packages/llm-openai-compatible/src/types.ts", "export interface OpenAICompatibleConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-openai-compatible/src/${path}`, 'import type { OpenAICompatibleConfig } from "@i-harness/llm-openai-compatible"\nconst read = (config: OpenAICompatibleConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4b: Chat config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-openai-compatible#OpenAICompatibleConfig\tpackages/llm-openai-compatible/src/index.ts",
+    "split:unused-export\t@i-harness/llm-openai-compatible#OpenAICompatibleConfig\tpackages/llm-openai-compatible/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(openaiCompatibleRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4b: unmapped modules, other protocols and outside readers remain independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-openai-compatible/src/future.ts"],
+      ["other-protocol", "packages/llm-openai/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...openaiCompatibleRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { OpenAICompatibleConfig } from "@i-harness/llm-openai-compatible"\nconst read = (config: OpenAICompatibleConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function anthropicRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-anthropic/src/index.ts", [
+    "export interface AnthropicConfig { model: string }",
+    "const createClient = (config: AnthropicConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-anthropic/src/index.ts", 'export type { AnthropicConfig } from "./types.ts"'),
+    file("packages/llm-anthropic/src/types.ts", "export interface AnthropicConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-anthropic/src/${path}`, 'import type { AnthropicConfig } from "@i-harness/llm-anthropic"\nconst read = (config: AnthropicConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4c: Anthropic config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-anthropic#AnthropicConfig\tpackages/llm-anthropic/src/index.ts",
+    "split:unused-export\t@i-harness/llm-anthropic#AnthropicConfig\tpackages/llm-anthropic/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(anthropicRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4c: future Anthropic modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-anthropic/src/future.ts"],
+      ["other-protocol", "packages/llm-openai/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...anthropicRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { AnthropicConfig } from "@i-harness/llm-anthropic"\nconst read = (config: AnthropicConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function geminiRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-gemini/src/index.ts", [
+    "export interface GeminiConfig { model: string }",
+    "const createClient = (config: GeminiConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-gemini/src/index.ts", 'export type { GeminiConfig } from "./types.ts"'),
+    file("packages/llm-gemini/src/types.ts", "export interface GeminiConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-gemini/src/${path}`, 'import type { GeminiConfig } from "@i-harness/llm-gemini"\nconst read = (config: GeminiConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4d: Gemini config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-gemini#GeminiConfig\tpackages/llm-gemini/src/index.ts",
+    "split:unused-export\t@i-harness/llm-gemini#GeminiConfig\tpackages/llm-gemini/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(geminiRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4d: future Gemini modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-gemini/src/future.ts"],
+      ["other-protocol", "packages/llm-anthropic/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...geminiRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { GeminiConfig } from "@i-harness/llm-gemini"\nconst read = (config: GeminiConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function bedrockRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-bedrock/src/index.ts", [
+    "export interface BedrockConfig { model: string }",
+    "const createClient = (config: BedrockConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-bedrock/src/index.ts", 'export type { BedrockConfig } from "./types.ts"'),
+    file("packages/llm-bedrock/src/types.ts", "export interface BedrockConfig { model: string }"),
+    ...["region.ts", "client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "stream/iterate.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-bedrock/src/${path}`, 'import type { BedrockConfig } from "@i-harness/llm-bedrock"\nconst read = (config: BedrockConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4e: Converse config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-bedrock#BedrockConfig\tpackages/llm-bedrock/src/index.ts",
+    "split:unused-export\t@i-harness/llm-bedrock#BedrockConfig\tpackages/llm-bedrock/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(bedrockRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4e: future Converse modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-bedrock/src/future.ts"],
+      ["other-protocol", "packages/llm-anthropic/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...bedrockRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { BedrockConfig } from "@i-harness/llm-bedrock"\nconst read = (config: BedrockConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function pluginRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const names = ["CascadeHandler", "GuardFn", "Listener", "WaterfallHandler"]
+  const declarations = names.map(name => `export interface ${name} { value: unknown }`).join("\n")
+  const reads = names.map(name => `const read${name} = (handler: ${name}) => handler`).join("\n")
+  if (!split) return [file("packages/core-plugin/src/index.ts", `${declarations}\n${reads}`)]
+  return [
+    file("packages/core-plugin/src/index.ts", `export type { ${names.join(", ")} } from "./types.ts"`),
+    file("packages/core-plugin/src/types.ts", declarations),
+    ...["redispatch.ts", "scope/types.ts", "scope/promise.ts", "scope/services.ts", "scope/listeners.ts",
+      "scope/waterfall.ts", "scope/cascade.ts", "scope/dispose.ts", "scope/create-scope.ts"].map(path =>
+      file(`packages/core-plugin/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S5: Plugin dispatch types retain the original owner boundary across every extracted module",
+  expect: [false, true].flatMap(split => ["CascadeHandler", "GuardFn", "Listener", "WaterfallHandler"]
+    .map(name => `${split ? "split" : "before"}:unused-export\t@i-harness/core-plugin#${name}\tpackages/core-plugin/src/index.ts`)),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(pluginRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S5: unmapped Plugin sources and external consumers stay independent; test-only reads do not wire exports",
+  expect: ["pre-existing=0", "future=0", "other-package=0", "outside=0", "test-only=4"],
+  run() {
+    return [
+      ["pre-existing", "packages/core-plugin/src/existing.ts", false],
+      ["future", "packages/core-plugin/src/scope/future.ts", false],
+      ["other-package", "packages/hooks/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/core-plugin/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = [...pluginRelocationFixtureFiles(true), {
+        rel, test, text: "const read = (a: CascadeHandler, b: GuardFn, c: Listener, d: WaterfallHandler) => [a, b, c, d]",
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function toolsRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declarations = "export interface ToolResult { output: unknown }\nexport interface SearchableTool { name: string }"
+  const reads = "const result = (a: ToolResult, b: SearchableTool) => [a, b]"
+  if (!split) return [file("packages/core-tools/src/index.ts", `${declarations}\n${reads}`)]
+  return [
+    file("packages/core-tools/src/index.ts", 'export type { ToolResult, SearchableTool } from "./types.ts"'),
+    file("packages/core-tools/src/types.ts", `${declarations}\n${reads}`),
+    ...["registry/catalog.ts", "registry/prepare.ts", "registry/dispatch.ts", "registry/finalize.ts",
+      "approval/identity.ts", "approval/arguments.ts", "approval/decision.ts"].map(path =>
+      file(`packages/core-tools/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S6: registry types retain complete original findings across every extracted module",
+  expect: [false, true].flatMap(split => ["ToolResult", "SearchableTool"].map(name => JSON.stringify({
+    split, finding: { kind: "unused-export", subject: `@i-harness/core-tools#${name}`, evidence: "packages/core-tools/src/index.ts" },
+  }))),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(toolsRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S6: pre-existing tools modules and outside readers remain independent; tests do not wire exports",
+  expect: ["schema=0", "observation=0", "context=0", "future=0", "other-package=0", "outside=0", "test-only=2"],
+  run() {
+    return [
+      ["schema", "packages/core-tools/src/json-schema.ts", false],
+      ["observation", "packages/core-tools/src/observation.ts", false],
+      ["context", "packages/core-tools/src/context-remaining.ts", false],
+      ["future", "packages/core-tools/src/registry/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/core-tools/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...toolsRelocationFixtureFiles(true), {
+      rel, test, text: "const use = (a: ToolResult, b: SearchableTool) => [a, b]",
+    }]).length}`)
+  },
+})
+
+function hooksRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface HookRegistryOptions { configPath?: string }"
+  const reads = "const use = (options: HookRegistryOptions) => options"
+  if (!split) return [file("packages/hooks/src/index.ts", `${declaration}\n${reads}`)]
+  return [
+    file("packages/hooks/src/index.ts", 'export type { HookRegistryOptions } from "./registry-types.ts"'),
+    file("packages/hooks/src/registry-types.ts", `${declaration}\n${reads}`),
+    ...["registry.ts", "configuration/load.ts", "configuration/validation.ts", "configuration/matchers.ts",
+      "execution/handlers.ts", "execution/permissions.ts", "execution/runtime.ts", "lifecycle/session.ts", "lifecycle/mount.ts"]
+      .map(path => file(`packages/hooks/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S7: moved registry contracts retain complete original findings across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/hooks#HookRegistryOptions", evidence: "packages/hooks/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(hooksRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S7: pre-existing Hooks owners and outside readers still count; test readers do not",
+  expect: ["types=0", "trust=0", "runner=0", "claude=0", "runtime=0", "transcript=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["types", "packages/hooks/src/types.ts", false],
+      ["trust", "packages/hooks/src/trust.ts", false],
+      ["runner", "packages/hooks/src/runner.ts", false],
+      ["claude", "packages/hooks/src/claude.ts", false],
+      ["runtime", "packages/hooks/src/claude-runtime.ts", false],
+      ["transcript", "packages/hooks/src/claude-transcript.ts", false],
+      ["future", "packages/hooks/src/lifecycle/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/hooks/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...hooksRelocationFixtureFiles(true), {
+      rel, test, text: "const use = (options: HookRegistryOptions) => options",
+    }]).length}`)
+  },
+})
+
+function supervisorRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface SupervisorDeps { connect(): void }"
+  const reads = "const use = (deps: SupervisorDeps) => deps"
+  const entry = file("packages/mcp-client/src/index.ts", 'export type { SupervisorDeps } from "./supervisor.ts"')
+  if (!split) return [entry, file("packages/mcp-client/src/supervisor.ts", `${declaration}\n${reads}`)]
+  return [
+    entry,
+    file("packages/mcp-client/src/supervisor.ts", `export type { SupervisorDeps } from "./supervisor/types.ts"\n${reads}`),
+    file("packages/mcp-client/src/supervisor/types.ts", `${declaration}\n${reads}`),
+    ...["status", "generation", "catalogue", "recovery", "disposal"]
+      .map(name => file(`packages/mcp-client/src/supervisor/${name}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S8: non-entry supervisor retains complete original findings across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/mcp-client#SupervisorDeps", evidence: "packages/mcp-client/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(supervisorRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S8: package entry and existing MCP owners remain independent; test readers do not wire exports",
+  expect: ["entry=0", "scheduler=0", "client=0", "bridge=0", "oauth=0", "oauth-callback=0", "resources=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["entry", "packages/mcp-client/src/index.ts", false],
+      ["scheduler", "packages/mcp-client/src/scheduler.ts", false],
+      ["client", "packages/mcp-client/src/client.ts", false],
+      ["bridge", "packages/mcp-client/src/bridge.ts", false],
+      ["oauth", "packages/mcp-client/src/oauth.ts", false],
+      ["oauth-callback", "packages/mcp-client/src/oauth-callback.ts", false],
+      ["resources", "packages/mcp-client/src/resources.ts", false],
+      ["future", "packages/mcp-client/src/supervisor/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/mcp-client/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = supervisorRelocationFixtureFiles(true)
+      const reads = "const use = (deps: SupervisorDeps) => deps"
+      const existing = files.find(file => file.rel === rel)
+      if (existing) existing.text += `\n${reads}`
+      else files.push({ rel, test, text: reads })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function persistenceCoordinatorRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface CoordinatorOptions { maxDelayMs?: number }"
+  const reads = "const use = (options: CoordinatorOptions) => options"
+  if (!split) return [file("packages/session-persistence/src/index.ts", `${declaration}\n${reads}`)]
+  return [
+    file("packages/session-persistence/src/index.ts", 'export type { CoordinatorOptions } from "./coordinator/types.ts"'),
+    file("packages/session-persistence/src/coordinator/types.ts", `${declaration}\n${reads}`),
+    ...["coordinator/load", "coordinator/ownership", "coordinator/documents", "coordinator/mutations", "coordinator/lifecycle", "format/registry", "format/validation"]
+      .map(path => file(`packages/session-persistence/src/${path}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S9: coordinator retains complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/session-persistence#CoordinatorOptions", evidence: "packages/session-persistence/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(persistenceCoordinatorRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S9: existing persistence owners remain independent; test readers do not wire exports",
+  expect: ["write-behind=0", "repair=0", "fork=0", "store-root=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["write-behind", "packages/session-persistence/src/write-behind.ts", false],
+      ["repair", "packages/session-persistence/src/repair.ts", false],
+      ["fork", "packages/session-persistence/src/fork.ts", false],
+      ["store-root", "packages/session-persistence/src/store-root.ts", false],
+      ["future", "packages/session-persistence/src/coordinator/future.ts", false],
+      ["other-package", "packages/session-executor/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/session-persistence/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = persistenceCoordinatorRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const use = (options: CoordinatorOptions) => options" })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function fileBackedQueryRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const names = ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"]
+  const declarations = names.map(name => `export interface ${name} { value: string }`).join("\n")
+  const reads = names.map(name => `const read${name} = (value: ${name}) => value`).join("\n")
+  const entry = file("packages/session-query/src/index.ts", `export type { ${names.join(", ")} } from "./file-backed.ts"`)
+  if (!split) return [entry, file("packages/session-query/src/file-backed.ts", `${declarations}\n${reads}`)]
+  return [
+    entry,
+    file("packages/session-query/src/file-backed.ts", `export type { ${names.join(", ")} } from "./file-backed/contracts.ts"\n${reads}`),
+    file("packages/session-query/src/file-backed/contracts.ts", `${declarations}\n${reads}`),
+    ...["database", "schema", "inspection", "index-refresh", "query"]
+      .map(name => file(`packages/session-query/src/file-backed/${name}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S10: non-entry file-backed query retains complete original findings across every extracted module",
+  expect: [false, true].flatMap(split => ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"].map(name => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/session-query#${name}`, evidence: "packages/session-query/src/index.ts",
+  } }))),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(fileBackedQueryRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S10: existing query and warning owners remain independent; test readers do not wire exports",
+  expect: ["entry=0", "warning=0", "tools=0", "future=0", "other-package=0", "outside=0", "test-only=3"],
+  run() {
+    return [
+      ["entry", "packages/session-query/src/index.ts", false],
+      ["warning", "packages/session-query/src/warning.ts", false],
+      ["tools", "packages/session-query/src/tools.ts", false],
+      ["future", "packages/session-query/src/file-backed/future.ts", false],
+      ["other-package", "packages/session-persistence/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/session-query/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = fileBackedQueryRelocationFixtureFiles(true)
+      const reads = ["SessionQueryError", "FileBackedQueryOptions", "InspectOutcome"]
+        .map(name => `const read${name} = (value: ${name}) => value`).join("\n")
+      const existing = files.find(file => file.rel === rel)
+      if (existing) existing.text += `\n${reads}`
+      else files.push({ rel, test, text: reads })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+
+function compactionRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface CompactionEngine { compact(): Promise<void> }"
+  const reads = "const read = (engine: CompactionEngine) => engine"
+  if (!split) return [file("packages/compaction/src/index.ts", declaration + "\n" + reads)]
+  return [
+    file("packages/compaction/src/index.ts", declaration),
+    ...["engine/contracts", "engine/admission", "engine/prune", "engine/summary", "engine/commit", "projection/shadowed", "projection/window"]
+      .map(path => file("packages/compaction/src/" + path + ".ts", reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S11: compaction keeps the complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/compaction#CompactionEngine", evidence: "packages/compaction/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(compactionRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S11: original compaction leaves remain independent; test-only readers do not wire exports",
+  expect: ["config=0", "region=0", "slices=0", "summarizer=0", "tokens=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["config", "packages/compaction/src/config.ts", false],
+      ["region", "packages/compaction/src/region.ts", false],
+      ["slices", "packages/compaction/src/slices.ts", false],
+      ["summarizer", "packages/compaction/src/summarizer.ts", false],
+      ["tokens", "packages/compaction/src/tokens.ts", false],
+      ["future", "packages/compaction/src/engine/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/compaction/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = compactionRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const read = (engine: CompactionEngine) => engine" })
+      return label + "=" + scanUnusedExports(files).length
+    })
+  },
+})
+
+function shellRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface ShellToolDeps { cwd?: string }"
+  const reads = "const read = (deps: ShellToolDeps) => deps"
+  if (!split) return [file("packages/shell/src/index.ts", declaration + "\n" + reads)]
+  return [
+    file("packages/shell/src/index.ts", 'export type { ShellToolDeps } from "./types.ts"'),
+    file("packages/shell/src/types.ts", declaration),
+    ...["discovery/windows", "discovery/environment", "command/resolve", "command/argv", "command/identity", "tools/policy", "tools/background", "tools/retention", "tools/foreground", "tools/selected", "tools/registration"]
+      .map(path => file("packages/shell/src/" + path + ".ts", reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S12: Shell retains the complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/shell#ShellToolDeps", evidence: "packages/shell/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(shellRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S12: unmapped Shell and external readers remain independent; tests do not wire exports",
+  expect: ["future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["future", "packages/shell/src/discovery/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/shell/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = shellRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const read = (deps: ShellToolDeps) => deps" })
+      return label + "=" + scanUnusedExports(files).length
+    })
+  },
+})
+
+function execRelocationFixtureFiles(split, unit) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const service = unit === EXEC_SERVICE_SOURCE_UNIT
+  const original = service ? "service" : "execution-supervisor"
+  const contract = service ? "capture/contracts" : "supervision/contracts"
+  const name = service ? "ServiceOwnedValue" : "SupervisorOwnedValue"
+  const declaration = `export interface ${name} { value: string }`
+  const reads = `const read = (value: ${name}) => value`
+  const entry = file("packages/exec/src/index.ts", `export type { ${name} } from "./${original}.ts"`)
+  if (!split) return [entry, file(`packages/exec/src/${original}.ts`, declaration + "\n" + reads)]
+  return [entry,
+    file(`packages/exec/src/${original}.ts`, `export type { ${name} } from "./${contract}.ts"`),
+    file(`packages/exec/src/${contract}.ts`, declaration),
+    ...[...unit].filter(rel => rel !== `packages/exec/src/${original}.ts` && rel !== `packages/exec/src/${contract}.ts`)
+      .map(rel => file(rel, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S13: service and supervisor findings survive source-only extraction with complete original evidence",
+  expect: ["ServiceOwnedValue", "SupervisorOwnedValue"].flatMap(name => [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/exec#${name}`, evidence: "packages/exec/src/index.ts",
+  } }))),
+  run() {
+    return [EXEC_SERVICE_SOURCE_UNIT, EXEC_SUPERVISOR_SOURCE_UNIT].flatMap(unit => [false, true]
+      .flatMap(split => scanUnusedExports(execRelocationFixtureFiles(split, unit)).map(finding => JSON.stringify({ split, finding }))))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S13: original Exec owners, public entry and external readers remain independent; test-only reads do not wire exports",
+  expect: ["service", "supervisor"].flatMap(unit => ["other-owner=0", "entry=0", "admission=0", "spill=0", "retained=0", "caller=0", "backend=0", "future=0", "outside=0", "test-only=1"].map(result => `${unit}:${result}`)),
+  run() {
+    return [EXEC_SERVICE_SOURCE_UNIT, EXEC_SUPERVISOR_SOURCE_UNIT].flatMap(unit => {
+      const service = unit === EXEC_SERVICE_SOURCE_UNIT
+      const name = service ? "ServiceOwnedValue" : "SupervisorOwnedValue"
+      return [
+        ["other-owner", service ? "packages/exec/src/supervision/retirement.ts" : "packages/exec/src/capture/output.ts", false],
+        ["entry", "packages/exec/src/index.ts", false],
+        ["admission", "packages/exec/src/execution-admission.ts", false],
+        ["spill", "packages/exec/src/spill.ts", false],
+        ["retained", "packages/exec/src/retained-output.ts", false],
+        ["caller", "packages/exec/src/caller-scope.ts", false],
+        ["backend", "packages/exec/src/backends/fake.ts", false],
+        ["future", "packages/exec/src/supervision/future.ts", false],
+        ["outside", "apps/consumer/src/index.ts", false],
+        ["test-only", "packages/exec/test/consumer.test.ts", true],
+      ].map(([label, rel, test]) => {
+        const files = execRelocationFixtureFiles(true, unit)
+        const text = `const read = (value: ${name}) => value`
+        const existing = files.find(file => file.rel === rel)
+        if (existing) existing.text += "\n" + text
+        else files.push({ rel, test, text })
+        return `${service ? "service" : "supervisor"}:${label}=` + scanUnusedExports(files).length
+      })
+    })
+  },
+})
+
+function coreAgentRelocationFixtureFiles(split, unit) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const agent = unit === CORE_AGENT_SOURCE_UNIT
+  const owner = agent ? "index" : "execute-tool-calls"
+  const contract = agent ? "agent/types" : "tool-batch/types"
+  const name = agent ? "AgentOwnedValue" : "BatchOwnedValue"
+  const declaration = `export interface ${name} { value: string }`
+  const reads = `const read = (value: ${name}) => value`
+  const entry = file("packages/core-agent/src/index.ts", `export type { ${name} } from "./${agent ? contract : owner}.ts"`)
+  if (!split) return agent ? [file(entry.rel, declaration + "\n" + reads)] : [entry, file(`packages/core-agent/src/${owner}.ts`, declaration + "\n" + reads)]
+  return [entry,
+    ...(!agent ? [file(`packages/core-agent/src/${owner}.ts`, `export type { ${name} } from "./${contract}.ts"`)] : []),
+    file(`packages/core-agent/src/${contract}.ts`, declaration),
+    ...[...unit].filter(rel => rel !== `packages/core-agent/src/${owner}.ts` && rel !== `packages/core-agent/src/${contract}.ts`)
+      .map(rel => file(rel, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S17: agent and batch findings retain complete original evidence before and after extraction",
+  expect: ["AgentOwnedValue", "BatchOwnedValue"].flatMap(name => [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/core-agent#${name}`, evidence: "packages/core-agent/src/index.ts",
+  } }))),
+  run() {
+    return [CORE_AGENT_SOURCE_UNIT, CORE_AGENT_BATCH_SOURCE_UNIT].flatMap(unit => [false, true]
+      .flatMap(split => scanUnusedExports(coreAgentRelocationFixtureFiles(split, unit)).map(finding => JSON.stringify({ split, finding }))))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S17: each extracted descendant belongs to exactly its original source owner",
+  expect: ["agent:unique", "batch:unique"],
+  run() {
+    return [["agent", CORE_AGENT_SOURCE_UNIT, "packages/core-agent/src/index.ts"], ["batch", CORE_AGENT_BATCH_SOURCE_UNIT, "packages/core-agent/src/execute-tool-calls.ts"]]
+      .map(([label, unit, owner]) => `${label}:` + ([...unit].every(rel => declarationOwner(rel) === owner && !(unit === CORE_AGENT_SOURCE_UNIT ? CORE_AGENT_BATCH_SOURCE_UNIT : CORE_AGENT_SOURCE_UNIT).has(rel)) ? "unique" : "wrong"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S17: other original owner, executor and outside readers stay independent; test-only reads do not wire exports",
+  expect: ["agent", "batch"].flatMap(unit => ["other-owner=0", "executor=0", "future=0", "outside=0", "test-only=1"].map(result => `${unit}:${result}`)),
+  run() {
+    return [CORE_AGENT_SOURCE_UNIT, CORE_AGENT_BATCH_SOURCE_UNIT].flatMap(unit => {
+      const agent = unit === CORE_AGENT_SOURCE_UNIT
+      const name = agent ? "AgentOwnedValue" : "BatchOwnedValue"
+      return [
+        ["other-owner", agent ? "packages/core-agent/src/tool-batch/dispatch.ts" : "packages/core-agent/src/agent/turn.ts", false],
+        ["executor", "packages/core-agent/src/executor.ts", false],
+        ["future", agent ? "packages/core-agent/src/agent/future.ts" : "packages/core-agent/src/tool-batch/future.ts", false],
+        ["outside", "packages/session-executor/src/service.ts", false],
+        ["test-only", "packages/core-agent/test/consumer.test.ts", true],
+      ].map(([label, rel, test]) => {
+        const files = coreAgentRelocationFixtureFiles(true, unit)
+        files.push({ rel, test, text: `const read = (value: ${name}) => value` })
+        return `${agent ? "agent" : "batch"}:${label}=` + scanUnusedExports(files).length
+      })
+    })
+  },
+})
+
+function llmSeamErrorFixture(split) {
+  const name = "SeamOwnedValue", reads = `const read = (value: ${name}) => value`
+  const declaration = `export interface ${name} { value: string }`
+  const entry = "packages/llm-seam/src/index.ts"
+  return split ? [
+    { rel: entry, test: false, text: `export type { ${name} } from "./provider-error/types.ts"` },
+    { rel: "packages/llm-seam/src/provider-error/types.ts", test: false, text: declaration },
+    ...[...LLM_SEAM_ERROR_SOURCE_UNIT].filter(rel => rel !== entry && !rel.endsWith("types.ts")).map(rel => ({ rel, test: false, text: reads })),
+  ] : [{ rel: entry, test: false, text: declaration + "\n" + reads }]
+}
+SELF_TEST_CASES.push({
+  name: "reliability: llm-seam internal error reads preserve the original finding across extraction",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: { kind: "unused-export", subject: "@i-harness/llm-seam#SeamOwnedValue", evidence: "packages/llm-seam/src/index.ts" } })),
+  run() { return [false, true].flatMap(split => scanUnusedExports(llmSeamErrorFixture(split)).map(finding => JSON.stringify({ split, finding }))) },
+})
+SELF_TEST_CASES.push({
+  name: "reliability: exact llm-seam error descendants retain their original owner",
+  expect: [...LLM_SEAM_ERROR_SOURCE_UNIT].map(rel => `${rel}:packages/llm-seam/src/index.ts`),
+  run() { return [...LLM_SEAM_ERROR_SOURCE_UNIT].map(rel => `${rel}:${declarationOwner(rel)}`) },
+})
+SELF_TEST_CASES.push({
+  name: "reliability: future seam modules and adapters remain consumers, tests cannot retire a finding",
+  expect: ["future=0", "adapter=0", "outside=0", "test-only=1"],
+  run() { return [
+    ["future", "packages/llm-seam/src/provider-error/future.ts", false],
+    ["adapter", "packages/llm-bedrock/src/client.ts", false],
+    ["outside", "packages/core-agent/src/index.ts", false],
+    ["test-only", "packages/llm-seam/test/reader.test.ts", true],
+  ].map(([label, rel, test]) => `${label}=` + scanUnusedExports([...llmSeamErrorFixture(true), { rel, test, text: "const read = (value: SeamOwnedValue) => value" }]).length) },
+})
+
+function teamSchedulerRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface SchedulerOwnedValue { value: string }"
+  const reads = "const read = (value: SchedulerOwnedValue) => value"
+  return [
+    file("packages/agent-team/src/index.ts", 'export type { SchedulerOwnedValue } from "./scheduler.ts"'),
+    file("packages/agent-team/src/scheduler.ts", declaration + (split ? "" : "\n" + reads)),
+    ...(split ? [...TEAM_SCHEDULER_SOURCE_UNIT].filter(rel => rel !== "packages/agent-team/src/scheduler.ts").map(rel => file(rel, reads)) : []),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S19: original and split scheduler retain the complete original finding object",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/agent-team#SchedulerOwnedValue", evidence: "packages/agent-team/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(teamSchedulerRelocationFixtureFiles(split)).map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S19: every exact scheduler descendant shares only its original source owner",
+  expect: [...TEAM_SCHEDULER_SOURCE_UNIT].map(rel => `${rel}:packages/agent-team/src/scheduler.ts`),
+  run() { return [...TEAM_SCHEDULER_SOURCE_UNIT].map(rel => `${rel}:${declarationOwner(rel)}`) },
+})
+
+SELF_TEST_CASES.push({
+  name: "S19: existing team owners and external readers remain independent; tests do not wire exports",
+  expect: ["entry=0", "types=0", "fold=0", "transact=0", "roster=0", "mailbox=0", "task-board=0", "activity=0", "tools=0", "agent-path=0", "future=0", "subagent=0", "executor=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ...["index", "types", "fold", "transact", "roster", "mailbox", "task-board", "activity", "tools", "agent-path"].map(name => [name === "index" ? "entry" : name, `packages/agent-team/src/${name}.ts`, false]),
+      ["future", "packages/agent-team/src/scheduler/future.ts", false],
+      ["subagent", "packages/subagent/src/child.ts", false],
+      ["executor", "packages/session-executor/src/assembly.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/agent-team/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = teamSchedulerRelocationFixtureFiles(true)
+      const text = "const read = (value: SchedulerOwnedValue) => value"
+      const existing = files.find(file => file.rel === rel)
+      if (existing) existing.text += "\n" + text
+      else files.push({ rel, test, text })
+      return `${label}=` + scanUnusedExports(files).length
+    })
+  },
 })
 
 // The five cases below were added by M1's fix wave (final whole-branch review,

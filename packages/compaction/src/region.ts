@@ -1,6 +1,7 @@
-import type { Session, SessionEvent } from "@i-harness/core-session"
+import type { SessionView as Session, SessionEventView as SessionEvent } from "@i-harness/core-session"
 import { deriveSearchText } from "@i-harness/core-session"
 import { approxTokens } from "./tokens.ts"
+import { activeEvents } from "./projection/shadowed.ts"
 
 function isCompactionMarker(ev: SessionEvent): boolean {
   // M20 fix round 1: a pure reset is also a compaction marker — it must never
@@ -112,7 +113,7 @@ export function walkOffToolEvents(session: Session, index: number): number {
  * `deriveMessages` folds it with). `POSITIVE_INFINITY` when the log holds no
  * such call at all, so a result nothing opened constrains no cut (see the
  * walk's docstring). */
-function callIndexOf(events: SessionEvent[], at: number, callId: string): number {
+function callIndexOf(events: readonly SessionEvent[], at: number, callId: string): number {
   for (let i = at - 1; i >= 0; i--) {
     const ev = events[i]!
     if (ev.type === "tool/call" && ev.callId === callId) return i
@@ -125,6 +126,7 @@ function callIndexOf(events: SessionEvent[], at: number, callId: string): number
 // budget shadows everything except markers; a budget covering the whole
 // session shadows nothing.
 export function selectShadowableRange(session: Session, retainTokens: number): number[] {
+  session = { ...session, events: activeEvents(session) }
   const shadowed: number[] = []
   if (retainTokens <= 0) {
     for (const ev of session.events) {

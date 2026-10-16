@@ -1,4 +1,5 @@
-import type { ModelClient } from "@i-harness/llm-seam"
+import type { ModelClient, ReasoningEffort } from "@i-harness/llm-seam"
+import type { ContextBindingMetadata } from "@i-harness/core-session"
 import { resolveModelContext, type ProviderProfile } from "@i-harness/provider"
 
 // M33 §3: model-free prune pass options. `false` (explicit) turns the whole
@@ -21,6 +22,11 @@ export interface ModelCompactionPolicy {
   thresholdRatio?: number
   retainTokens?: number
   maxTokens?: number
+  summaryMaxOutputTokens?: number
+  summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
+  summaryMetadata?: ContextBindingMetadata
+  summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
   auto?: boolean
 }
@@ -30,6 +36,13 @@ export interface CompactionConfig {
   thresholdRatio?: number
   retainTokens?: number
   maxTokens?: number
+  /** Independent summary wire ceiling; maxTokens remains retained text size. */
+  summaryMaxOutputTokens?: number
+  /** Limits resolved for an explicitly selected summary client, never the main client. */
+  summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
+  summaryMetadata?: ContextBindingMetadata
+  summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
   auto?: boolean
   // M34 ⑦c: summary quality floor — the summarizer output (trimmed) must
@@ -89,6 +102,12 @@ export interface ResolvedCompactionConfig {
   thresholdRatio: number
   retainTokens: number
   maxTokens: number
+  summaryMaxOutputTokens: number
+  summaryOutputCapExplicit: boolean
+  summaryLimits?: { contextWindow?: number; maxOutputTokens?: number }
+  summaryBudgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
+  summaryMetadata?: ContextBindingMetadata
+  summaryReasoningEffort?: ReasoningEffort
   summarizationModel?: ModelClient
   auto: boolean
   overheadTokens: number
@@ -116,6 +135,10 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
     throw new Error(`compaction: maxTokens must be a positive integer (got ${maxTokens})`)
   }
   const minSummaryChars = config.minSummaryChars ?? 500
+  const summaryMaxOutputTokens = config.summaryMaxOutputTokens ?? 4096
+  for (const [name, value] of [["summaryMaxOutputTokens", summaryMaxOutputTokens], ["summaryLimits.contextWindow", config.summaryLimits?.contextWindow], ["summaryLimits.maxOutputTokens", config.summaryLimits?.maxOutputTokens]] as const) {
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 1)) throw new Error(`compaction: ${name} must be a positive safe integer`)
+  }
   if (!Number.isInteger(minSummaryChars) || minSummaryChars < 1) {
     throw new Error(`compaction: minSummaryChars must be a positive integer (got ${minSummaryChars})`)
   }
@@ -142,6 +165,12 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
     thresholdRatio,
     retainTokens,
     maxTokens,
+    summaryMaxOutputTokens,
+    summaryOutputCapExplicit: config.summaryMaxOutputTokens !== undefined,
+    summaryLimits: config.summaryLimits,
+    summaryBudgetBinding: config.summaryBudgetBinding,
+    summaryMetadata: config.summaryMetadata,
+    summaryReasoningEffort: config.summaryReasoningEffort,
     auto,
     summarizationModel: config.summarizationModel,
     overheadTokens,
@@ -187,6 +216,11 @@ export function resolveCompactSpec(
     thresholdRatio: policy.thresholdRatio ?? config.thresholdRatio,
     retainTokens: policy.retainTokens ?? config.retainTokens,
     maxTokens: policy.maxTokens ?? config.maxTokens,
+    summaryMaxOutputTokens: policy.summaryMaxOutputTokens ?? config.summaryMaxOutputTokens,
+    summaryLimits: policy.summaryLimits ?? config.summaryLimits,
+    summaryBudgetBinding: policy.summaryBudgetBinding ?? config.summaryBudgetBinding,
+    summaryMetadata: policy.summaryMetadata ?? config.summaryMetadata,
+    summaryReasoningEffort: policy.summaryReasoningEffort ?? config.summaryReasoningEffort,
     summarizationModel: policy.summarizationModel ?? config.summarizationModel,
     auto: policy.auto ?? config.auto,
   })

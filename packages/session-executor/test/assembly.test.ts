@@ -13,7 +13,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
     if (Date.now() >= deadline) throw new Error("waitFor: condition not met within budget")
   }
 }
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, copyConversationData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -73,7 +73,7 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
 describe("createSessionAssembly", () => {
   it("owns live child observation and closes it once before discarding children", async () => {
     const root = await mkdtemp(join(tmpdir(), "assembly-child-observation-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
     await coordinator.create({ sessionId: "observed-root" })
     const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock" })
     const changes: string[] = []
@@ -85,13 +85,14 @@ describe("createSessionAssembly", () => {
       const live = assembly.liveChildSession!(row.sessionId!)!
       expect(live).toBeDefined()
       const before = changes.length
-      append(live, { type: "tool/result", name: "controlled", callId: "controlled-result", output: "unflushed" })
+      const childDocument=await coordinator.openManagedDocument(row.sessionId!)
+      await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})
       expect(changes.length).toBe(before + 1)
       expect(changes.at(-1)).toBe("changed")
       await assembly.dispose()
       expect(assembly.liveChildSession!(row.sessionId!)).toBeUndefined()
       expect(changes.at(-1)).toBe("closed")
-      append(live, { type: "user/message", text: "after disposal" })
+      expect(await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})).toEqual({kind:'not-issued',code:'FACT_CLOSED'})
       expect(changes.filter(kind => kind === "closed")).toHaveLength(1)
       expect(changes.at(-1)).toBe("closed")
     } finally { await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
@@ -352,7 +353,7 @@ describe("createSessionAssembly", () => {
         { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
         { role: "assistant", text: "second done" },
       ]),
-      compact: { contextWindow: 100, auto: true }, autoCompactionEnabled: () => enabled,
+      compact: { contextWindow: 20000, thresholdRatio: .01, auto: true }, autoCompactionEnabled: () => enabled,
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -380,7 +381,7 @@ describe("createSessionAssembly", () => {
       ]),
       // No `contextWindow` here — the window arrives ONLY in the config, which is
       // exactly how the CLI now supplies it.
-      compact: { contextWindow: 100, auto: true },
+      compact: { contextWindow: 20000, thresholdRatio: .01, auto: true },
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -392,28 +393,29 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("does not duplicate persistence for a host-owned session", async () => {
+  it("attaches only the actual owner or an explicit detached import and saves each continuation once", async () => {
     const mirrored: SessionEvent[] = []
-    const coordinator = {
-      enqueue: (_sessionId: string, events: SessionEvent[]) => { mirrored.push(...events) },
-      flush: async (_sessionId: string) => {},
-    } as unknown as SessionCoordinator
+    const root=await mkdtemp(join(tmpdir(),'ih-f1-explicit-attachment-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
     const sessionId = "mirror-session"
+    await coordinator.create({sessionId})
     const session = createSession((ev) => {
       mirrored.push(ev)
     })
+    await expect(createSessionAssembly({workspace:root,sessionId,session,coordinator,modelPolicy:'test-mock'})).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       sessionId,
-      session,
+      detachedSession:session,
       coordinator,
       model: createMockClient([{ role: "assistant", text: "ok" }]),
     })
     try {
       await assembly.agent.run("hello")
-      expect(mirrored).toEqual(session.events)
+      expect(mirrored).toEqual([])
+      expect((await backend.read(sessionId)).events).toEqual(assembly.session.events)
+      expect(assembly.session.events.map(event=>event.seq)).toEqual(assembly.session.events.map((_,index)=>index))
     } finally {
-      await assembly.dispose()
+      await assembly.dispose();await coordinator.close()
     }
   }, 30_000)
 })
@@ -580,6 +582,22 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 // assignment reaches THOSE six: they already hold this same object, so none of
 // them is ever re-wired.
 describe("createSessionAssembly — the model handle (R-B1)", () => {
+  it("a preparation keeps its selected client after the stable handle rebinds",async()=>{
+    const first=capturingModel(),second=capturingModel()
+    const dir=mkdtempSync(join(tmpdir(),"ih-prepared-handle-"))
+    const assembly=await createSessionAssembly({workspace:dir,model:first})
+    try {
+      const prepared=await assembly.model.prepare!({systemPrompt:"frozen",messages:[],tools:[]})
+      assembly.setModel(second)
+      for await(const _event of prepared.withOutputCap(4096).stream()){}
+      expect(first.requests).toHaveLength(1)
+      expect(first.requests[0]).toMatchObject({systemPrompt:"frozen",maxOutputTokens:4096})
+      expect(second.requests).toHaveLength(0)
+      const rebound=await assembly.model.prepare!({systemPrompt:"next",messages:[],tools:[]})
+      for await(const _event of rebound.stream()){}
+      expect(second.requests).toHaveLength(1)
+    }finally{await assembly.dispose()}
+  })
   it("a rebound model reaches the handle, and the turn loop reads through it", async () => {
     // The design said "two consumers, one change covers both"; measured, the
     // grouping is in the block header above. This test pins the handle itself
@@ -704,27 +722,11 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
  * packages/agent-team/test/lifecycle.test.ts:515 (`const coordinator = {`
  * … `as unknown as SessionCoordinator` at :533): a coordinator double, NOT a
  * model client — the recorder shapes above are untouched. */
-function memoryCoordinator(): SessionCoordinator {
-  const events = new Map<string, SessionEvent[]>()
-  return {
-    create: async (meta?: { sessionId?: string }) => {
-      const id = meta?.sessionId ?? `mem-${events.size}`
-      events.set(id, [])
-      return { id }
-    },
-    append: async (sessionId: string, evs: SessionEvent[]) => { events.get(sessionId)?.push(...evs) },
-    enqueue: (sessionId: string, evs: SessionEvent[]) => {
-      const list = events.get(sessionId) ?? []
-      list.push(...evs)
-      events.set(sessionId, list)
-    },
-    load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(events.get(sessionId) ?? [])] } }),
-    list: async () => [...events.keys()],
-    flush: async () => {},
-    close: async () => {},
-    putDocument: async () => {},
-    getDocument: async () => undefined,
-  } as unknown as SessionCoordinator
+async function memoryCoordinator(): Promise<SessionCoordinator> {
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-assembly-team-'))
+  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await coordinator.create({sessionId:'lead-1'})
+  return coordinator
 }
 
 describe("createSessionAssembly — every handle-reachable holder follows a rebind (Task 2, R-B1)", () => {
@@ -886,7 +888,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
   }, 30_000)
 
   it("holder 5c — a team-mate's first turn inherits the rebound client", async () => {
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const first = capturingModel()
     const second = scriptedModel([
       { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
@@ -914,6 +916,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
       // subject is the TEAMMATE's request — only a teammate turn carries the
       // teammate role's prompt.
       await assembly.agent.run("use the team")
+      expect(assembly.session.events.find(event => event.type === "tool/result" && event.name === "spawn_teammate")).not.toMatchObject({ isError: true })
       await waitFor(() => second.requests.some((r) => r.systemPrompt.includes("You are a teammate in an agent team.")))
       expect(first.requests).toHaveLength(0)
     } finally {
@@ -1254,7 +1257,7 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
  * assert the SAME reason on the channel it travels. Returns the string
  * "undefined" when no such result exists, so a missing result fails the match
  * instead of raising a shape error. */
-function toolErrorOf(events: SessionEvent[], name: string): string {
+function toolErrorOf(events: readonly SessionEventView[], name: string): string {
   const result = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
     e.type === "tool/result" && e.name === name)
   return String((result?.output as { error?: string } | undefined)?.error)
@@ -1398,7 +1401,7 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     })
     try {
       const run = await assembly.agent.run("start")
-      return { run, events: [...assembly.session.events] }
+      return { run, events: copyConversationData(assembly.session.events) }
     } finally {
       await assembly.dispose()
     }
@@ -1534,7 +1537,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
       sessionId: "s1",
       approveAll: true,
       model,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
     })
     try {
@@ -1638,7 +1641,7 @@ describe("createSessionAssembly — the session's budget reaches its children (M
 // 3619 and not 4_242), while the `opts.compact?.contextWindow` form is what
 // nothing above can see: the fixture passes the SAME window to both keys
 // (`:144-145`). Hence the DECOY PAIR in
-// every fixture below: `contextWindow: 8_000` sits beside
+// every fixture below: `contextWindow: 12_000` sits beside
 // `maxOutputTokens: 100_000`, and each assertion reads the number the WINDOW
 // half carried, so a swap MOVES it. The two fixtures whose sites can also swap
 // to `opts.compact?.contextWindow` carry a THIRD, again distinct decoy
@@ -1720,9 +1723,10 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
     const assembly = await createSessionAssembly({
       workspace: dir,
       model: client,
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       guardian: {}, // no `model` → the reviewer inherits → the gate's TRUE arm
     })
     try {
@@ -1741,7 +1745,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // `opts.maxOutputTokens`, or `opts.compact?.contextWindow` — puts a
       // different number here and reds. At the M73 fixtures' 200 000 window
       // this assertion could not tell the two keys apart at all.
-      expect(reviewed[0]!.budget?.contextWindow).toBe(8_000)
+      expect(reviewed[0]!.budget?.contextWindow).toBe(12_000)
       // Secondary, the wire half: the cap the reviewer's OWN request carries is
       // that 100_000 clamped against the window, so the request is a second
       // witness that the window reached this child (with no window it would be
@@ -1798,16 +1802,17 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
   // hop 2 (`assembly.ts:1182`) + hop 3 (`agent-team/src/scheduler.ts:221`).
   it("hop 2+3: a TEAMMATE's budget carries the session's WINDOW, not its cap", async () => {
     agentCalls.deps.length = 0
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const model = teamLeadModel()
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model,
       approveAll: true,
       team: {},
-      contextWindow: 8_000,
+      contextWindow: 12_000,
       maxOutputTokens: 100_000,
-      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      autoCompactionEnabled: () => false,
+      compact: { contextWindow: 4_000, auto: false }, // the third decoy (see the block header)
       // The team's spawn path REQUIRES durable child sessions (roster.ts), which
       // the assembly wires only when BOTH are present — holder 5c's shape (:854).
       sessionId: "lead-1",
@@ -1821,7 +1826,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       // The decoy set again: a swap at EITHER hop (the assembly's literal, or
       // the scheduler's) makes this read 100_000, and one to the compact
       // config's window reads 4_000.
-      expect(teammates[0]!.budget?.contextWindow).toBe(8_000)
+      expect(teammates[0]!.budget?.contextWindow).toBe(12_000)
       // …and the observed child is one that really RAN: its own request carries
       // the cap clamped against that window (100_000 reaches the wire verbatim
       // only where the window is wide enough for it).

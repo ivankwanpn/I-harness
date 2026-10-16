@@ -1,5 +1,6 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { append, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
+import { createJobFacts } from './job-facts.ts'
 import type { JobRegistry, JobStatus, JobSnapshot } from "./jobs.ts"
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { RoleRegistry, SubagentRole } from "./roles.ts"
@@ -9,6 +10,8 @@ export interface DurableAgentEntry {
   status: ChildStatus
   finalText?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   sessionId?: string
@@ -63,7 +66,8 @@ export interface SubagentPersistence {
   // caller that omits it — the CLI headless path — gets zero new events
   // (additive-only, zero behavior change). Deliberately NOT `registerSubagent`
   // defaulted from opts.parentSession (the CLI would suddenly log job events).
-  parentSession?: Session
+  parentSession?: SessionView
+  factOwner?: FactOwner
 }
 
 export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry }): SubagentStateSnapshot {
@@ -86,6 +90,8 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     status: e.status,
     ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
     ...(e.error !== undefined ? { error: e.error } : {}),
+    ...(e.retention !== undefined ? { retention: e.retention } : {}),
+    ...(e.retentionError !== undefined ? { retentionError: e.retentionError } : {}),
     mailbox: e.mailbox,
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
@@ -129,6 +135,8 @@ export function restoreState(
       controller: new AbortController(),
       ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
       ...(wasRunning || entry.error !== undefined ? { error: wasRunning ? "interrupted by resume" : entry.error } : {}),
+      ...(entry.retention !== undefined ? { retention: entry.retention } : {}),
+      ...(entry.retentionError !== undefined ? { retentionError: entry.retentionError } : {}),
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
@@ -166,7 +174,7 @@ export function restoreState(
 function createSessionFromEmpty() {
   // Minimal Session shape (formatVersion + events); callers only need a
   // non-null session object on restored entries.
-  return { formatVersion: 1, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
+  return { formatVersion: CURRENT_FORMAT_VERSION, events: [] as unknown[] } as unknown as ReturnType<typeof import("@i-harness/core-session").createSession>
 }
 
 // Task 4.4: a real transition observer — called with the post-change snapshot
@@ -176,7 +184,7 @@ export type JobTransitionObserver = (job: JobSnapshot) => void
 // Task 4.4: the additive `job/status` event (core-session SessionEvent,
 // registered in session-persistence's load gate). Whole-job snapshot per
 // event so a consumer folds last-wins by jobId (the goal/change pattern).
-function jobStatusEvent(job: JobSnapshot): SessionEvent {
+function jobStatusEvent(job: JobSnapshot): Extract<SessionEvent, { type: 'job/status' }> {
   return {
     type: "job/status",
     version: 1,
@@ -261,12 +269,17 @@ export function emitRestoredJobTransitions(
   persist: SubagentPersistence,
   snap: SubagentStateSnapshot,
   jobs: JobRegistry,
+  observe?: JobTransitionObserver,
 ): void {
   if (persist.parentSession === undefined) return
   for (const rec of snap.jobs) {
     if (rec.status !== "running") continue
     const view = jobs.read(rec.id)
-    append(persist.parentSession, jobStatusEvent(view))
+    if (observe) observe(view)
+    else {
+      if (!isNondurableSession(persist.parentSession)) throw Object.assign(new Error('Restored job facts require the registered source'), { code: 'FACT_OWNER_UNSUPPORTED' })
+      append(persist.parentSession, jobStatusEvent(view))
+    }
   }
 }
 
@@ -312,19 +325,23 @@ export function persistentRoleRegistry(
 export function wireSubagentPersistence(
   state: { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry },
   persist: SubagentPersistence,
-): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry } {
+): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistry; observe?: JobTransitionObserver; flushFacts(): Promise<void>; closeFacts(): Promise<void> } {
   const saveAll = async () => {
     await persist.coordinator.putDocument(persist.stateId, snapshotState(state))
   }
   // Task 4.4: the transition observer is wired ONLY when the caller handed the
   // live parent session (web path) — otherwise zero events (additive-only).
+  const owner = persist.factOwner ?? (persist.parentSession && isNondurableSession(persist.parentSession) ? createNondurableFactOwner(persist.parentSession) : undefined)
+  if (persist.parentSession && (!owner || owner.view !== persist.parentSession)) throw Object.assign(new Error('Job events require matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
+  const facts = persist.parentSession ? createJobFacts(owner!) : undefined
   const observe: JobTransitionObserver | undefined =
     persist.parentSession === undefined
       ? undefined
-      : (job) => { append(persist.parentSession!, jobStatusEvent(job)) }
+      : (job) => { facts!.record(jobStatusEvent(job)) }
   // Return wrapped registries (deterministic — no in-place mutation). The
   // caller uses the returned object for the 11 tools and later lookups.
   return {
+    observe, flushFacts: async () => { await facts?.flush() }, closeFacts: async () => { await facts?.close() },
     jobs: persistentJobRegistry(state.jobs, async () => { await saveAll() }, observe),
     table: persistentAgentTable(state.table, async () => { await saveAll() }),
     roles: persistentRoleRegistry(state.roles, async () => { await saveAll() }),

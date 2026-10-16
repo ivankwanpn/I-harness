@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import { waitForObservation } from "@i-harness/core-tools"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import type { ReportPolicy } from "./report-policy.ts"
 
 export type TaskStatus = "accepted" | "running" | "completed" | "error" | "cancelled" | "recovery-required"
 export type TaskOutcome = "completed" | "error" | "cancelled" | "recovery-required"
@@ -26,6 +27,8 @@ export interface TaskRecord {
   outcome?: TaskOutcome
   resultText?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   recoveryReason?: RecoveryReason
   timeCreated: number
   timeStarted?: number
@@ -91,6 +94,7 @@ export interface TaskTerminalizeInput {
   recoveryReason?: RecoveryReason
 }
 export interface TaskRegistryOptions {
+  reportPolicy?: ReportPolicy
   coordinator?: SessionCoordinator
   stateId?: string
   maxConcurrency?: number
@@ -114,6 +118,8 @@ export interface TaskRegistry {
   save(): Promise<void>
   /** Drain already-scheduled saves without creating another document write. */
   flushPersistence(): Promise<void>
+  /** Retain the existing complete task result before advertising durable retrieval. */
+  retainResult(taskId: string): Promise<void>
 }
 
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
@@ -165,15 +171,50 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         ...task,
         ...(modelLabel !== undefined ? { modelLabel } : {}),
       })),
-      notifications: [...notifs],
+      notifications: notifs.map(n => ({ ...n })),
     }
   }
 
   function save(): Promise<void> {
     if (!opts.coordinator || !opts.stateId) return Promise.resolve()
-    const p = saveChain.then(() => opts.coordinator!.putDocument(taskDocKey(opts.stateId!), snapshot()))
+    const document = opts.reportPolicy ? snapshot() : undefined
+    const p = saveChain.then(() => {
+      if (opts.reportPolicy) {
+        if (!opts.coordinator!.putDocumentStrict) throw new Error("Strict result retention is unavailable")
+        return opts.coordinator!.putDocumentStrict(taskDocKey(opts.stateId!), document)
+      }
+      return opts.coordinator!.putDocument(taskDocKey(opts.stateId!), snapshot())
+    })
     saveChain = p.catch(() => {}) // M6: report, never reject
     return p
+  }
+
+  async function retainResult(taskId: string): Promise<void> {
+    const task = records.get(taskId)
+    if (!task) throw new Error(`unknown task: ${taskId}`)
+    if (!opts.reportPolicy) return
+    // The in-memory authoritative outcome is already complete. Persistence
+    // failure changes delivery evidence only; it never reopens execution.
+    if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
+    if (task.retention === "pending") {
+      await saveChain
+      const settledRetention = records.get(taskId)?.retention
+      if (settledRetention === "durable") return
+      if (settledRetention === "failed") throw new Error(task.retentionError)
+    }
+    if (task.retention === "durable") return
+    task.retention = "pending"
+    try {
+      await save()
+      task.retention = "durable"
+      delete task.retentionError
+    } catch (error) {
+      task.retention = "failed"
+      task.retentionError = error instanceof Error ? error.message : String(error)
+      publish(task)
+      throw error
+    }
+    publish(task)
   }
 
   function enqueueNotification(task: TaskRecord): void {
@@ -206,13 +247,18 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     if (input.recoveryReason !== undefined) t.recoveryReason = input.recoveryReason
     t.timeCompleted = Date.now()
     enqueueNotification(t)
-    void save()
+    if (opts.reportPolicy) {
+      void retainResult(t.id).then(() => opts.onTerminalized?.(t), () => opts.onTerminalized?.(t))
+    } else {
+      void save().catch(() => {})
+    }
     publish(t)
-    opts.onTerminalized?.(t)
+    if (!opts.reportPolicy) opts.onTerminalized?.(t)
     return true
   }
 
   return {
+    retainResult,
     subscribe,
     submit(input) {
       // R-D3 配額：running(非終態) 計數 >= max → fail-closed
@@ -241,7 +287,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       records.set(record.id, record)
       byIdentity.set(key, record)
       if (record.childSessionId) byChild.set(record.childSessionId, record)
-      void save()
+      void save().catch(() => {})
       publish(record)
       return record
     },
@@ -254,7 +300,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       const n = notifs.find((x) => x.id === id)
       if (!n) return false
       Object.assign(n, patch)
-      void save()
+      void save().catch(() => {})
       return true
     },
     claim(taskId, childSessionId, modelLabel) {
@@ -267,7 +313,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         t.childSessionId = childSessionId
         byChild.set(childSessionId, t)
       }
-      void save()
+      void save().catch(() => {})
       publish(t)
       return true
     },
@@ -288,7 +334,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         taskIds.push(t.id)
         cancelled += 1
       }
-      if (cancelled > 0) void save()
+      if (cancelled > 0) void save().catch(() => {})
       for (const id of taskIds) publish(records.get(id)!)
       return { taskIds, cancelled }
     },
@@ -323,6 +369,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       for (const t of doc.tasks) {
         if (records.has(t.id)) throw new Error(`duplicate task id on restore: ${t.id}`)
         records.set(t.id, t)
+        if (opts.reportPolicy && t.outcome !== undefined) { t.retention = "durable"; delete t.retentionError }
         const anon = t.callEventSeq === undefined && t.toolCallId === undefined
         if (anon) restoredAnon += 1
         byIdentity.set(

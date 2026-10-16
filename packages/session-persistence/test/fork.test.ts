@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { append, createSession, deriveMessages, rewindCuts, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, rewindCuts, toJSONL, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   createSessionCoordinator,
@@ -21,7 +21,7 @@ async function fixture(): Promise<{
   cleanup(): Promise<void>
 }> {
   const root = await mkdtemp(join(tmpdir(), "ih-session-fork-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   return {
     root,
     coordinator,
@@ -33,6 +33,33 @@ async function fixture(): Promise<{
 }
 
 describe("forkSession", () => {
+  it('forks a complete literal replacement prefix with an absent legacy reset list', async () => {
+    const { root, coordinator, cleanup } = await fixture()
+    const events: SessionEvent[] = [
+      { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
+      { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+      { type: 'compaction/reset', seq: 6 } as SessionEvent,
+      { type: 'compaction/replacement', version: 1, seq: 7, replacementId: 'r7', text: 'S',
+        coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+        insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+    ]
+    const lines = toJSONL({ formatVersion: 7, events }).split('\n')
+    lines[0] = JSON.stringify({ ...JSON.parse(lines[0]!), sessionId: 'source', createdAt: 'literal' })
+    const original = lines.join('\n'), path = join(root, 'source.jsonl')
+    await writeFile(path, original)
+    try {
+      const forked = await forkSession(coordinator, 'source')
+      expect(forked.seedLength).toBe(8)
+      const child = await coordinator.openManagedDocument(forked.sessionId)
+      expect(child.view.events[6]).toEqual({ type: 'compaction/reset', seq: 6, removedSeqs: [] })
+      expect(child.view.events[7]).toMatchObject({ type: 'compaction/replacement', seq: 7, replacementId: 'seed:15f868c37d857ce231050ad17156edb4325509bd188b2442d13c52faf3b4a676',
+        coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+        insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } })
+      expect(deriveMessages(child.view).map(message => message.content)).toEqual(['H', 'S'])
+      expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [8], receipt: { owner: { sessionId: forked.sessionId } } })
+      expect(await readFile(path, 'utf8')).toBe(original)
+    } finally { await cleanup() }
+  })
   it("keeps an image admission with its retained user turn", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
@@ -82,14 +109,14 @@ describe("forkSession", () => {
     await mkdir(root)
     const outsidePath = join(outer, "secret.jsonl")
     const outside = [
-      JSON.stringify({ formatVersion: 1, sessionId: "secret", createdAt: "x" }),
+      JSON.stringify({ formatVersion: 2, sessionId: "secret", createdAt: "x" }),
       JSON.stringify({ type: "turn/start", seq: 0 }),
       JSON.stringify({ type: "user/message", text: "outside secret", seq: 1 }),
       JSON.stringify({ type: "turn/end", seq: 2 }),
       "",
     ].join("\n")
     await writeFile(outsidePath, outside, "utf8")
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     try {
       await expect(forkSession(coordinator, "../secret")).rejects.toThrow(/outside the JSONL store root/)
       expect(await coordinator.list()).toEqual([])

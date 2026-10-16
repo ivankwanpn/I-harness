@@ -165,6 +165,7 @@ export function createWorkspaceRuntimeManager(options: {
         if (!info.capabilities["desktop-project-scope"]?.includes("1")) throw new Error("Gateway does not support project execution scopes")
       }
       launched.client.onNotification((frame) => {
+        if (closed || (generations.get(workspace.id) ?? 0) !== generation || children.get(workspace.id) !== launched) return
         if (frame.method !== "session/event"
           && frame.method !== "session/status"
           && frame.method !== "session/execution-state"
@@ -173,8 +174,11 @@ export function createWorkspaceRuntimeManager(options: {
           && frame.method !== "desktop/workflow/changed"
           && frame.method !== "desktop/session/subagents/changed"
           && frame.method !== "desktop/usage/recording-warning"
+          && frame.method !== "desktop/context/diagnostic"
           && frame.method !== "desktop/session/navigation/changed") return
-        emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params: frame.params })
+        const params = frame.method === "desktop/context/diagnostic" && frame.params && typeof frame.params === "object" && !Array.isArray(frame.params)
+          ? { ...frame.params, runtimeGeneration: generation } : frame.params
+        emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params })
       })
       return { client: launched.client, info, sandbox }
     } catch (error) {
@@ -191,11 +195,12 @@ export function createWorkspaceRuntimeManager(options: {
       const starting = pending.get(id)
       const child = children.get(id)
       if (!runtime && !starting && !child) return
-      generations.set(id, (generations.get(id) ?? 0) + 1)
+      const generation = generations.get(id) ?? 0
+      generations.set(id, generation + 1)
       runtimes.delete(id)
       pending.delete(id)
       children.delete(id)
-      emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue." })
+      emit({ kind: "sdk/disconnected", workspaceId: id, message: "Project execution scope changed; reconnect to continue.", close: { generation, reason: "scope-changed" } })
       const client = child?.client ?? runtime?.client
       if (client) await closeClient(client)
       if (starting) await starting.catch(() => undefined)
@@ -263,7 +268,7 @@ export function createWorkspaceRuntimeManager(options: {
               if (runtimes.get(workspace.id)?.client !== runtime.client) return
               runtimes.delete(workspace.id)
               children.delete(workspace.id)
-              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "SDK subprocess exited" })
+              if (!closed) emit({ kind: "sdk/disconnected", workspaceId: workspace.id, message: "SDK subprocess exited", close: { generation, reason: "subprocess-exited" } })
             })
           }
           return runtime
@@ -315,7 +320,7 @@ export function createWorkspaceRuntimeManager(options: {
     async close() {
       if (closed) return
       closed = true
-      listeners.clear()
+      const closingIds = [...new Set([...runtimes.keys(), ...children.keys()])]
       const clients = [...children.values()].map((launched) => launched.client)
       const starters = [...pending.values()]
       children.clear()
@@ -323,6 +328,8 @@ export function createWorkspaceRuntimeManager(options: {
       pending.clear()
       await Promise.allSettled(clients.map(closeClient))
       await Promise.allSettled([...starters, scopeSyncTail])
+      for (const id of closingIds) { try { emit({ kind: "sdk/disconnected", workspaceId: id, message: "Runtime manager closed.", close: { generation: generations.get(id) ?? 0, reason: "manager-closed" } }) } catch { /* Diagnostics cannot fail owner close. */ } }
+      listeners.clear()
     },
   }
   return manager

@@ -1,4 +1,4 @@
-import { rewindCuts, type Session } from "@i-harness/core-session"
+import { rewindCuts, type SessionView as Session } from "@i-harness/core-session"
 import type { CodeModeStoreEntries } from "./types.ts"
 
 /** Seed prefixes are inherited data authority, including repeated forks.

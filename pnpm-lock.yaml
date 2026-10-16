@@ -340,6 +340,18 @@ importers:
         specifier: workspace:*
         version: link:../token-meter
 
+  packages/context-engine:
+    dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
+
   packages/context-output:
     dependencies:
       '@i-harness/core-tools':
@@ -351,6 +363,9 @@ importers:
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -838,6 +853,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/llm-bedrock:
     dependencies:
@@ -847,12 +865,18 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/llm-gemini:
     dependencies:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/llm-mock:
     dependencies:
@@ -868,12 +892,18 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/llm-openai-compatible:
     dependencies:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/llm-seam:
     dependencies:
@@ -883,6 +913,9 @@ importers:
       '@i-harness/image-validation':
         specifier: workspace:*
         version: link:../image-validation
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/lsp:
     dependencies:
@@ -1029,12 +1062,18 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
 
   packages/provider-runtime:
     dependencies:
       '@i-harness/coding-plans':
         specifier: workspace:*
         version: link:../coding-plans
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
@@ -1149,6 +1188,9 @@ importers:
       '@i-harness/diagnostics':
         specifier: workspace:*
         version: link:../diagnostics
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor
@@ -1170,6 +1212,9 @@ importers:
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/context-output':
         specifier: workspace:*
         version: link:../context-output

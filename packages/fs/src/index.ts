@@ -11,6 +11,8 @@ import { normalizeLineEndings, detectLineEndings, restoreLineEndings, assertText
 import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
 import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
 import { ESCALATION_TARGETS, resolveCallPolicy } from "@i-harness/sandbox"
+import { fileReadPage, type FileReadArgs, type FileReadPage, type FileReadPolicy } from "./range-read.ts"
+export type { FileReadPolicy } from "./range-read.ts"
 
 export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -115,6 +117,7 @@ function denialMessage(denial: SandboxDenial): string {
 }
 
 export interface FsToolDeps {
+  readPolicy?: FileReadPolicy
   workspace: string
   /** M16: WRITE confinement. The assembly builds this from the session's sandbox
    *  policy; absent means unconfined, which is the pre-M16 behavior a host that
@@ -238,15 +241,39 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
 // declaration can move by editing another's.
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
-  const implementation = [createFsTools, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
-  const read: Tool<{ path: string }, { content: string } | FsToolFailure> = {
+  const implementation = [createFsTools, fileReadPage, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
+  const read: Tool<FileReadArgs, FileReadPage | FsToolFailure> = {
     name: "read",
-    description: "read a file",
-    inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    description: deps.readPolicy ? "Read a file within a final JSON byte budget. Follow next_offset_bytes with the same digest to retrieve more; changed sources require restarting." : "read a file",
+    inputSchema: { type: "object", properties: { path: { type: "string" }, ...(deps.readPolicy ? { offset_bytes: { type: "integer", minimum: 0 }, max_output_bytes: { type: "integer", minimum: 1024 }, digest: { type: "string" } } : {}) }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "read", implementation),
-    execute: async ({ path }) => softFail(async () => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") })),
+    execute: async (args, exec) => {
+      exec?.abortSignal?.throwIfAborted()
+      const result = await softFail(async () => {
+        const content = await readFile(resolvePath(deps.workspace, args.path), { encoding: "utf8", signal: exec?.abortSignal })
+        return deps.readPolicy ? fileReadPage(content, args, deps.readPolicy) : { content }
+      })
+      exec?.abortSignal?.throwIfAborted()
+      if (deps.readPolicy && "error" in result) {
+        const requested = args.max_output_bytes
+        const cap = Math.min(deps.readPolicy.maxOutputBytes, Number.isSafeInteger(requested) && requested! >= 1024 ? requested! : deps.readPolicy.maxOutputBytes)
+        if (!Number.isSafeInteger(cap) || cap < 1024) throw new Error("Invalid file read policy")
+        if (Buffer.byteLength(JSON.stringify(result), "utf8") > cap) {
+          const reason = Buffer.from(result.error, "utf8")
+          let end = reason.length
+          let bounded = { ...result, reason_truncated: true }
+          do {
+            end = Math.floor(end / 2)
+            while (end > 0 && (reason[end]! & 0xc0) === 0x80) end--
+            bounded = { ...result, error: reason.subarray(0, end).toString("utf8") + " [read failure reason truncated]", reason_truncated: true }
+          } while (Buffer.byteLength(JSON.stringify(bounded), "utf8") > cap && end > 0)
+          return bounded
+        }
+      }
+      return result
+    },
   }
   const write: Tool<{ path: string; text: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
     name: "write",

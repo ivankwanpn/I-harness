@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSession, Inbox } from '@i-harness/core-session'
 import { userSteerForTool } from '@i-harness/core-tools'
 import { createCodeModeRuntime } from '../src/runtime.js'
-import type { CodeModeOrigin, CodeModeRuntimeOptions } from '../src/types.js'
+import type { CodeModeOrigin, CodeModeRuntimeEvent, CodeModeRuntimeOptions } from '../src/types.js'
 import { PNG } from '../../image-validation/test/fixtures.ts'
 import { readFileSync } from 'node:fs'
 const read = {name:'read',description:'read',inputSchema:{type:'object'}}
@@ -10,6 +10,48 @@ const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRu
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 describe('isolated Code Mode runtime', () => {
+  it('keeps option getters lazy, ordered and called with the original receiver', async () => {
+    const trace: string[] = []
+    const options: CodeModeRuntimeOptions = {
+      get config() { trace.push('config'); return { defaultYieldTimeMs: 5000 } },
+      get spillStore() { trace.push('spill'); return undefined },
+      get tools() {
+        trace.push('tools:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('tools:call'); return [read] }
+      },
+      get restoreStore() {
+        trace.push('restore:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('restore:call'); return [] }
+      },
+      get invoke() {
+        trace.push('invoke:get')
+        return async function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('invoke:call'); return 7 }
+      },
+      get commitStore() {
+        trace.push('commit:get')
+        return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('commit:call') }
+      },
+      get onEvent() {
+        trace.push('event:get')
+        return function(this: CodeModeRuntimeOptions, event: CodeModeRuntimeEvent) { expect(this).toBe(options); trace.push(`event:${event.type}`) }
+      },
+    }
+    const r = createCodeModeRuntime(options)
+    try {
+      expect(trace).toEqual(['config','spill'])
+      expect(await r.exec({code: "const value=await tools.read({}); text(value); store('value',value)"})).toMatchObject({status:'completed',text:'7'})
+      expect(trace).toEqual(['config','spill','restore:get','restore:get','restore:call','tools:get','tools:call','event:get','event:started','invoke:get','invoke:call','event:get','event:output','restore:get','restore:get','restore:call','commit:get','commit:call','event:get','event:closed'])
+    } finally { await r.dispose() }
+  })
+  it('dispatches disposal through the current runtime cancel method once with its receiver', async () => {
+    const r = make(), cancel = r.cancel
+    const calls: string[] = []
+    r.cancel = async function(reason) { expect(this).toBe(r); calls.push(reason!); await cancel(reason) }
+    await r.dispose()
+    await r.dispose()
+    expect(calls).toEqual(['Code Mode disposed'])
+    await expect(r.exec({code:'text(1)'})).rejects.toThrow('disposed')
+  })
   it('repeated steer observations release subscriptions and preserve observer exclusion', async () => {
     const session = createSession(), inbox = new Inbox(session), actual = userSteerForTool({ session })!
     let active = 0

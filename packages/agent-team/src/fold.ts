@@ -1,5 +1,5 @@
 import { z } from "zod"
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session, DeepReadonly } from "@i-harness/core-session"
 import type { TeamEvent, TeamMemberSnapshot, TeamTaskSnapshot, TeamMessageSnapshot } from "./types.ts"
 
 export interface TeamFoldState {
@@ -14,10 +14,10 @@ export function createFoldState(): TeamFoldState {
 }
 /** Forked conversation history does not grant ownership of its source team's
  * child sessions. The new conversation starts a new team ledger after its seed. */
-export function teamLedger(session: Session): TeamEvent[] {
+export function teamLedger(session: Session): readonly DeepReadonly<TeamEvent>[] {
   const header = session.header
   const fork = Boolean(header?.parentSession && header.origin !== "subagent" && header.origin !== "approval-review")
-  return (fork ? session.events.slice(header?.seedLength ?? session.events.length) : session.events) as unknown as TeamEvent[]
+  return (fork ? session.events.slice(header?.seedLength ?? session.events.length) : session.events).filter((event):event is DeepReadonly<TeamEvent>=>event.type.startsWith('team/'))
 }
 
 // Spec §4.5 structure validation: strict zod schemas for the 4 team event
@@ -88,7 +88,7 @@ function validateTeamEvent(event: unknown): TeamEvent {
 // full log is always correct regardless of prior folds, and a watermark beyond
 // the log length indicates the log shrank (corruption). The returned watermark
 // is the log length, so callers can resume incremental folding afterwards.
-export function foldTeam(events: TeamEvent[], opts?: { watermark?: number }): { state: TeamFoldState; watermark: number } {
+export function foldTeam(events: readonly DeepReadonly<TeamEvent>[], opts?: { watermark?: number }): { state: TeamFoldState; watermark: number } {
   const start = opts?.watermark ?? 0
   if (start > events.length) throw new Error(`agent-team: watermark ${start} exceeds log length ${events.length}`)
   const state = createFoldState()

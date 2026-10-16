@@ -6,9 +6,10 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
+import { append } from '@i-harness/core-session'
 
 it("keeps a coordinator-only parent fresh while mirroring dispatch before the actual tool body", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-default-parent-writer-")), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend)
+  const root = await mkdtemp(join(tmpdir(), "ih-default-parent-writer-")), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   let parentLoads = 0, calls = 0, bodySawDurableDispatch = false
   const observed = { ...coordinator, async loadOwned() { parentLoads++; throw new Error("Fresh parent must not be loaded or recovered") } }
@@ -30,6 +31,7 @@ it("keeps a coordinator-only parent fresh while mirroring dispatch before the ac
   try {
     const writer = await service.writableSessionFor!("parent")
     expect(writer!.events).toEqual([])
+    expect(() => Reflect.apply(append,undefined,[writer!, { type: 'plan/mode', mode: 'on' }])).toThrow(/Managed/)
     const assembly = await service.assemblyFor("parent")
     expect(assembly.session).toBe(writer)
     await service.submit("parent", "Owned default-parent action", new AbortController().signal)

@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
-import { deriveMessages } from "@i-harness/core-session"
+import { deriveMessages, renderConversation, stringifyJsonData } from "@i-harness/core-session"
 import { createHash, randomUUID } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
@@ -207,112 +207,14 @@ export function resolveRetryPolicy(config: RetryPolicyConfig | undefined, path =
   throw new Error(`${path}.mode must be "normal" or "always"`)
 }
 
-// Error classification: prefer a stable code (err.code / err.cause), then a
-// message regex fallback.
-const CONTEXT_OVERFLOW_RE = /(?:^|[^a-z0-9])context[\s_-]?(?:length|window)[\s_-]?(?:exceed|overflow)/i
-const QUOTA_RE = /(?:quota|balance|credit|budget|usage[\s_-]limit)[\s_-]?(?:exceeded|exhausted|reached|depleted)/i
-const RATE_RE = /429|rate[\s_-]limit|too many requests/i
-const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT/i
-const SERVER_RE = /\b5\d\d\b|internal server|bad gateway|service unavailable/i
-const CAPACITY_RE = /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i
-const CAPACITY_CODE_RE = /^server_(?:is_)?overloaded$/i
-const TERMINAL_CODES = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
-
-function normalizedCode(code: string): string {
-  if (CONTEXT_OVERFLOW_RE.test(code)) return "CONTEXT_WINDOW_EXCEEDED"
-  if (/^(rate_limit_exceeded|rate_limit_error)$/i.test(code)) return "RATE_LIMIT"
-  if (/^(server_error|api_error|overloaded_error)$/i.test(code) || CAPACITY_CODE_RE.test(code)) return "SERVER"
-  if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
-  if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
-  if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
-  if (/^(AbortError|ABORT_ERR|ERR_CANCELED)$/.test(code)) return "ABORTED"
-  if (/^(insufficient_quota|billing_hard_limit_reached|quota_exceeded|ServiceQuotaExceededException)$/i.test(code)) return "QUOTA"
-  if (/^(invalid_api_key|authentication_error|permission_error|permission_denied|AccessDeniedException|UnrecognizedClientException)$/i.test(code)) return "AUTH"
-  if (/^(invalid_request_error|invalid_argument|not_found_error|request_too_large|ValidationException)$/i.test(code)) return "INVALID_ARGUMENT"
-  if (/^(ThrottlingException|TooManyRequestsException)$/i.test(code)) return "RATE_LIMIT"
-  if (/^(ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/i.test(code)) return "SERVER"
-  return code
-}
-
-export function retryErrorCode(err: unknown): string | undefined {
-  // Walk the cause chain for a structured code.
-  let cur: unknown = err
-  for (let i = 0; i < 5 && cur != null; i++) {
-    if (typeof cur === "object") {
-      const record = cur as { code?: unknown; name?: string; httpStatus?: number; $metadata?: { httpStatusCode?: number } }
-      if (record.name === "AbortError") return "ABORTED"
-      if (record.name === "SSEParseError" || record.name === "SyntaxError") return "MALFORMED_RESPONSE"
-      if (typeof record.code === "string") return normalizedCode(record.code)
-      if (record.name && normalizedCode(record.name) !== record.name) return normalizedCode(record.name)
-      const status = record.httpStatus ?? record.$metadata?.httpStatusCode
-      if (status === 401 || status === 403) return "AUTH"
-      if (status === 429) return "RATE_LIMIT"
-      if (status !== undefined && status >= 500 && status <= 599) return "SERVER"
-    }
-    cur = (cur as { cause?: unknown }).cause
-  }
-  const msg = err instanceof Error ? `${err.message} ${err.cause instanceof Error ? err.cause.message : ""}` : String(err)
-  if (CONTEXT_OVERFLOW_RE.test(msg)) return "CONTEXT_WINDOW_EXCEEDED"
-  if (QUOTA_RE.test(msg)) return "QUOTA"
-  if (/insufficient_quota|billing|payment required|not enough (?:credit|balance)/i.test(msg)) return "QUOTA"
-  if (/malformed|invalid (?:tool|function).*argument|invalid json/i.test(msg)) return "MALFORMED_RESPONSE"
-  if (/\b(?:401|403)\b|invalid.api.key|authentication|unauthorized|permission denied/i.test(msg)) return "AUTH"
-  if (/certificate|self.signed|unable to verify|\bTLS\b|\bSSL\b/i.test(msg)) return "TLS"
-  if (RATE_RE.test(msg)) return "RATE_LIMIT"
-  if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
-  if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|fetch failed|network error|socket hang up/i.test(msg)) return "TRANSPORT"
-  if (SERVER_RE.test(msg) || CAPACITY_RE.test(msg)) return "SERVER"
-  return undefined
-}
-
-function isModelCapacityError(error: unknown): boolean {
-  let current = error
-  for (let i = 0; i < 5 && current !== null && typeof current === "object"; i++) {
-    const value = current as { code?: unknown; message?: unknown; capacityLimited?: unknown; cause?: unknown }
-    if (value.capacityLimited === true || typeof value.code === "string" && CAPACITY_CODE_RE.test(value.code)
-      || typeof value.message === "string" && CAPACITY_RE.test(value.message)) return true
-    current = value.cause
-  }
-  return false
-}
-
-/** HTTP status and server delay are structured; response bodies never enter retry diagnostics. */
-export async function describeHttpError(label: string, response: Response, request?: Pick<LLMRequest, "onTerminalResponse">): Promise<Error> {
-  // Preserve body-based classification (notably 400 context overflow), but let
-  // a guarded host retain known terminal status if this error body's read parks.
-  if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-    const code = response.status === 401 || response.status === 403 ? "AUTH" : response.status === 402 ? "QUOTA" : "INVALID_ARGUMENT"
-    try { request?.onTerminalResponse?.({ code, httpStatus: response.status }) } catch { /* diagnostic observer */ }
-  }
-  const body = await response.text()
-  let bodyCode: string | undefined
-  let capacityLimited = CAPACITY_RE.test(body.slice(0, 8192))
-  try {
-    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; message?: unknown } }
-    const value = parsed.error?.code ?? parsed.error?.type
-    if (typeof value === "string") { bodyCode = normalizedCode(value); capacityLimited ||= CAPACITY_CODE_RE.test(value) }
-  } catch { /* Non-JSON error responses still carry a reliable HTTP status. */ }
-  const classified = retryErrorCode(new Error(body.slice(0, 8192)))
-  const code = bodyCode && TERMINAL_CODES.has(bodyCode) ? bodyCode
-    : classified && TERMINAL_CODES.has(classified) ? classified
-    : response.status === 401 || response.status === 403 ? "AUTH"
-    : response.status === 402 ? "QUOTA"
-    : response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429 ? "INVALID_ARGUMENT"
-    : capacityLimited ? "SERVER"
-    : response.status === 429 ? "RATE_LIMIT"
-    : response.status === 408 ? "TIMEOUT"
-    : response.status >= 500 ? "SERVER" : "INVALID_ARGUMENT"
-  const advice = response.headers.get("retry-after")?.trim()
-  const now = Date.now()
-  const parsedDeadline = advice === undefined || advice === "" ? NaN
-    : /^\d+(?:\.\d+)?$/.test(advice) ? now + Number(advice) * 1000 : Date.parse(advice)
-  capacityLimited &&= code === "SERVER"
-  return Object.assign(new Error(`${label} request failed: ${response.status}${capacityLimited ? " (model is at capacity)" : ""}`), {
-    code, httpStatus: response.status,
-    ...(capacityLimited ? { capacityLimited: true } : {}),
-    ...(Number.isFinite(parsedDeadline) ? { retryAfterAt: Math.max(now, parsedDeadline) } : {}),
-  })
-}
+// Provider failure classification and payload-free facts share one public facade.
+export { retryErrorCode } from "./provider-error/classify.ts"
+export { describeHttpError } from "./provider-error/http.ts"
+export { modelFailureFacts, safeModelFailureFacts } from "./provider-error/facts.ts"
+export type { ModelFailureFacts } from "./provider-error/types.ts"
+import { retryErrorCode, isModelCapacityError } from "./provider-error/classify.ts"
+import { modelFailureFacts } from "./provider-error/facts.ts"
+import { terminalErrorCodes as TERMINAL_CODES } from "./provider-error/types.ts"
 
 // Exponential backoff with symmetric jitter. attemptNo starts at 1 for the
 // wait AFTER the first failed attempt; the delay is capped at maxDelayMs and
@@ -326,7 +228,7 @@ export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): n
 
 // Retry only the model request. Consumers must explicitly opt into discarding
 // output; tools and earlier committed steps never belong to this boundary.
-export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
+function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
   async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
     const requestId = randomUUID()
     let attemptNo = 0
@@ -437,6 +339,9 @@ export interface LLMRequestScope {
 }
 
 export interface LLMRequest {
+  confirmExecution?: (confirmation: import("./prepared/execution.ts").ExecutionConfirmation) => void
+  /** Internal owner guard; wrappers forward it to each physical transport boundary. */
+  validateBeforeTransport?: () => void
   /** Host-only conversation scope; never serialize into a provider body. */
   requestScope?: LLMRequestScope
   /** Host-only fallback for an error body that outlives a guard deadline. */
@@ -479,15 +384,19 @@ export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, in
 }
 
 export interface ModelClient {
+  readonly executionIdentity?: import("./prepared/execution.ts").LiveExecutionIdentity
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
+  prepare?(request: LLMRequest): Promise<import("./prepared/types.ts").PreparedModelRequest>
 }
 
 export { createWaitingGuard, reportStreamActivity, type ModelWaitPolicy, type StreamActivity, type TerminalResponseHint } from "./waiting-guard.ts"
 
-export function assertMessagesFromLog(messages: LLMMessage[], session: Session): void {
-  const logged = deriveMessages(session)
-  const msgJson = JSON.stringify(messages)
-  const logJson = JSON.stringify(logged)
+export function assertMessagesFromLog(messages: LLMMessage[], source: Session | Parameters<typeof renderConversation>[0]): void {
+  // A captured projection is a source-owned view of the log. Revalidating its
+  // renderer must not fold a newer live archive into this request in place.
+  const logged = "events" in source ? deriveMessages(source) : renderConversation(source)
+  const msgJson = stringifyJsonData(messages)
+  const logJson = stringifyJsonData(logged)
   if (msgJson !== logJson) throw new Error("model-visible messages must derive from the session log (audit F01-3)")
 }
 
@@ -624,6 +533,8 @@ export async function describeTransportError(
   err.cause = error
   const code = retryErrorCode(error)
   if (code !== undefined) Object.assign(err, { code })
+  const modelFailure = modelFailureFacts(error)
+  if (modelFailure) Object.assign(err, { modelFailure })
   return err
 }
 
@@ -700,3 +611,24 @@ export function clampOutputCap(value: number, contextWindow: number | undefined,
   const room = hardRoom - OUTPUT_CAP_SAFETY_MARGIN
   return Math.min(value, room >= 1 ? room : hardRoom)
 }
+
+export type { PreparedModelRequest, PreparedStreamControl } from "./prepared/types.ts"
+export type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness/token-meter"
+export { prepareModelRequest } from "./prepared/fallback.ts"
+export { wrapPreparedRequest, withPreparedRequests, mapModelRequest, snapshotModelData, preparedControls, freezePreparedFacts, invalidPreparedRequest, validateOutputCap } from "./prepared/wrappers.ts"
+export { createPreparedPayload } from "./prepared/payload.ts"
+export type { PreparedValidation, FinalValidator, FinalRejectionReason } from './prepared/validation.ts'
+export { assertNativeProducerWitnesses } from './prepared/native-witness.ts'
+export { stringifyJsonData } from '@i-harness/core-session'
+export { validationCollector, readPreparedValidation } from './prepared/validation.ts'
+export { assertPreparedValidation, preparedBindingError } from './prepared/rejection.ts'
+export { preparedModelClient } from "./prepared/wrappers.ts"
+
+import { withPreparedRequests } from "./prepared/wrappers.ts"
+export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
+  return withPreparedRequests(client, inner => createRetryingExecution(inner, policy, metadata))
+}
+export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./binding.ts"
+
+export type { LiveExecutionIdentity, ExecutionConfirmation, ExecutionReceipt, PreparedExecutionContext } from "./prepared/execution.ts"
+export { sameExecutionIdentity, validExecutionIdentity } from "./prepared/execution.ts"

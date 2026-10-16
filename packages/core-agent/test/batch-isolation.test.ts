@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, type Session } from "@i-harness/core-session"
-import { createToolRegistry, TOOL_FAILED } from "@i-harness/core-tools"
-import { executeToolCalls } from "../src/execute-tool-calls.ts"
+import { createToolRegistry, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING } from "@i-harness/core-tools"
+import { executeToolCalls, type ExecuteToolCallsOptions } from "../src/execute-tool-calls.ts"
 
 function deferred() {
   let resolve!: () => void
@@ -13,6 +13,58 @@ function deferred() {
 function results(session: Session) {
   return session.events.filter((event) => event.type === "tool/result")
 }
+
+it("uses current dispatch after the checkpoint await and preserves registry and checkpoint receivers", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  const order: string[] = []
+  const receivers: unknown[] = []
+  tools.register({ name: "read", description: "", inputSchema: {}, execute: async () => { order.push("body"); return "answer" } })
+  const prepare = tools.prepare
+  const dispatch = tools.dispatch
+  const finalize = tools.finalize
+  tools.prepare = async function (...args) { receivers.push(this); order.push("prepare"); return prepare.apply(this, args) }
+  tools.dispatch = async () => { throw new Error("stale dispatch") }
+  tools.finalize = async function (...args) { receivers.push(this); order.push("finalize"); return finalize.apply(this, args) }
+  const opts: ExecuteToolCallsOptions = { maxParallel: 1, async flush() {
+    receivers.push(this)
+    expect(session.events.at(-1)).toMatchObject({ type: "tool/dispatch", callId: "live" })
+    order.push("checkpoint")
+    await Promise.resolve()
+    tools.dispatch = function (...args) { receivers.push(this); order.push("dispatch"); return dispatch.apply(this, args) }
+  } }
+  ctx.on("agent/post-tool", () => { order.push("post") })
+  await executeToolCalls(ctx, session, tools, [{ callId: "live", name: "read", args: {} }], opts)
+  expect(order).toEqual(["prepare", "checkpoint", "dispatch", "body", "finalize", "post"])
+  expect(receivers).toEqual([tools, opts, tools, tools])
+  expect(results(session)).toMatchObject([{ callId: "live", output: "answer" }])
+})
+
+it("keeps checkpoint fallback coercion lazy and preserves failure identity and never-started results", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  let coercions = 0
+  let bodies = 0
+  const reason = { toString() {
+    if (++coercions > 1) throw new Error("unexpected second coercion")
+    return "original reason"
+  } }
+  tools.register({ name: "read", description: "", inputSchema: {}, execute: async () => { bodies++; return "answer" } })
+  const failure = await executeToolCalls(ctx, session, tools, [
+    { callId: "first", name: "read", args: {} },
+    { callId: "second", name: "read", args: {} },
+  ], { maxParallel: 1, flush: async () => { throw reason } }).then(() => undefined, error => error)
+  expect(coercions).toBe(1)
+  expect(failure).toBe(reason)
+  expect(bodies).toBe(0)
+  expect(results(session)).toMatchObject([
+    { callId: "first", isError: true, output: { error: "tool call aborted before dispatch: original reason", code: TOOL_ABORTED_BEFORE_DISPATCH } },
+    { callId: "second", isError: true, output: { error: "tool call cancelled: the batch checkpoint failed", code: TOOL_CANCELLED_BY_SIBLING } },
+  ])
+  expect(session.events.filter(event => event.type === "tool/dispatch").map(event => event.callId)).toEqual(["first"])
+})
 
 describe("ordinary tool failures are isolated to their call", () => {
   it("does not abort a running sibling when a body fails", async () => {
@@ -174,18 +226,20 @@ describe("batch stopping conditions remain fail closed", () => {
     const tools = createToolRegistry(ctx)
     const hookArmed = deferred()
     const errorObserved = deferred()
+    const runningEntered = deferred()
     const refusal = Object.assign(new Error("hook blocked"), { policyRefusal: true as const })
     let bodyRan = false
     let siblingAborted = false
     ctx.onCascade("tools/execute", async (input, next) => {
       if ((input as { name: string }).name !== "veto") return next()
       hookArmed.resolve()
-      await errorObserved.promise
+      await Promise.all([errorObserved.promise, runningEntered.promise])
       throw refusal
     })
     tools.register({ name: "fail", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => { await hookArmed.promise; throw new Error("ordinary") } })
     tools.register({ name: "veto", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => { bodyRan = true; return {} } })
     tools.register({ name: "running", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async (_args, exec) => {
+      runningEntered.resolve()
       await new Promise<void>((resolve) => {
         const aborted = () => { siblingAborted = true; resolve() }
         if (exec.abortSignal?.aborted) aborted()

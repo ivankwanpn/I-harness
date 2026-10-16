@@ -7,7 +7,7 @@
 // Every read and write touches ONLY this session's own suffix (§5, the forked-session rule): a
 // child session that inherited its parent's prefix (header.seedLength) owns neither the parent's
 // records nor their ids — the same slice task-protocol.ts:355 applies to a forked log.
-import { append, type Session, type SessionEvent } from "@i-harness/core-session"
+import { committedFactSeqs, metadataFactsFor, type SessionView as Session, type SessionEventView as SessionEvent, type MetadataFactSource } from "@i-harness/core-session"
 import type { Tool } from "@i-harness/core-tools"
 import {
   ScheduleInputError,
@@ -21,7 +21,7 @@ import {
   type ScheduleView,
 } from "./index.ts"
 
-export interface ScheduleToolDeps { session: Session }
+export interface ScheduleToolDeps { session: Session; metadata?: MetadataFactSource }
 
 function ownEvents(session: Session): readonly SessionEvent[] {
   return session.events.slice(session.header?.seedLength ?? 0)
@@ -47,7 +47,7 @@ function createScheduleCreateTool(deps: ScheduleToolDeps): Tool<ScheduleCreateAr
     },
     isReadOnly: false,
     isConcurrencySafe: false,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       // The schema dialect has no `oneOf`, so "exactly one selector" can only be checked here —
       // before anything is folded or written.
       const selectors = [args.after_seconds !== undefined, args.at !== undefined, args.every_seconds !== undefined]
@@ -64,7 +64,7 @@ function createScheduleCreateTool(deps: ScheduleToolDeps): Tool<ScheduleCreateAr
           ? createAtScheduleRecord(id, args.prompt, args.at, now)
           // selectors === 1 and the other two are absent ⇒ every_seconds is present
           : createEveryScheduleRecord(id, args.prompt, args.every_seconds as number, now)
-      append(deps.session, { type: "schedule/change", version: 1, operation: "create", schedule: record })
+      committedFactSeqs(await metadataFactsFor(deps.session, deps.metadata, exec.abortSignal).admit({ type: "schedule/change", version: 1, operation: "create", schedule: record }))
       return { id: record.id, kind: record.kind, scheduledAt: record.scheduledAt }
     },
   }
@@ -92,7 +92,7 @@ function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, 
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
     isReadOnly: false,
     isConcurrencySafe: false,
-    execute: async ({ id }) => {
+    execute: async ({ id }, exec) => {
       const folded = foldScheduleEvents(ownEvents(deps.session))
       if (!folded.active.some((record) => record.id === id)) {
         if (!folded.seenIds.includes(id)) throw new Error(`schedule_delete: schedule ${JSON.stringify(id)} was not found in this session`)
@@ -102,7 +102,7 @@ function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, 
         }
         return { id, deleted: false, state }
       }
-      append(deps.session, { type: "schedule/change", version: 1, operation: "delete", id })
+      committedFactSeqs(await metadataFactsFor(deps.session, deps.metadata, exec.abortSignal).admit({ type: "schedule/change", version: 1, operation: "delete", id }))
       return { deleted: id }
     },
   }

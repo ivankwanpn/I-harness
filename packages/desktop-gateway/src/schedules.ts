@@ -30,7 +30,7 @@ export function createDesktopSchedules(coordinator: SessionCoordinator, service:
       idle(sessionId)
       const assembly = await service.assemblyFor(sessionId)
       idle(sessionId)
-      const tool = createScheduleTools({ session: assembly.session }).find((entry) => entry.name === "schedule_create")!
+      const tool = createScheduleTools({ session: assembly.session,metadata:assembly.metadataFacts }).find((entry) => entry.name === "schedule_create")!
       const result = await tool.execute(command, {}) as ScheduleCreateOutput
       await coordinator.flush(sessionId)
       return result
@@ -40,7 +40,7 @@ export function createDesktopSchedules(coordinator: SessionCoordinator, service:
       idle(sessionId)
       const assembly = await service.assemblyFor(sessionId)
       idle(sessionId)
-      const tool = createScheduleTools({ session: assembly.session }).find((entry) => entry.name === "schedule_delete")!
+      const tool = createScheduleTools({ session: assembly.session,metadata:assembly.metadataFacts }).find((entry) => entry.name === "schedule_delete")!
       const result = await tool.execute({ id }, {}) as { deleted: string }
       await coordinator.flush(sessionId)
       return result

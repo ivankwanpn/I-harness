@@ -3,7 +3,7 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { ImageInput } from "@i-harness/sdk"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
-export interface CompactResult { compacted: boolean; summary?: string; reason?: "summarizer-failed"; reset?: boolean; pruned?: boolean }
+export interface CompactResult { compacted: boolean; summary?: string; reason?: "summarizer-failed"; blockedReason?: string; reset?: boolean; pruned?: boolean }
 export interface SessionOperation { kind: "prompt" | "compact" | "model"; busy: boolean; error?: string; result?: CompactResult }
 export const operationKey = (workspaceId: string, sessionId: string) => JSON.stringify([workspaceId, sessionId])
 

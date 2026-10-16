@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile } from "node:fs/promises"
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
@@ -7,68 +7,102 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSessionService, createDurableSessionLoader, type SessionService, type SessionAssembly, type SessionServiceOptions } from "@i-harness/session-executor"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, copyConversationData, decodeFactBatch } from "@i-harness/core-session"
 import { createDesktopSubagents } from "../src/session-subagents.ts"
 import { createAgentTable, createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 import { createChildObservation } from "../../session-executor/src/child-observation.ts"
 
-it("real service pushes a child's actual unflushed tool result while the parent waits, with lineage checked before live access", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-child-push-assembly-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { maxDelayMs: 60_000 })
-  for (const sessionId of ["parent", "other"]) await coordinator.create({ sessionId })
-  let release!: () => void, entered!: () => void
-  const hold = new Promise<void>(resolve => { release = resolve }), childSecondRequest = new Promise<void>(resolve => { entered = resolve })
-  let childRequests = 0, parentRequests = 0
-  const child: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
-    if (++childRequests === 1) yield { type: "tool_call", call: { id: "child-list", name: "list_dir", args: { path: "." } } }
-    else { entered(); await hold; yield { type: "text/chunk", text: "original child final" } }
-    yield { type: "end" }
+it("real service pushes one committed child result after its actual receipt, with lineage checked before live access", async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-child-push-assembly-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { maxDelayMs: 60_000, lock: { enabled: true } })
+  for (const sessionId of ['parent', 'other']) await coordinator.create({ sessionId })
+  const resultEntered = Promise.withResolvers<void>(), releaseResult = Promise.withResolvers<void>()
+  const childSecondRequest = Promise.withResolvers<void>(), releaseChild = Promise.withResolvers<void>()
+  let childRequests = 0, parentRequests = 0, resultFrames = 0, finalizations = 0
+  const child: NonNullable<SessionServiceOptions['model']> = { async *stream() {
+    if (++childRequests === 1) yield { type: 'tool_call', call: { id: 'child-list', name: 'list_dir', args: { path: '.' } } }
+    else { childSecondRequest.resolve(); await releaseChild.promise; yield { type: 'text/chunk', text: 'original child final' } }
+    yield { type: 'end' }
   } }
-  const parent: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
-    if (++parentRequests === 1) yield { type: "tool_call", call: { name: "wait_agent", args: { target: "root/actual", timeout_ms: 300_000 } } }
-    else yield { type: "text/chunk", text: "parent finished" }
-    yield { type: "end" }
+  const parent: NonNullable<SessionServiceOptions['model']> = { async *stream() {
+    if (++parentRequests === 1) yield { type: 'tool_call', call: { name: 'wait_agent', args: { target: 'root/actual', timeout_ms: 300_000 } } }
+    else yield { type: 'text/chunk', text: 'parent finished' }
+    yield { type: 'end' }
   } }
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: "danger-full-access",
-    allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: 'danger-full-access',
+    allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }), resolveRoleModel: async () => ({ status: 'ready', binding: { client: child } }),
   })
-  const assembly = await service.assemblyFor("parent")
-  const changed = vi.fn(), catalog = createDesktopSubagents(coordinator, service, { onChanged: changed })
+  const assembly = await service.assemblyFor('parent')
+  assembly.ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'list_dir') finalizations++ })
+  const actualAppend = backend.appendOwnedBatch!
+  let childId = ''
+  backend.appendOwnedBatch = async (...args) => {
+    if (args[0].startsWith('child-') && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'tool/result' && event.callId === 'child-list')) {
+      resultFrames++; childId = args[0]; resultEntered.resolve(); await releaseResult.promise
+    }
+    return actualAppend(...args)
+  }
+  const changed = vi.fn(), pushedResults: unknown[] = []
+  const catalog = createDesktopSubagents(coordinator, service, { onChanged(id) {
+    changed(id)
+    const result = childId ? assembly.liveChildSession!(childId)?.events.find(event => event.type === 'tool/result' && event.callId === 'child-list') : undefined
+    if (result && !pushedResults.includes(result)) pushedResults.push(result)
+  } })
   let turn: Promise<unknown> | undefined
   try {
-    await assembly.tools.get("spawn_agent")!.execute({ task_name: "actual", agent_type: "explore", message: "read the workspace", background: true }, { sessionId: "parent" })
-    let enteredSecond = false
-    void childSecondRequest.then(() => { enteredSecond = true })
-    await vi.waitFor(() => expect(enteredSecond).toBe(true), { timeout: 5000 })
-    const row = assembly.subagentState().agentTable.find(row => row.path === "root/actual")!, childId = row.sessionId!
-    turn = service.submit("parent", "observe actual child", new AbortController().signal)
-    await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/dispatch")).toBe(true))
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith("parent"))
-    expect(service.queueState("parent").running).toBe(true)
-    expect(assembly.session.events.filter(event => event.type === "tool/result" && event.name === "wait_agent")).toHaveLength(0)
-    const saved = (await coordinator.snapshot!(childId)).session
-    expect(saved.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(false)
-    const flush = vi.spyOn(coordinator, "flush"), originalAccess = assembly.liveChildSession!, access = vi.fn(originalAccess)
+    await assembly.tools.get('spawn_agent')!.execute({ task_name: 'actual', agent_type: 'explore', message: 'read the workspace', background: true }, { sessionId: 'parent' })
+    await resultEntered.promise
+    expect(childRequests).toBe(1)
+    turn = service.submit('parent', 'observe actual child', new AbortController().signal)
+    await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === 'tool/dispatch')).toBe(true))
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith('parent'))
+    expect(service.queueState('parent').running).toBe(true)
+    expect(assembly.session.events.filter(event => event.type === 'tool/result' && event.name === 'wait_agent')).toHaveLength(0)
+    const originalAccess = assembly.liveChildSession!, access = vi.fn(originalAccess)
     assembly.liveChildSession = access
-    const history = await catalog.history("parent", childId)
-    const live = assembly.liveChildSession!(childId)!
-    expect(history.events).toEqual(live.events)
-    expect(history.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(true)
-    expect((await catalog.list("parent")).agents.find(row => row.sessionId === childId)).toMatchObject({ live: true, status: "running", path: "root/actual" })
+    const flush = vi.spyOn(coordinator, 'flush'), assemble = vi.spyOn(service, 'assemblyFor')
+    await expect(catalog.history('parent', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(access).not.toHaveBeenCalled()
+    expect(assembly.liveChildSession!(childId)!.events.some(event => event.type === 'tool/result' && event.callId === 'child-list')).toBe(false)
+    expect((await backend.read(childId)).events.some(event => event.type === 'tool/result' && event.callId === 'child-list')).toBe(false)
+    await expect(coordinator.snapshot!(childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(pushedResults).toEqual([])
     access.mockClear()
-    await expect(catalog.history("other", childId)).rejects.toThrow(/scope/)
-    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled()
+    await expect(catalog.history('other', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled()
+    const requestsBefore = [parentRequests, childRequests]
+    await expect(catalog.history('parent', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect([parentRequests, childRequests]).toEqual(requestsBefore)
+    releaseResult.resolve()
+    await childSecondRequest.promise
+    await vi.waitFor(() => expect(pushedResults).toHaveLength(1))
+    const saved = (await coordinator.snapshot!(childId)).session
+    const live = assembly.liveChildSession!(childId)!
+    const result = live.events.filter(event => event.type === 'tool/result' && event.callId === 'child-list')
+    expect(result).toHaveLength(1)
+    expect(saved.events.filter(event => event.type === 'tool/result' && event.callId === 'child-list')).toEqual(result)
+    flush.mockClear(); assemble.mockClear()
+    const afterRequests = [parentRequests, childRequests]
+    expect((await catalog.history('parent', childId)).events).toEqual(live.events)
+    expect((await catalog.list('parent')).agents.find(row => row.sessionId === childId)).toMatchObject({ live: true, status: 'running', path: 'root/actual' })
+    access.mockClear()
+    await expect(catalog.history('other', childId)).rejects.toThrow(/scope/)
+    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled()
+    expect([parentRequests, childRequests]).toEqual(afterRequests)
     expect(service.liveSession(childId)).toBeUndefined(); expect(service.liveAssembly(childId)).toBeUndefined()
-    flush.mockRestore(); assembly.liveChildSession = originalAccess
-    release(); await turn
+    expect([resultFrames, finalizations]).toEqual([1, 1])
+    assembly.liveChildSession = originalAccess; flush.mockRestore(); assemble.mockRestore()
+    releaseChild.resolve(); await turn
     expect(childRequests).toBe(2)
-    expect((await catalog.history("parent", childId)).events.some(event => event.type === "assistant/message" && event.text === "original child final")).toBe(true)
-  } finally { release(); await turn?.catch(() => {}); await catalog.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    expect((await catalog.history('parent', childId)).events.some(event => event.type === 'assistant/message' && event.text === 'original child final')).toBe(true)
+  } finally {
+    releaseResult.resolve(); releaseChild.resolve(); await turn?.catch(() => {})
+    await catalog.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true })
+  }
 }, 15_000)
-
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "desktop-subagent-catalog-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent", title: "Parent" })
   await coordinator.create({ sessionId: "other" })
   await coordinator.create({ sessionId: "fork", parentSession: "parent", origin: "fork" })
@@ -107,7 +141,7 @@ function observedRuntime(f: Awaited<ReturnType<typeof fixture>>) {
 
 it("reads actual unflushed durable child history and catalog without any parent event or widened root authority", async () => {
   const f = await fixture(), runtime = observedRuntime(f), owner = runtime.mount("parent")
-  const session = (await f.coordinator.snapshot!("normal")).session
+  const session = copyConversationData((await f.coordinator.snapshot!("normal")).session)
   owner.table.add("root/helper", { path: "root/helper", sessionId: "normal", session, status: "running", controller: new AbortController(), mailbox: [] })
   const catalog = createDesktopSubagents(f.coordinator, f.service)
   const flush = vi.spyOn(f.coordinator, "flush"), access = vi.fn(owner.assembly.liveChildSession!)
@@ -135,7 +169,7 @@ it("reads restored Session replacements and validates sequence invariants on the
   const catalog = createDesktopSubagents(f.coordinator, f.service)
   try {
     expect((await catalog.history("parent", "normal")).events).toEqual([])
-    const restored = (await f.coordinator.snapshot!("normal")).session
+    const restored = copyConversationData((await f.coordinator.snapshot!("normal")).session)
     owner.table.update(row.path, row, { session: restored })
     append(restored, { type: "tool/result", name: "controlled", callId: "restored", output: "restored live result" })
     expect((await catalog.history("parent", "normal")).events.at(-1)).toMatchObject({ output: "restored live result" })
@@ -147,7 +181,7 @@ it("reads restored Session replacements and validates sequence invariants on the
 
 it("reads lineage-validated intermediate owner history from its root registry", async () => {
   const f = await fixture(), owner = observedRuntime(f).mount("parent")
-  const session = (await f.coordinator.snapshot!("normal")).session
+  const session = copyConversationData((await f.coordinator.snapshot!("normal")).session)
   owner.table.add("root/helper", { path: "root/helper", sessionId: "normal", session, status: "waiting", controller: new AbortController(), mailbox: [] })
   const member = { id: "live-member", name: "Live nested member", description: "live", provider: "spawn", context: "fresh" as const, sessionId: "nested" }
   append(session, { type: "team/member", version: 1, teamId: "live-team", member: { ...member, phase: "provisioning" } })
@@ -291,7 +325,7 @@ it("reads normal/team descendants and durable results after restart without acti
   const f = await fixture()
   try {
     await f.coordinator.close()
-    const coordinator = createSessionCoordinator(createJsonlBackend(f.root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
     try {
       const catalog = createDesktopSubagents(coordinator, f.service)
       const result = await catalog.list("parent")
@@ -401,12 +435,18 @@ it("reports an old sequence-corrupt child as unavailable and refuses history wit
   const f = await fixture()
   try {
     await f.coordinator.create({ sessionId: "corrupt", parentSession: "parent", origin: "subagent", seedLength: 0 })
-    await f.coordinator.append("corrupt", [
+    const legacyEvents = [
       { type: "turn/start", seq: 0 }, { type: "user/message", seq: 1, text: "corrupt child task" }, { type: "step/start", seq: 2 },
       { type: "step/end" }, { type: "turn/end" }, { type: "reasoning", seq: 3, text: "late stream" },
       { type: "assistant/message", seq: 4, text: "late final" }, { type: "turn/end", seq: 5 },
-    ])
-    const path = join(f.root, "corrupt.jsonl"), before = await readFile(path, "utf8")
+    ]
+    // This deliberately invalid historical file cannot be created through a
+    // current atomic writer. Preserve the old raw sequence-corruption input.
+    const path = join(f.root, "corrupt.jsonl")
+    const header = JSON.parse((await readFile(path, 'utf8')).split('\n')[0]!)
+    delete header.journal
+    await writeFile(path, JSON.stringify({ ...header, formatVersion: 4 }) + '\n' + legacyEvents.map(event => JSON.stringify(event)).join('\n') + '\n')
+    const before = await readFile(path, "utf8")
     const catalog = createDesktopSubagents(f.coordinator, f.service)
     expect((await catalog.list("parent")).agents.find((row) => row.sessionId === "corrupt")).toMatchObject({ status: "unavailable", error: expect.stringContaining("sequence"), canFollowup: false })
     await expect(catalog.history("parent", "corrupt")).rejects.toThrow(/sequence/)
@@ -520,7 +560,7 @@ it("restores a completed closed child's actual model from its JSONL task documen
     expect(assembly.subagentState().agentTable.some(row => row.path === spawned.agent_path)).toBe(false)
     await service.close()
     await f.coordinator.flush(owned.sessionId!)
-    reader = createSessionCoordinator(createJsonlBackend(f.root))
+    reader = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
     const doc = await reader.getDocument(taskDocKey("parent")) as TaskProtocolDocument
     const restored = createTaskRegistry()
     restored.restore(doc)

@@ -62,7 +62,7 @@ describe("hysteresis (M33 §2.1)", () => {
     // hot shape: the summary alone keeps activeTokens above the 50-token
     // threshold, so only the hysteresis (not the pressure gate) can stop a retry
     const config: CompactionConfig = {
-      contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
+      contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200,
       minTurnsBeforeRecompact: 3,
     }
     const s = pressureSession()
@@ -88,7 +88,7 @@ describe("hysteresis (M33 §2.1)", () => {
   it("minTurnsBeforeRecompact: 0 keeps the pure re-fire guard (no turn gate)", async () => {
     const calls = { n: 0 }
     const config: CompactionConfig = {
-      contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100,
+      contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200,
       minTurnsBeforeRecompact: 0,
     }
     const s = pressureSession()
@@ -101,7 +101,7 @@ describe("hysteresis (M33 §2.1)", () => {
 })
 
 describe("breaker (M33 §2.2)", () => {
-  const config: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 100, minTurnsBeforeRecompact: 0 }
+  const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200, minTurnsBeforeRecompact: 0 }
 
   // M34 ⑦d (until-success): WHERE M33 reset the failure counter on new
   // content, M34 keeps it — new content only opens ONE attempt per burst (the

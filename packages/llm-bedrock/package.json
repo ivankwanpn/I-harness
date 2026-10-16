@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-bedrock-runtime": "^3.800.0",
-    "@i-harness/llm-seam": "workspace:*"
+    "@i-harness/llm-seam": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   }
 }

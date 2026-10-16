@@ -2,12 +2,18 @@ import { describe, expect, it, vi } from "vitest"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 describe("live approval modes", () => {
   it("runs an isolated reviewer on its selected model without creating child sessions", async () => {
-    const create = vi.fn(async () => ({ id: "unexpected-child" }))
-    const coordinator = { create, enqueue() {}, async flush() {}, async getDocument() { return undefined }, async putDocument() {} } as unknown as SessionCoordinator
+    const root = await mkdtemp(join(tmpdir(), 'ih-f1-reviewer-owner-'))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+    await coordinator.create({ sessionId: 's' })
+    const create = vi.spyOn(coordinator, 'create')
     const seen: { model: string; tools: number; effort?: string }[] = []
     let selected = "cheap-one"
     let mainCalls = 0
@@ -32,7 +38,7 @@ describe("live approval modes", () => {
       await service.submit("s", "second", new AbortController().signal)
       expect(seen).toEqual([{ model: "cheap-one", tools: 0, effort: "low" }, { model: "cheap-two", tools: 0, effort: "low" }])
       expect(create).not.toHaveBeenCalled()
-    } finally { await service.close() }
+    } finally { await service.close(); await coordinator.close() }
   })
   it("delegates tool review and switches the same assembly back to manual approval", async () => {
     let mode: "delegate" | "ask-all" | "dangerous" = "delegate"

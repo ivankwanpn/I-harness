@@ -1,0 +1,966 @@
+{
+  "baseline": "460a2aee9395dafe196eb31425dcc2c3fcdc259e",
+  "head": "1b605d0e7e7f88cdc4de5a5ae3c6103eea61f590",
+  "measuredAt": "2026-10-15T14:20:14.353Z",
+  "method": {
+    "trackedOnly": true,
+    "thresholdLines": 800,
+    "functionThresholdLines": 250,
+    "compressedFunctionThresholdCharacters": 18000,
+    "extensions": [
+      ".ts",
+      ".tsx",
+      ".mts",
+      ".cts",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+      ".rs",
+      ".c",
+      ".cc",
+      ".cpp",
+      ".cxx",
+      ".h",
+      ".hpp",
+      ".py",
+      ".ps1",
+      ".psm1",
+      ".sh",
+      ".cs"
+    ],
+    "lineDefinition": "Physical newline-delimited lines; trailing empty final split omitted. Nonempty counts include comments; JS/TS scanner-derived nonemptyExcludingCommentLines is an estimate (scanner lexical context can differ in template/regex/JSX). Function counts are TypeScript AST spans and nested functions overlap. Compressed-function candidates have <250 lines and >=18000 characters. Generated/vendor content not read. Other language functions not AST-measured.",
+    "consumerAnalysis": "Exact static import/export specifier resolution for relative source files and @i-harness/package src/index.ts facades; dynamic imports/reexports through intermediary facades may require follow-up. Native Rust consumers audited separately.",
+    "scope": "Tracked maintained product files only; test/script/vendor/generated excluded; scripts directories excluded at every depth. Rust embedded tests remain included in physical line totals and require manual product-only review. JS/TS function AST includes nested spans; measurements are candidate flags, not completion verdicts."
+  },
+  "summary": {
+    "originalFiles": 43,
+    "reviewedOriginalFiles": 27,
+    "pendingOriginalFiles": 16,
+    "pendingTasks": 13,
+    "currentProductFiles": 891,
+    "currentFlaggedFiles": 18,
+    "extraFlaggedFiles": 2
+  },
+  "original": [
+    {
+      "task": "S20",
+      "status": "pending",
+      "originalPath": "packages/session-executor/src/assembly.ts",
+      "baselineLines": 1745,
+      "current": {
+        "path": "packages/session-executor/src/assembly.ts",
+        "lines": 1785,
+        "bytes": 119164,
+        "largestFunction": {
+          "name": "createSessionAssembly",
+          "start": 499,
+          "end": 1785,
+          "lines": 1287,
+          "characters": 85352
+        },
+        "findings": [
+          {
+            "name": "createSessionAssembly",
+            "start": 499,
+            "end": 1785,
+            "lines": 1287,
+            "characters": 85352
+          }
+        ]
+      }
+    },
+    {
+      "task": "S1",
+      "status": "reviewed",
+      "originalPath": "packages/settings/src/index.ts",
+      "baselineLines": 1698,
+      "current": {
+        "path": "packages/settings/src/index.ts",
+        "lines": 60,
+        "bytes": 2567,
+        "findings": []
+      }
+    },
+    {
+      "task": "S14",
+      "status": "reviewed",
+      "originalPath": "packages/sandbox-windows-psec/native/src/runner.rs",
+      "baselineLines": 1246,
+      "current": {
+        "path": "packages/sandbox-windows-psec/native/src/runner.rs",
+        "lines": 320,
+        "bytes": 12059,
+        "findings": []
+      }
+    },
+    {
+      "task": "S3",
+      "status": "reviewed",
+      "originalPath": "packages/provider-runtime/src/index.ts",
+      "baselineLines": 1173,
+      "current": {
+        "path": "packages/provider-runtime/src/index.ts",
+        "lines": 4,
+        "bytes": 282,
+        "findings": []
+      }
+    },
+    {
+      "task": "S20",
+      "status": "pending",
+      "originalPath": "packages/session-executor/src/service.ts",
+      "baselineLines": 1132,
+      "current": {
+        "path": "packages/session-executor/src/service.ts",
+        "lines": 1153,
+        "bytes": 64788,
+        "largestFunction": {
+          "name": "createSessionService",
+          "start": 258,
+          "end": 1153,
+          "lines": 896,
+          "characters": 48229
+        },
+        "findings": [
+          {
+            "name": "createSessionService",
+            "start": 258,
+            "end": 1153,
+            "lines": 896,
+            "characters": 48229
+          }
+        ]
+      }
+    },
+    {
+      "task": "S3",
+      "status": "reviewed",
+      "originalPath": "packages/provider/src/index.ts",
+      "baselineLines": 1044,
+      "current": {
+        "path": "packages/provider/src/index.ts",
+        "lines": 10,
+        "bytes": 1018,
+        "findings": []
+      }
+    },
+    {
+      "task": "S22",
+      "status": "pending",
+      "originalPath": "apps/cli/src/run.ts",
+      "baselineLines": 1019,
+      "current": {
+        "path": "apps/cli/src/run.ts",
+        "lines": 1033,
+        "bytes": 62620,
+        "largestFunction": {
+          "name": "runHeadless",
+          "start": 353,
+          "end": 1033,
+          "lines": 681,
+          "characters": 42096
+        },
+        "findings": [
+          {
+            "name": "runHeadless",
+            "start": 353,
+            "end": 1033,
+            "lines": 681,
+            "characters": 42096
+          }
+        ]
+      }
+    },
+    {
+      "task": "S21",
+      "status": "pending",
+      "originalPath": "packages/sdk/src/server.ts",
+      "baselineLines": 1015,
+      "current": {
+        "path": "packages/sdk/src/server.ts",
+        "lines": 1018,
+        "bytes": 55405,
+        "largestFunction": {
+          "name": "createSdkServer",
+          "start": 200,
+          "end": 892,
+          "lines": 693,
+          "characters": 37576
+        },
+        "findings": [
+          {
+            "name": "createSdkServer",
+            "start": 200,
+            "end": 892,
+            "lines": 693,
+            "characters": 37576
+          },
+          {
+            "name": "handleRequest",
+            "start": 378,
+            "end": 859,
+            "lines": 482,
+            "characters": 27456
+          }
+        ]
+      }
+    },
+    {
+      "task": "S22",
+      "status": "pending",
+      "originalPath": "apps/cli/src/index.ts",
+      "baselineLines": 995,
+      "current": {
+        "path": "apps/cli/src/index.ts",
+        "lines": 995,
+        "bytes": 55822,
+        "largestFunction": {
+          "name": "main",
+          "start": 117,
+          "end": 555,
+          "lines": 439,
+          "characters": 24548
+        },
+        "findings": [
+          {
+            "name": "main",
+            "start": 117,
+            "end": 555,
+            "lines": 439,
+            "characters": 24548
+          },
+          {
+            "name": "runSdkCommand",
+            "start": 640,
+            "end": 891,
+            "lines": 252,
+            "characters": 13359
+          }
+        ]
+      }
+    },
+    {
+      "task": "S2",
+      "status": "reviewed",
+      "originalPath": "packages/core-session/src/index.ts",
+      "baselineLines": 984,
+      "current": {
+        "path": "packages/core-session/src/index.ts",
+        "lines": 41,
+        "bytes": 2216,
+        "findings": []
+      }
+    },
+    {
+      "task": "S18",
+      "status": "reviewed",
+      "originalPath": "packages/subagent/src/tools.ts",
+      "baselineLines": 916,
+      "current": {
+        "path": "packages/subagent/src/tools.ts",
+        "lines": 30,
+        "bytes": 1756,
+        "largestFunction": {
+          "name": "createSubagentTools",
+          "start": 15,
+          "end": 30,
+          "lines": 16,
+          "characters": 881
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S17",
+      "status": "reviewed",
+      "originalPath": "packages/core-agent/src/index.ts",
+      "baselineLines": 863,
+      "current": {
+        "path": "packages/core-agent/src/index.ts",
+        "lines": 21,
+        "bytes": 1325,
+        "findings": []
+      }
+    },
+    {
+      "task": "S12",
+      "status": "reviewed",
+      "originalPath": "packages/shell/src/index.ts",
+      "baselineLines": 836,
+      "current": {
+        "path": "packages/shell/src/index.ts",
+        "lines": 25,
+        "bytes": 1548,
+        "largestFunction": {
+          "name": "createShellTools",
+          "start": 15,
+          "end": 25,
+          "lines": 11,
+          "characters": 746
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S29",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/renderer/app.tsx",
+      "baselineLines": 807,
+      "current": {
+        "path": "packages/desktop/src/renderer/app.tsx",
+        "lines": 809,
+        "bytes": 48647,
+        "largestFunction": {
+          "name": "App",
+          "start": 52,
+          "end": 809,
+          "lines": 758,
+          "characters": 45987
+        },
+        "findings": [
+          {
+            "name": "App",
+            "start": 52,
+            "end": 809,
+            "lines": 758,
+            "characters": 45987
+          }
+        ]
+      }
+    },
+    {
+      "task": "S27",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/main/ipc.ts",
+      "baselineLines": 800,
+      "current": {
+        "path": "packages/desktop/src/main/ipc.ts",
+        "lines": 800,
+        "bytes": 58036,
+        "largestFunction": {
+          "name": "dispatchDesktopRequest",
+          "start": 63,
+          "end": 688,
+          "lines": 626,
+          "characters": 49264
+        },
+        "findings": [
+          {
+            "name": "dispatchDesktopRequest",
+            "start": 63,
+            "end": 688,
+            "lines": 626,
+            "characters": 49264
+          }
+        ]
+      }
+    },
+    {
+      "task": "S23",
+      "status": "pending",
+      "originalPath": "packages/desktop-gateway/src/router.ts",
+      "baselineLines": 716,
+      "current": {
+        "path": "packages/desktop-gateway/src/router.ts",
+        "lines": 716,
+        "bytes": 52885,
+        "largestFunction": {
+          "name": "createDesktopRouter",
+          "start": 96,
+          "end": 710,
+          "lines": 615,
+          "characters": 47405
+        },
+        "findings": [
+          {
+            "name": "createDesktopRouter",
+            "start": 96,
+            "end": 710,
+            "lines": 615,
+            "characters": 47405
+          },
+          {
+            "name": "handleLine",
+            "start": 109,
+            "end": 692,
+            "lines": 584,
+            "characters": 46122
+          }
+        ]
+      }
+    },
+    {
+      "task": "S7",
+      "status": "reviewed",
+      "originalPath": "packages/hooks/src/index.ts",
+      "baselineLines": 713,
+      "current": {
+        "path": "packages/hooks/src/index.ts",
+        "lines": 26,
+        "bytes": 1383,
+        "findings": []
+      }
+    },
+    {
+      "task": "S9",
+      "status": "reviewed",
+      "originalPath": "packages/session-persistence/src/index.ts",
+      "baselineLines": 702,
+      "current": {
+        "path": "packages/session-persistence/src/index.ts",
+        "lines": 61,
+        "bytes": 2952,
+        "largestFunction": {
+          "name": "createSessionCoordinator",
+          "start": 30,
+          "end": 61,
+          "lines": 32,
+          "characters": 1516
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S11",
+      "status": "reviewed",
+      "originalPath": "packages/compaction/src/index.ts",
+      "baselineLines": 681,
+      "current": {
+        "path": "packages/compaction/src/index.ts",
+        "lines": 133,
+        "bytes": 7644,
+        "largestFunction": {
+          "name": "createCompactionEngine",
+          "start": 62,
+          "end": 133,
+          "lines": 72,
+          "characters": 4227
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S19",
+      "status": "reviewed",
+      "originalPath": "packages/agent-team/src/scheduler.ts",
+      "baselineLines": 660,
+      "current": {
+        "path": "packages/agent-team/src/scheduler.ts",
+        "lines": 250,
+        "bytes": 13234,
+        "largestFunction": {
+          "name": "mountAgentTeams",
+          "start": 112,
+          "end": 250,
+          "lines": 139,
+          "characters": 6847
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S6",
+      "status": "reviewed",
+      "originalPath": "packages/core-tools/src/index.ts",
+      "baselineLines": 632,
+      "current": {
+        "path": "packages/core-tools/src/index.ts",
+        "lines": 52,
+        "bytes": 2718,
+        "largestFunction": {
+          "name": "createToolRegistry",
+          "start": 19,
+          "end": 52,
+          "lines": 34,
+          "characters": 1268
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S31",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/renderer/session/Composer.tsx",
+      "baselineLines": 604,
+      "current": {
+        "path": "packages/desktop/src/renderer/session/Composer.tsx",
+        "lines": 604,
+        "bytes": 47196,
+        "largestFunction": {
+          "name": "SessionComposer",
+          "start": 260,
+          "end": 604,
+          "lines": 345,
+          "characters": 28945
+        },
+        "findings": [
+          {
+            "name": "SessionComposer",
+            "start": 260,
+            "end": 604,
+            "lines": 345,
+            "characters": 28945
+          }
+        ]
+      }
+    },
+    {
+      "task": "S18",
+      "status": "reviewed",
+      "originalPath": "packages/subagent/src/child.ts",
+      "baselineLines": 601,
+      "current": {
+        "path": "packages/subagent/src/child.ts",
+        "lines": 81,
+        "bytes": 4416,
+        "largestFunction": {
+          "name": "spawnChild",
+          "start": 16,
+          "end": 81,
+          "lines": 66,
+          "characters": 3446
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S13",
+      "status": "reviewed",
+      "originalPath": "packages/exec/src/service.ts",
+      "baselineLines": 588,
+      "current": {
+        "path": "packages/exec/src/service.ts",
+        "lines": 11,
+        "bytes": 635,
+        "largestFunction": {
+          "name": "createExecService",
+          "start": 7,
+          "end": 11,
+          "lines": 5,
+          "characters": 358
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S17",
+      "status": "reviewed",
+      "originalPath": "packages/core-agent/src/execute-tool-calls.ts",
+      "baselineLines": 584,
+      "current": {
+        "path": "packages/core-agent/src/execute-tool-calls.ts",
+        "lines": 4,
+        "bytes": 317,
+        "findings": []
+      }
+    },
+    {
+      "task": "S10",
+      "status": "reviewed",
+      "originalPath": "packages/session-query/src/file-backed.ts",
+      "baselineLines": 558,
+      "current": {
+        "path": "packages/session-query/src/file-backed.ts",
+        "lines": 24,
+        "bytes": 1328,
+        "largestFunction": {
+          "name": "createFileBackedSessionQuery",
+          "start": 16,
+          "end": 24,
+          "lines": 9,
+          "characters": 368
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S30",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/renderer/shell/Workbench.tsx",
+      "baselineLines": 547,
+      "current": {
+        "path": "packages/desktop/src/renderer/shell/Workbench.tsx",
+        "lines": 547,
+        "bytes": 52486,
+        "largestFunction": {
+          "name": "Workbench",
+          "start": 138,
+          "end": 547,
+          "lines": 410,
+          "characters": 44108
+        },
+        "findings": [
+          {
+            "name": "Workbench",
+            "start": 138,
+            "end": 547,
+            "lines": 410,
+            "characters": 44108
+          }
+        ]
+      }
+    },
+    {
+      "task": "S23",
+      "status": "pending",
+      "originalPath": "packages/desktop-gateway/src/host.ts",
+      "baselineLines": 539,
+      "current": {
+        "path": "packages/desktop-gateway/src/host.ts",
+        "lines": 556,
+        "bytes": 38140,
+        "largestFunction": {
+          "name": "createDesktopHost",
+          "start": 126,
+          "end": 556,
+          "lines": 431,
+          "characters": 30690
+        },
+        "findings": [
+          {
+            "name": "createDesktopHost",
+            "start": 126,
+            "end": 556,
+            "lines": 431,
+            "characters": 30690
+          }
+        ]
+      }
+    },
+    {
+      "task": "S4",
+      "status": "reviewed",
+      "originalPath": "packages/llm-gemini/src/index.ts",
+      "baselineLines": 531,
+      "current": {
+        "path": "packages/llm-gemini/src/index.ts",
+        "lines": 4,
+        "bytes": 202,
+        "findings": []
+      }
+    },
+    {
+      "task": "S8",
+      "status": "reviewed",
+      "originalPath": "packages/mcp-client/src/supervisor.ts",
+      "baselineLines": 528,
+      "current": {
+        "path": "packages/mcp-client/src/supervisor.ts",
+        "lines": 54,
+        "bytes": 2864,
+        "largestFunction": {
+          "name": "createMcpSupervisor",
+          "start": 27,
+          "end": 54,
+          "lines": 28,
+          "characters": 1362
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S4",
+      "status": "reviewed",
+      "originalPath": "packages/llm-openai/src/index.ts",
+      "baselineLines": 515,
+      "current": {
+        "path": "packages/llm-openai/src/index.ts",
+        "lines": 4,
+        "bytes": 197,
+        "findings": []
+      }
+    },
+    {
+      "task": "S15",
+      "status": "reviewed",
+      "originalPath": "packages/code-mode/src/runtime.ts",
+      "baselineLines": 508,
+      "current": {
+        "path": "packages/code-mode/src/runtime.ts",
+        "lines": 44,
+        "bytes": 2627,
+        "largestFunction": {
+          "name": "createCodeModeRuntime",
+          "start": 10,
+          "end": 44,
+          "lines": 35,
+          "characters": 2130
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S4",
+      "status": "reviewed",
+      "originalPath": "packages/llm-anthropic/src/index.ts",
+      "baselineLines": 505,
+      "current": {
+        "path": "packages/llm-anthropic/src/index.ts",
+        "lines": 4,
+        "bytes": 208,
+        "findings": []
+      }
+    },
+    {
+      "task": "S5",
+      "status": "reviewed",
+      "originalPath": "packages/core-plugin/src/index.ts",
+      "baselineLines": 478,
+      "current": {
+        "path": "packages/core-plugin/src/index.ts",
+        "lines": 11,
+        "bytes": 471,
+        "largestFunction": {
+          "name": "createContext",
+          "start": 7,
+          "end": 9,
+          "lines": 3,
+          "characters": 101
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S26",
+      "status": "pending",
+      "originalPath": "packages/coding-plans/src/codex-management.ts",
+      "baselineLines": 476,
+      "current": {
+        "path": "packages/coding-plans/src/codex-management.ts",
+        "lines": 476,
+        "bytes": 32309,
+        "largestFunction": {
+          "name": "createCodexManagement",
+          "start": 128,
+          "end": 476,
+          "lines": 349,
+          "characters": 24665
+        },
+        "findings": [
+          {
+            "name": "createCodexManagement",
+            "start": 128,
+            "end": 476,
+            "lines": 349,
+            "characters": 24665
+          }
+        ]
+      }
+    },
+    {
+      "task": "S4",
+      "status": "reviewed",
+      "originalPath": "packages/llm-bedrock/src/index.ts",
+      "baselineLines": 419,
+      "current": {
+        "path": "packages/llm-bedrock/src/index.ts",
+        "lines": 4,
+        "bytes": 253,
+        "findings": []
+      }
+    },
+    {
+      "task": "S4",
+      "status": "reviewed",
+      "originalPath": "packages/llm-openai-compatible/src/index.ts",
+      "baselineLines": 401,
+      "current": {
+        "path": "packages/llm-openai-compatible/src/index.ts",
+        "lines": 4,
+        "bytes": 222,
+        "findings": []
+      }
+    },
+    {
+      "task": "S24",
+      "status": "pending",
+      "originalPath": "packages/desktop-gateway/src/project-scope.ts",
+      "baselineLines": 397,
+      "current": {
+        "path": "packages/desktop-gateway/src/project-scope.ts",
+        "lines": 397,
+        "bytes": 22853,
+        "largestFunction": {
+          "name": "createProjectScopeBroker",
+          "start": 30,
+          "end": 397,
+          "lines": 368,
+          "characters": 20865
+        },
+        "findings": [
+          {
+            "name": "createProjectScopeBroker",
+            "start": 30,
+            "end": 397,
+            "lines": 368,
+            "characters": 20865
+          }
+        ]
+      }
+    },
+    {
+      "task": "S13",
+      "status": "reviewed",
+      "originalPath": "packages/exec/src/execution-supervisor.ts",
+      "baselineLines": 368,
+      "current": {
+        "path": "packages/exec/src/execution-supervisor.ts",
+        "lines": 8,
+        "bytes": 479,
+        "largestFunction": {
+          "name": "createExecutionSupervisor",
+          "start": 6,
+          "end": 8,
+          "lines": 3,
+          "characters": 102
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S28",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/main/runtime-diagnostics.ts",
+      "baselineLines": 319,
+      "current": {
+        "path": "packages/desktop/src/main/runtime-diagnostics.ts",
+        "lines": 375,
+        "bytes": 32710,
+        "largestFunction": {
+          "name": "createRuntimeDiagnostics",
+          "start": 43,
+          "end": 375,
+          "lines": 333,
+          "characters": 28600
+        },
+        "findings": [
+          {
+            "name": "createRuntimeDiagnostics",
+            "start": 43,
+            "end": 375,
+            "lines": 333,
+            "characters": 28600
+          }
+        ]
+      }
+    },
+    {
+      "task": "S25",
+      "status": "pending",
+      "originalPath": "packages/desktop-gateway/src/session-subagents.ts",
+      "baselineLines": 316,
+      "current": {
+        "path": "packages/desktop-gateway/src/session-subagents.ts",
+        "lines": 316,
+        "bytes": 22156,
+        "largestFunction": {
+          "name": "createDesktopSubagents",
+          "start": 60,
+          "end": 316,
+          "lines": 257,
+          "characters": 18479
+        },
+        "findings": [
+          {
+            "name": "createDesktopSubagents",
+            "start": 60,
+            "end": 316,
+            "lines": 257,
+            "characters": 18479
+          }
+        ]
+      }
+    },
+    {
+      "task": "S16",
+      "status": "reviewed",
+      "originalPath": "packages/code-retrieval/src/service.ts",
+      "baselineLines": 309,
+      "current": {
+        "path": "packages/code-retrieval/src/service.ts",
+        "lines": 21,
+        "bytes": 1264,
+        "largestFunction": {
+          "name": "createCodeRetrievalService",
+          "start": 9,
+          "end": 21,
+          "lines": 13,
+          "characters": 872
+        },
+        "findings": []
+      }
+    },
+    {
+      "task": "S32",
+      "status": "pending",
+      "originalPath": "packages/desktop/src/renderer/session/SessionManager.tsx",
+      "baselineLines": 210,
+      "current": {
+        "path": "packages/desktop/src/renderer/session/SessionManager.tsx",
+        "lines": 210,
+        "bytes": 23559,
+        "largestFunction": {
+          "name": "SessionManager",
+          "start": 26,
+          "end": 210,
+          "lines": 185,
+          "characters": 20560
+        },
+        "findings": [
+          {
+            "name": "SessionManager",
+            "start": 26,
+            "end": 210,
+            "lines": 185,
+            "characters": 20560
+          }
+        ]
+      }
+    }
+  ],
+  "extraFlagged": [
+    {
+      "path": "packages/session-persistence-jsonl/src/index.ts",
+      "lines": 337,
+      "bytes": 19076,
+      "largestFunction": {
+        "name": "createJsonlBackend",
+        "start": 46,
+        "end": 301,
+        "lines": 256,
+        "characters": 15548
+      },
+      "findings": [
+        {
+          "name": "createJsonlBackend",
+          "start": 46,
+          "end": 301,
+          "lines": 256,
+          "characters": 15548
+        }
+      ]
+    },
+    {
+      "path": "packages/subagent/src/task-protocol.ts",
+      "lines": 457,
+      "bytes": 18267,
+      "largestFunction": {
+        "name": "createTaskRegistry",
+        "start": 125,
+        "end": 402,
+        "lines": 278,
+        "characters": 11211
+      },
+      "findings": [
+        {
+          "name": "createTaskRegistry",
+          "start": 125,
+          "end": 402,
+          "lines": 278,
+          "characters": 11211
+        }
+      ]
+    }
+  ]
+}

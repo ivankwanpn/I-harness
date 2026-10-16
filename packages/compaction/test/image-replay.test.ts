@@ -23,7 +23,7 @@ describe("compaction image-aware replay", () => {
     append(s, { type: "user/message", text: "pic", images: [{ mediaType: "image/png", dataBase64: "aGVsbG8=" }] })
     append(s, { type: "assistant/message", text: "ok" })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.9, auto: false }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)
@@ -49,7 +49,7 @@ describe("compaction image-aware replay", () => {
     })
     append(s, { type: "assistant/message", text: "done" })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.9, auto: false }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)
@@ -68,7 +68,7 @@ describe("compaction image-aware replay", () => {
     append(s, { type: "user/message", text: "plain words here" })
     append(s, { type: "assistant/message", text: "ok" })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.9, auto: false }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)
@@ -83,7 +83,7 @@ describe("compaction image-aware replay", () => {
     s.events.push({ type: "user/message", text: "broken-a", images: "not-an-array", seq: 0 } as never)
     s.events.push({ type: "user/message", text: "still-text", seq: 1 })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.9, auto: false }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)
@@ -100,7 +100,7 @@ describe("compaction image-aware replay", () => {
     s.events.push({ type: "user/message", text: "pic-ish", images: [{ mediaType: 7, dataBase64: {} }], seq: 0 } as never)
     s.events.push({ type: "assistant/message", text: "ok", seq: 1 })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10, thresholdRatio: 0.9, auto: false }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.9, auto: false }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s)
     expect(r.compacted).toBe(true)

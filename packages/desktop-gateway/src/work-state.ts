@@ -1,8 +1,8 @@
 import { foldGoal, type GoalView } from "@i-harness/goal"
 import { deriveTodoList, validateTodoItems } from "@i-harness/todo"
-import { append, type Session, type TodoItem } from "@i-harness/core-session"
+import { committedFactSeqs, type SessionView as Session, type TodoItem } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { createDurableSessionLoader, type SessionService } from "@i-harness/session-executor"
+import { actionMetadataFacts, createDurableSessionLoader, type SessionService } from "@i-harness/session-executor"
 
 export interface DesktopWorkStateView {
   todos: TodoItem[] | null
@@ -77,8 +77,9 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
         if (actualRevision !== expectedRevision) throw new TodoRevisionConflictError(expectedRevision, actualRevision)
         // No await between compare and append: a live model tool cannot write
         // between the revision check and this whole-list replacement.
-        append(session, { type: "todo/write", version: 1, items })
-        await coordinator.flush(sessionId)
+        const document=await coordinator.openManagedDocument(sessionId)
+        if(document.view!==session)throw Object.assign(new Error('Todo edit requires its owned document view'),{code:'FACT_OWNER_UNSUPPORTED'})
+        committedFactSeqs(await actionMetadataFacts(document).admit({ type: "todo/write", version: 1, items }))
         return view(session)
       } finally {
         gate.resolve()

@@ -19,6 +19,19 @@ import {
   type RpcRequest,
 } from "../src/protocol.ts"
 import { HarnessClient } from "../src/client.ts"
+import { RpcError } from '../src/protocol.ts'
+import { SdkRunError } from '../src/client.ts'
+import { validationCollector } from '@i-harness/llm-seam'
+
+it('RPC and run errors retain only sanitized validation reports', () => {
+  const check = validationCollector('openai-responses'); check.issue('binding', 'model', 'binding')
+  const report = check.finish().report
+  for (const error of [new RpcError(-32603, 'private raw', { modelFailure: { code: 'INVALID_ARGUMENT', reason: 'binding', validation: report } }), new SdkRunError('private raw', -32603, { modelFailure: { code: 'INVALID_ARGUMENT', reason: 'binding', validation: report } }, [])]) {
+    expect(error.modelFailure).toMatchObject({ reason: 'binding', message: 'Model request does not match its selected binding.', validation: report })
+    expect(JSON.stringify(error.modelFailure)).not.toContain('private raw')
+  }
+  expect(new RpcError(-32603, '', { modelFailure: { code: 'INVALID_ARGUMENT', reason: 'schema', validation: { ...report, constructor: 'private' } } }).modelFailure?.validation).toBeUndefined()
+})
 
 describe("frame encoding", () => {
   it("round-trips a request; each frame is one NDJSON line", () => {

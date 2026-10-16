@@ -1,5 +1,5 @@
 import type { GuardianRequest } from "@i-harness/core-tools"
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
 import { clampOutputCap, type LLMMessage } from "@i-harness/llm-seam"
 import { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./verdict.ts"

@@ -29,6 +29,29 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it("describes binding identity without authentication or a client and observes manual endpoint/template changes", async () => {
+  const resolve = vi.fn(async () => { throw new Error("metadata must not authenticate") }), describe = vi.fn(async () => { throw new Error("metadata must not inspect credentials") })
+  const f = await fixture({ providers: { route: { protocol: "openai-completions", apiKeyEnv: "SYNTHETIC", baseURL: "https://route.test", models: [{ id: "m", contextWindow: 1000 }] } }, auth: { resolve, describe } })
+  const input = { sessionSelection: { provider: "route", model: "m" } }
+  const first = await f.runtime.describeModelBindingMetadata?.(input)
+  expect(first).toMatchObject({ modelId: "m", protocol: "openai-compatible", identityCoverage: "complete", contextWindow: 1000 })
+  expect(f.builds).toHaveLength(0)
+  const document = JSON.parse(readFileSync(f.settingsPath, "utf8"))
+  document.llm.providers.route.baseURL = "https://other.test"
+  writeFileSync(f.settingsPath, JSON.stringify(document)); await f.settings.load()
+  const second = await f.runtime.describeModelBindingMetadata!(input)
+  expect(second?.bindingConfigFingerprint).not.toBe(first?.bindingConfigFingerprint)
+  f.registry.register({ name: "route", displayName: "Route", protocol: "openai-compatible", inputModalities: ["text", "image"] })
+  const templateChanged = await f.runtime.describeModelBindingMetadata!(input)
+  expect(templateChanged?.bindingConfigFingerprint).not.toBe(second?.bindingConfigFingerprint)
+  await f.runtime.patchProvider("route", { baseURL: "https://user:secret@other.test/?token=private" })
+  const sensitive = await f.runtime.describeModelBindingMetadata!(input)
+  expect(sensitive?.identityCoverage).toBe("partial")
+  expect(JSON.stringify(sensitive)).not.toMatch(/secret|private|other.test/)
+  expect(f.builds).toHaveLength(0)
+  expect(resolve).not.toHaveBeenCalled(); expect(describe).not.toHaveBeenCalled()
+})
+
 it.each([undefined, 0] as const)("runtime-created profiles activate recovery and preserve explicit retry budget %s", async maxRetries => {
   const f = await fixture({ providers: { route: { protocol: "openai-completions", apiKeyEnv: "SYNTHETIC", models: [{ id: "m" }] } }, credentials: { SYNTHETIC: "fixture-key" }, registry(registry) {
     if (maxRetries !== undefined) registry.register({ name: "route", displayName: "route", protocol: "openai-compatible", retryPolicy: { mode: "normal", maxRetries } })
@@ -1732,4 +1755,16 @@ it("refreshes wait settings on existing binding independently of explicit retry 
  for await (const _ of ready.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {}
  expect(f.builds.at(-1)?.profile.modelWait).toEqual({ firstResponseMs: 0, progressMs: 30000 })
  expect(f.builds.at(-1)?.profile.retryPolicy).toEqual({ mode: "normal", maxRetries: 0 })
+})
+it("prepared binding refreshes live policy once and cap derivatives retain selected execution",async()=>{
+ const f=await fixture({providers:{route:{protocol:"openai-completions",apiKeyEnv:"KEY",models:[{id:"m"}]}},credentials:{KEY:"fixture"}})
+ const ready=await f.runtime.resolveModel({sessionSelection:{provider:"route",model:"m"}})
+ if(ready.status!=="ready")throw new Error("unavailable")
+ await f.settings.set({modelWait:{firstResponseSeconds:0,progressSeconds:30},modelRetryLimit:2})
+ const prepared=await ready.binding.client.prepare!({messages:[],tools:[],systemPrompt:"frozen"})
+ expect(f.builds.at(-1)?.profile.modelWait).toEqual({firstResponseMs:0,progressMs:30000})
+ expect(f.builds.at(-1)?.profile.retryPolicy).toEqual({mode:"normal",maxRetries:2})
+ const builds=f.builds.length
+ for await(const _event of prepared.withOutputCap(4096).stream()){}
+ expect(f.builds).toHaveLength(builds)
 })

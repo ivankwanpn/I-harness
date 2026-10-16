@@ -13,7 +13,7 @@ describe("jsonl backend", () => {
   it("stores an admitted prompt image once and restores its model-visible reference", async () => {
     const backend = createJsonlBackend(dir)
     const image = { mediaType: "image/png" as const, dataBase64: "AQIDBAUG", name: "once.png" }
-    await backend.create("image", { formatVersion: 1, sessionId: "image", createdAt: "2026-09-27T00:00:00.000Z" })
+    await backend.create("image", { formatVersion: 7, sessionId: "image", createdAt: "2026-09-27T00:00:00.000Z" })
     const session = createSession()
     append(session, { type: "agent/input/admitted", version: 1, inputId: "photo", text: "inspect", delivery: "queue", intent: "user", images: [image] })
     append(session, { type: "turn/start" })
@@ -35,7 +35,7 @@ describe("jsonl backend", () => {
       resolve(dir, "..", "absolute-secret"),
     ]
     const operations: Array<(id: string) => Promise<unknown>> = [
-      (id) => backend.create(id, { formatVersion: 1, sessionId: id, createdAt: "x" }),
+      (id) => backend.create(id, { formatVersion: 7, sessionId: id, createdAt: "x" }),
       (id) => backend.append(id, [{ type: "turn/start" }]),
       (id) => backend.read(id),
       (id) => backend.repair(id),
@@ -54,7 +54,7 @@ describe("jsonl backend", () => {
   it("preserves generated and child session ids", async () => {
     const backend = createJsonlBackend(dir)
     for (const id of ["sess-mtpljaje-mnksho", "child-550e8400-e29b-41d4-a716-446655440000"]) {
-      await backend.create(id, { formatVersion: 1, sessionId: id, createdAt: "x" })
+      await backend.create(id, { formatVersion: 7, sessionId: id, createdAt: "x" })
       await backend.append(id, [{ type: "turn/start" }, { type: "turn/end" }])
       await expect(backend.read(id)).resolves.toMatchObject({
         events: [{ type: "turn/start" }, { type: "turn/end" }],
@@ -64,20 +64,20 @@ describe("jsonl backend", () => {
 
   it("create writes a header; append+read round-trips events", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
     await backend.append("s1", [
       { type: "turn/start" },
       { type: "user/message", text: "hi" },
     ])
     const { version, events } = await backend.read("s1")
-    expect(version).toBe(1)
+    expect(version).toBe(7)
     expect(events).toMatchObject([{ type: "turn/start" }, { type: "user/message", text: "hi" }])
     expect(backend.capabilities).toEqual({ seekableRead: false, rawArtifacts: true })
   })
 
   it("read tolerates a torn final record and returns the committed prefix", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
     await backend.append("s1", [{ type: "turn/start" }, { type: "user/message", text: "hi" }])
     // Simulate a crash mid-write: append a partial line.
     const path = join(dir, "s1.jsonl")
@@ -88,7 +88,7 @@ describe("jsonl backend", () => {
 
   it("repair truncates a torn tail left by a crash during the first append batch", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
     // Crash during the FIRST append batch: the only event line after the header is torn.
     const path = join(dir, "s1.jsonl")
     writeFileSync(path, readFileSync(path, "utf-8") + '{"type":"user/mess')
@@ -103,7 +103,7 @@ describe("jsonl backend", () => {
 
   it("append after a failed write rolls back so retry does not duplicate seqs", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
     await backend.append("s1", [{ type: "turn/start" }])
     // Force a failure by writing to a closed handle via a second backend on a removed file? No —
     // instead test the rollback contract directly: after repair/list, file size reflects committed only.
@@ -121,7 +121,7 @@ describe("jsonl backend", () => {
 
   it("repair truncates a torn tail and re-closes an interrupted turn", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "2026-08-17T00:00:00.000Z" })
     await backend.append("s1", [{ type: "turn/start" }, { type: "step/start" }, { type: "user/message", text: "hi" }])
     const path = join(dir, "s1.jsonl")
     writeFileSync(path, readFileSync(path, "utf-8") + '{"type":"assistant/mess') // torn
@@ -135,7 +135,7 @@ describe("jsonl backend", () => {
 
   it("repair on the mount's [dispatch, admitted] batch torn MID-SECOND-LINE keeps the dispatch and drops the admitted (measured)", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-09-21T00:00:00.000Z" })
+    writeFileSync(join(dir, "s1.jsonl"), JSON.stringify({ formatVersion: 5, sessionId: "s1", createdAt: "2026-09-21T00:00:00.000Z" }) + "\n")
     // The schedule mount's durable batch (§3.4): ONE append, two events, the
     // dispatch first and its admission second — the shape
     // session-executor's `deliver` writes.
@@ -167,7 +167,7 @@ describe("jsonl backend", () => {
     // (dispatch kept, admitted lost), not both and not neither.
     expect(events).toEqual([dispatch])
     expect(readFileSync(path, "utf-8")).toBe(
-      '{"formatVersion":1,"sessionId":"s1","createdAt":"2026-09-21T00:00:00.000Z"}\n'
+      '{"formatVersion":5,"sessionId":"s1","createdAt":"2026-09-21T00:00:00.000Z"}\n'
       + '{"type":"schedule/change","version":1,"operation":"dispatch","id":"schedule-1"}\n',
     )
     expect((await backend.read("s1")).events).toEqual([dispatch])
@@ -175,14 +175,14 @@ describe("jsonl backend", () => {
 
   it("list enumerates session files without extension", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
-    await backend.create("s2", { formatVersion: 1, sessionId: "s2", createdAt: "x" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "x" })
+    await backend.create("s2", { formatVersion: 7, sessionId: "s2", createdAt: "x" })
     expect((await backend.list()).sort()).toEqual(["s1", "s2"])
   })
 
   it("list excludes document sidecars", async () => {
     const backend = createJsonlBackend(dir)
-    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "x" })
+    await backend.create("s1", { formatVersion: 7, sessionId: "s1", createdAt: "x" })
     await backend.putDocument("subagent-state", { jobs: [] })
     expect((await backend.list()).sort()).toEqual(["s1"])
   })
@@ -212,7 +212,7 @@ describe("jsonl lineage header", () => {
   it("create/read/repair round-trip the lineage header", async () => {
     const backend = createJsonlBackend(dir)
     await backend.create("child-abc", {
-      formatVersion: 1, sessionId: "child-abc", createdAt: "x",
+      formatVersion: 7, sessionId: "child-abc", createdAt: "x",
       parentSession: "sess-p", seedLength: 3, origin: "subagent", delegationDepth: 0,
     })
     await backend.append("child-abc", [{ type: "turn/start" }])

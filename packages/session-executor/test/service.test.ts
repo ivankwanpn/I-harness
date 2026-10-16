@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import type { SessionQueueItem } from "../src/index.ts"
@@ -19,6 +20,30 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it.each(["success", "refusal"] as const)("fences the legacy model builder behind held writable acquisition (%s)", async outcome => {
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const builder = vi.fn(async () => createMockClient([]))
+    const service = createSessionService({ workspace: process.cwd(), modelBuilder: builder, sessionFor: async () => {
+      entered.resolve(); await release.promise
+      if (outcome === "refusal") throw new Error("writable format barrier refused")
+      return createSession()
+    } })
+    const pending = service.assemblyFor("legacy-barrier").then(value => ({ value }), error => ({ error }))
+    try {
+      await entered.promise
+      expect(builder).not.toHaveBeenCalled()
+      release.resolve()
+      const result = await pending
+      if (outcome === "success") {
+        expect(result).toHaveProperty("value.sessionId", "legacy-barrier")
+        expect(builder).toHaveBeenCalledTimes(1)
+      } else {
+        expect(result).toHaveProperty("error.message", "writable format barrier refused")
+        expect(builder).not.toHaveBeenCalled()
+      }
+    } finally { release.resolve(); await pending; await service.close() }
+  })
+
   it("optionally attaches existing assemblies, keeps default future-only, and detaches after unsubscribe", async () => {
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
     try {
@@ -518,14 +543,8 @@ describe("createSessionService", () => {
     append(restored, { type: "user/message", text: "earlier question" })
     append(restored, { type: "assistant/message", text: "earlier answer" })
     append(restored, { type: "turn/end" })
-    const enqueue = vi.fn()
-    const flush = vi.fn(async () => {})
-    const coordinator = {
-      load: vi.fn(async () => ({ session: restored })),
-      loadOwned: vi.fn(async () => ({ session: restored })),
-      enqueue,
-      flush,
-    } as unknown as SessionCoordinator
+    const root=mkdtempSync(join(tmpdir(),'ih-f1-service-resume-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+    await coordinator.create({sessionId:'durable'});await coordinator.append('durable',restored.events)
     const requests: LLMRequest[] = []
     const model: ModelClient = {
       async *stream(request) {
@@ -538,6 +557,7 @@ describe("createSessionService", () => {
       workspace: process.cwd(),
       approveAll: true,
       model,
+      coordinator,
       sessionFor: createDurableSessionLoader(coordinator),
     })
 
@@ -550,11 +570,11 @@ describe("createSessionService", () => {
       const live = service.liveSession("durable")!
       expect(live.events.slice(0, restored.events.length)).toEqual(restored.events)
       expect(live.events.map((event) => event.seq)).toEqual(live.events.map((_, index) => index))
-      const mirrored = enqueue.mock.calls.flatMap((call) => call[1] as Array<{ seq?: number }>)
-      expect(mirrored[0]?.seq).toBe(restored.events.length)
-      expect(flush).toHaveBeenCalledWith("durable")
+      const saved=(await backend.read('durable')).events
+      expect(saved).toEqual(live.events)
+      expect(saved[restored.events.length]?.seq).toBe(restored.events.length)
     } finally {
-      await service.close()
+      await service.close();await coordinator.close()
     }
   }, 60_000)
 
@@ -774,7 +794,7 @@ describe("createSessionService", () => {
       approveAll: true,
       ...effortSeam,
       loadMeta: async () => ({
-        formatVersion: 1, sessionId: "s1", createdAt: "",
+        formatVersion: 2, sessionId: "s1", createdAt: "",
         modelSelection: { provider: "p", model: "m", reasoningEffort: "high" },
       }),
       modelBuilder: async () => ({
@@ -793,7 +813,7 @@ describe("createSessionService", () => {
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
-      loadMeta: async () => ({ formatVersion: 1, sessionId: "s1", createdAt: "" }),
+      loadMeta: async () => ({ formatVersion: 2, sessionId: "s1", createdAt: "" }),
       modelBuilder: async () => ({
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)
@@ -922,8 +942,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
       const row = await waitForQueueText(service, "s1", "second")
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       release()
       await Promise.all([first, second])
       expect(seen).toEqual(["first"])
@@ -942,8 +962,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const row = await waitForQueueText(service, "s1", "second")
       release()
       await Promise.all([first, second])
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
     } finally {
       release()
       await service.close()
@@ -998,8 +1018,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       // deliberately stale while the lane is running this row.
       releaseBinding()
       await waitFor(() => seen.length === 1)
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       // the running turn keeps executing to completion (no abort path taken);
       // the second row was never cancelled and runs after it.
       releaseModel()
@@ -1207,7 +1227,7 @@ describe("createSessionService — close lifecycle with a queue in flight (Task 
       const closing = service.closeSession("s1")
       gate.resolve()
       await closing
-      await expect(submit).resolves.toBeUndefined()
+      await expect(submit).rejects.toThrow('agent aborted')
       expect(service.queue("s1")).toEqual([])
       expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
       expect(service.hasAssembly("s1")).toBe(false)

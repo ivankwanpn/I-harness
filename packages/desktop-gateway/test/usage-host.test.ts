@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import type { UsageSnapshot } from "../../usage-stats/src/types.ts"
 import { createDesktopHost } from "../src/host.ts"
+import { createRuntimeDiagnostics } from "../../desktop/src/main/runtime-diagnostics.ts"
+import type { DesktopEvent } from "../../desktop/src/shared/bridge.ts"
 
 it("captures real host turns, titles and compaction with provenance, surviving a host restart globally", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-usage-host-"))
@@ -47,6 +49,22 @@ it("captures real host turns, titles and compaction with provenance, surviving a
     expect(stats.summary.requests).toBe(3)
     expect(stats.records.every(row => row.workspace === workspace && row.projectId === "usage-project" && row.sessionId === sessionId && row.providerId === "fixture" && row.modelId === "model-a" && row.billing === "api")).toBe(true)
     expect(stats.summary.totalTokens).toBe(315)
+    expect(stats.records.every(row => row.requestMetrics?.coverage === "neutral-only")).toBe(true)
+    const diagnostics = frames.filter(frame => "method" in frame && frame.method === "desktop/context/diagnostic")
+    expect(diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ params: expect.objectContaining({ sessionId, projectId: "usage-project", requestMetrics: expect.objectContaining({ version: 1, coverage: "neutral-only" }) }) })]))
+    expect(diagnostics).toEqual(expect.arrayContaining([expect.objectContaining({ params: expect.objectContaining({ sessionId, compaction: expect.objectContaining({ operation: "summary", contextWindow: 100000 }) }) })]))
+    expect(JSON.stringify(diagnostics)).not.toMatch(/private prompt|fake-key|useful facts/)
+    const journal = createRuntimeDiagnostics(join(root, "runtime-diagnostics"))
+    for (const frame of frames) if ("method" in frame && ["session/event", "session/status", "desktop/context/diagnostic"].includes(frame.method))
+      journal.observe({ kind: "sdk/notification", workspaceId: "controlled-workspace", method: frame.method, params: frame.params } as DesktopEvent)
+    await journal.flush()
+    const entries = (await createRuntimeDiagnostics(join(root, "runtime-diagnostics")).list()).entries
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "context/request", sessionId, projectId: "usage-project", requestMetrics: expect.objectContaining({ coverage: "neutral-only" }) }),
+      expect.objectContaining({ kind: "context/budget", sessionId, contextBudget: expect.objectContaining({ contextWindow: 100000, estimateSource: "neutral-only" }) }),
+      expect.objectContaining({ kind: "context/compaction", sessionId, compaction: expect.objectContaining({ operation: "summary", contextWindow: 100000 }) }),
+    ]))
+    expect(JSON.stringify(entries)).not.toMatch(/private prompt|fake-key|useful facts/)
     expect((await call("desktop/usage/query", { query: { ...query, projectId: "another-project" } }) as UsageSnapshot).summary.requests).toBe(0)
     expect(JSON.stringify(stats)).not.toMatch(/private prompt|fake-key|useful facts/)
     await host.close()

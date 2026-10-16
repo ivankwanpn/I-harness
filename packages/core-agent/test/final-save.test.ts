@@ -13,7 +13,7 @@ it("does not resolve a completed answer until its final persistence barrier succ
   let saving = false
   const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx),
     model: createMockClient([{ role: "assistant", text: "done" }]), systemPrompt: "",
-    flush: async () => { saving = true; await gate },
+    flush: async () => { if (session.events.at(-1)?.type === "turn/end") { saving = true; await gate } },
   })
   let settled = false
   const run = agent.run("task").then(value => { settled = true; return value })

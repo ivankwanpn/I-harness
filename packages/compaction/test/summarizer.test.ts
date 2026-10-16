@@ -2,6 +2,35 @@ import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { buildSummaryPrompt, summarizeWithModel } from "../src/summarizer.ts"
+import { prepareModelRequest, type PreparedModelRequest } from "@i-harness/llm-seam"
+
+it.each(["overflow", "incomplete"] as const)("blocks a final summary derivative with %s before any provider call", async mode => {
+  let sends = 0, reports = 0
+  const base = await prepareModelRequest({ async *stream() { yield { type: "end" } } }, { systemPrompt: "", tools: [], messages: [] })
+  const initialInput = { ...base.measurement.input, coverage: "complete" as const }
+  const selectedInput = { ...initialInput, coverage: mode === "incomplete" ? "incomplete" as const : "complete" as const,
+    components: { ...initialInput.components, otherInput: { ...initialInput.components.otherInput, heuristicTokens: 105 } } }
+  const output = { capSupport: "supported" as const, minimumCap: 1, source: "request" as const }
+  const candidate: PreparedModelRequest = { measurement: { ...base.measurement, input: selectedInput, output: { ...output, effectiveCap: 10 } }, withOutputCap() { throw new Error("no convergence loop") }, async *stream() { sends++; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
+  const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input: initialInput, output }, withOutputCap: () => candidate }
+  const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare() { return initial } }
+  await expect(summarizeWithModel(model, "literal", 10, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 100, onMeasurement() { reports++ } })).rejects.toThrow(/fixed summary input|unpriced provider/)
+  expect(sends).toBe(0); expect(reports).toBe(0)
+})
+it("reports and sends the selected summary measurement", async () => {
+  const base = await prepareModelRequest({ async *stream() { yield { type: "end" } } }, { systemPrompt: "", tools: [], messages: [] })
+  const input = { ...base.measurement.input, coverage: "complete" as const }
+  const finalInput = { ...input, components: { ...input.components, otherInput: { ...input.components.otherInput, heuristicTokens: 105 } } }
+  let sends = 0, selections = 0
+  const reports: unknown[] = []
+  const output = { capSupport: "supported" as const, minimumCap: 1, effectiveCap: 10, source: "request" as const }
+  const candidate: PreparedModelRequest = { measurement: { ...base.measurement, input: finalInput, output }, withOutputCap() { throw Error("only one selection") }, async *stream() { sends++; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
+  const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input, output }, withOutputCap() { selections++; return candidate } }
+  await expect(summarizeWithModel({ async *stream() { throw Error("unprepared") }, async prepare() { return initial } }, "literal", 10, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 1000, onMeasurement: facts => reports.push(facts) })).resolves.toEqual({ text: "ok", attempts: 1 })
+  expect(sends).toBe(1); expect(selections).toBe(1)
+  // The neutral fixture also retains four system and five schema tokens.
+  expect(reports).toEqual([expect.objectContaining({ inputTokens: 114, outputReserve: 10, effectiveCap: 10, coverage: "complete" })])
+})
 import { createCompactionEngine, resolveConfig, type CompactionConfig } from "../src/index.ts"
 
 // Spy model that records the summarizer input. `summarizeWithModel` builds the
@@ -80,7 +109,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
     const s = createSession()
     for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 50 }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
 
     const r1 = await engine.compact(s)
@@ -102,7 +131,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hello" })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5 }
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
     const engine = createCompactionEngine({ model: spyModel(inputs), config })
     const r = await engine.compact(s, "summarize the tool section in Chinese")
     expect(r.compacted).toBe(true)
@@ -112,7 +141,7 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
 })
 
 describe("summary degenerate floor (M34 ⑦c)", () => {
-  const config: CompactionConfig = { contextWindow: 1000, thresholdRatio: 0.5 }
+  const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
   function smallSession(): ReturnType<typeof createSession> {
     const s = createSession()
     for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
@@ -148,7 +177,7 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
     const engine = createCompactionEngine({ model: short, config })
     const result = await engine.compact(s)
     // M73: the summarizer-failure arm names its reason (the shape stays pinned).
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed", blockedReason: "compaction: retained summary outside quality/size limits (100 chars; floor 500; ceiling 4096)" })
     expect(calls.n).toBe(2) // one retry, then fail-soft
     // M78 exception, named: "a failed pass appends nothing" is no longer true in
     // general — a pass that PRUNED leaves its `compaction/prune` marker behind

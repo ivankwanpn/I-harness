@@ -1,0 +1,142 @@
+packages\coding-plans\src\codex-management.ts:12:import { setTimeout as delay } from "node:timers/promises"
+packages\coding-plans\src\codex-management.ts:50:  trustedTestDependencies?: { fetch?: typeof fetch; now?: () => number; pollIntervalMs?: number; attemptTimeoutMs?: number }
+packages\coding-plans\src\codex-management.ts:367:        const interval = options.trustedTestDependencies?.pollIntervalMs ?? (Number.isFinite(rawInterval) && rawInterval > 0 ? Math.max(1000, rawInterval * 1000) : 5000)
+packages\coding-plans\src\codex-management.ts:368:        login.timer = setTimeout(() => { if (pending === login) { message = "OpenAI device sign-in expired. Please try again."; login.controller.abort() } }, Math.max(1, login.expiresAt - now()))
+packages\code-retrieval\src\service.ts:44:    const timer=setTimeout(()=>controller.abort(new Error('Code Context deadline exceeded')),config.deadlineMs)
+packages\exec\src\service.ts:181:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\exec\src\service.ts:192:      if (command.timeoutMs !== undefined) timer = setTimeout(() => {
+packages\exec\src\service.ts:498:      let timer: ReturnType<typeof setTimeout> | undefined
+packages\exec\src\service.ts:525:        if (threshold !== undefined) timer = setTimeout(() => {
+packages\core-tools\src\observation.ts:70:        let timer: ReturnType<typeof setTimeout>
+packages\core-tools\src\observation.ts:74:          timer = setTimeout(() => {
+packages\core-agent\src\index.ts:533:      let reasoningTimer: ReturnType<typeof setTimeout> | undefined
+packages\core-agent\src\index.ts:615:                else if (reasoningTimer === undefined) reasoningTimer = setTimeout(() => {
+packages\fs-search\src\model-search.ts:22:  const timer = setTimeout(() => { timedOut = true; lifetime.abort() }, query.timeoutMs)
+packages\core-plugin\src\index.ts:450:      const timer = setTimeout(() => {
+packages\agent-team\src\roster.ts:111:        const timer = setTimeout(() => resolve(false), startupTimeoutMs)
+packages\context-output\src\store.ts:27:        await new Promise((settle) => setTimeout(settle, 5))
+packages\code-mode\src\runtime.ts:95:  watchdog?: ReturnType<typeof setTimeout>
+packages\code-mode\src\runtime.ts:280:          cell.watchdog = setTimeout(() => close(cell,'failed','CPU work limit exceeded (worker hard stop)'),config.cpuTimeMs + 250)
+packages\code-mode\src\runtime.ts:460:      cell.watchdog = setTimeout(()=>close(cell,'failed','Worker initialization deadline exceeded'),30_000)
+packages\agent-team\src\activity.ts:79:      const timer = setTimeout(() => finish({ timedOut: true }), t)
+packages\code-mode\src\catalog.ts:25:Helpers: text(value), image(dataURL or image item), audio(dataURL or audio item), store(key, JSONValue), load(key), notify(value), yield_control(), exit(), setTimeout(), clearTimeout(). Only emitted items enter the model result. Images are forwarded; audio is recorded as metadata. Bounded JSON store commits after successful completion and resumes from session history; globals are fresh. Long admitted text has a bounded preview and textRetention reference; use context_output_read/search with contextRef when present, or grep with a legacy path. Retrieval uses current role/session policy. Await tools/Promises; unawaited work is discarded at module end. Running cells return cell_id: use code_wait for new output or termination, code_status to recover live IDs. Compaction preserves live cells; restart does not restore continuations. Termination does not undo side effects.
+packages\fs-lock\src\win32.ts:85:const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+packages\fs-lock\src\win32.ts:199:            await sleep(delay)
+packages\fs-lock\src\win32.ts:221:      await sleep(delay)
+packages\fs-lock\src\linux.ts:62:const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+packages\fs-lock\src\linux.ts:183:      await sleep(delay)
+packages\desktop\src\renderer\browser\BrowserPane.tsx:46:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\desktop\src\renderer\browser\BrowserPane.tsx:59:      if (scope.active) timer = setTimeout(() => { void poll() }, 500)
+packages\settings\src\index.ts:1595:  let retryTimer: ReturnType<typeof setTimeout> | undefined
+packages\settings\src\index.ts:1599:    retryTimer = setTimeout(() => {
+packages\desktop\src\main\project-content-search.ts:79:        const timer = setTimeout(() => { void stop(preview) }, 30000); timer.unref?.()
+packages\desktop\src\main\project-content-search.ts:123:      const deadlineAt = Date.now() + query.timeoutMs, timer = setTimeout(() => { timedOut = true; void stop(job) }, query.timeoutMs); timer.unref?.()
+packages\workflow\src\runner.ts:261:          if (backoff > 0) await new Promise((r) => setTimeout(r, backoff))
+packages\desktop\src\main\native-window.ts:33:      else setTimeout(() => { if (!window.isDestroyed()) window.close() }, 0)
+packages\desktop\src\renderer\terminal\TerminalPane.tsx:48:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\desktop\src\renderer\terminal\TerminalPane.tsx:79:      if (document.hidden) { timer = setTimeout(() => { void poll() }, 1000); return }
+packages\desktop\src\renderer\terminal\TerminalPane.tsx:88:        timer = setTimeout(() => { void poll() }, output.truncated ? 10 : 120)
+packages\desktop\src\main\attachment-readers.ts:18:    const timer = setTimeout(() => finish(new Error("Attachment parsing exceeded the 15 second time limit")), 15_000)
+packages\session-title\src\index.ts:97:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\session-title\src\index.ts:105:              timer = setTimeout(() => {
+packages\sdk\src\client.ts:111:  timer: ReturnType<typeof setTimeout> | undefined
+packages\sdk\src\client.ts:169:      const timer = setTimeout(() => {
+packages\sdk\src\client.ts:369:        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
+packages\desktop\src\renderer\session\refresh-scheduler.ts:3:  let timer: ReturnType<typeof setTimeout> | undefined
+packages\desktop\src\renderer\session\refresh-scheduler.ts:11:    timer = setTimeout(() => {
+packages\desktop\src\renderer\shell\use-sidebar-navigation.ts:13:  const opening = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+packages\desktop\src\renderer\shell\use-sidebar-navigation.ts:14:  const dismissal = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+packages\desktop\src\renderer\shell\use-sidebar-navigation.ts:50:    opening.current = setTimeout(() => { setPreview(true); opening.current = undefined }, 180)
+packages\desktop\src\renderer\shell\use-sidebar-navigation.ts:58:    dismissal.current = setTimeout(() => {
+packages\desktop\src\renderer\session\execution-surface.ts:25:    const timer = setInterval(() => { if (!pending.current) void refresh() }, 1500)
+packages\desktop\src\renderer\session\useOutputCopy.ts:12:  const request = useRef(0), feedback = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+packages\desktop\src\renderer\session\useOutputCopy.ts:26:      feedback.current = setTimeout(() => { if (current === request.current) setState("idle") }, 1800)
+packages\hooks\src\windows-process.ts:67:  const timer = setTimeout(() => stop(new HookOutputError(`hook ${input.id}: timed out after ${input.timeoutMs} ms`), "timeout"), input.timeoutMs)
+packages\desktop\src\renderer\session\durable-draft-client.ts:11:  private timer?: ReturnType<typeof setTimeout>
+packages\desktop\src\renderer\session\durable-draft-client.ts:40:  changed() { if (this.retired) return; this.version++; this.dirty = true; clearTimeout(this.timer); this.timer = setTimeout(() => { void this.flush().catch(() => {}) }, 150) }
+packages\desktop\src\renderer\session\MessageActions.tsx:10:  const epoch=useRef(0),feedback=useRef<ReturnType<typeof setTimeout>|undefined>(undefined)
+packages\desktop\src\renderer\session\MessageActions.tsx:22:      setState("copied");feedback.current=setTimeout(()=>{if(epoch.current===captured)setState("idle")},1800)
+packages\schedule\src\driver.ts:81:  pollMs?: number
+packages\schedule\src\driver.ts:87:  /** Re-drive immediately (restart policy), then poll every pollMs. */
+packages\schedule\src\driver.ts:117:  const pollMs = opts.pollMs ?? 30_000
+packages\schedule\src\driver.ts:191:      timer = setInterval(() => {
+packages\schedule\src\driver.ts:193:      }, pollMs)
+packages\hooks\src\runner.ts:176:    const timer = setTimeout(() => {
+packages\desktop\src\renderer\session\ContextUsage.tsx:38:  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+packages\desktop\src\renderer\session\ContextUsage.tsx:61:    closeTimer.current = setTimeout(() => closePopup(true), hoverCloseDelay)
+packages\desktop\src\renderer\session\ContextUsage.tsx:95:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\desktop\src\renderer\session\ContextUsage.tsx:137:      timer = setTimeout(() => { timer = undefined; void read() }, Math.max(refreshDelay, refreshInterval - (Date.now() - lastStarted)))
+packages\desktop\src\renderer\session\RuntimeFeedback.tsx:127:    const timer = window.setInterval(() => setNow(Date.now()), 250)
+packages\desktop\src\renderer\session\SlashCommands.tsx:58:    let mounted = true, timer: ReturnType<typeof setTimeout> | undefined
+packages\desktop\src\renderer\session\SlashCommands.tsx:69:      if (mounted) timer = setTimeout(() => { void refresh() }, 500)
+packages\desktop\src\renderer\settings\CodingPlans.tsx:49:  const pollInterval = pending ? 1500 : state?.accounts.some(account => account.status === "connected") ? 60_000 : undefined
+packages\desktop\src\renderer\settings\CodingPlans.tsx:51:    if (!active || busy || pollInterval === undefined) return
+packages\desktop\src\renderer\settings\CodingPlans.tsx:53:    let timer: ReturnType<typeof setTimeout>
+packages\desktop\src\renderer\settings\CodingPlans.tsx:57:      if (!stopped && (!next || next.login?.status === "pending" || next.openaiManagement?.status === "pending" || next.accounts.some(account => account.status === "connected"))) timer = setTimeout(poll, pollInterval)
+packages\desktop\src\renderer\settings\CodingPlans.tsx:59:    timer = setTimeout(poll, pollInterval)
+packages\desktop\src\renderer\settings\CodingPlans.tsx:61:  }, [active, busy, pollInterval, run])
+packages\desktop\src\renderer\settings\CodingPlans.tsx:114:    const timer = setInterval(() => setNow(Date.now()), 30_000)
+packages\image-validation\src\index.ts:126:      const timer = setTimeout(() => finish(new Error('Image validation timed out after 5 seconds')), 5000)
+packages\guard-retry\src\index.ts:48:function sleep(ms: number): Promise<void> {
+packages\guard-retry\src\index.ts:49:  return new Promise((resolve) => setTimeout(resolve, ms))
+packages\guard-retry\src\index.ts:92:            await sleep(backoffDelay(attempt, resolved))
+packages\sandbox-wsl\src\transport.ts:39:  let timer: ReturnType<typeof setTimeout> | undefined
+packages\sandbox-wsl\src\transport.ts:42:      timer = setTimeout(() => no(new Error(`WSL ${label} timed out; guest cleanup unconfirmed`)), timeout)
+packages\sandbox-wsl\src\transport.ts:115:  private rootDrainTimer?: ReturnType<typeof setTimeout>
+packages\sandbox-wsl\src\transport.ts:190:        this.rootDrainTimer = setTimeout(() => this.fail(new Error("WSL root exited without timely guest settlement acknowledgement")), CONTROL_TIMEOUT_MS)
+packages\desktop\src\renderer\settings\ProviderDirectory.tsx:48:    setTimeout(() => addTrigger.current?.focus(), 0)
+packages\desktop\src\renderer\settings\ProviderCard.tsx:48:    setTimeout(() => editorTrigger.current?.focus(), 0)
+packages\guard-timeout\src\index.ts:40:        const timer = setTimeout(() => { timedOut = true; controller.abort() }, timeoutMs)
+packages\session-persistence\src\write-behind.ts:27:  private timer: ReturnType<typeof setTimeout> | undefined
+packages\session-persistence\src\write-behind.ts:73:    this.timer = setTimeout(() => { this.onDeadline() }, this.options.maxDelayMs)
+packages\desktop\src\renderer\settings\ResourceSettings.tsx:51:    setTimeout(() => { if (returnFocus.current?.isConnected) returnFocus.current.focus() }, 0)
+packages\desktop-gateway\src\workflow.ts:95:          const timer = setTimeout(done, 250)
+packages\sandbox-windows-psec\src\index.ts:154:  private statusDrainTimer?: ReturnType<typeof setTimeout>
+packages\sandbox-windows-psec\src\index.ts:179:      else this.statusDrainTimer = setTimeout(() => {
+packages\sandbox-windows-psec\src\index.ts:359:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\sandbox-windows-psec\src\index.ts:361:      timer = setTimeout(() => reject(new Error("native release acknowledgment timed out")), 12000)
+packages\llm-seam\src\waiting-guard.ts:26:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\llm-seam\src\waiting-guard.ts:47:      timer = setTimeout(() => {
+packages\guard-approval\src\guardian\reviewer.ts:193:  let timer: ReturnType<typeof setTimeout> | undefined
+packages\guard-approval\src\guardian\reviewer.ts:195:    timer = setTimeout(() => resolve("timeout"), timeoutMs)
+packages\plugin-registry\src\managed.ts:41:      const timer = setInterval(tick, 250); timer.unref?.(); tick()
+packages\llm-seam\src\index.ts:1:import { setTimeout as delay } from "node:timers/promises"
+packages\desktop-gateway\src\session-subagents.ts:65:  const timers = new Map<string, ReturnType<typeof setTimeout>>()
+packages\desktop-gateway\src\session-subagents.ts:72:    timers.set(parentId, setTimeout(() => {
+packages\guard-approval\src\guardian\isolated-reviewer.ts:29:  const timeout = setTimeout(() => controller.abort(new Error("guardian review timed out")), deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS)
+packages\mcp-client\src\client.ts:125:      await new Promise((r) => setTimeout(r, AUTH_RETRY_DELAY_MS))
+packages\mcp-client\src\supervisor.ts:88:const unref = (timer: ReturnType<typeof setTimeout>): void => {
+packages\mcp-client\src\supervisor.ts:104:  let retryTimer: ReturnType<typeof setTimeout> | undefined
+packages\mcp-client\src\supervisor.ts:105:  let stabilityTimer: ReturnType<typeof setTimeout> | undefined
+packages\mcp-client\src\supervisor.ts:221:    let timer: ReturnType<typeof setTimeout> | undefined
+packages\mcp-client\src\supervisor.ts:229:          timer = setTimeout(() => resolve(false), ms)
+packages\mcp-client\src\supervisor.ts:280:    retryTimer = setTimeout(() => {
+packages\mcp-client\src\supervisor.ts:336:    stabilityTimer = setTimeout(() => {
+packages\mcp-client\src\bridge.ts:80:  // when the request options set `resetTimeoutOnProgress`, which these are not —
+packages\lsp\src\instance.ts:77:function sleep(ms: number): Promise<void> {
+packages\lsp\src\instance.ts:78:  return new Promise((resolve) => setTimeout(resolve, ms))
+packages\lsp\src\instance.ts:144:      sleep(this.startupTimeoutMs).then(() => {
+packages\lsp\src\instance.ts:277:        sleep(this.shutdownTimeoutMs).then(() => new Error("shutdown timed out")),
+packages\lsp\src\instance.ts:289:    const closed = await Promise.race([this.conn.closed.then(() => true), sleep(this.killGraceMs).then(() => false)])
+packages\desktop-gateway\src\review.ts:85:    const timer = setTimeout(() => { timedOut = true; child.kill() }, control.timeoutMs)
+packages\mcp-client\src\oauth-callback.ts:22:  let pending: { resolve: (v: { code: string; state: string }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> } | undefined
+packages\mcp-client\src\oauth-callback.ts:71:      const timer = setTimeout(() => {
+packages\desktop-gateway\src\project-content-search.ts:115:      const timer = setTimeout(() => { timedOut = true; controller.abort(new Error("Content search timed out")) }, Math.max(1, remaining)); timer.unref?.()
+packages\desktop-gateway\src\project-content-search.ts:134:      const controller = new AbortController(), timer = setTimeout(() => controller.abort(new Error("Search preview timed out")), 30000); timer.unref?.()
+packages\desktop-gateway\src\project-content-search.ts:177:      const timer = setTimeout(() => controller.abort(new Error("Reference read timed out")), 30000); timer.unref?.()
+packages\session-executor\src\assembly.ts:581:    // makes setTimeout fire immediately), all of which promote every foreground
+packages\media\src\process.ts:12:    const timer = setTimeout(() => stop(new Error("Video decoder exceeded its time limit")), options.timeoutMs)
+packages\desktop-gateway\src\context-runtime.ts:25:  let timer:ReturnType<typeof setInterval>|undefined,refreshing:Promise<unknown>|undefined
+packages\desktop-gateway\src\context-runtime.ts:87:      if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
+packages\sandbox-local\src\posix-execution.ts:13:const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+packages\sandbox-local\src\posix-execution.ts:44:  private stopTimer?: ReturnType<typeof setTimeout>
+packages\sandbox-local\src\posix-execution.ts:153:    if (!this.stopTimer) this.stopTimer = setTimeout(() => this.stopDeadline.reject(new Error("POSIX process-group cleanup timed out")), 12000)
+packages\desktop-gateway\src\environment-diagnostics.ts:41:    const timer = setTimeout(() => { child.kill(); done("unavailable", "Version probe timed out") }, 2500)
+packages\desktop-gateway\src\interaction.ts:66:  timer: ReturnType<typeof setTimeout>
+packages\desktop-gateway\src\interaction.ts:124:    const carried: WaitingRequest = { view, timer: undefined as unknown as ReturnType<typeof setTimeout> }
+packages\desktop-gateway\src\interaction.ts:135:  function expiryTimer(row: WaitingRequest): ReturnType<typeof setTimeout> {
+packages\desktop-gateway\src\interaction.ts:136:    const timer = setTimeout(() => {
+packages\desktop-gateway\src\interaction.ts:157:      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+packages\desktop-gateway\src\interaction.ts:178:      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+packages\desktop-gateway\src\host.ts:492:  const policyTimer = setInterval(syncPolicy, 1000)
+packages\sandbox-windows-acl\src\spawn.ts:210:    await new Promise<void>(resolve => setTimeout(resolve, 1))

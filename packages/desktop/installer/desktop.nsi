@@ -38,7 +38,7 @@ SetCompressorDictSize 32
 Name "${APP_NAME} ${APP_VERSION}"
 OutFile "${OUTPUT_FILE}"
 BrandingText "I-harness"
-VIProductVersion "${APP_VERSION}.0"
+VIProductVersion "${WINDOWS_VERSION}"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
 VIAddVersionKey "FileDescription" "${APP_NAME} Setup"

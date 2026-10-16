@@ -23,6 +23,7 @@ import type {
   GoalRef,
   GoalSnapshot,
   SessionEvent,
+  SessionEventView,
 } from "@i-harness/core-session"
 
 /** Projected view of the current goal — GET /api/sessions/:id/goal response. */
@@ -71,7 +72,7 @@ export interface GoalMutationRequest {
 
 /** Result of one settled mutation: the durable event to append + the next view. */
 export interface GoalMutationResult {
-  event: SessionEvent
+  event: Extract<SessionEvent,{type:'goal/change'}>
   next: GoalView | null
 }
 
@@ -105,7 +106,7 @@ function resolveMaxGoalRounds(value: number): number {
  * write side validated it; the invariant is enforced by append-side tests,
  * not by the projection).
  */
-function viewFromEvent(ev: SessionEvent): GoalView | null | undefined {
+function viewFromEvent(ev: SessionEventView): GoalView | null | undefined {
   if (ev.type !== "goal/change") return undefined
   const { goal, cleared, updatedAt } = ev
   if (ev.operation === "clear") {
@@ -138,7 +139,7 @@ function viewFromEvent(ev: SessionEvent): GoalView | null | undefined {
  * state; a clear sets the projection to null. Non-goal and malformed events
  * leave the projection unchanged (same-reference rule).
  */
-export function foldGoal(events: readonly SessionEvent[]): GoalView | null {
+export function foldGoal(events: readonly SessionEventView[]): GoalView | null {
   let view: GoalView | null = null
   for (const ev of events) {
     const next = viewFromEvent(ev)

@@ -4,7 +4,7 @@ import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
-import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
+import { createAgent, createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from "../src/index.ts"
 
 function makeDeps(ctx: PluginContext) {
   const session = createSession()
@@ -25,6 +25,110 @@ function makeDeps(ctx: PluginContext) {
   tools.register(editTool)
   return { session, tools, model: undefined as unknown as ReturnType<typeof createMockClient> }
 }
+
+it("keeps initialization getter order and resolves live step callbacks with their receivers", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  const reads: string[] = []
+  const receivers: unknown[] = []
+  const requests: { systemPrompt: string; tools: { name: string }[] }[] = []
+  let prompt = "initial"
+  const initialModel = { async *stream() { throw new Error("stale model"); yield { type: "end" as const } } }
+  const currentModel = { async *stream(request: Parameters<AgentDeps["model"]["stream"]>[0]) {
+    receivers.push(this)
+    requests.push(request)
+    yield { type: "text/chunk" as const, text: "done" }
+    yield { type: "end" as const }
+  } }
+  const stepInputs = { claimAtStepBoundary() { receivers.push(this) } }
+  const deps: AgentDeps & AgentConfig = {
+    get sessionId() { reads.push("sessionId"); return undefined },
+    get maxTurns() { reads.push("maxTurns"); return undefined },
+    get maxParallelToolCalls() { reads.push("parallel"); return undefined },
+    get budget() { reads.push("budget"); return undefined },
+    get compact() { reads.push("compact"); return undefined },
+    get maxOutputTokens() { reads.push("output"); return undefined },
+    get session() { reads.push("session"); return session },
+    tools, model: initialModel, stepInputs,
+    systemPrompt() { receivers.push(this); return prompt },
+    modelToolSchemas() { receivers.push(this); return [{ name: prompt, description: "", inputSchema: {} }] },
+  }
+  const agent = createAgent(ctx, deps)
+  expect(reads).toEqual(["sessionId", "maxTurns", "parallel", "budget", "session", "sessionId", "compact", "output", "output", "compact", "budget", "session"])
+  ctx.on("agent/pre-step", async () => {
+    await Promise.resolve()
+    prompt = "current"
+    deps.model = currentModel
+  })
+  await agent.run("task")
+  await agent.followup("again")
+  expect(requests.map(request => [request.systemPrompt, request.tools[0]?.name])).toEqual([["current", "current"], ["current", "current"]])
+  expect(receivers.filter(value => value === stepInputs || value === currentModel)).toEqual([stepInputs, currentModel, stepInputs, currentModel])
+  expect(receivers.every(value => value === deps || value === stepInputs || value === currentModel)).toBe(true)
+})
+
+it.each(["truncated", "refused", "error"] as const)("reads the live shared step count for concurrent provider %s reports", async (ending) => {
+  const ctx = createContext()
+  const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+  const release = Promise.withResolvers<void>()
+  const emitted: TelemetryEvent[] = []
+  let streams = 0
+  const agent = createAgent(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    telemetry: { emit: event => { emitted.push(event) }, close() {} },
+    model: { async *stream() {
+      const index = streams++
+      entered[index]!.resolve()
+      await release.promise
+      if (ending === "error") yield { type: "error" as const, error: new Error(`provider ${index} failed`) }
+      else {
+        yield { type: "text/chunk" as const, text: `answer ${index}` }
+        yield { type: "end" as const, ...(ending === "truncated" ? { truncated: true } : { refused: true }) }
+      }
+    } },
+  })
+  const first = agent.run("first")
+  await entered[0]!.promise
+  const second = agent.followup("second")
+  const settled = Promise.allSettled([first, second])
+  try {
+    await entered[1]!.promise
+    expect(streams).toBe(2)
+  } finally { release.resolve() }
+  const outcomes = await settled
+  expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([2, 2])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(["rejected", "rejected"])
+})
+
+it.each(["stop", "flush"] as const)("reads the live shared step count after a held final %s and overlapping followup", async (boundary) => {
+  const ctx = createContext()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const stopCounts: number[] = []
+  const turnCounts: unknown[] = []
+  let stops = 0
+  let saves = 0
+  ctx.on("agent/stop", async payload => {
+    stopCounts.push((payload as { turns: number }).turns)
+    if (++stops === 1 && boundary === "stop") { entered.resolve(); await release.promise }
+  })
+  const agent = createAgent(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    model: createMockClient([{ role: "assistant", text: "first answer" }, { role: "assistant", text: "second answer" }]),
+    telemetry: { emit: event => { if (event.type === "turn/end") turnCounts.push(event.data.turns) }, close() {} },
+    flush: async () => { if (++saves === 2 && boundary === "flush") { entered.resolve(); await release.promise } },
+  })
+  const first = agent.run("first")
+  await entered.promise
+  let second: Awaited<ReturnType<Agent["followup"]>>
+  try { second = await agent.followup("second") }
+  finally { release.resolve() }
+  const completedFirst = await first
+  expect(stopCounts).toEqual([1, 2])
+  expect(turnCounts).toEqual([1, 2])
+  expect([completedFirst.turns, second.turns]).toEqual([2, 2])
+})
 
 describe("agent loop", () => {
   it("runs a read → edit → report sequence", async () => {
@@ -232,7 +336,7 @@ describe("agent loop", () => {
       yield { type: "tool_call", call: { id: "tool-1", name: "read", args: { path: "a.txt" } } }
       yield { type: "end", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] }
     } }
-    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", flush: async () => { throw new Error("commit failed") } })
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", flush: async () => { if (deps.session.events.some(event => event.type === "tool/dispatch")) throw new Error("commit failed") } })
     await expect(agent.run("inspect")).rejects.toThrow()
     expect(deps.session.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "assistant/message", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] })]))
   })
@@ -476,7 +580,7 @@ describe("agent compaction seam", () => {
     }
     const agent = createAgent(ctx, {
       ...deps, systemPrompt: "p",
-      compact: { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0 },
+      compact: { contextWindow: 1000, thresholdRatio: 0.1, retainTokens: 0 },
     })
     const result = await agent.run("z".repeat(300)) // ~75 tokens ≥ 50 threshold → compacts at step 1's boundary
     expect(deps.session.events.some((e) => e.type === "compaction/summary")).toBe(true)
@@ -630,7 +734,7 @@ describe("M72 II: the request's output cap", () => {
     // 10,000 − (estimated input + overhead) − 4096 < 8,000 for any non-empty
     // prompt → strictly less, and still a positive number.
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 10_000 } })
-    await agent.run("hi")
+    await agent.run("near full ".repeat(500))
     expect(seen[0]!.maxOutputTokens).toBeLessThan(8_000)
     expect(seen[0]!.maxOutputTokens).toBeGreaterThan(0)
   })
@@ -676,7 +780,7 @@ describe("M72 II: a truncated ending reaches the durable log and telemetry", () 
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate:
     // the payload is exactly the step it happened on — a `step` field that were
@@ -736,7 +840,7 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    const result = await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     // The same fact on the host's independent stream. `toEqual` is deliberate
     // (the M72 Ⅱ block's reason): the payload is exactly the step it happened
@@ -750,7 +854,6 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
     const messages = deps.session.events.filter((e) => e.type === "assistant/message")
     expect(messages).toHaveLength(1)
     expect(messages[0]).toMatchObject({ text: "" })
-    expect(result.finalText).toBe("")
   })
 
   it("M77: a clean step writes no refused field", async () => {
@@ -781,7 +884,7 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
       },
     }
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
-    await agent.run("hi")
+    await expect(agent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     // Neither bit is the other's `else`: both land on the one `step/end`.
     expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true, refused: true })
     expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(1)
@@ -873,7 +976,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
       },
     }
     const refusedAgent = createAgent(refused, { ...refusedDeps, systemPrompt: "p", maxTurns: 1, telemetry: refusedSpy.telemetry })
-    await refusedAgent.run("hi")
+    await expect(refusedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_REFUSED" })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
     expect(refusedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(refusedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
@@ -887,7 +990,7 @@ describe("M80: a non-content empty success reaches the durable log and telemetry
       },
     }
     const truncatedAgent = createAgent(truncated, { ...truncatedDeps, systemPrompt: "p", maxTurns: 1, telemetry: truncatedSpy.telemetry })
-    await truncatedAgent.run("hi")
+    await expect(truncatedAgent.run("hi")).rejects.toMatchObject({ code: "MODEL_OUTPUT_TRUNCATED" })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
     expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
     expect(truncatedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)

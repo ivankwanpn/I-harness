@@ -1,7 +1,11 @@
 import { expect, it } from "vitest"
-import { createSession } from "@i-harness/core-session"
+import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createSessionService } from "@i-harness/session-executor"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createSdkServer } from "../src/server.ts"
 import { createRefreshScheduler } from "../../desktop/src/renderer/session/refresh-scheduler.ts"
 
@@ -12,37 +16,45 @@ function gate() {
 }
 
 it.each(["stop", "flush"])("refreshes an internally submitted parent result after delayed %s settles", async delay => {
-  const session = createSession(), stop = gate(), entered = gate(), read = gate()
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-sdk-receipt-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+  await coordinator.create({sessionId:'parent'})
+  const session = delay==='flush'?(await coordinator.openManagedDocument('parent')).view:createSession(), stop = gate(), entered = gate(), read = gate()
+  const actual=backend.appendOwnedBatch!
+  backend.appendOwnedBatch=async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='turn/end')){entered.release();await stop.promise}return actual(...args)}
   const service = createSessionService({ workspace: process.cwd(), session,
-    ...(delay === "flush" ? { coordinator: { flush: async () => { entered.release(); await stop.promise } } as unknown as SessionCoordinator } : {}),
+    ...(delay === "flush" ? {coordinator} : {}),
     model: { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } } })
   let renderedRunning = false
   const snapshots: boolean[] = []
+  const executionStates: { running: boolean; queued: number }[] = []
   const refresh = createRefreshScheduler(async () => {
     renderedRunning = service.queueState("parent").running
     snapshots.push(renderedRunning)
     read.release()
   }, 5)
   const server = createSdkServer(service, { onNotify(message) {
+    if (message.method === 'session/execution-state') executionStates.push(message.params as { running: boolean; queued: number })
     if (["session/event", "session/status", "session/execution-state"].includes(message.method)) refresh.schedule()
   } })
   try {
     const assembly = await service.assemblyFor("parent")
     if (delay === "stop") assembly.ctx.on("agent/stop", async () => { entered.release(); await stop.promise })
-    assembly.inbox.admit({ inputId: "parent-notify-fixture", text: "child result", delivery: "steer", intent: "system",
+    await assembly.inbox.admit({ inputId: "parent-notify-fixture", text: "child result", delivery: "steer", intent: "system",
       synthetic: { description: "fixture", scope: "turn" } })
     const execution = service.submit("parent", "child result", new AbortController().signal, { admittedInputId: "parent-notify-fixture" })
     await entered.promise
     await read.promise
-    expect(session.events.at(-1)?.type).toBe("turn/end")
+    expect(session.events.at(-1)?.type).toBe(delay==='flush'?'step/end':"turn/end")
     expect(renderedRunning).toBe(true)
+    const completedBefore = executionStates.filter(state => !state.running && state.queued === 0).length
     stop.release()
     await execution
     await expect.poll(() => snapshots.at(-1)).toBe(false)
     expect(service.queueState("parent")).toEqual({ running: false, queued: 0 })
     expect(snapshots.at(-1)).toBe(false)
+    expect(executionStates.filter(state => !state.running && state.queued === 0)).toHaveLength(completedBefore + 1)
     expect(session.events.filter(event => event.type === "user/message" && event.text === "child result")).toHaveLength(1)
-  } finally { stop.release(); refresh.dispose(); await server.close(); await service.close() }
+  } finally { stop.release(); refresh.dispose(); await server.close(); await service.close();await coordinator.close() }
 })
 
 it("forwards future service changes once and detaches on SDK close", async () => {

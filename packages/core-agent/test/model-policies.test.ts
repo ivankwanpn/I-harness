@@ -14,7 +14,7 @@ function pressureAgent(
   const agent = createAgent(ctx, {
     session, tools: createToolRegistry(ctx), systemPrompt: "",
     model: createMockClient([{ role: "assistant", text: "done" }]),
-    ...selection,
+    contextMetadata: selection.modelId ? { version: 1, providerId: selection.provider, modelId: selection.modelId, protocol: "custom", identityCoverage: "partial", contextWindow: 10000 } : undefined,
     compact: {
       contextWindow: 10000, ...globalPolicy,
       summarizationModel: createMockClient([{ role: "assistant", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }]),
@@ -25,28 +25,8 @@ function pressureAgent(
 }
 
 describe("createAgent per-model compaction policies", () => {
-  // WHY: engine-only coverage missed the dropped selection at the real agent
-  // seam (packages/core-agent/src/index.ts:222; packages/compaction/src/config.ts:176).
-  //
-  // KNOWN GAP — NOT a passing regression. `modelPolicies` is implemented in
-  // `packages/compaction` and reachable through `createCompactionEngine`, but the
-  // ONLY production caller (`packages/core-agent/src/index.ts:222`) never passes
-  // the resolved `provider`/`modelId`, so a per-model policy cannot take effect in
-  // production. The drop point was located: the composition chain carries the IDs
-  // (`packages/provider-runtime/src/index.ts:840-842`) but
-  // `packages/session-executor/src/service.ts:577-582` passes the client and
-  // limits to the assembly WITHOUT them, and `packages/session-executor/src/
-  // assembly.ts:535-537` hands `createAgent` a stream-only model handle; its
-  // `createAgent` call at `:1500` passes no IDs.
-  //
-  // This test fails for that reason and is skipped rather than deleted, so the
-  // gap stays visible and the assertion is preserved for whoever completes the
-  // wiring. Completing it requires editing `packages/session-executor` (initial
-  // binding + live-rebind plumbing), which was outside the change that added this
-  // file. Remove `.skip` when the IDs are threaded through; the control below
-  // already passes with the equivalent GLOBAL policy, which is what proves the
-  // fixture's compaction itself works.
-  it.skip("applies the resolved provider/model threshold and retention when the agent runs", async () => {
+  // Actual owned binding metadata supplies the current policy key.
+  it("applies the resolved provider/model threshold and retention when the agent runs", async () => {
     const { agent, session } = pressureAgent({ provider: "deepseek", modelId: "deepseek-v4-pro" })
     expect((await agent.run("continue")).finalText).toBe("done")
     const marker = session.events.find(event => event.type === "compaction/summary")
@@ -61,6 +41,33 @@ describe("createAgent per-model compaction policies", () => {
     expect(session.events.find(event => event.type === "compaction/summary")).toMatchObject({ shadowedSeqs: [0, 1, 2] })
     const visibleHistory = deriveMessages(session).filter(message => typeof message.content === "string" && /^[0-9]: /.test(message.content))
     expect(visibleHistory.map(message => (message.content as string).slice(0, 1))).toEqual(["3", "4", "5", "6"])
+  })
+
+  it("refreshes the policy key on a direct metadata rebind", async () => {
+    const { agent, session } = pressureAgent({ provider: "deepseek", modelId: "unlisted" })
+    const compact = { contextWindow: 10000, thresholdRatio: 0.8, retainTokens: 0,
+      summarizationModel: createMockClient([{ role: "assistant", text: "checkpoint " + "work ".repeat(120) }]),
+      modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.05, retainTokens: 400 } } }
+    agent.updateContext!({ compact, contextMetadata: { version: 1, providerId: "deepseek", modelId: "deepseek-v4-pro", protocol: "custom", contextWindow: 10000, identityCoverage: "partial" } })
+    expect((await agent.run("continue")).finalText).toBe("done")
+    expect(session.events.find(event => event.type === "compaction/summary")).toMatchObject({ shadowedSeqs: [0, 1, 2] })
+    expect(deriveMessages(session).filter(message => typeof message.content === "string" && /^[0-9]: /.test(message.content)).map(message => (message.content as string).slice(0, 1))).toEqual(["3", "4", "5", "6"])
+  })
+
+  it("refreshes the inherited policy descriptor before the next logical step", async () => {
+    const ctx = createContext(), session = createSession()
+    for (let i = 0; i < 7; i++) append(session, { type: "user/message", text: `${i}: ` + "word ".repeat(80) })
+    let binding = { identity: {}, contextWindow: 10000, contextMetadata: { version: 1 as const, providerId: "deepseek", modelId: "unlisted", protocol: "custom", contextWindow: 10000, identityCoverage: "partial" as const } }
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: "", bindingForStep: () => binding,
+      model: createMockClient([{ role: "assistant", text: "first" }, { role: "assistant", text: "second" }]),
+      compact: { contextWindow: 10000, thresholdRatio: 0.8, summarizationModel: createMockClient([{ role: "assistant", text: "checkpoint " + "work ".repeat(120) }]),
+        modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.05, retainTokens: 400 } } } })
+    expect((await agent.run("continue")).finalText).toBe("first")
+    expect(session.events.some(event => event.type === "compaction/summary")).toBe(false)
+    binding = { ...binding, identity: {}, contextMetadata: { ...binding.contextMetadata, modelId: "deepseek-v4-pro" } }
+    expect((await agent.followup("continue")).finalText).toBe("second")
+    expect(session.events.find(event => event.type === "compaction/summary")).toMatchObject({ shadowedSeqs: [0, 1, 2] })
+    expect(deriveMessages(session).filter(message => typeof message.content === "string" && /^[0-9]: /.test(message.content)).map(message => (message.content as string).slice(0, 1))).toEqual(["3", "4", "5", "6"])
   })
 
   it.each([

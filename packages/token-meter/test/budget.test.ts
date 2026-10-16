@@ -1,38 +1,24 @@
-import { describe, expect, it } from "vitest"
-import { createSession, append } from "@i-harness/core-session"
-import { checkBudget } from "../src/index.ts"
+import { describe, expect, it } from 'vitest'
+import { compareBudgetTotal } from '../src/index.ts'
 
-describe("checkBudget", () => {
-  it("charges a calibrated full-input total once while preserving the budget validator", () => {
-    const s = createSession()
-    append(s, { type: "user/message", text: "short" })
-    const check = checkBudget
-    expect(check(s, 1000, .9, 50, 901)).toEqual({ state: "overflow", tokens: 901, budget: 900 })
-    expect(() => check(s, 1000, .9, 50, NaN)).toThrow(/calibrated/)
+describe('compareBudgetTotal', () => {
+  it('charges the supplied complete total exactly once', () => {
+    expect(compareBudgetTotal(901, 1000, .9)).toEqual({ state: 'overflow', tokens: 901, budget: 900 })
+    expect(() => compareBudgetTotal(NaN, 1000)).toThrow(/tokens/)
   })
-  it("returns ok when under budget", () => {
-    const s = createSession()
-    append(s, { type: "user/message", text: "hello" })
-    expect(checkBudget(s, 10_000, 0.9).state).toBe("ok")
+  it('returns ok for a literal total under budget', () => {
+    expect(compareBudgetTotal(24, 10000)).toEqual({ state: 'ok', tokens: 24, budget: 9000 })
   })
-  it("returns overflow when over budget", () => {
-    const s = createSession()
-    append(s, { type: "user/message", text: "x".repeat(2000) })
-    const r = checkBudget(s, 100, 0.5)
-    expect(r.state).toBe("overflow")
-    expect(r.budget).toBe(50) // 100 * 0.5
+  it('returns overflow for a literal total over budget', () => {
+    expect(compareBudgetTotal(504, 100, .5)).toEqual({ state: 'overflow', tokens: 504, budget: 50 })
   })
-  it("validates reserve ratio", () => {
-    const s = createSession()
-    expect(() => checkBudget(s, 100, 0)).toThrow()
-    expect(() => checkBudget(s, 100, 1.5)).toThrow()
+  it('validates reserve ratio', () => {
+    expect(() => compareBudgetTotal(24, 100, 0)).toThrow(/reserveRatio/)
+    expect(() => compareBudgetTotal(24, 100, 1.5)).toThrow(/reserveRatio/)
   })
-  it("M33: overheadTokens is added to the counted tokens (default 0)", () => {
-    const s = createSession()
-    append(s, { type: "user/message", text: "x".repeat(80) }) // 20 + 4 = 24 tokens
-    expect(checkBudget(s, 100, 0.5).state).toBe("ok") // 24 ≤ 50
-    expect(checkBudget(s, 100, 0.5, 30).state).toBe("overflow") // 54 > 50
-    expect(checkBudget(s, 100, 0.5, 30).tokens).toBe(54)
-    expect(() => checkBudget(s, 100, 0.5, -1)).toThrow(/overheadTokens/)
+  it('preserves the inclusive boundary and rejects invalid totals', () => {
+    expect(compareBudgetTotal(9000, 10000, .9)).toEqual({ state: 'ok', tokens: 9000, budget: 9000 })
+    expect(compareBudgetTotal(9001, 10000, .9)).toEqual({ state: 'overflow', tokens: 9001, budget: 9000 })
+    for (const value of [-1, .5, Infinity, Number.MAX_SAFE_INTEGER + 1]) expect(() => compareBudgetTotal(value, 10000)).toThrow(/tokens/)
   })
 })

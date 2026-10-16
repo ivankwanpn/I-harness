@@ -35,12 +35,19 @@ import {
   deriveMessages,
   SYSTEM_INPUT_PLUGIN,
   type Session,
-  type SessionEvent,
+  type SessionView,
+  decodeFactBatch, type BatchKey,
+  type SessionEventView,
+  copyConversationData,
 } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   createAfterScheduleRecord,
   createEveryScheduleRecord,
@@ -54,9 +61,10 @@ import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 
 interface BatchCoordinator extends SessionCoordinator {
   /** One entry per backend append — a flush moves the whole pending set as ONE batch. */
-  batches: SessionEvent[][]
+  batches: SessionEventView[][]
   /** Everything that reached the backend, in order. */
-  written: SessionEvent[]
+  written: SessionEventView[]
+  unknownKey?:BatchKey
 }
 
 /** The coordinator double from assembly.test.ts's `memoryCoordinator`, extended
@@ -66,37 +74,20 @@ interface BatchCoordinator extends SessionCoordinator {
  * `failFirstFlush` adds the real write-behind's FAILURE RETENTION: the first
  * flush rejects but KEEPS its queue (`pending = batch.concat(pending)`,
  * write-behind.ts:127-131), so the NEXT flush retries that same batch. */
-function batchCoordinator(failFirstFlush = false): BatchCoordinator {
-  const written: SessionEvent[] = []
-  const batches: SessionEvent[][] = []
-  let pending: SessionEvent[] = []
-  let flushes = 0
-  return {
-    batches,
-    written,
-    create: async (meta?: { sessionId?: string }) => ({ id: meta?.sessionId ?? "mem-0" }),
-    append: async (_id: string, evs: SessionEvent[]) => {
-      written.push(...evs)
-      batches.push([...evs])
-    },
-    enqueue: (_id: string, evs: SessionEvent[]) => {
-      pending.push(...evs)
-    },
-    flush: async () => {
-      flushes += 1
-      if (failFirstFlush && flushes === 1) throw new Error("flush refused (first)")
-      if (pending.length > 0) {
-        written.push(...pending)
-        batches.push(pending)
-        pending = []
-      }
-    },
-    load: async () => ({ session: { formatVersion: 1, events: [...written] } }),
-    list: async () => ["s"],
-    close: async () => {},
-    putDocument: async () => {},
-    getDocument: async () => undefined,
-  } as unknown as BatchCoordinator // the shape's base is SessionCoordinator; the recorder fields are this double's own
+async function batchCoordinator(failFirstFlush = false): Promise<BatchCoordinator> {
+  const written: SessionEventView[] = []
+  const batches: SessionEventView[][] = []
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-schedule-')),backend=createJsonlBackend(root)
+  const coordinator=Object.assign(createSessionCoordinator(backend,{lock:{enabled:true}}),{written,batches}) as BatchCoordinator
+  const actual=backend.appendOwnedBatch!
+  let failed=false
+  backend.appendOwnedBatch=async(...args)=>{
+    const events=decodeFactBatch(args[3].bytes).events,outcome=await actual(...args)
+    if(outcome.kind==='committed'){written.push(...events);batches.push([...events])}
+    if(failFirstFlush&&!failed&&events.some(event=>event.type==='schedule/change'&&event.operation==='dispatch')){failed=true;coordinator.unknownKey=args[3].key;return{kind:'unknown',key:args[3].key}}
+    return outcome
+  }
+  return coordinator
 }
 
 /** The recorder+cassette pair this file's cases drive the mount through (the
@@ -146,7 +137,7 @@ function seedCreate(session: Session, record: AfterScheduleRecord | EverySchedul
 
 interface HostFixture {
   assembly: SessionAssembly
-  session: Session
+  session: SessionView
   coordinator: BatchCoordinator
   model: ModelClient & { requests: LLMRequest[] }
   /** submit + drain — the serial lane is the real drive, and its pump is
@@ -164,12 +155,11 @@ async function mountHost(opts: {
   script?: MockStep[]
   failFirstFlush?: boolean
 } = {}): Promise<HostFixture> {
-  const coordinator = batchCoordinator(opts.failFirstFlush ?? false)
-  const session = createSession((ev) => {
-    coordinator.enqueue(SESSION_ID, [ev])
-    if (ev.type === "turn/end") void coordinator.flush(SESSION_ID)
-  })
-  opts.seed?.(session)
+  const coordinator = await batchCoordinator(opts.failFirstFlush ?? false)
+  const seed=createSession();opts.seed?.(seed)
+  await coordinator.create({sessionId:SESSION_ID,...seed.header})
+  if(seed.events.length){await coordinator.append(SESSION_ID,seed.events);const events=(await coordinator.snapshot!(SESSION_ID)).session.events;coordinator.written.push(...events);coordinator.batches.push([...events])}
+  const session=(await coordinator.openManagedDocument(SESSION_ID)).view
   const model = scriptedModel(opts.script ?? twoStepScript())
   const assembly = await createSessionAssembly({
     workspace: process.cwd(),
@@ -196,20 +186,20 @@ async function mountHost(opts: {
 const REMINDER = "[SCHEDULE REMINDER]"
 const BATCH_REMINDER = "[SCHEDULE REMINDER BATCH]"
 
-const isScheduleDispatch = (ev: SessionEvent): boolean =>
+const isScheduleDispatch = (ev: SessionEventView): boolean =>
   ev.type === "schedule/change" && ev.operation === "dispatch"
 
-type AdmittedEvent = Extract<SessionEvent, { type: "agent/input/admitted" }>
-const isAdmission = (ev: SessionEvent): ev is AdmittedEvent => ev.type === "agent/input/admitted"
+type AdmittedEvent = Extract<SessionEventView, { type: "agent/input/admitted" }>
+const isAdmission = (ev: SessionEventView): ev is AdmittedEvent => ev.type === "agent/input/admitted"
 /** The SCHEDULE admissions only: the lane's own submit admits its input as an
  * `agent/input/admitted` too, and every `inputId` this mount mints starts with
  * the record id (`schedule-…`, §3.5) or `schedule-batch@…` (§3.5's batch id). */
-const isScheduleAdmission = (ev: SessionEvent): ev is AdmittedEvent =>
+const isScheduleAdmission = (ev: SessionEventView): ev is AdmittedEvent =>
   isAdmission(ev) && ev.inputId.startsWith("schedule-")
 
-type UserMessageEvent = Extract<SessionEvent, { type: "user/message" }>
+type UserMessageEvent = Extract<SessionEventView, { type: "user/message" }>
 
-function reminderMessages(session: Session): UserMessageEvent[] {
+function reminderMessages(session: SessionView): readonly UserMessageEvent[] {
   return session.events.filter(
     (ev): ev is UserMessageEvent => ev.type === "user/message" && ev.text.includes(REMINDER),
   )
@@ -239,7 +229,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       // mutation: start()/setInterval) delivers here, with no turn at all.
       await sleep(200)
       expect(host.session.events.some(isScheduleDispatch)).toBe(false)
-      expect(host.coordinator.written).toEqual([])
+      expect(host.coordinator.written.map(event=>event.type)).toEqual(['schedule/change'])
 
       await host.runTurn("hello")
 
@@ -299,29 +289,28 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     }
   }, 30_000)
 
-  it("a failed flush is NOT a refusal: the host accepted in memory (the reminder still reaches the model), and the next flush — turn/end via the mirror — lands BOTH events (a durability report, eventual, never a loss)", async () => {
+  it("keeps an unknown reminder private until exact reconciliation and consumes it once after owned reopen", async () => {
     const record = overdueOneShot()
     const host = await mountHost({ seed: (session) => seedCreate(session, record), failFirstFlush: true })
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {}) // the driver's report goes to a spy
     try {
-      await host.runTurn("hello")
-
-      // (i) in-memory acceptance DESPITE the failed flush. `deliver` appends both
-      // events through the canonical append() BEFORE the barrier, so the fold already
-      // consumed the occurrence (no re-drive) and the admission is pending — the pump
-      // claims it in turn 2, and THAT request carries the reminder. A host that treated
-      // the flush throw as "nothing accepted" would have to re-deliver instead.
-      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(1)
-      expect(host.model.requests).toHaveLength(2)
-      expect(requestMessagesCarrying(host.model.requests[1]!, REMINDER)).toHaveLength(1)
-
-      // …and the throw was REPORTED (deliveryErrors → the driver's warn), not swallowed.
+      await expect(host.runTurn("hello")).rejects.toThrow()
+      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(0)
+      expect(host.session.events.filter(isScheduleAdmission)).toHaveLength(0)
+      expect(host.model.requests).toHaveLength(0)
       expect(warn.mock.calls.some((call) => String(call[0]).includes("schedule-1"))).toBe(true)
-
-      // (ii) eventual durability: the failed batch was RETAINED, and the next flush —
-      // turn/end triggers one through the session mirror — committed it. BOTH events
-      // reached the backend, exactly once each.
-      await sleep(10) // the mirror's flush is fire-and-forget (`void coordinator.flush`)
+      const document=await host.coordinator.openManagedDocument(SESSION_ID)
+      expect(host.coordinator.unknownKey).toBeDefined()
+      await document.reconcile(host.coordinator.unknownKey!)
+      await host.assembly.dispose()
+      const resumed=await createSessionAssembly({workspace:process.cwd(),coordinator:host.coordinator,sessionId:SESSION_ID,model:host.model})
+      try{
+        const executor=createSessionExecutor({session:resumed.session,agent:resumed.agent,inbox:resumed.inbox})
+        executor.submit({tier:'send',text:'continue after reconciliation'});await executor.drain()
+        expect(host.model.requests).toHaveLength(2)
+        expect(requestMessagesCarrying(host.model.requests[0]!,REMINDER)).toHaveLength(1)
+        expect(resumed.session.events.filter(event=>event.type==='agent/input/promoted'&&event.inputId===`schedule-1@${record.scheduledAt}`)).toHaveLength(1)
+      }finally{await resumed.dispose()}
       expect(host.coordinator.written.filter(isScheduleDispatch)).toHaveLength(1)
       expect(host.coordinator.written.filter(isScheduleAdmission)).toHaveLength(1)
     } finally {
@@ -444,7 +433,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     // Phase 1 — a delivered log, case 1's shape.
     const record = overdueOneShot()
     const delivered = await mountHost({ seed: (session) => seedCreate(session, record) })
-    let written: SessionEvent[]
+    let written: SessionEventView[]
     try {
       await delivered.runTurn("hello")
       written = [...delivered.coordinator.written]
@@ -458,7 +447,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     // driver inside it. One step happens, so the tick DOES run.
     const host = await mountHost({
       seed: (session) => {
-        for (const ev of written) append(session, ev)
+        for (const ev of written) append(session, copyConversationData(ev))
       },
       script: [{ role: "assistant", text: "ok" }],
     })

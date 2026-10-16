@@ -159,7 +159,7 @@ describe("llm-gemini protocol", () => {
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
     expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "gemini", model: "gemini-3-flash", callSignatures: ["signed"], callBindings: [{ name: "read", argsJson: "{}" }] } })
-    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "gemini", callSignatures: ["signed"] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "gemini", callSignatures: ["signed"] } }, { role: 'tool', toolCallId: 'c1', content: 'done' }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.contents[0].parts[0]).toEqual({ functionCall: { id: "c1", name: "read", args: {} }, thoughtSignature: "signed" })
@@ -269,13 +269,13 @@ describe("llm-gemini protocol", () => {
     const continuation = (events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
     const iterator = client.stream({ messages: [{ role: "assistant", content: " ", toolCalls: [
       { id: "call_a", name: "read", args: {} },
-    ], providerContinuation: continuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    ], providerContinuation: continuation }, { role: 'tool', toolCallId: 'call_a', content: 'done' }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.contents).toEqual([{ role: "model", parts: [
       { text: " ", thoughtSignature: "space-sig" },
       { functionCall: { id: "call_a", name: "read", args: {} }, thoughtSignature: "call-sig" },
-    ] }])
+    ] }, { role: 'user', parts: [{ functionResponse: { id: 'call_a', name: 'read', response: { output: 'done' } } }] }])
     await iterator.return?.()
   })
 
@@ -287,13 +287,14 @@ describe("llm-gemini protocol", () => {
         kind: "gemini", model: "gemini-3-flash", callSignatures: ["signed-call"],
         partOrder: [{ kind: "tool", index: 0 }, { kind: "text", text: "Old.", thoughtSignature: "signed-text" }],
       } },
+      { role: 'tool', toolCallId: 'call_a', content: 'done' },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
     expect(body.contents).toEqual([{ role: "model", parts: [
       { text: "Edited." },
       { functionCall: { id: "call_a", name: "read", args: {} } },
-    ] }])
+    ] }, { role: 'user', parts: [{ functionResponse: { id: 'call_a', name: 'read', response: { output: 'done' } } }] }])
     await iterator.return?.()
   })
 
@@ -310,13 +311,13 @@ describe("llm-gemini protocol", () => {
     const continuation = (events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
     const iterator = client.stream({ messages: [{ role: "assistant", content: "Checking.", toolCalls: [
       { id: "call_a", name: "read", args: { path: "new" } },
-    ], providerContinuation: continuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    ], providerContinuation: continuation }, { role: 'tool', toolCallId: 'call_a', content: 'done' }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.contents).toEqual([{ role: "model", parts: [
       { text: "Checking." },
       { functionCall: { id: "call_a", name: "read", args: { path: "new" } } },
-    ] }])
+    ] }, { role: 'user', parts: [{ functionResponse: { id: 'call_a', name: 'read', response: { output: 'done' } } }] }])
     await iterator.return?.()
   })
 

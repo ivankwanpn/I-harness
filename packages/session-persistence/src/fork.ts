@@ -1,26 +1,9 @@
-import { CURRENT_FORMAT_VERSION, rewindCuts, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, committedFactSeqs, rewindCuts, isContextEventType, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { remapConversationSeed, SessionForkUnavailableError } from "./seed.ts"
+export { materializeMissingImageAdmissions, remapSeedEvent, SessionForkUnavailableError } from "./seed.ts"
 import type { SessionCoordinator } from "./index.ts"
 
-/** A turn-only fork can start after an image admission. In that child the
- * reference has no target, so copy the image onto its retained user message.
- * References whose admission is retained stay compact. Source objects and
- * event order remain untouched; callers remap seqs after this pass. */
-export function materializeMissingImageAdmissions(source: readonly SessionEvent[], retained: readonly SessionEvent[]): SessionEvent[] {
-  const retainedSet = new Set(retained)
-  const admissions = new Map<string, Extract<SessionEvent, { type: "agent/input/admitted" }>>()
-  const replacements = new Map<SessionEvent, SessionEvent>()
-  for (const event of source) {
-    if (event.type === "agent/input/admitted") admissions.set(event.inputId, event)
-    if (event.type !== "user/message" || event.imageInputId === undefined || !retainedSet.has(event)) continue
-    const admission = admissions.get(event.imageInputId)
-    if (!admission?.images?.length) throw new Error(`image admission not found for forked user/message: ${event.imageInputId}`)
-    if (retainedSet.has(admission)) continue
-    const { imageInputId: _imageInputId, ...message } = event
-    replacements.set(event, { ...message, images: admission.images })
-  }
-  return retained.map((event) => replacements.get(event) ?? event)
-}
-
+/** Select a completed parent prefix; batch seed semantics live in seed.ts. */
 export interface ForkSessionOptions {
   atSeq?: number
   title?: string
@@ -33,15 +16,6 @@ interface ForkSessionResult {
   title?: string
 }
 
-export class SessionForkUnavailableError extends Error {
-  readonly code = "fork-unavailable" as const
-
-  constructor(message: string) {
-    super(message)
-    this.name = "SessionForkUnavailableError"
-  }
-}
-
 export async function forkSession(
   coordinator: SessionCoordinator,
   sourceSessionId: string,
@@ -52,11 +26,11 @@ export async function forkSession(
     throw new TypeError("atSeq must be a non-negative integer")
   }
 
-  const [{ session }, profile] = await Promise.all([
-    coordinator.load(sourceSessionId),
-    coordinator.profile(sourceSessionId),
-  ])
-  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq)
+  const profile = await coordinator.profile(sourceSessionId)
+  const source = await coordinator.openManagedDocument(sourceSessionId)
+  source.assertReady()
+  const session = source.view
+  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion)
   const title = options.title ?? profile.meta.title
   const workspaceId = options.workspaceId ?? profile.meta.workspaceId
   const { id } = await coordinator.create({
@@ -66,7 +40,8 @@ export async function forkSession(
     parentSession: sourceSessionId,
     seedLength: prefix.length,
   })
-  if (prefix.length > 0) await coordinator.append(id, prefix)
+  const target = await coordinator.openManagedDocument(id)
+  if (prefix.length > 0) committedFactSeqs(await target.importSeed(prefix))
   return {
     sessionId: id,
     seedLength: prefix.length,
@@ -75,9 +50,10 @@ export async function forkSession(
 }
 
 export function completedTurnPrefix(
-  events: readonly SessionEvent[],
+  events: readonly SessionEventView[],
   sourceSessionId: string,
   atSeq: number | undefined,
+  sourceFormat = CURRENT_FORMAT_VERSION,
 ): SessionEvent[] {
   let boundaryIndex = -1
   if (atSeq === undefined) {
@@ -116,6 +92,9 @@ export function completedTurnPrefix(
   let cut = boundaryIndex + 1
   while (cut < events.length && events[cut]!.type !== "turn/start") cut++
   const prefix = events.slice(0, cut)
+  // Positional replacements require their historical proof and cuts intact.
+  // The central compiler refuses missing/out-of-boundary dependencies.
+  if (events.some(event => event.type === 'compaction/replacement')) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
 
   // M54 A3 (research G5): apply the SAME hidden-region semantics deriveMessages
   // uses on the source (core-session `rewindCuts`): a rewind/point marker hides
@@ -152,7 +131,7 @@ export function completedTurnPrefix(
   // into the dropped region disappear with the events they named.
   const cuts = rewindCuts({ formatVersion: CURRENT_FORMAT_VERSION, events: [...events] })
   const carriesMarker = prefix.some((event) => event.type === "rewind/point")
-  if (cuts.length === 0 && !carriesMarker) return materializeMissingImageAdmissions(events, prefix)
+  if (cuts.length === 0 && !carriesMarker) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
   const hidden = new Set<number>()
   for (const window of cuts) {
     let from = window.cutFrom
@@ -170,68 +149,8 @@ export function completedTurnPrefix(
     type === "compaction/summary" || type === "compaction/reset" || type === "compaction/prune"
   const kept = prefix.filter((event) =>
     event.type !== "rewind/point"
+    && !isContextEventType(event.type)
     && (isCompactionMarker(event.type) || event.seq === undefined || !hidden.has(event.seq)))
-  if (kept.length === prefix.length) return materializeMissingImageAdmissions(events, prefix)
-  const materialized = materializeMissingImageAdmissions(events, kept)
-  const renumbered = new Map<number, number>()
-  for (const [index, event] of materialized.entries()) {
-    if (event.seq !== undefined) renumbered.set(event.seq, index)
-  }
-  return materialized.map((event, index) => remapSeedEvent(event, index, renumbered))
-}
-
-// M54 A3: renumber one seed event into the child's coordinates, remapping the
-// seq references the projection consumes. A reference into a dropped (hidden)
-// region has no child-side target and is dropped with it.
-//
-// M74: this is no longer private to the session fork — the subagent's
-// `forkTurns` (packages/subagent/src/fork.ts) applies the SAME pass to a
-// `forkTurns: N` seed, so its contract "the output is in the child's
-// coordinates, references without a child-side target are gone" has a second
-// consumer and has to hold for both.
-//
-// M76: the fourth reference is `rewind/point`'s `anchorSeq`. Unlike the three
-// above it is a SCALAR, so a missing target has to land somewhere instead of
-// dropping (see the branch below for what it means and where it lands).
-export function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
-  const remap = (seqs: number[] | undefined): number[] =>
-    (seqs ?? []).flatMap((seq) => {
-      const mapped = renumbered.get(seq)
-      return mapped === undefined ? [] : [mapped]
-    })
-  if (event.type === "compaction/summary") return { ...event, seq: index, shadowedSeqs: remap(event.shadowedSeqs) }
-  if (event.type === "compaction/reset") return { ...event, seq: index, removedSeqs: remap(event.removedSeqs) }
-  if (event.type === "session/title") return { ...event, seq: index, messageSeqs: remap(event.messageSeqs) }
-  // M76: `anchorSeq` names a seq the same way — it is the FIRST event the marker
-  // hides, and `rewindCuts` reads the window as [anchorSeq, the marker's own seq)
-  // — so it rides the SAME map. The session fork never noticed: it DROPS rewind
-  // markers before this pass (:150-152). The subagent's `forkTurns` keeps them,
-  // and there a carried-over PARENT coordinate names an unrelated child event:
-  // `rewindCuts` resolves a subset window — or none at all, once the stale anchor
-  // lands at or past the marker's child-side seq — and the region the rewind hid
-  // comes back onto the child's surface.
-  //
-  // An anchor this child never received (the seed begins INSIDE the window the
-  // marker opened, so no child-side target exists) opens the window on the
-  // child's FIRST event. That is the parent's surface restricted to this log:
-  // every event the child owns before the marker was hidden on the parent's,
-  // whereas a stale coordinate would name an unrelated event (or be discarded).
-  //
-  // M76 final review: `?? 0` is the fallback for THAT miss only, and the numeric
-  // test below is what keeps it there. A marker with no numeric `anchorSeq` at
-  // all (a persisted line that lost the field — resume does not re-run append's
-  // validation) is different input with its own rule: `rewindCuts` refuses it
-  // outright (`core-session/src/index.ts:281`, "unsealed events are NEVER
-  // hidden"), so a `0` minted for it would answer that malformed input with a
-  // LIVE `[0, marker)` window hiding the child's whole prefix — silent
-  // over-hiding on the one input the projection elsewhere keeps inert. A
-  // non-numeric anchor is therefore carried through untouched and the
-  // malformed-marker rule keeps deciding.
-  if (event.type === "rewind/point") {
-    const anchorSeq = typeof event.anchorSeq === "number"
-      ? renumbered.get(event.anchorSeq) ?? 0
-      : event.anchorSeq
-    return { ...event, seq: index, anchorSeq }
-  }
-  return { ...event, seq: index }
+  if (kept.length === prefix.length) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
+  return remapConversationSeed({ sourceFormat, source: events, retained: kept })
 }

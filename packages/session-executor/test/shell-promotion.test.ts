@@ -208,7 +208,7 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       await runTurn(assembly)
       const read = toolResult(assembly.session, "job_output")
       expect(read.text).toContain("started")
-      expect(read.text).toContain("[status: running]")
+      expect(read.status).toBe("running")
 
       // 5. The work is NOT lost: release the command and watch it complete.
       writeFileSync(release, "go")

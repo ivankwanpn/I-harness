@@ -1,7 +1,7 @@
 import { forkSession, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createHash } from "node:crypto"
-import { Inbox } from "@i-harness/core-session"
+import { readInbox } from "@i-harness/core-session"
 import { recoverColdSessionRewind, sessionArtifactManifest } from "./session-artifacts.ts"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 
@@ -58,7 +58,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     if (!coordinator.snapshot) throw new Error("Durable session inspection is unavailable")
     await coordinator.flush(id)
     const snapshot = (await coordinator.snapshot(id)).session
-    if (new Inbox(snapshot).pending().length) throw new Error("Session has pending durable inputs")
+    if (readInbox(snapshot).pending().length) throw new Error("Session has pending durable inputs")
     let inTurn = false
     for (const event of snapshot.events) { if (event.type === "turn/start") inTurn = true; if (event.type === "turn/end") inTurn = false }
     if (inTurn) throw new Error("Session has an unfinished durable turn")
@@ -84,7 +84,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           if (event.type === "subagent/inbox" && (event.seq ?? 0) > (row.lastInboxSeq ?? -1)) throw new Error("Session has active or pending durable agents/inbox")
           if (event.type === "code/cell") { if (event.state === "started") cells.add(event.cellId); else cells.delete(event.cellId) }
         }
-        if (!ended || cells.size || new Inbox(child).pending().length || service.queueState(row.sessionId).running || service.queueState(row.sessionId).queued) throw new Error("Session has active or pending durable agents/inbox")
+        if (!ended || cells.size || readInbox(child).pending().length || service.queueState(row.sessionId).running || service.queueState(row.sessionId).queued) throw new Error("Session has active or pending durable agents/inbox")
         const resources = service.liveAssembly?.(row.sessionId)?.liveResources?.()
         const ownerResources = assembly?.liveResources?.(row.sessionId)
         if ([resources, ownerResources].some(resources => resources?.backgroundJobs?.length)) throw new Error("Session has active background producers")

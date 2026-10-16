@@ -6,6 +6,23 @@ type WireEvent = HistoryRange["events"][number]
 type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 
 describe("projectTimeline", () => {
+  it("hides scalar usage bookkeeping without mutating the event log", () => {
+    const events: WireEvent[] = [{ type: "context/usage", version: 1, seq: 0, checkpoint: { version: 1, ownerSessionId: "owner", bindingFingerprint: "a".repeat(64), shapeFingerprint: "b".repeat(64), identityCoverage: "partial", inputPrefixFingerprint: "c".repeat(64), inputUnitCount: 1, heuristicPrefixTokens: 100, reportedInputTokens: 120, projectionRevision: 0 } }]
+    const original = JSON.stringify(events)
+    expect(projectTimeline(events)).toEqual([])
+    expect(projectHistoryTimeline(events)).toEqual([])
+    expect(JSON.stringify(events)).toBe(original)
+  })
+  it("keeps owned recovery state readable in live and history projection", () => {
+    const states = ["required", "retry-started", "resolved", "blocked"] as const
+    const events: WireEvent[] = states.map((state, seq) => ({ type: "context/recovery", version: 1, ownerSessionId: "owner", recoveryId: "r", logicalStepSeq: 1,
+      bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "b".repeat(64), state, reason: "Controlled recovery status", seq }))
+    const rows = projectTimeline(events)
+    expect(rows).toHaveLength(4)
+    expect(rows.map(row => row.kind === "other" && row.detail)).toEqual(states.map(state => `Context recovery: ${state}\nControlled recovery status`))
+    expect(projectHistoryTimeline(events).map(({ seqs: _seqs, ...row }) => row)).toEqual(rows)
+    expect(events).toHaveLength(4)
+  })
   it("keeps searchable text visible when a historical window starts after the tool call", () => {
     const row = projectHistoryTimeline([{ type: "tool/result", name: "read", callId: "old", seq: 900, output: "old searchable output" }])[0]!
     expect(row).toMatchObject({ seqs: [900], kind: "tool", name: "read", output: "old searchable output", resultReceived: true })

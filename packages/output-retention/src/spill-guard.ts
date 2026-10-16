@@ -19,6 +19,8 @@ import { createSpillStore, createTextRetainer, spillNotice, type SpillStore } fr
 const d = diagnosticsFor("mount")
 
 export interface OutputSpillGuardConfig {
+  /** Shipping policy; absent preserves the legacy synthetic verdict exemption. */
+  boundSyntheticFailures?: boolean
   // 缺省 64_000. The cap has a FLOOR as well: the replacement always carries the
   // notice, whose own text plus the spill path is ~200 B, so a cap below that
   // can never hold a replacement — an over-cap result then comes back
@@ -172,59 +174,11 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
   return null
 }
 
-// A synthetic failure is a VERDICT ABOUT a call, not output FROM it. Truncating
-// one is worse than not bounding it: the model would lose the reason the call
-// failed, which is the whole point of block ①. And the predicate reads the
-// CODE, not the shape — a body that returns `{ error }` as real data is not a
-// failure, and keying on the shape would bound it.
-//
-// WHAT THIS EXEMPTION ACTUALLY REACHES — measured, and it is NOT what an
-// earlier version of this comment claimed. This guard is mounted on the
-// `tools/execute` CASCADE, so it only ever sees a value a cascade handler
-// returned. Four of the five codes are written by core-agent's scheduler
-// STRAIGHT TO THE SESSION (`append` — the synthetic fills never go through
-// `registry.execute` or `tools.finalize`), so in production those four verdicts
-// never arrive here at all: their membership is DEFENCE-IN-DEPTH for any future
-// path that routes a synthetic result through the cascade, plus the
-// value-collision rule below. The ONE code that does cross this seam today is
-// TOOL_TIMEOUT, because guard-timeout is itself a cascade handler, mounted
-// inside this one by the assembly. Measured before it was added: a
-// timed-out tool's over-cap result came back as a spill envelope; the durable
-// record had NO top-level `code` and the verdict survived only as truncated
-// text. With it in the set the verdict — and the PARTIAL output the timeout
-// guard spread under it — passes through whole.
-//
-//
-// TOOL_TIMEOUT'S EXPOSURE, measured end to end rather than assumed — it is the
-// one member whose result is not just a message. For the SHIPPED shell tools
-// the exposure is bounded at 2× the cap, because `shellRetention` truncates
-// each stream to 64,000 BEFORE the timeout guard spreads the partial under the
-// verdict: driven through the real CLI with a real shell that outlived its
-// deadline, one stream over-retained came back at 64,153 B (1.00× the cap) and
-// both streams at 128,158 B (2.00×). The bound is NOT general, and the
-// condition is the part to remember: a tool that declares `timeoutMs` and has
-// NO self-retention resolves after the deadline with a partial nothing has
-// bounded — measured with a stand-in of exactly that shape, 1,000,101 B
-// (15.6× the cap), passed through whole. So ANY future `timeoutMs` tool
-// without self-retention makes this member unbounded; the exemption accepted
-// that when the code was admitted, deliberately. If a different treatment is
-// ever wanted, it must preserve `error` and `code` VERBATIM at the top level
-// and carry a real `images` array through — everything else is spillable.
-// THE PRICE, stated rather than hidden: the rule is a VALUE test, so a tool
-// body that returns one of these five strings as its own data is never bounded.
-// That is the cost of keying on the vocabulary instead of the shape; the
-// vocabulary is the one the tool-result contract owns, and the shape rule was
-// rejected because it bounds real data (the line above).
-//
-// WHY THIS EXEMPTION KEYS ON A SET AND NOT ON THE REACHABILITY GATE'S SILENCE:
-// "no row" does not mean "no reader". When the codes moved to core-tools (T1),
-// the gate's used-scan began counting the DECLARING file as a user — a
-// cross-package declarer escapes the scan's own declaring-file exclusion — so
-// the two core-agent allowlist entries went INERT with nothing new reading the
-// codes. An exemption keyed on the instrument's quiet would have been keyed on
-// an artifact of that move. (The mechanism is recorded in
-// scripts/audit/reachability-allowlist.json, the core-agent TOOL_FAILED /
-// TOOL_CANCELLED_BY_SIBLING pair.)
+// Legacy callers preserve the original code-value exemption when the injected
+// shipping policy is absent. Shipping uses an explicit synthetic-producer
+// cascade below; an ordinary result with a matching code string is still data.
+// The timeout guard and scheduler commit lane invoke that cascade without
+// replaying the tool or its post-execute hooks.
 const SYNTHETIC_FAILURE_CODES = new Set([
   TOOL_FAILED,                    // a body that tried and failed
   TOOL_ABORTED_BEFORE_DISPATCH,   // a call that never started
@@ -259,19 +213,40 @@ export function createOutputSpillGuard(_ctx: PluginContext, config?: OutputSpill
   return {
     name: "output-spill",
     mount(ctx: PluginContext): void {
+      if (config?.boundSyntheticFailures) ctx.onCascade("tools/project-synthetic-result", async (dispatch, next) => {
+        const out = await next()
+        if (modelVisibleBytes(out) <= maxBytes) return out
+        const { name } = dispatch as { name: string }
+        const { text, images } = splitRealImages(out as object)
+        const raw = out as { code: string; error: string; outcome?: string }
+        const path = await store.saveText(text, `${name}-failure`)
+        const reason = createTextRetainer({ maxBytes: 2048, mode: "head" })
+        reason.push(raw.error)
+        const replacement = fitWithinCap(maxBytes, budget => {
+          const r = createTextRetainer({ maxBytes: budget, mode: "headTail" })
+          r.push(text)
+          const kept = r.finish()
+          return { code: raw.code, error: reason.finish().text,
+            ...(raw.outcome !== undefined ? { outcome: raw.outcome } : {}),
+            output: kept.text + "\n" + spillNotice(kept.omittedBytes, path), outputPaths: [path],
+            spill: { omittedBytes: kept.omittedBytes, label: name, retention: "temporary", maxAgeMs: gcOpts.maxAgeMs, maxTotalBytes: gcOpts.maxTotalBytes },
+            ...(images !== undefined ? { images } : {}),
+          }
+        })
+        if (replacement === null) throw new Error("Synthetic result metadata exceeds output budget; full result retained at " + path)
+        return replacement
+      })
       ctx.onCascade("tools/execute", async (dispatch, next) => {
         const out = await next()
         if (out === undefined || out === null || typeof out === "number" || typeof out === "boolean") return out
         const d = dispatch as { name: string }
-        // A truncated `read` sends the model back to read the same file, and it
-        // gets truncated again — the loop is worse than the size. dsh skips it
-        // for exactly this reason (spec §4.2). The check is on the TOOL NAME at
-        // the cascade seam, which is the only place this guard can see it.
+        // Read owns its source-backed range policy in shipping registrations.
+        // Legacy path-only callers preserve their full read behavior here.
         if (d.name === "read") return out
-        // A synthetic failure is returned UN-bounded (see SYNTHETIC_FAILURE_CODES
-        // above): the verdict about the call, and the reason it carries, is the
-        // whole payload — a truncation would delete it.
-        if (isSyntheticFailure(out)) return out
+        // Keep the old code-value exemption only for legacy registrations.
+        // Explicit shipping synthetic producers have already retained/projected
+        // their verdict; arbitrary code-string collisions still use normal spill.
+        if (!config?.boundSyntheticFailures && isSyntheticFailure(out)) return out
         if (typeof out === "string") {
           // Atom (ii): what the model sees for a string result is the
           // authority's JSON-quoted form, so that — not the raw byte length —

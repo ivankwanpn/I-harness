@@ -1,6 +1,6 @@
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import type { SessionAssembly, SessionService } from "@i-harness/session-executor"
-import { derivePlanMode, type Session, type SessionEvent } from "@i-harness/core-session"
+import { derivePlanMode, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 import type { HistoryRange } from "@i-harness/sdk"
 import { transportSessionEvents } from "@i-harness/sdk/server"
 import { foldTeam, teamLedger } from "@i-harness/agent-team"
@@ -220,7 +220,7 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
       // absent error on the current registry must not fall back to an older
       // saved entry or the initial task's outcome after a successful retry.
       const currentError = (liveEntry ?? saved ?? hint)?.error
-      let events: SessionEvent[] = [], unavailable: string | undefined
+      let events: readonly SessionEvent[] = [], unavailable: string | undefined
       const childAuthority = runtime?.runtime && liveEntry ? { ownerId: runtime.ownerId, assembly: runtime.runtime.assembly, entry: liveEntry } : undefined
       try { events = (await snapshot(sessionId, liveChild(sessionId, childAuthority))).events.slice(meta.seedLength ?? 0) }
       catch (error) { unavailable = errorText(error); errors.push({ sessionId, message: unavailable }) }

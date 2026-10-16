@@ -14,6 +14,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createHarnessClient } from "@i-harness/sdk"
+import { fromJSONL } from '@i-harness/core-session'
 import { RewindStore, sha256Hex } from "@i-harness/rewind"
 import type { CancelResult, RewindPointsResponse, RewindPlanResponse, RewindExecuteResponse, SessionModelSelection } from "@i-harness/sdk"
 
@@ -536,8 +537,9 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         await first.close().catch(() => {})
       }
 
-      const rawAfterFirst = readFileSync(sessionPath, "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as { type: string; seq?: number; output?: { code?: string; error?: string } })
+      const firstBytes = readFileSync(sessionPath, 'utf8')
+      expect(JSON.parse(firstBytes.split('\n')[0]!).formatVersion).toBe(6)
+      const rawAfterFirst = fromJSONL(firstBytes).events
       expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
       // M71 T2 — DELIBERATE CONTRACT CHANGE (was TOOL_ABORTED_BEFORE_DISPATCH):
       // this hand-written crash log carries no tool/dispatch ANYWHERE, so the
@@ -547,8 +549,8 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       // own (the dispatched arm's says "was dispatched", which this log cannot
       // establish). Raw JSONL on purpose — the wire carries the full payload.
       expect(rawAfterFirst.some((event) => event.type === "tool/result"
-        && event.output?.code === "TOOL_OUTCOME_UNKNOWN"
-        && (event.output?.error ?? "").includes("no tool/dispatch marker anywhere"))).toBe(true)
+        && (event.output as { code?: string })?.code === "TOOL_OUTCOME_UNKNOWN"
+        && ((event.output as { error?: string })?.error ?? "").includes("no tool/dispatch marker anywhere"))).toBe(true)
 
       const second = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {

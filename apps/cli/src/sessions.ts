@@ -14,7 +14,7 @@
 // header says).
 import { stat } from "node:fs/promises"
 import { join } from "node:path"
-import { deriveMessages, type Session, type SessionEvent } from "@i-harness/core-session"
+import { deriveMessages, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
 import {
   createSessionCoordinator,
   resolveSessionStoreRoot,
@@ -86,7 +86,7 @@ export async function listStoredSessions(coordinator: SessionCoordinator, storeR
       const updatedAt = artifact ?? (Number.isNaN(created) ? undefined : created)
       if (updatedAt !== undefined) row.updatedAt = updatedAt
       try {
-        const { session } = await coordinator.load(id)
+        const { session } = await coordinator.snapshot!(id)
         row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
         // M3 §3.4: the durable run-end record rides the full-log read the turn
         // count already pays for. The LAST one wins — a run whose success
@@ -219,7 +219,7 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
       }
       let session: Session
       try {
-        session = (await coordinator.load(id)).session
+        session = (await coordinator.snapshot!(id)).session
       } catch (error) {
         d.error(`session not found: ${id} (${error instanceof Error ? error.message : String(error)})`)
         return 1

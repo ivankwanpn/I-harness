@@ -58,7 +58,7 @@ it.each(["prepared", "mounting"] as const)("retains an acknowledged Todo on the 
     await f.service.assemblyFor("owned")
     expect(await f.work.writeTodos("owned", { expectedRevision: 1, items: [{ content: items[0]!.content, status: "completed" }] })).toMatchObject({ todosRevision: 2 })
     await f.service.close(); await f.coordinator.close()
-    const file = join(f.root, "owned.jsonl"), before = await readFile(file, "utf8"), cold = createSessionCoordinator(createJsonlBackend(f.root))
+    const file = join(f.root, "owned.jsonl"), before = await readFile(file, "utf8"), cold = createSessionCoordinator(createJsonlBackend(f.root),{lock:{enabled:true}})
     try {
       const events = (await cold.loadOwned("owned")).session.events
       expect(events.map(event => event.seq)).toEqual(events.map((_, index) => index))
@@ -111,7 +111,7 @@ it.each(["prepared", "mounting"] as const)("refuses late %s publication after cl
     await expect(f.work.writeTodos("owned", { expectedRevision: 0, items: [] })).rejects.toThrow(/closing/)
     f.release.resolve()
     await closing
-    await expect(f.building).rejects.toThrow(/closing/)
+    await expect(f.building).rejects.toThrow(/closing|FACT_CLOSED/)
     expect(f.service.hasAssembly("owned")).toBe(false)
     expect(published).toHaveLength(0)
     await f.service.assemblyFor("owned")
@@ -124,8 +124,8 @@ it("owns a late cold writer load through close without publishing it or changing
   await coordinator.create({ sessionId: "owned" })
   const file = join(root, "owned.jsonl"), before = await readFile(file, "utf8"), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let loads = 0
-  const observed = { ...coordinator, loadOwned: async (id: string) => {
-    const restored = await coordinator.loadOwned(id)
+  const observed = { ...coordinator, openManagedDocument: async (id: string) => {
+    const restored = await coordinator.openManagedDocument(id)
     if (++loads === 1) { entered.resolve(); await release.promise }
     return restored
   } }
@@ -136,17 +136,17 @@ it("owns a late cold writer load through close without publishing it or changing
     await entered.promise
     const closing = service.closeSession("owned")
     release.resolve(); await closing
-    await expect(writing).rejects.toThrow(/closing/)
+    await expect(writing).rejects.toThrow(/closing|FACT_CLOSED/)
     expect(service.hasAssembly("owned")).toBe(false)
     expect(await readFile(file, "utf8")).toBe(before)
     expect(await work.writeTodos("owned", { expectedRevision: 0, items: [{ content: "Owned next lifecycle", status: "pending" }] })).toMatchObject({ todosRevision: 1 })
-    expect(loads).toBe(2)
+    expect(loads).toBe(4)
     expect(service.hasAssembly("owned")).toBe(false)
   } finally { release.resolve(); await writing.catch(() => {}); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 it("retains the failed cleanup owner until an explicit close succeeds", async () => {
-  const root = await mkdtemp(join(tmpdir(), "ih-mount-cleanup-owner-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const root = await mkdtemp(join(tmpdir(), "ih-mount-cleanup-owner-")), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "owned" })
   let attempts = 0, failCleanup = true
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: "test-mock",

@@ -7,11 +7,11 @@ import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import type { ParentInputAdmission } from "@i-harness/subagent"
-import { SYSTEM_INPUT_PLUGIN, type SessionEvent } from "@i-harness/core-session"
+import { SYSTEM_INPUT_PLUGIN, decodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 
 async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[]) {
   const root = await mkdtemp(join(tmpdir(), "team-completion-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "lead" })
   if (seed?.length) await coordinator.append("lead", seed)
   const service = createSessionService({
@@ -24,11 +24,11 @@ async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: Par
   })
   const assembly = await service.assemblyFor("lead")
   const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "lead" })
-  return { root, service, assembly, coordinator, execute, close: async () => { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
+  return { root, service, assembly, coordinator, backend, execute, close: async () => { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
 async function assertColdDoesNotWake(root: string, marker: string) {
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const seen: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Unexpected wake" }; yield { type: "end" } } }
   const service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
@@ -75,6 +75,53 @@ it("delivers initial and followup teammate finals exactly once to an idle Lead u
   } finally { await f.close() }
 })
 
+it("shipping teammate completion waits for strict owned retention and bounds its framed model notice", async () => {
+  const output = "TEAM_BARRIER " + '中文🙂"\n'.repeat(12000)
+  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: output }; yield { type: "end" } } }
+  const lead: ModelClient = { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } }
+  const notices: string[] = []
+  const f = await fixture(lead, child, { admit: async input => { notices.push(input.text) }, wake: () => {} })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
+  let retained = false
+  f.coordinator.putDocumentStrict = async (key, data) => {
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_BARRIER")) { await held; retained = true }
+    await strict(key, data)
+  }
+  try {
+    await f.execute("spawn_teammate", { name: "helper", description: "large result", prompt: "first", context: "fresh" })
+    await vi.waitFor(() => expect(f.assembly.subagentState().jobs.some(job => job.output === output)).toBe(true))
+    expect(notices).toHaveLength(0)
+    release()
+    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    expect(retained).toBe(true)
+    expect(Buffer.byteLength(notices[0]!, "utf8")).toBeLessThanOrEqual(16384)
+    expect(notices[0]).toContain("job_output")
+    expect(f.assembly.subagentState().jobs.find(job => job.output === output)?.status).toBe("completed")
+  } finally { release(); await f.close() }
+})
+
+it("shipping teammate retention failure keeps the real completed result inspectable and suppresses admission", async () => {
+  let turns = 0, admissions = 0
+  const child: ModelClient = { async *stream() { turns++; yield { type: "text/chunk", text: "TEAM_RETENTION_FAILED completed effect" }; yield { type: "end" } } }
+  const lead: ModelClient = { async *stream() { yield { type: "end" } } }
+  const f = await fixture(lead, child, { admit: async () => { admissions++ }, wake: () => {} })
+  const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
+  f.coordinator.putDocumentStrict = async (key, data) => {
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_RETENTION_FAILED")) throw new Error("team result disk full")
+    await strict(key, data)
+  }
+  try {
+    await f.execute("spawn_teammate", { name: "helper", description: "controlled result", prompt: "first", context: "fresh" })
+    await vi.waitFor(() => expect(f.assembly.subagentState().agentTable[0]).toMatchObject({ retention: "failed", retentionError: "team result disk full" }))
+    expect(admissions).toBe(0); expect(turns).toBe(1)
+    expect(f.assembly.subagentState().jobs[0]).toMatchObject({ status: "completed", output: "TEAM_RETENTION_FAILED completed effect" })
+    const job = await f.execute("job_output", { job_id: f.assembly.subagentState().jobs[0]!.id }) as any
+    expect(job).toMatchObject({ status: "completed", text: "TEAM_RETENTION_FAILED completed effect", retention: "failed", retention_error: "team result disk full" })
+  } finally { await f.close() }
+})
+
 it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized UTF-8 result summary and retains the full job output (%#)", async (output) => {
   const seen: LLMRequest[] = []
   const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received summary" }; yield { type: "end" } } }
@@ -91,7 +138,16 @@ it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized
     const jobId = notification.text.match(/job_output\(\{job_id:"([^"]+)"\}\)/)?.[1]
     expect(jobId).toBeDefined()
     expect(notification.text).not.toContain("\uFFFD")
-    expect(await f.execute("job_output", { job_id: jobId })).toEqual(expect.objectContaining({ status: "completed", text: `${output}\n[status: completed]` }))
+    let offset = 0, digest: string | undefined, full = ""
+    for (;;) {
+      const page = await f.execute("job_output", { job_id: jobId, offset_bytes: offset, digest, max_output_bytes: 4096 }) as { text: string; status: string; digest: string; next_offset_bytes: number; truncated: boolean }
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
+      expect(page.status).toBe("completed")
+      full += page.text; digest = page.digest
+      if (!page.truncated) break
+      expect(page.next_offset_bytes).toBeGreaterThan(offset); offset = page.next_offset_bytes
+    }
+    expect(full).toBe(output)
   } finally { await f.close() }
 })
 
@@ -244,10 +300,10 @@ it("cancels an admitted notification if Stop arrives during its persistence flus
   let release!: () => void
   const held = new Promise<void>((done) => { release = done })
   let flushing = false
-  const originalFlush = f.coordinator.flush.bind(f.coordinator)
-  f.coordinator.flush = async (sessionId) => {
-    if (!flushing && f.assembly.inbox.pending().some((input) => input.text.includes("STOP_DURING_FLUSH"))) { flushing = true; await held }
-    await originalFlush(sessionId)
+  const originalAppend = f.backend.appendOwnedBatch!
+  f.backend.appendOwnedBatch = async (...args) => {
+    if (!flushing && args[0] === 'lead' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted' && event.text.includes('STOP_DURING_FLUSH'))) { flushing = true; await held }
+    return originalAppend(...args)
   }
   try {
     const run = f.service.submit("lead", "active parent", new AbortController().signal).catch(() => {})
@@ -255,8 +311,9 @@ it("cancels an admitted notification if Stop arrives during its persistence flus
     await f.execute("spawn_teammate", { name: "helper", description: "flush fixture", prompt: "first", context: "fresh" })
     await vi.waitFor(() => expect(flushing).toBe(true))
     expect(f.service.cancelRunning?.("lead").cancelled).toBe(true)
-    await run
+    expect(seen).toHaveLength(1)
     release()
+    await run
     await vi.waitFor(() => expect(f.assembly.inbox.pending().some((input) => input.text.includes("STOP_DURING_FLUSH"))).toBe(false))
     const notification = f.assembly.session.events.find((event) => event.type === "agent/input/admitted" && event.text.includes("STOP_DURING_FLUSH"))
     expect(f.assembly.session.events.some((event) => event.type === "agent/input/cancelled" && notification?.type === "agent/input/admitted" && event.inputId === notification.inputId)).toBe(true)

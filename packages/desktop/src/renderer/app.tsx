@@ -1,3 +1,4 @@
+import { safeCompactionBlockedReason } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { ComposerPreparationError, retireSessionDraft } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
@@ -545,7 +546,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canCompact: gate.canSend && !running && !operation?.busy && !(queue?.length),
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
-          await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          const result = await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          if (selection.current === scope && result?.reason === "summarizer-failed") setTaskActionFailure({ scope, message: [t("摘要產生失敗，未完成壓縮。"), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(" ") })
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
         queue,

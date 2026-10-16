@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest"
 import { createExecutionLease, type ExecutionOutput, type TransportExecutionBackend } from "@i-harness/sandbox"
 import { compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import { createExecService } from "../src/service.ts"
-import { withExecCallerScope, type BackgroundJobView } from "../src/index.ts"
+import { withExecCallerScope, type BackgroundJobView, type ExecutionSupervisor } from "../src/index.ts"
 import { retainedOutputReader } from "../src/retained-output.ts"
 import { createExecutionSupervisor } from "../src/execution-supervisor.ts"
 
@@ -22,6 +22,35 @@ function deferred<T>() {
   const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
   return { promise, resolve, reject }
 }
+it("reads the injected supervised handle once and preserves IO callback receivers through capture completion", async () => {
+  const events: string[] = []
+  const owner = { sessionId: "injected-owner" }
+  const policy = compileExecutionPolicy({ mode: "danger-full-access", owner,
+    authority: { kind: "unbound", revision: "injected-test", workspaceRoot: resolve(".") } })
+  const io = {
+    output: (async function* () { yield { channel: "stdout" as const, data: Buffer.from("captured\r\n") } })(),
+    async write() { expect(this).toBe(io); events.push("write") },
+    async endInput() { expect(this).toBe(io); events.push("end") },
+    diagnostics() { expect(this).toBe(io); events.push("diagnostics"); return { outputAbandoned: false, discardedOutputBytes: 0 } },
+  }
+  const root = { exitCode: 0 }
+  const handle = { pid: 1, receipt: { executionId: "injected", backendId: "injected", policyFingerprint: policy.fingerprint, owner, assurance: "unverified" as const },
+    io, rootExited: Promise.resolve(root), settled: Promise.resolve({ kind: "settled" as const, root, treeEmpty: true as const, ioSettled: true as const, resourcesReleased: true as const }),
+    async cancel() { throw new Error("unexpected cancellation") }, async release() { throw new Error("unexpected release") } }
+  const supervisor: ExecutionSupervisor = {
+    async launch() { return { id: "injected", policy, get handle() { events.push("handle"); return handle } } },
+    list: () => [], cancel: async () => { throw new Error("unexpected cancellation") },
+    reconcile: async () => {}, closeOwner: async () => {}, dispose: async () => {},
+  }
+  // Selection is still required before the injected supervisor receives a run.
+  const backend: TransportExecutionBackend = { probe: async () => { throw new Error("unused probe") }, prepare: async () => { throw new Error("unused prepare") } }
+  const exec = createExecService({ execution: { supervisor, defaultOwner: owner,
+    resolvePolicy: () => policy, validateAuthority: () => {}, selectBackend: () => backend } })
+  try {
+    expect(await exec.run({ argv: ["fixture"], input: "input" })).toMatchObject({ stdout: "captured\n", exitCode: 0 })
+    expect(events).toEqual(["handle", "write", "end", "diagnostics"])
+  } finally { await exec.dispose() }
+})
 function fixture(options: { output: AsyncIterable<ExecutionOutput>; inputError?: unknown; incomplete?: boolean; heldCancel?: boolean; spill?: boolean; autoLifetime?: "complete-tree" | "retain-tree" }) {
   const root = deferred<{ exitCode: number }>(), cancelled = deferred<void>(), releaseCancel = deferred<void>()
   const drained = deferred<void>()

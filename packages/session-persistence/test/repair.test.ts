@@ -1,3 +1,4 @@
+import { fromJSONL } from "@i-harness/core-session"
 // M27 R-A3: log-semantic repair (packages/session-persistence/src/repair.ts).
 // repairTurnTail is a PURE function: it never mutates its input (the raw log
 // must stay byte-preservable) and appends synthetic closers ONLY to the LAST
@@ -268,7 +269,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-seq"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "turn/start", seq: 0 }),
         JSON.stringify({ type: "step/start", seq: 1 }),
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "echo hi" }, seq: 2 }),
@@ -291,7 +292,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-nonpos"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
@@ -316,7 +317,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-load-ignorable"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "turn/start", seq: 0 }),
         JSON.stringify({ type: "step/start", seq: 1 }),
         JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 2 }),
@@ -384,8 +385,7 @@ describe("repairTurnTail through coordinator.load()", () => {
       )).toBe(true)
       await second.close()
 
-      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as SessionEvent)
+      const raw = fromJSONL(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")).events
       expect(raw.map((event) => event.seq)).toEqual(raw.map((_, index) => index))
       expect(JSON.stringify(raw)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
     } finally {
@@ -446,15 +446,14 @@ describe("repairTurnTail through coordinator.load()", () => {
     const sessionId = "sess-seq-ref"
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
-        JSON.stringify({ formatVersion: 1, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
+        JSON.stringify({ formatVersion: 2, sessionId, createdAt: "2026-09-06T00:00:00.000Z" }),
         JSON.stringify({ type: "user/message", text: "hidden", seq: 0 }),
         JSON.stringify({ type: "compaction/summary", text: "summary", shadowedSeqs: [0], seq: 20 }),
         "",
       ].join("\n"), "utf8")
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await expect(coordinator.loadOwned(sessionId)).rejects.toThrow(/sequence/i)
-      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as SessionEvent)
+      const raw = fromJSONL(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")).events
       expect(raw[1]?.seq).toBe(20)
       expect((raw[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
     } finally {
@@ -468,7 +467,7 @@ describe("repairTurnTail through coordinator.load()", () => {
     try {
       writeFileSync(join(dir, `${sessionId}.jsonl`), [
         JSON.stringify({
-          formatVersion: 1,
+          formatVersion: 2,
           sessionId,
           createdAt: "2026-09-06T00:00:00.000Z",
           extensionField: { keep: true },

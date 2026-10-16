@@ -11,7 +11,7 @@ describe("compaction config", () => {
     expect(() => resolveConfig({ contextWindow: 100, retainTokens: -1 })).toThrow(/retainTokens/)
     expect(() => resolveConfig({ contextWindow: 100, maxTokens: 0 })).toThrow(/maxTokens/)
     const r = resolveConfig({ contextWindow: 2000 })
-    expect(r).toMatchObject({ contextWindow: 2000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true })
+    expect(r).toMatchObject({ contextWindow: 2000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, summaryMaxOutputTokens: 4096, summaryOutputCapExplicit: false, auto: true })
   })
 
   it("M33: validates overheadTokens / minTurnsBeforeRecompact / prune (fail-loud, defaults on)", () => {
@@ -55,7 +55,7 @@ describe("token estimation", () => {
 })
 
 describe("M15 resolveContextWindow", () => {
-  const config: ResolvedCompactionConfig = { contextWindow: 1000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, auto: true, overheadTokens: 0, minTurnsBeforeRecompact: 3, minSummaryChars: 500, prune: { enabled: true, thresholdChars: 8192, headChars: 4096, tailChars: 1024 } }
+  const config: ResolvedCompactionConfig = { contextWindow: 1000, thresholdRatio: 0.8, retainTokens: 0, maxTokens: 1024, summaryMaxOutputTokens: 4096, summaryOutputCapExplicit: false, auto: true, overheadTokens: 0, minTurnsBeforeRecompact: 3, minSummaryChars: 500, prune: { enabled: true, thresholdChars: 8192, headChars: 4096, tailChars: 1024 } }
 
   it("catalog-first: per-model override beats profile-level beats config", () => {
     const profile = {
@@ -82,9 +82,9 @@ describe("region selection", () => {
     append(s, { type: "user/message", text: "b".repeat(400) }) // seq 1, ~100 tokens
     append(s, { type: "compaction/summary", text: "old", shadowedSeqs: [0, 1] }) // seq 2 (marker)
     append(s, { type: "user/message", text: "c".repeat(400) }) // seq 3, ~100 tokens
-    // retainTokens=150 keeps the tail (~seq 3 + part of seq 1), shadows seq 0 only
+    // The old raw events are already hidden; they cannot be selected again.
     const shadowed = selectShadowableRange(s, 150)
-    expect(shadowed).toEqual([0]) // seq 1 is part of the retained tail; the compaction/summary marker is never shadowed
+    expect(shadowed).toEqual([])
   })
 
   it("retainTokens 0 shadows everything except compaction markers", () => {

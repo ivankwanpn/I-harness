@@ -221,6 +221,7 @@ describe("llm-anthropic protocol", () => {
     vi.stubGlobal("fetch", fetchMock)
     const iterator = createAnthropicClient({ apiKey: "k", model: "m", providerId: "new-profile" }).stream({ messages: [
       { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "old-sig" }], providerContinuation: { kind: "anthropic", model: "m", providerId: "old-profile" }, toolCalls: [{ id: "c1", name: "read", args: {} }] },
+      { role: 'tool', toolCallId: 'c1', content: 'done' },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
@@ -362,6 +363,7 @@ describe("llm-anthropic protocol", () => {
       { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }],
         thinkingBlocks: [{ type: "thinking", thinking: "old", signature: "foreign" }],
         providerContinuation: { kind: "bedrock", reasoningBlocks: [], model: "aws-model" } },
+      { role: 'tool', toolCallId: 'call_1', content: 'done' },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
@@ -376,6 +378,7 @@ describe("llm-anthropic protocol", () => {
       { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }],
         thinkingBlocks: [{ type: "thinking", thinking: "old", signature: "signed" }],
         providerContinuation: { kind: "anthropic", model: "deepseek-flash" } },
+      { role: 'tool', toolCallId: 'call_1', content: 'done' },
     ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
@@ -441,7 +444,7 @@ describe("llm-anthropic protocol", () => {
     const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [
       { id: "call_a", name: "read", args: { path: "new" } },
       { id: "call_b", name: "read", args: {} },
-    ], thinkingBlocks: end.thinkingBlocks, providerContinuation: end.providerContinuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    ], thinkingBlocks: end.thinkingBlocks, providerContinuation: end.providerContinuation }, { role: 'tool', toolCallId: 'call_a', content: 'A' }, { role: 'tool', toolCallId: 'call_b', content: 'B' }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.messages[0].content).toEqual([
