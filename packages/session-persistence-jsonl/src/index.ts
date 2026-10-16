@@ -4,44 +4,13 @@ import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } f
 import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
+import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
 // answer (no turn/start yet); a larger one is served non-blank without a read
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
-
-async function replaceSessionFile(path: string, headerLine: string, events: SessionEvent[]): Promise<void> {
-  const body = [headerLine, ...events.map((event) => JSON.stringify(event)), ""].join("\n")
-  await replaceRawSessionFile(path, body)
-}
-
-async function replaceRawSessionFile(path: string, body: string | Buffer): Promise<void> {
-  const tmp = `${path}.${randomUUID()}.tmp`
-  const handle = await open(tmp, "wx")
-  try {
-    await handle.writeFile(body, { encoding: "utf-8" })
-    await handle.sync()
-  } catch (error) {
-    await handle.close().catch(() => {})
-    await unlink(tmp).catch(() => {})
-    throw error
-  }
-  await handle.close()
-  try {
-    await rename(tmp, path)
-  } catch (error) {
-    await unlink(tmp).catch(() => {})
-    throw error
-  }
-  // Directory fsync is not supported uniformly on Windows. Best-effort keeps
-  // the stronger durability path on platforms/filesystems that allow it.
-  const directory = await open(dirname(path), "r").catch(() => undefined)
-  if (directory !== undefined) {
-    try { await directory.sync() } catch { /* best-effort */ }
-    await directory.close().catch(() => {})
-  }
-}
 
 export function createJsonlBackend(root: string): PersistenceBackend {
   const rootPath = resolve(root)
