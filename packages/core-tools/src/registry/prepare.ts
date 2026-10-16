@@ -1,17 +1,19 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { Session } from "@i-harness/core-session"
+import { assertToolSettlementScope, bindPreparedSettlement } from './retained-outcome.ts'
 import { validateJsonSchemaValue, type JsonSchemaNode } from "../json-schema.ts"
 import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type ToolDecision, type PreparedApprovalInput, type ApprovalGuardian, type ToolRegistry } from "../types.ts"
 import { freezeArguments } from "../approval/arguments.ts"
+import { captureToolCall } from '../approval/capture-call.ts'
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
 
 export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry): ToolRegistry["prepare"] {
-  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall> {
+  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: Parameters<ToolRegistry['prepare']>[2]): Promise<PreparedCall> {
+    assertToolSettlementScope(identity?.session, identity?.settlementSource)
     // The validated snapshot is also the dispatched operation. A caller cannot
     // mutate it while the human or guardian is deciding.
-    call = structuredClone(call)
+    call = captureToolCall(call)
     freezeArguments(call)
     const { tool, bindingGeneration, bindingValidation } = catalog.captureBinding(call)
 
@@ -105,7 +107,9 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
 
-    return { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
+    const prepared = { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
+    bindPreparedSettlement(prepared, identity?.settlementSource)
+    return prepared
   }
 
   return prepare

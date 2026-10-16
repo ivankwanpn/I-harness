@@ -1,5 +1,6 @@
-import type { Session } from "@i-harness/core-session"
-import { append } from "@i-harness/core-session"
+import type { SessionView as Session, LegacyCompactionFacts, ProducerFactOutcome } from "@i-harness/core-session"
+import { committedFactSeqs } from "@i-harness/core-session"
+import { ordinaryCompactionFacts } from '../engine/facts.ts'
 import type { CompactionResult } from "../index.ts"
 import { activeTokens } from "../tokens.ts"
 import { walkOffToolEvents } from "../region.ts"
@@ -18,7 +19,7 @@ import { walkOffToolEvents } from "../region.ts"
 // are never removable: they cannot be keyed and include externally-injected
 // user messages the agent loop must retain. Nothing removable →
 // `{ compacted: false, reset: false }` (caller falls through to fail-closed).
-export async function resetWindowOnce(session: Session, retainLast: number): Promise<CompactionResult> {
+export async function resetWindowOnce(session: Session, retainLast: number, facts?: () => LegacyCompactionFacts<ProducerFactOutcome>): Promise<CompactionResult> {
   if (!Number.isInteger(retainLast) || retainLast < 1) {
     throw new Error(`compaction: resetWindow retainLast must be a positive integer (got ${retainLast})`)
   }
@@ -47,7 +48,7 @@ export async function resetWindowOnce(session: Session, retainLast: number): Pro
   }
   if (removedSeqs.length === 0) return { compacted: false, shadowedSeqs: [], reset: false }
   // Append-only record of the removal — no `session.events` mutation.
-  append(session, { type: "compaction/reset", removedSeqs })
+  committedFactSeqs(await ordinaryCompactionFacts(session, facts).commit([{ type: "compaction/reset", removedSeqs }]))
   return { compacted: true, shadowedSeqs: removedSeqs, reset: true }
 }
 

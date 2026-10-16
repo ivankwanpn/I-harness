@@ -1,5 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { createSession } from "@i-harness/core-session"
+import type { SessionView } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -14,7 +14,7 @@ export interface SpawnOptions extends RoleModelHost {
   message: string
   parentPath: string
   parentRegistry: ToolRegistry
-  parentSession: ReturnType<typeof createSession>
+  parentSession: SessionView
   parentCtx: PluginContext
   role: SubagentRole
   parentModel: ModelClient
@@ -36,5 +36,7 @@ export interface SpawnOptions extends RoleModelHost {
   childSessions?: { coordinator: SessionCoordinator; parentSessionId: string; origin?: "approval-review" }
   // M26-D1: settle callback — fires once when the initial run settles (the
   // task protocol's spawn record transitions on it). Additive: absent = today.
-  onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void
+  validateBeforeLaunch?: () => void
+  onPublished?: (info: { path: string; jobId: string; sessionId?: string; modelLabel?: string }) => void
+  onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void | Promise<void>
 }

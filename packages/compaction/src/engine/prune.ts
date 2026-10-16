@@ -1,4 +1,4 @@
-import { deriveMessages, derivePruneSubstitutes, renderPruneSubstitute, type Session, type PruneRecord } from "@i-harness/core-session"
+import { deriveMessages, derivePruneSubstitutes, renderPruneSubstitute, type SessionView as Session, type PruneRecord } from "@i-harness/core-session"
 import type { ResolvedPruneConfig } from "../config.ts"
 import { activeTokens } from "../tokens.ts"
 

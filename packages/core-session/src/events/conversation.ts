@@ -1,5 +1,5 @@
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
-import type { SessionEvent } from "./types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 
 export interface InputProvenance {
   kind: "human" | "plugin" | "child-report" | "inherited" | "unknown"
@@ -12,7 +12,7 @@ export type ConversationSemanticsEvent = { type: "conversation/semantics"; versi
 export type ExchangeAcceptedEventV1 = {
   type: "model/exchange-accepted"; version: 1; seq?: number
   exchangeId: string; actionId: string; attemptId: string
-  stepStartSeq: number; assistantSeq: number; callSeqs: number[]
+  stepStartSeq: number; assistantSeq: number; callSeqs: readonly number[]
 }
 export type ExchangeAcceptedEventV2 = Omit<ExchangeAcceptedEventV1, "version"> & { version: 2; request: AcceptedRequestAttributionV1 }
 export type ExchangeAcceptedEvent = ExchangeAcceptedEventV1 | ExchangeAcceptedEventV2

@@ -7,6 +7,7 @@ import { createOwnedBudget } from "./budget.ts"
 import { captureRequestCandidate } from "./request-snapshot.ts"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import { snapshotModelData } from "@i-harness/llm-seam"
+import { agentFacts } from './facts.ts'
 
 const scalarIdentity = (binding: ModelContextBindingDescriptor) => projectionFingerprint({ contextMetadata: binding.contextMetadata, budgetBinding: binding.budgetBinding, contextWindow: binding.contextWindow, maxOutputTokens: binding.maxOutputTokens, reasoningEffort: binding.reasoningEffort })
 function inheritedBindingCurrent(current: ModelContextBindingDescriptor | undefined, inherited: ModelContextBindingDescriptor | undefined, scalars: string | undefined): boolean {
@@ -61,7 +62,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
       binding, budgetBinding: budgetBinding(),
     }, projectionRevision())
   }
-  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.expected)
+  const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.expected, () => agentFacts(deps), () => deps.sourceFacts)
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
@@ -75,6 +76,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     if (!compact) return undefined
     const attributedModel = deps.sessionId === undefined ? deps.model : mapModelRequest(deps.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId }))
     return createCompactionEngine({
+        facts: () => agentFacts(deps).compaction,
         model: attributedModel,
         config: compact.summarizationModel === deps.model ? { ...compact, summarizationModel: attributedModel } : compact,
         ...(deps.telemetry ? { telemetry: { close() {}, emit(event) { deps.telemetry!.emit({ ...event, data: { ...event.data, sessionId: deps.sessionId } }) } } } : {}),

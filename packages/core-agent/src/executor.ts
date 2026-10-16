@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
-import type { ImageInput, Session } from "@i-harness/core-session"
-import { Inbox, type AdmittedInput, type PendingInput } from "@i-harness/core-session"
+import type { ImageInput, SessionView as Session } from "@i-harness/core-session"
+import { Inbox, AsyncInbox, type AdmittedInput, type PendingInput } from "@i-harness/core-session"
 import type { AgentResult } from "./index.ts"
 import type { AgentInputOptions } from "./agent/types.ts"
 
@@ -15,13 +15,14 @@ export type InputSubmit = (
 ) & { provenance?: import("@i-harness/core-session").InputProvenance }
 
 export interface AgentRunSurface {
+  runAdmitted?: AgentRunSurface['run']
   run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>
 }
 
 export interface SessionExecutorDeps {
   session: Session
   agent: AgentRunSurface
-  inbox: Inbox
+  inbox: Inbox | AsyncInbox
   signal?: AbortSignal
 }
 
@@ -57,10 +58,10 @@ export interface SessionExecutor {
    * THROUGH the lane admission so a queue projection can merge service-front
    * and lane rows by the same public id and cancel by it. Absent → a fresh id
    * is generated (pre-M49 behavior). */
-  submit(input: InputSubmit, inputId?: string): { inputId: string }
+  submit(input: InputSubmit, inputId?: string): { inputId: string; admitted: Promise<void> }
   /** Execute exactly one durable pending input; no duplicate admission. */
   runAdmitted(inputId: string, signal?: AbortSignal): Promise<void>
-  cancel(inputId: string): { cancelled: boolean }
+  cancel(inputId: string): Promise<{ cancelled: boolean }>
   cancelCurrent?(): { cancelled: boolean }
   pending(): PendingInput[]
   isRunning(): boolean
@@ -119,6 +120,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   let lastError: SessionExecutorFailure | undefined
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
+  const admissions = new Map<string, { admitted: Promise<void>; controller: AbortController }>()
 
   function pump(onlyId?: string): Promise<void> {
     chain = chain.then(async () => {
@@ -126,22 +128,27 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
         if (disposed || (deps.signal?.aborted ?? false)) return
         const next = onlyId === undefined ? deps.inbox.pending()[0] : deps.inbox.pending().find((input) => input.inputId === onlyId)
         if (next === undefined) return
-        const sig = turnSignals.get(next.inputId) ?? deps.signal
+        const inputSignal = turnSignals.get(next.inputId)
+        const sig = inputSignal && deps.signal ? AbortSignal.any([inputSignal, deps.signal]) : inputSignal ?? deps.signal
         if (sig?.aborted) {
           turnSignals.delete(next.inputId)
           if (onlyId !== undefined) return // durable input remains available for explicit resume
-          deps.inbox.cancel(next.inputId, "aborted")
+          await deps.inbox.cancel(next.inputId, "aborted")
           continue
         }
         running = true
         current = next
         try {
-          deps.inbox.promote(next.inputId)
+          if (!deps.agent.runAdmitted) {
+            if (!(deps.inbox instanceof Inbox)) throw Object.assign(new Error('Managed Agent must own atomic input-start'), { code: 'FACT_OWNER_UNSUPPORTED' })
+            deps.inbox.promote(next.inputId)
+          }
           // turn/start + user/message are appended BY the agent loop here
           // (agent.run), so the promoted marker immediately precedes them.
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
-          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, ...(next.provenance ? [{ provenance: next.provenance }] : []))
+          const run = deps.agent.runAdmitted ?? deps.agent.run
+          await run.call(deps.agent, next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, ...(next.provenance ? [{ provenance: next.provenance }] : []))
           lastError = undefined
         } catch (err) {
           lastError = withPendingCount(err, deps.inbox.pending().length)
@@ -174,15 +181,23 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
       // the service queue projection merges by one id (inbox.admit fails
       // closed on duplicates — a memory is ground truth, never overwritten).
       if (inputId !== undefined) admission.inputId = inputId
-      deps.inbox.admit(admission)
       const signal = (input as InputSubmit & { signal?: AbortSignal }).signal
-      if (signal !== undefined) turnSignals.set(admission.inputId, signal)
-      void pump()
-      return { inputId: admission.inputId }
+      const controller = new AbortController()
+      const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
+      turnSignals.set(admission.inputId, combined)
+      const admitted = Promise.resolve(deps.inbox instanceof AsyncInbox ? deps.inbox.admit(admission, combined) : deps.inbox.admit(admission)).then(() => { void pump() })
+      admissions.set(admission.inputId, { admitted, controller })
+      void admitted.then(() => { admissions.delete(admission.inputId) }, error => { lastError = withPendingCount(error, deps.inbox.pending().length) })
+      return Object.defineProperty({ inputId: admission.inputId }, 'admitted', { value: admitted }) as { inputId: string; admitted: Promise<void> }
     },
-    cancel(inputId) {
-      const cancelled = deps.inbox.cancel(inputId)
-      return { cancelled }
+    async cancel(inputId) {
+      if (current?.inputId === inputId) return { cancelled: false }
+      const wasPending = deps.inbox.isPending(inputId)
+      const front = admissions.get(inputId)
+      front?.controller.abort()
+      if (front) await front.admitted
+      const cancelled = await deps.inbox.cancel(inputId)
+      return { cancelled: cancelled || wasPending && !deps.inbox.isPending(inputId) }
     },
     cancelCurrent() {
       if (!currentAbort) return { cancelled: false }
@@ -192,11 +207,12 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
     pending: () => deps.inbox.pending(),
     isRunning: () => running,
     currentInput: () => current,
-    drain: () => chain.then(() => {
+    drain: async () => { await Promise.allSettled([...admissions.values()].map(record => record.admitted)); await chain; {
       if (lastError !== undefined) throw lastError
-    }),
+    } },
     dispose() {
       disposed = true
+      for (const record of admissions.values()) record.controller.abort()
     },
   }
 }

@@ -9,7 +9,7 @@ it('version fences witnesses before append and roundtrips current native metadat
   const current = createSession()
   append(current, event)
   expect(fromJSONL(toJSONL(current)).events[0]).toMatchObject(event)
-  expect(migrate({ formatVersion: 4, events: [] }, 5).formatVersion).toBe(5)
+  expect(migrate({ formatVersion: 4, events: [] }, 6).formatVersion).toBe(6)
 })
 it.each([{ ...witness, version: 2 }, { ...witness, thinkingConfigId: 'bad' }, { ...witness, extra: true }, { ...witness, budgetTokens: 1.5 }])('rejects malformed closed witness fields on append and load', producerWitness => {
   const malformed = { ...event, providerContinuation: { ...event.providerContinuation, producerWitness } }

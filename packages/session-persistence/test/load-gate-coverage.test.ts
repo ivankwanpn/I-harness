@@ -59,14 +59,17 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 /** Production durable-append sites: `append(session, { type: "X" ... })`. */
 function productionAppends(): Map<string, string[]> {
   const found = new Map<string, string[]>()
-  const re = /(?:append|appendSynthetic|appendDomain)\s*\(\s*[^,()]+,\s*\{\s*type:\s*"([^"]+)"/g
+  const expressions = [
+    /(?:append|appendSynthetic|appendDomain)\s*\(\s*[^,()]+,\s*\{\s*type:\s*["']([^"']+)["']/g,
+    /\b(?:admit|feedback|lifecycle|usage|call|record|result|captureResult|capture|auditAssistant)\s*\(\s*\{\s*type:\s*["']([^"']+)["']/g,
+  ]
   for (const pkg of readdirSync(PACKAGES)) {
     const src = join(PACKAGES, pkg, "src")
     if (!existsSync(src) || !statSync(src).isDirectory()) continue
     for (const file of sourceFiles(src)) {
       const text = readFileSync(file, "utf8")
       let m: RegExpExecArray | null
-      while ((m = re.exec(text)) !== null) {
+      for(const re of expressions)while ((m = re.exec(text)) !== null) {
         const where = `${relative(ROOT, file).split(sep).join("/")}:${text.slice(0, m.index).split("\n").length}`
         const list = found.get(m[1]) ?? []
         list.push(where)

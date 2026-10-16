@@ -1,4 +1,4 @@
-import type { Session, SessionEvent } from "@i-harness/core-session"
+import type { SessionView as Session, SessionEventView as SessionEvent } from "@i-harness/core-session"
 import { deriveSearchText, derivePruneSubstitutes, renderPruneSubstitute, rewindCuts, type PruneRecord } from "@i-harness/core-session"
 
 /** Mirror the additive shadow/rewind fold; raw source events remain untouched. */

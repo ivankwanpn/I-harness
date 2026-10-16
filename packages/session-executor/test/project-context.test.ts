@@ -1,3 +1,4 @@
+import { appendStandalone as append } from "./helpers.ts"
 import { afterEach, expect, it } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
@@ -10,7 +11,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader } from "../src/durable-session.ts"
 import type { SubagentStateSnapshot } from "@i-harness/subagent"
-import { append } from "@i-harness/core-session"
+
 import type { WorkflowExecutor } from "@i-harness/workflow"
 
 const fixtures: string[] = []
@@ -60,7 +61,7 @@ it("writes to another project folder without an extra approval and revokes a rem
 
 it("normal and rebuilt resident children inherit the live project scope for requests and writes", async () => {
   const { root, a, b, c } = fixture()
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   let context: SessionProjectContext = { id: "p", name: "Initial child project", roots: [a, b], primaryRoot: a }
   let target = join(b, "child-initial.txt")
@@ -188,7 +189,7 @@ it("the selected shell receives current project roots and refuses removed cwd an
 
 it("a teammate receives the same live project context as its parent", async () => {
   const { root, a, b } = fixture()
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "team-parent" })
   const requests: LLMRequest[] = []
   const cassette = createMockClient([

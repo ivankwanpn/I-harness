@@ -12,7 +12,7 @@ import { rmWorkspaceSync } from "./helpers.ts"
 const sse = (delta: object, finish_reason = "stop") => new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\ndata: [DONE]\n\n`)
 it("actual submit durably recovers while a parked child and previous tool effect keep their owners", async () => {
   const base = resolve("build/context-recovery-tests"); mkdirSync(base, { recursive: true }); const root = mkdtempSync(join(base, "run-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let childSignal: AbortSignal | undefined, effects = 0, attempts = 0, summaries = 0, ordinary: "unknown" | "schema" | undefined
@@ -60,7 +60,7 @@ it("actual submit durably recovers while a parked child and previous tool effect
     release.resolve()
     await vi.waitFor(() => expect(assembly.tasks().find(row => row.group === "subagent")?.status).toBe("completed"))
     await service.close(); await coordinator.close()
-    const restoredStore = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+    const restoredStore = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
     const restoredService = makeService(restoredStore)
     try {
       const restored = await restoredService.assemblyFor("parent")

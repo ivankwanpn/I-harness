@@ -1,8 +1,9 @@
+import { appendStandalone as append } from "./helpers.ts"
 import { expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExecService, ExecCommand, ExecStreamRunOptions } from '@i-harness/exec'
-import { append, deriveMessages } from '@i-harness/core-session'
+import { deriveMessages } from '@i-harness/core-session'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { rmWorkspaceSync } from './helpers.ts'
 

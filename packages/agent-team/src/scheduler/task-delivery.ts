@@ -1,4 +1,4 @@
-import { append } from "@i-harness/core-session"
+import { createTeamDeliveryFacts, teamFactOwner } from '../facts.ts'
 import { driveFollowups, isParentNotificationStopped, type FollowupDeps, type ChildAgentEntry, type JobRegistry } from "@i-harness/subagent"
 import type { TeamDeps, TeamSubagentDeps } from "../scheduler.ts"
 import type { TeamFoldState } from "../fold.ts"
@@ -10,29 +10,18 @@ import { AgentPath } from "../agent-path.ts"
 export function createTaskDelivery(
   teamId: string,
   state: TeamFoldState,
-  deps: Pick<TeamDeps, "parentSession" | "parentNotify">,
+  deps: Pick<TeamDeps, "parentSession" | "parentNotify" | "factOwner">,
   sub: Pick<TeamSubagentDeps, "childSessions" | "table" | "agents" | "jobs" | "ensureResident">,
   teamJobs: JobRegistry,
   activity: Pick<ReturnType<typeof createActivity>, "notify">,
   isUnmounted: () => boolean,
 ) {
+  const recordDelivery=createTeamDeliveryFacts()
   const realDeliver = async (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", _signal?: AbortSignal): Promise<boolean> => {
     if (targetId === teamId) {
-      // Lead is always live: durably record the message in the parent session
-      // log (subagent/inbox-style event; the parent's mirror persists it).
-      // Flush the parent's write-behind so the ack means on-disk.
-      if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) append(deps.parentSession, { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } })
-      if (sub.childSessions) {
-        try {
-          await sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
-        } catch {
-          // FAIL CLOSED (Ruling 22): the flush is the durability point — a
-          // rejection means the message may still be in the volatile
-          // write-behind. Returning true would let the mailbox append
-          // delivered and recoverRoot skip this id forever. False keeps it
-          // queued (at-least-once) for a recoverRoot retry.
-          return false
-        }
+      if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) {
+        try { await recordDelivery(teamFactOwner(deps.parentSession,deps.factOwner), { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }) }
+        catch { return false }
       }
       if (deps.parentNotify) {
         const queued = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)
@@ -70,23 +59,10 @@ export function createTaskDelivery(
       if (!ok) return false
     }
     if (entry.status === "killed") return false
-    // Durable inbox write: append through the child's mirror (spawnChild's
-    // session hook enqueues every append to the coordinator write-behind),
-    // then update the live mailbox mirror.
-    append(entry.session, { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } })
-    entry.mailbox.push(content)
-    // FLUSH BEFORE ACK: true must mean the message is on disk in the target's
-    // session (binding: "durably in the target's session before returning
-    // true"). A crash right after this returns true must not lose it — the
-    // mailbox's delivered marker is only appended after this resolves.
-    if (entry.sessionId && sub.childSessions) {
-      try {
-        await sub.childSessions.coordinator.flush(entry.sessionId)
-      } catch {
-        // FAIL CLOSED (Ruling 22): see the lead branch — flush rejection ⇒
-        // not durably delivered ⇒ return false so the message stays queued.
-        return false
-      }
+    if(!entry.session.events.some(event=>event.type==='subagent/inbox'&&event.messageId===messageId)){
+      try { await recordDelivery(teamFactOwner(entry.session,entry.factOwner), { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }) }
+      catch { return false }
+      entry.mailbox.push(content)
     }
     if (delivery === "wakeup" && entry.sessionId) {
       // Wake: drive the serialized followup chain (shared with subagent via

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { append, createSession } from "@i-harness/core-session"
 import type { ReasoningEffort } from "@i-harness/core-agent"
 import { forkTurns } from "./fork.ts"
 import { declaredRoleModel, modelLabelOf, subagentModelSelectionDisabled, subagentModelSelectionGated } from "./child/model-binding.ts"
 import type { SpawnOptions } from "./child/types.ts"
 import { assembleChild } from "./child/assembly.ts"
 import { publishChild, warnInheritedSeed } from "./child/lifecycle.ts"
+import { openChildDocument } from './child/document.ts'
 
 export { SUBAGENT_PROMPT_CONTRACT, composeSubagentPrompt, estimateChildOverhead } from "./child/prompt.ts"
 export { resolveRoleTools } from "./child/role-tools.ts"
@@ -17,6 +17,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // Gate precedes mounting; resolution retains its original post-mount position.
   const declared = declaredRoleModel(opts.role, opts)
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
+  if (opts.childSessions && !opts.childSessions.coordinator.openManagedDocument) throw Object.assign(new Error('Durable child requires the owned fact capability'), { code: 'FACT_OWNER_UNSUPPORTED' })
 
   const childPath = `${opts.parentPath}/${opts.taskName}`
   const childCtx = opts.parentCtx.scope.mount()
@@ -26,7 +27,6 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const turns = opts.forkTurns ?? "none"
   const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns, opts.parentSession.formatVersion)
 
-  let childSession: ReturnType<typeof createSession>
   let sessionId: string | undefined
   const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
 
@@ -61,23 +61,16 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       origin: opts.childSessions.origin ?? "subagent",
       delegationDepth: childDepth,
     })
-    childSession = createSession((ev) => {
-      opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
-      if (ev.type === "turn/end") void opts.childSessions!.coordinator.flush(sessionId!).catch(() => {})
-    })
-    for (const ev of seedEvents) append(childSession, { ...ev })
-    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth }
-  } else {
-    childSession = createSession()
-    for (const ev of seedEvents) childSession.events.push({ ...ev })
-    childSession.header = { seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
   }
+  const { session: childSession, factOwner, document } = await openChildDocument(seedEvents,
+    { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth },
+    opts.childSessions && sessionId ? { coordinator: opts.childSessions.coordinator, sessionId } : undefined)
   if(sessionId && opts.childSessions) await childCtx.emit('session/inherited',{
     sessionId,parentSessionId:opts.childSessions.parentSessionId,session:childSession,
   })
 
   warnInheritedSeed(childSession, contextWindow)
 
-  const { childReg, codeModeMount, controller, agent } = assembleChild(opts, childCtx, childSession, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? opts.inheritedBindingForStep : undefined)
-  return publishChild(opts, childCtx, childSession, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel)
+  const { childReg, codeModeMount, controller, agent } = await assembleChild(opts, childCtx, childSession, factOwner, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? opts.inheritedBindingForStep : undefined)
+  return publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel)
 }

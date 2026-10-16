@@ -1,5 +1,5 @@
 import { readContextCoordinates } from "@i-harness/context-engine"
-import { contextStateFromBudget, deriveContextBudget, deriveContextRecovery, type ContextBindingMetadata, type Session, type SessionContextState } from "@i-harness/core-session"
+import { contextStateFromBudget, deriveContextBudget, deriveContextRecovery, type ContextBindingMetadata, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
 
 interface ContextStateReaders<Meta> {
   assertOpen(): void

@@ -1,11 +1,13 @@
-import { createSession } from "@i-harness/core-session"
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 
 export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
 export interface ChildAgentEntry {
   path: string
   status: ChildStatus
-  session: ReturnType<typeof createSession>
+  session: SessionView
+  /** Process-local capability for this exact child view, never serialized. */
+  factOwner?: FactOwner
   controller: AbortController
   finalText?: string
   error?: string

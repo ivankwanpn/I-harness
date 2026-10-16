@@ -59,7 +59,7 @@ it("runs registered Bash and Code Mode shell through captured WSL service option
 
 it("inherits the captured Linux workspace and exec owner through a real child Code Mode registry", async () => {
   const root = directory()
-  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
   const child: ModelClient = { async *stream(request) {

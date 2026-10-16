@@ -1,4 +1,4 @@
-import type { Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
+import type { SessionView as Session, SessionEvent, SessionHeader } from "@i-harness/core-session"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 
 export interface SessionMeta extends SessionHeader {
@@ -37,6 +37,9 @@ export interface SessionModelSelection {
 // concrete backend (e.g. JSONL now, SQLite later) implements it. Capabilities
 // declare what consumers may rely on (F01-5).
 export interface PersistenceBackend {
+  readJournalPrefix?: import('./fact-types.ts').OwnedFactBackend['readJournalPrefix']
+  appendOwnedBatch?: import('./fact-types.ts').OwnedFactBackend['appendOwnedBatch']
+  reconcileOwnedBatch?: import('./fact-types.ts').OwnedFactBackend['reconcileOwnedBatch']
   id: "jsonl" | "sqlite"
   create(sessionId: string, meta: SessionMeta): Promise<void>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
@@ -77,6 +80,8 @@ export interface PersistenceBackend {
 export interface SessionArtifactManifest { documents: string[]; files?: string[] }
 
 export interface CoordinatorOptions {
+  maxPendingGroups?: number
+  coalesceTargetBytes?: number
   /** Write-behind batching window. Default 200. */
   maxDelayMs?: number
   /** Observe a detached background document/write-behind failure. Default console.warn. */
@@ -95,6 +100,9 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  openManagedDocument(sessionId: string): Promise<import('./fact-types.ts').ManagedDocument>
+  revokeManagedDocumentNewWork(sessionId: string): void
+  closeManagedDocument(sessionId: string): Promise<void>
   ensureWritableFormat?(sessionId: string): Promise<{ formatVersion: number }>
   /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
   deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>

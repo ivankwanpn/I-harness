@@ -1,4 +1,5 @@
-import { append, publishTransient, type ModelActivityInfo } from "@i-harness/core-session"
+import { agentFacts, committedFactSeqs } from "./facts.ts"
+import { publishTransient, type ModelActivityInfo } from "@i-harness/core-session"
 import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
 import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
@@ -6,8 +7,10 @@ import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import { createStepReasoning } from "./reasoning.ts"
 import { TOOL_ABORTED_BEFORE_DISPATCH } from "@i-harness/core-tools"
 import { randomUUID } from "node:crypto"
+import { closeStepBoundary, failStepBoundary, openStepBoundary } from './boundaries.ts'
+import { savingFailure } from './saving-failure.ts'
 
-export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
+export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => Promise<BatchCall>, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
   const initialStart = deps.session.events[initialStartSeq]
   const actionId = initialStart?.type === "step/start" ? initialStart.actionId! : ""
@@ -31,31 +34,30 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
   let modelActivity: ModelActivityInfo | undefined
   let modelFailed = false
   let providerEnded = false
-  function discard(notDispatched: boolean) {
+  async function discard(notDispatched: boolean) {
     modelFailed = true
-    stepReasoning.flush()
+    await stepReasoning.flush()
     if (stepText || thinkingBlocks?.length || providerContinuation || truncatedThisStep || refusedThisStep) {
-      append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
+      committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) }))
     }
     if (notDispatched) for (const call of batch) {
       // This batch never entered the scheduler. Do not synthesize outcomes for
       // any earlier/unknown dispatched work.
-      append(deps.session, { type: "tool/result", callId: call.callId, name: call.name, isError: true,
-        output: { code: TOOL_ABORTED_BEFORE_DISPATCH, error: "Model attempt was not accepted; tool call was not dispatched" } })
+      committedFactSeqs(await (deps.sourceFacts?.tools ?? agentFacts(deps).tools).result({ type: "tool/result", callId: call.callId, name: call.name, isError: true,
+        output: { code: TOOL_ABORTED_BEFORE_DISPATCH, error: "Model attempt was not accepted; tool call was not dispatched" } }))
     }
     stepText = ""
     reasoning.length = reasoningStart
-    append(deps.session, { type: "step/failed" })
-    lifecycle.stepFailed = true
+    await failStepBoundary(deps,lifecycle)
   }
   return {
     confirm(received: import("@i-harness/llm-seam").ExecutionReceipt) { receipt = { ...received, actionId, attemptId } },
-    discard() { discard(true) },
-    accept(ev: LLMStreamEvent) {
+    discard() { return discard(true) },
+    async accept(ev: LLMStreamEvent) {
       stepReasoning.checkPublication()
       if (abort?.aborted) throw new Error("agent aborted")
       if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
-      if (ev.type !== "reasoning" && ev.type !== "usage" && ev.type !== "activity") stepReasoning.flush()
+      if (ev.type !== "reasoning" && ev.type !== "usage" && ev.type !== "activity") await stepReasoning.flush()
       switch (ev.type) {
         case "activity":
           modelActivity = ev.activity
@@ -67,11 +69,9 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
             // Keep failed output in the append-only audit, but exclude it
             // and its unexecuted calls from the next model projection.
-            if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
-            append(deps.session, { type: "step/failed" })
-            lifecycle.stepFailed = true
-            append(deps.session, { type: "step/end" })
-            lifecycle.stepOpen = false
+            if (stepText) committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: stepText }))
+            await failStepBoundary(deps,lifecycle)
+            await closeStepBoundary(deps,lifecycle,{type:'step/end'})
             stepText = ""
             toolCallsThisStep = 0
             batch.length = 0
@@ -85,22 +85,20 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
             providerContinuation = undefined
             providerEnded = false
             endFingerprint = undefined
-            stepStartSeq = deps.session.events.length
             attemptId = randomUUID()
-            append(deps.session, { type: "step/start", actionId, attemptId })
-            lifecycle.stepOpen = true
-            lifecycle.stepFailed = false
+            stepStartSeq = committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "step/start", actionId, attemptId }))[0]!
+            openStepBoundary(lifecycle)
           }
-          append(deps.session, { type: "model/retry", version: 1, ts: Date.now(), retry: ev.retry })
+          committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "model/retry", version: 1, ts: Date.now(), retry: ev.retry }))
           break
         case "text/chunk":
           stepText += ev.text
           break
         case "reasoning":
-          stepReasoning.accept(ev)
+          await stepReasoning.accept(ev)
           break
         case "tool_call": {
-          batch.push(recordCall(ev))
+          batch.push(await recordCall(ev))
           toolCallsThisStep += 1
           break
         }
@@ -143,15 +141,18 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           break
       }
     },
-    fail(error: unknown): never {
-      discard(false)
+    async fail(error: unknown): Promise<never> {
+      try { await discard(false) }
+      catch (saving) {
+        throw savingFailure(error, [saving], 'model attempt saving failed')
+      }
       throw error
     },
-    settle() {
+    async settle() {
       if (modelActivity && modelActivity.phase !== "settled") {
         publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: { ...modelActivity, phase: "settled", outcome: abort?.aborted ? "cancelled" : modelFailed ? "failed" : "completed" } })
       }
-      stepReasoning.flush()
+      await stepReasoning.flush()
     },
     result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
   }

@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationProjection, ConversationCall } from "./types.ts"
 import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"

@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 
 export interface PlanModeView { active: boolean; proposal?: string; eventSeq?: number }
 

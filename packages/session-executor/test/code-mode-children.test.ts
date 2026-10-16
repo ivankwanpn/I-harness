@@ -10,7 +10,7 @@ import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
 
 it("ordinary and Team children keep role-local Code Mode through followup and resident reconstruction", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-children-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
   const parallelLimits: Array<number | undefined> = []

@@ -6,6 +6,7 @@ export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { SubagentRole, RoleRegistry } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
+export { hasCommittedInitialInput } from './child/initial-input.ts'
 // W11: the runtime-context section naming sub-agents past the staleness
 // threshold. Its consumer is the assembly (`createSessionAssembly`), which
 // registers it under the "subagents" section name. The section's options type
@@ -30,7 +31,7 @@ export type { ParentInputAdmission, NotificationDrainOptions } from "./task-noti
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { createSession } from "@i-harness/core-session"
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ExecService } from "@i-harness/exec"
 // M24b (spec §3.3): optional workflow executor threaded into SubagentToolDeps
@@ -49,6 +50,7 @@ import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 import type { ReportPolicy } from "./report-policy.ts"
+import { subagentFactOwner } from './facts.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   reportPolicy?: ReportPolicy
@@ -65,7 +67,8 @@ export interface RegisterSubagentOptions extends RoleModelHost {
   resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   parentModel: ModelClient
-  parentSession: ReturnType<typeof createSession>
+  parentSession: SessionView
+  factOwner?: FactOwner
   // M6 state persistence: when set, every registry mutation persists the full
   // snapshot through the coordinator document API.
   persist?: SubagentPersistence
@@ -130,12 +133,14 @@ export interface RegisterSubagentResult {
 // four built-in roles, creates the job registry + agent table, builds the 11
 // subagent/job tools, and registers them on the parent registry.
 export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistry, opts: RegisterSubagentOptions): RegisterSubagentResult {
+  const factOwner = subagentFactOwner(opts.parentSession, opts.factOwner)
   // M24a (G1a/G4): resolved to the real post-restore step below when BOTH a
   // restored state and persistence are present; otherwise a no-op.
   let ready: Promise<void> = Promise.resolve()
   let roles: RoleRegistry = createRoleRegistry()
   let jobs: JobRegistry = createJobRegistry()
   let table: AgentTable = createAgentTable()
+  let factPersistence: ReturnType<typeof wireSubagentPersistence> | undefined
   if (!opts.restoredState) {
     // Snapshot roles are authoritative (builtins + custom/edited); seeding
     // builtins now would throw on duplicates and shadow edited builtins.
@@ -149,7 +154,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     restoreState({ jobs, table, roles }, opts.restoredState, opts.persist)
   }
   if (opts.persist) {
-    const wired = wireSubagentPersistence({ jobs, table, roles }, opts.persist)
+    const wired = wireSubagentPersistence({ jobs, table, roles }, { ...opts.persist, factOwner: opts.persist.factOwner ?? opts.factOwner })
+    factPersistence = wired
     jobs = wired.jobs
     table = wired.table
     roles = wired.roles
@@ -172,7 +178,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
     reportPolicy: opts.reportPolicy,
-    table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
+    table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
     codeMode: opts.codeMode, codeModeFactory: opts.codeModeFactory,
@@ -237,7 +243,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // nothing after) would fold to forever-"running" while the doc says
     // "error". Replay the mapped outcome through the event emitter now, so
     // the log stays rebuildable (no-op without a parentSession).
-    emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs)
+    emitRestoredJobTransitions(opts.persist, opts.restoredState, jobs, factPersistence?.observe)
   }
   if (opts.persist) {
     // M26-D1/D2: the unified post-restore chain — task doc restore +
@@ -256,20 +262,28 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
     ready, tasks,
     async dispose() {
-      await ready
       const entries = [...table.entries().values()]
-      for (const entry of entries) { table.update(entry.path, entry, { closing: true }); entry.controller.abort() }
-      await Promise.allSettled(entries.map(async entry => {
+      for (const entry of entries) {
+        table.update(entry.path, entry, { closing: true }); entry.controller.abort()
+        if (entry.sessionId) opts.persist?.coordinator.revokeManagedDocumentNewWork(entry.sessionId)
+      }
+      await ready
+      const results = await Promise.allSettled(entries.map(async entry => {
         if (entry.dispose) await entry.dispose()
         else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
         if (entry.sessionId) agents.remove(entry.sessionId)
       }))
-      await tasks.flushPersistence()
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      try { await factPersistence?.flushFacts() } catch (error) { errors.push(error) }
+      try { await tasks.flushPersistence() } catch (error) { errors.push(error) }
+      if (errors.length) throw Object.assign(new AggregateError(errors, 'Subagent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+      await factPersistence?.closeFacts()
     },
     async flushPersistence() {
       await ready
       for (;;) {
         await Promise.allSettled([...notificationDrains])
+        await factPersistence?.flushFacts()
         await tasks.flushPersistence()
         if (notificationDrains.size === 0) return
       }
@@ -324,15 +338,8 @@ async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable)
   for (const entry of table.entries().values()) {
     if (!entry.sessionId || !deps.childSessions) continue
     try {
-      const loaded = await deps.childSessions.coordinator.loadOwned(entry.sessionId)
-      const resumed = createSession((ev) => {
-        deps.childSessions!.coordinator.enqueue(entry.sessionId!, [ev])
-        if (ev.type === "turn/end") void deps.childSessions!.coordinator.flush(entry.sessionId!).catch(() => {})
-      })
-      resumed.events.push(...loaded.session.events)
-      resumed.formatVersion = loaded.session.formatVersion
-      resumed.header = loaded.session.header
-      table.update(entry.path, entry, { session: resumed })
+      const document = await deps.childSessions.coordinator.openManagedDocument(entry.sessionId)
+      table.update(entry.path, entry, { session: document.view, factOwner: document })
     } catch {
       // G1a fail-visible: no silent empty-stub downgrade.
       table.update(entry.path, entry, { status: "error", error: "child log unavailable after resume" })

@@ -7,7 +7,7 @@ type IntakeSession = { readonly formatVersion: number; readonly events: readonly
 
 /** The existing event intake contract shared by explicit memory append and
  * owned staging. Only the newly allocated event is normalized. */
-export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number): SessionEvent {
+export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
   if (isContextEventType(event.type) && (session.formatVersion < 2 || !validContextEvent({ ...event, seq }))) throw new Error('invalid operational context event or session format')
   if (event.type === 'model/activity') throw new Error('model/activity must be published as a transient event')
   if (event.type === 'reasoning/chunk') throw new Error('reasoning/chunk must be published as a transient event')
@@ -15,7 +15,8 @@ export function prepareSessionEvent(session: IntakeSession, event: SessionEvent,
   let imageSummaries: ImageSummary[] | undefined
   if (event.type === 'user/message' && event.imageInputId !== undefined) {
     if (typeof event.imageInputId !== 'string' || event.imageInputId.length === 0 || event.images !== undefined) throw new Error('image reference: user/message needs one non-empty imageInputId and no inline images')
-    const admission = session.events.findLast(prior => prior.type === 'agent/input/admitted' && prior.inputId === event.imageInputId)
+    const matches = (prior: IntakeSession['events'][number]) => prior.type === 'agent/input/admitted' && prior.inputId === event.imageInputId
+    const admission = staged.findLast(matches) ?? session.events.findLast(matches)
     if (admission?.type !== 'agent/input/admitted' || !admission.images?.length) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
     imageSummaries = admission.images.map(({ mediaType, name, width, height, dataBase64 }) => ({
       mediaType, ...(name !== undefined ? { name } : {}), ...(width !== undefined ? { width } : {}), ...(height !== undefined ? { height } : {}),

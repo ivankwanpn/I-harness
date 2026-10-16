@@ -5,6 +5,7 @@ import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SubagentToolDeps } from "../tools/types.ts"
 import type { FollowupDeps } from "./drive.ts"
 import { composeSubagentPrompt, declaredRoleModel, estimateChildOverhead, modelLabelOf, resolveRoleTools, subagentModelSelectionGated } from "../child.ts"
+import { childFactOwner } from '../child/document.ts'
 
 // M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's
 // rebuild body (M19). On resume the subagent Agent registry is fresh-empty
@@ -32,6 +33,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // from the same helper spawnChild throws.
   const declared = declaredRoleModel(role, deps)
   if (subagentModelSelectionGated(deps, declared)) return false
+  const factOwner = await childFactOwner(entry, deps.childSessions?.coordinator)
   const childCtx = deps.parentCtx.scope.mount()
   const childReg = createToolRegistry(childCtx)
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
@@ -72,22 +74,12 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // non-ready arms returned above — those rebuilds change nothing, so the label
   // still describes the client the child was last left on.)
   const modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
-  // M70: the resumed child's checkpoint, read off the entry NOW rather than
-  // inside the closure, so the seam is built from the pair that is true at
-  // construction. MEASURED before wiring it: a restored entry's session is the
-  // mirror `restoreMirrorsAndSweep` rebuilt (`index.ts:269-276` — enqueue +
-  // flush under `entry.sessionId`), so `coordinator.flush(entry.sessionId)`
-  // drains exactly the write-behind that receives the marker. For the one
-  // session that is NOT mirrored — the `createSessionFromEmpty` stub a FAILED
-  // mirror rebuild leaves behind (`persist.ts:124`, entry marked "error") — the
-  // flush is a no-op (measured: 0 backend writes), which is honest: nothing
-  // mirrored those appends in the first place.
   const childCoordinator = deps.childSessions?.coordinator
   const childSessionId = entry.sessionId
   const codeModeMount = role.tools.length === 0 ? undefined : deps.codeModeFactory?.(childCtx, childReg, {
-    session: entry.session, sessionId: childSessionId, config: deps.codeMode,
-    ...(childCoordinator !== undefined && childSessionId !== undefined ? { flush: () => childCoordinator.flush(childSessionId) } : {}),
+    session: entry.session, factOwner, sessionId: childSessionId, config: deps.codeMode,
   })
+  await codeModeMount?.ready?.()
   const modelToolSchemas = () => codeModeMount?.schemas() ?? childReg.schemas()
   // M73 defect #2: this call used `role.systemPrompt` where spawn uses the
   // COMPOSED prompt — so a rebuilt child silently lost SUBAGENT_PROMPT_CONTRACT
@@ -112,7 +104,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     isSubagent: true,
     ...(childCoordinator && childSessionId ? { ensureWritableContext: ownedContextReadiness(childCoordinator, childSessionId, entry.session) } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
-    session: entry.session, tools: childReg, model,
+    session: entry.session, factOwner, tools: childReg, model,
     budgetBinding,
     contextMetadata,
     modelToolSchemas,
@@ -135,9 +127,6 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ...(contextWindow !== undefined
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
-    ...(childCoordinator !== undefined && childSessionId !== undefined
-      ? { flush: (): Promise<void> => childCoordinator.flush(childSessionId) }
-      : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
     // team member via the durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
@@ -154,10 +143,12 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     cancel: codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined,
     dispose: async () => {
       deps.table.update(entry.path, entry, { closing: true })
+      if (childSessionId) childCoordinator?.revokeManagedDocumentNewWork(childSessionId)
       entry.controller.abort()
       await codeModeMount?.cancel("Subagent closed")
       await codeModeMount?.dispose()
       await entry.followupChain?.catch(() => {})
+      if (childSessionId) await childCoordinator?.closeManagedDocument(childSessionId)
       await childCtx.scope.unmount()
     },
   })

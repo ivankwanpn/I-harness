@@ -18,7 +18,7 @@ function makeMailbox(overrides?: Partial<MailboxDeps> & { state?: TeamFoldState 
     // baseline folded state: the target member exists (as after spawn/activate)
     state.members.set("helper", { id: "child-1", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active" })
   }
-  const lead = { append: (e: TeamEvent) => events.push(e), flush: async () => {} }
+  const lead = { commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }
   const mailbox = createMailbox({
     teamId: "lead-1",
     state,

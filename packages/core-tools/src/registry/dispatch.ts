@@ -1,5 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../types.ts"
+import { beginRetainedDispatch } from './retained-outcome.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -21,6 +22,8 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
 
   async function dispatch(prepared: PreparedCall): Promise<unknown> {
     validatePrepared(prepared)
+    const retained = beginRetainedDispatch(prepared)
+    try {
     const output = await ctx.cascade(
       "tools/execute",
       { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
@@ -30,10 +33,14 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
         validatePrepared(prepared)
-        return prepared.tool.execute(prepared.call.args as never, prepared.exec)
+        const result = await prepared.tool.execute(prepared.call.args as never, prepared.exec)
+        retained?.body.observed(); retained?.body.ready(result)
+        return result
       },
     )
+    retained?.success()
     return output
+    } catch (error) { throw retained?.failure(error) ?? error }
   }
 
   return dispatch

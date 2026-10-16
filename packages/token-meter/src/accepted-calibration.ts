@@ -38,7 +38,7 @@ export function createAcceptedCalibration(ownerSessionId: string, observationLif
       const tokens = anchor.reportedInputTokens + suffix
       return Number.isSafeInteger(tokens) ? { tokens, calibrated: true } : { tokens: heuristic, calibrated: false, disposition: 'pricing-changed' as const }
     },
-    retire(reason: CalibrationRetirementReason): ContextUsageEventV2 | undefined {
+    retire(reason: CalibrationRetirementReason): Extract<ContextUsageEventV2, { op: 'retire' }> | undefined {
       if (!anchor) return
       const old = anchor; anchor = undefined; retired.add(old.anchorId)
       return { type: 'context/usage', version: 2, op: 'retire', ownerSessionId, anchorId: old.anchorId, reason, branchId: old.request.snapshot.branchId, contextEpoch: old.request.snapshot.contextEpoch }

@@ -1,5 +1,6 @@
+import { appendStandalone as append } from "./helpers.ts"
 import { afterEach, expect, it, vi } from "vitest"
-import { append, createSession, publishTransient } from "@i-harness/core-session"
+import { createSession, publishTransient } from "@i-harness/core-session"
 import { createAgentTable, type ChildAgentEntry } from "@i-harness/subagent"
 import { createChildObservation } from "../src/child-observation.ts"
 

@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 
 /** M5/D3: the three markers that share the shadow mechanism (see the pre-pass
  * inside deriveMessages). A rewrite of the model-visible projection is possible

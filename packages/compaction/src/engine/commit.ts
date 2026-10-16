@@ -1,4 +1,5 @@
-import { append, type Session } from "@i-harness/core-session"
+import { committedFactSeqs, type SessionView as Session } from "@i-harness/core-session"
+import { ordinaryCompactionFacts } from './facts.ts'
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { CompactionResult, CompactionRunOptions } from "../index.ts"
@@ -35,12 +36,12 @@ export async function runCompactionPass(
   const protectedCalls = new Set(session.events.flatMap(event => (event.type === "tool/call" || event.type === "tool/result") && event.seq !== undefined && protectedSet.has(event.seq) ? [event.callId] : []))
   const pruneRecords = planPrune(session, config.prune).filter(record => !protectedCalls.has(record.callId))
   if (allowPruneOnly && pruneRecords.length && surfaceTokensAfterPrune(session, pruneRecords) + overheadNow() < contextWindow * config.thresholdRatio) {
-    check(); append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
+    check(); committedFactSeqs(await ordinaryCompactionFacts(session, deps.facts).commit([{ type: "compaction/prune", version: 1, pruned: pruneRecords }]))
     await deps.flush?.(); check()
     emit("prune-only", { tokensAfter: safeActiveTokens(session), shadowed: 0, pruned: pruneRecords.length, attempts: 0 })
     return { compacted: true, shadowedSeqs: [], pruned: true }
   }
-  if (pruneRecords.length) { check(); append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords }) }
+  if (pruneRecords.length) { check(); committedFactSeqs(await ordinaryCompactionFacts(session, deps.facts).commit([{ type: "compaction/prune", version: 1, pruned: pruneRecords }])) }
   const prepared = prepareSummary(session, shadowedSeqs, config, deps)
   if (prepared.anchorSeq !== undefined && !protectedSet.has(prepared.anchorSeq) && safeSeqs.has(prepared.anchorSeq)) shadowedSeqs.push(prepared.anchorSeq)
   else if (prepared.anchorSeq !== undefined) prepared.previousSummary = undefined
@@ -68,9 +69,9 @@ export async function runCompactionPass(
   }
   check()
   prepared.validateBeforeTransport()
-  append(session, { type: "compaction/start" })
-  append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
-  append(session, { type: "compaction/end" })
+  committedFactSeqs(await ordinaryCompactionFacts(session, deps.facts).commit([
+    { type: "compaction/start" }, { type: "compaction/summary", text: summary, shadowedSeqs }, { type: "compaction/end" },
+  ]))
   await deps.flush?.(); check()
   emit("success", { tokensAfter: safeActiveTokens(session), shadowed: shadowedSeqs.length, pruned: pruneRecords.length, attempts: attemptsTracker.count })
   return { compacted: true, shadowedSeqs, summary, ...(pruneRecords.length ? { pruned: true } : {}) }

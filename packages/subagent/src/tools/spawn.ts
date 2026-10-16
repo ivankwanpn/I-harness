@@ -1,6 +1,7 @@
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
-import { append } from "@i-harness/core-session"
+import { subagentFactOwner } from '../facts.ts'
+import { createSpawnSource, spawnObservation } from './spawn-source.ts'
 import { userSteerForTool, waitForObservation } from "@i-harness/core-tools"
 import { declaredRoleModel, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord } from "../task-protocol.ts"
@@ -100,6 +101,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
+      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false)
       let task: TaskRecord
       try {
         task = deps.tasks.submit({
@@ -111,90 +113,133 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           delivery,
         })
       } catch (err) {
+        await source.releaseUnused()
+        source.finish()
         if (err instanceof TaskIdentityConflictError) throw new Error(`task identity conflict for this call: ${err.message}`)
         throw err
       }
-      append(deps.parentSession, { type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
-      const executed = await spawnChild({
-        taskName: args.task_name,
-        message: args.message,
-        parentPath: "root",
-        parentRegistry: deps.parentRegistry,
-        parentSession: deps.parentSession,
-        parentCtx: deps.parentCtx,
-        role,
-        parentModel: deps.parentModel,
-        codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
-        resolveModel: deps.resolveModel,
-        // Forwarded with the resolver so spawnChild decides the role's model for
-        // EVERY spawn site (this tool's precondition above only exists to refuse
-        // before the task record is written). See child.ts for the rule.
-        roleSelectionFor: deps.roleSelectionFor,
-        allowSubagentModelSelection: deps.allowSubagentModelSelection,
-        ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
-        ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
-        // M73: the session's own window and cap, forwarded to the spawn. Without
-        // this hop the values reach SubagentToolDeps and stop — an inheriting
-        // child of THIS tool would carry neither while every type still checks,
-        // which is the failure mode hardest to see: the precedence is right and
-        // both numbers are empty. Absent stays absent (no key written).
-        ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
-        budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort,
-        inheritedBindingForStep: deps.inheritedBindingForStep,
-        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
-        jobs: deps.jobs,
-        table: deps.table,
-        agents: deps.agents,
-        forkTurns: turns,
-        childSessions: deps.childSessions,
-        onSettled: (info) => {
-          // M26-D1: settle → terminalize（interrupt 中止的初始 turn 視為 cancelled——
-          // 被等待的回答不會到來；後續 followup 沿用 M9 job 流，不再入本 task）。
-          const outcome: TaskOutcome = info.aborted
-            ? "cancelled"
-            : info.error !== undefined && info.finalText === undefined
-              ? "error"
-              : "completed"
-          deps.tasks.terminalize({
-            taskId: task.id,
-            outcome,
-            ...(info.finalText !== undefined ? { resultText: info.finalText } : {}),
-            ...(info.error !== undefined ? { error: info.error } : {}),
-          })
-          // subagent/end —— parent 側的 durable 記號（D2 通知的資料源）。
-          // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
-          // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
-          const settled = deps.tasks.get(task.id)!
-          append(deps.parentSession, {
-            type: "subagent/end", version: 1, taskId: task.id,
-            outcome: settled.outcome ?? outcome,
-            ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
-            ...(settled.error !== undefined ? { error: settled.error } : {}),
-          })
-        },
-      })
-      // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
-      // it in the task snapshot, so closing a live entry cannot erase the evidence.
-      deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel)
-      const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
-      if (args.background === false) {
-        const reason = await waitForObservation({
-          ready: () => deps.tasks.get(task.id)?.outcome !== undefined,
-          changes: { subscribe: wake => deps.tasks.subscribe(task.id, wake) },
-          timeoutMs: deps.foregroundWaitMs ?? 300_000,
-          abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+      source.bindTask(task.id, () => deps.tasks.flushPersistence())
+      let observationAborted = false
+      try {
+        await deps.tasks.flushPersistence()
+        await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
+        const executed = await spawnChild({
+          taskName: args.task_name,
+          message: args.message,
+          parentPath: "root",
+          parentRegistry: deps.parentRegistry,
+          parentSession: deps.parentSession,
+          parentCtx: deps.parentCtx,
+          role,
+          parentModel: deps.parentModel,
+          codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
+          resolveModel: deps.resolveModel,
+          // Forwarded with the resolver so spawnChild decides the role's model for
+          // EVERY spawn site (this tool's precondition above only exists to refuse
+          // before the task record is written). See child.ts for the rule.
+          roleSelectionFor: deps.roleSelectionFor,
+          allowSubagentModelSelection: deps.allowSubagentModelSelection,
+          ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
+          ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
+          // M73: the session's own window and cap, forwarded to the spawn. Without
+          // this hop the values reach SubagentToolDeps and stop — an inheriting
+          // child of THIS tool would carry neither while every type still checks,
+          // which is the failure mode hardest to see: the precedence is right and
+          // both numbers are empty. Absent stays absent (no key written).
+          ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+          budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort,
+          inheritedBindingForStep: deps.inheritedBindingForStep,
+          ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+          jobs: deps.jobs,
+          table: deps.table,
+          agents: deps.agents,
+          forkTurns: turns,
+          childSessions: deps.childSessions,
+          validateBeforeLaunch: source.assertLaunch,
+          onPublished: source.published,
+          onSettled: async (info) => {
+            // M26-D1: settle → terminalize（interrupt 中止的初始 turn 視為 cancelled——
+            // 被等待的回答不會到來；後續 followup 沿用 M9 job 流，不再入本 task）。
+            const outcome: TaskOutcome = info.aborted
+              ? "cancelled"
+              : info.error !== undefined && info.finalText === undefined
+                ? "error"
+                : "completed"
+            try {
+              deps.tasks.terminalize({
+                taskId: task.id,
+                outcome,
+                ...(info.finalText !== undefined ? { resultText: info.finalText } : {}),
+                ...(info.error !== undefined ? { error: info.error } : {}),
+              })
+            } catch (error) {
+              source.failed(error, Object.freeze({ ...info }))
+              throw error
+            }
+            // subagent/end —— parent 側的 durable 記號（D2 通知的資料源）。
+            // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
+            // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
+            const settled = deps.tasks.get(task.id)!
+            await source.end({
+              type: "subagent/end", version: 1, taskId: task.id,
+              outcome: settled.outcome ?? outcome,
+              ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
+              ...(settled.error !== undefined ? { error: settled.error } : {}),
+            }, spawnObservation(source.identity(), settled))
+          },
         })
-        exec.abortSignal?.throwIfAborted()
-        const settled = deps.tasks.get(task.id)
-        if (settled?.outcome === undefined) {
-          const steered = reason === "user-steer"
-          return { ...base, status: settled?.status ?? "unknown",
-            message: steered ? `wait yielded to new user input for ${executed.path} (still running)` : `wait timed out for ${executed.path} (still running)`,
-            timed_out: reason === "deadline", ...(steered ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
+        // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
+        // it in the task snapshot, so closing a live entry cannot erase the evidence.
+        deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel)
+        const base = source.identity()
+        if (args.background === false) {
+          const reason = await waitForObservation({
+            ready: () => deps.tasks.get(task.id)?.outcome !== undefined,
+            changes: { subscribe: wake => deps.tasks.subscribe(task.id, wake) },
+            timeoutMs: deps.foregroundWaitMs ?? 300_000,
+            abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+          }).catch(error => {
+            if (exec.abortSignal?.aborted && error === exec.abortSignal.reason) observationAborted = true
+            throw error
+          })
+          if (exec.abortSignal?.aborted) {
+            observationAborted = true
+            exec.abortSignal.throwIfAborted()
+          }
+          const settled = deps.tasks.get(task.id)
+          if (settled?.outcome === undefined) {
+            const steered = reason === "user-steer"
+            return { ...base, status: settled?.status ?? "unknown",
+              message: steered ? `wait yielded to new user input for ${executed.path} (still running)` : `wait timed out for ${executed.path} (still running)`,
+              timed_out: reason === "deadline", ...(steered ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
+          }
+          return await source.foreground()
         }
-        return { ...base, status: settled?.status ?? "unknown", ...(settled?.outcome !== undefined ? { outcome: settled.outcome } : {}), ...(settled?.resultText !== undefined ? { resultText: settled.resultText } : {}), ...(settled?.error !== undefined ? { error: settled.error } : {}), message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
+        return base
+      } catch (error) {
+        if (source.hasPublished()) {
+          if (observationAborted) throw error
+          throw source.recoverPublished(error)
+        }
+        const outcome = exec.abortSignal?.aborted ? 'cancelled' as const : 'error' as const
+        const failures: unknown[] = [error]
+        try {
+          deps.tasks.terminalize({ taskId: task.id, outcome, error: error instanceof Error ? error.message : String(error) })
+        } catch (failure) { source.failed(failure, Object.freeze({ outcome, error })); failures.push(failure) }
+        const settled = deps.tasks.get(task.id)
+        if (settled?.outcome !== undefined) {
+          try {
+            await source.end({
+              type: 'subagent/end', version: 1, taskId: task.id, outcome: settled.outcome,
+              ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
+              ...(settled.error !== undefined ? { error: settled.error } : {}),
+            })
+          } catch (failure) { failures.push(failure) }
+        }
+        if (failures.length > 1) throw Object.assign(new AggregateError(failures, 'Spawn refusal needs recovery'), { code: 'FACT_RECOVERY_REQUIRED', cause: error })
+        throw error
       }
-      return base
+      finally { source.finish() }
     },
   }
   return spawnTool

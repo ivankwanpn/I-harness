@@ -95,7 +95,7 @@ it("publishes queued cancellation immediately without executing the cancelled pr
     await entered.promise
     const b = service.submit("s", "cancel me", new AbortController().signal)
     const id = service.queue("s").find(row => row.text === "cancel me")!.id
-    expect(service.cancelQueued("s", id)).toEqual({ cancelled: true })
+    expect(await service.cancelQueued("s", id)).toEqual({ cancelled: true })
     expect(states.at(-1)).toMatchObject({ running: true, queued: 0 })
     stop.release()
     await Promise.all([a, b])

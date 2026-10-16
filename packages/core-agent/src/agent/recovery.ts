@@ -1,5 +1,6 @@
+import { agentFacts, committedFactSeqs } from "./facts.ts"
 import { randomUUID } from "node:crypto"
-import { append, deriveContextRecovery, type ContextRecoveryFacts } from "@i-harness/core-session"
+import { deriveContextRecovery, type ContextRecoveryFacts } from "@i-harness/core-session"
 import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import type { AgentDeps } from "./types.ts"
@@ -18,17 +19,17 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
   let lastFailure: unknown
   const current = (measurement: PreparedRequestMeasurement) => deriveContextRecovery(deps.session, ownerSessionId, { ...measurement.input, providerId: context.metadata()?.providerId ?? measurement.input.providerId })
   const flush = async (signal?: AbortSignal) => { await deps.flush?.(); signal?.throwIfAborted() }
-  const fact = (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
+  const fact = async (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
     // Fold results may include the event envelope. Always publish only fields
     // from the scalar contract, never an inherited seq/type.
     const { version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
       inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint,
       identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint } = previous
-    append(deps.session, { type: "context/recovery", version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
-      inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint, identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint, state, ...extra })
+    committedFactSeqs(await agentFacts(deps).metadata.admit({ type: "context/recovery", version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
+      inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint, identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint, state, ...extra }))
   }
   const blocked = async (previous: ContextRecoveryFacts, reason: string, signal?: AbortSignal): Promise<never> => {
-    fact(previous, "blocked", { reason }); await flush(signal)
+    await fact(previous, "blocked", { reason }); await flush(signal)
     throw Object.assign(new Error(`prompt_too_long: ${reason}`, { cause: lastFailure }), { code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   }
   const progressed = (previous: ContextRecoveryFacts, measurement: PreparedRequestMeasurement) => {
@@ -53,7 +54,7 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         ...(metadata?.bindingConfigFingerprint ? { bindingConfigFingerprint: metadata.bindingConfigFingerprint } : {}), identityCoverage: metadata?.identityCoverage ?? "partial",
         inputCost: measured.tokens, inputBytes: measured.bytes, retryConsumed: previous?.state !== "resolved" && (previous?.retryConsumed === true || previous?.state === "retry-started"), state: "required",
         ...(failure.inputTokens !== undefined ? { inputTokens: failure.inputTokens } : {}), ...(failure.contextLimit !== undefined ? { contextLimit: failure.contextLimit } : {}) }
-      fact(required, "required"); await flush(signal)
+      await fact(required, "required"); await flush(signal)
       if (required.retryConsumed) await blocked(required, "The changed-input recovery attempt was also rejected; automatic retry is exhausted", signal)
       return true
     },
@@ -66,7 +67,7 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         // The projection itself, including local edits, must pass a durable
         // barrier before consuming the one main retry allowance.
         await flush(signal)
-        fact(previous, "retry-started", { retryConsumed: true, retryInputFingerprint: measurement.input.inputFingerprint })
+        await fact(previous, "retry-started", { retryConsumed: true, retryInputFingerprint: measurement.input.inputFingerprint })
         await flush(signal)
         state.recoveryId = previous.recoveryId; state.recoveryInputFingerprint = measurement.input.inputFingerprint
         return "authorized"
@@ -94,9 +95,9 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         // Accepted main output must be durable before declaring its recovery
         // successful. A failed/aborted resolution barrier stays inspectable.
         await flush(signal)
-        fact(previous, "resolved"); await flush(signal)
+        await fact(previous, "resolved"); await flush(signal)
       } catch (error) {
-        fact(previous, "blocked", { reason: "Accepted main recovery resolution checkpoint did not complete" })
+        await fact(previous, "blocked", { reason: "Accepted main recovery resolution checkpoint did not complete" })
         // Persist the conservative state even when Stop was the reason. The
         // enclosing failed-turn owner remains responsible for save failures.
         try { await deps.flush?.() } catch { /* original checkpoint failure wins */ }

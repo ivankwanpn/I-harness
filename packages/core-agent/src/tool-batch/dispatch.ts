@@ -1,5 +1,5 @@
-import { type Session } from "@i-harness/core-session"
-import { isPolicyRefusal, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall } from "@i-harness/core-tools"
+import { type SessionView as Session } from "@i-harness/core-session"
+import { isPolicyRefusal, retainedToolOutcome, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
 import type { BatchCancellation } from "./cancel.ts"
@@ -13,7 +13,8 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
     catch (error) { recordPreparationFailure(index, call, error, records, cancellation); return }
     // Approval may await. A cancelled prepared call has no dispatch marker.
     if (cancellation.batchSignal.aborted) return
-    markDispatch(session, index, call, records)
+    try { await markDispatch(session, index, call, records, opts) }
+    catch (error) { recordCheckpointFailure(index, call, error, records, cancellation); return }
     // The marker and checkpoint precede the actual body. Keep this direct
     // await and method receiver so a live host seam is read at dispatch time.
     if (opts.flush !== undefined) {
@@ -25,6 +26,7 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
         output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH } })
       return
     }
+    opts.assertFactOpen?.()
     opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
     const promise = tools
       .dispatch(prepared)
@@ -32,6 +34,12 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
         records.setSlot(index, { name: call.name, callId: call.callId, prepared, output })
       })
       .catch((err: unknown) => {
+        const retained = retainedToolOutcome(err, prepared)
+        if (retained) {
+          records.setSlot(index, { name: call.name, callId: call.callId, prepared, retained, recoveryCause: err })
+          cancellation.recordFailure(index, err); cancellation.stopForCheckpoint(err)
+          return
+        }
         // Record this rejection before classification and observations. The
         // drain needs its own reason even if another error stops the batch.
         cancellation.recordFailure(index, err)

@@ -1,4 +1,5 @@
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session, SettlementFacts, ProducerFactOutcome, SessionEvent } from "@i-harness/core-session"
+import type { RetainedOutcomeSink } from './registry/retained-outcome.ts'
 
 export type ToolExposure = "direct" | "deferred" | "hidden"
 
@@ -40,6 +41,9 @@ export type PreparedApprovalProvider = (input: PreparedApprovalInput) => Prepare
 export type ApprovalAuthorityProvider = (input: PreparedApprovalInput) => (() => boolean)
 
 export interface ToolExec {
+  /** Registry-bound source registration, never model JSON or a write port. */
+  retainOutcome?(): RetainedOutcomeSink
+  retainResultReference?(event: Extract<SessionEvent, { type: 'context/result-ref' }>): Promise<void>
   /** Actual executing session, supplied by trusted Agent/Code Mode hosts. */
   session?: Session
   /** Trusted broker presentation hint; it never widens tool authority. */
@@ -203,7 +207,7 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code"; settlementSource?: SettlementFacts<ProducerFactOutcome> }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>

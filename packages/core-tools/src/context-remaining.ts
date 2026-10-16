@@ -1,4 +1,4 @@
-import type { Session, BudgetRead } from "@i-harness/core-session"
+import type { SessionView as Session, BudgetRead } from "@i-harness/core-session"
 import { contextStateFromBudget } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { activeTokens } from "@i-harness/token-meter"

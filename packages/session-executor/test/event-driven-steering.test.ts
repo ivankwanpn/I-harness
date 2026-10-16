@@ -55,7 +55,7 @@ function assertAdmission(assembly: SessionAssembly, inputId: string, request: LL
 describe("real assembly: steering releases observation and preserves the producer", () => {
   it.each(["foreground", "target", "all", "tasks", "subagent-job"] as const)("%s child wait lets the parent turn end, then a later turn retrieves the same work", async family => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+    const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
     await coordinator.create({ sessionId: "parent" })
     const started = deferred(), release = deferred()
     let childCalls = 0, childFinished = 0, aborts = 0

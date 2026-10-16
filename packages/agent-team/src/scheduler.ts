@@ -5,7 +5,8 @@
 // via coordinator.snapshot, interrupt/close via the agent table, and message
 // delivery through the child's durable session mirror.
 
-import { append, type Session } from "@i-harness/core-session"
+import { type FactOwner, type SessionView as Session } from "@i-harness/core-session"
+import { createTeamFacts, teamFactOwner } from './facts.ts'
 import type { PluginContext } from "@i-harness/core-plugin"
 
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -21,7 +22,7 @@ import { createCompletionJobs } from "./scheduler/completion.ts"
 import { createTaskDelivery } from "./scheduler/task-delivery.ts"
 import { createDurabilityProbes, mountTeamTools } from "./scheduler/recovery.ts"
 
-import { createTeamTransact, type TeamLead } from "./transact.ts"
+import { createTeamTransact } from "./transact.ts"
 import { createRoster } from "./roster.ts"
 import { createMailbox } from "./mailbox.ts"
 import { createTaskBoard } from "./task-board.ts"
@@ -89,6 +90,7 @@ export interface TeamDeps {
   // lead session (the team's parent/main session; its event log is the team
   // log — every team/* event is appended here)
   parentSession: Session
+  factOwner?: FactOwner
   parentRegistry: ToolRegistry
   subagents: TeamSubagentDeps
   parentModel: ModelClient
@@ -135,24 +137,7 @@ export async function mountAgentTeams(
     // closure reads the final value.
     let teamRoleTools: string[] = [...TEAMMATE_BASE_TOOLS, ...(tools.get("shell") ? ["shell"] : [])]
     const activity = createActivity({ waitMinMs: cfg.waitMinMs, waitMaxMs: cfg.waitMaxMs, waitDefaultMs: cfg.waitDefaultMs })
-    const lead: TeamLead = {
-      // every team event is appended into the parent session log; the parent's
-      // mirror hook (run.ts createSession(onAppend)) persists it through the
-      // write-behind, so the team log is durable WITH the parent session log.
-      append: (e) => append(deps.parentSession, e),
-      // M19 Ruling 25: the coordinator's flush on the parent session IS the
-      // durability point — mirror the child-message deliver branch (below) so
-      // onCommit fires only after a REAL flush. Without childSessions (no
-      // coordinator) there is nothing to flush; the mirror hook is the write
-      // through the write-behind and the flush is a no-op there.
-      flush: () => sub.childSessions
-        ? sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
-        : Promise.resolve(),
-      // onCommit is invoked by the transact AFTER lead.flush() resolves, i.e.
-      // at the durable-commit point — mirror dsh's journal onCommit rule:
-      // waiters may only be woken for committed state (spec §4.4/§4.7).
-      onCommit: () => activity.notify(),
-    }
+    const lead = createTeamFacts(teamFactOwner(deps.parentSession,deps.factOwner),()=>tx.drain(),()=>activity.notify())
     const tx = createTeamTransact(lead, state)
 
     // ---- real bridge bindings (Ruling 18) ----
@@ -211,7 +196,7 @@ export async function mountAgentTeams(
       activity,
     }
     const collisions = new Set(["send_message", "followup_task", "wait_agent", "interrupt_agent"])
-    const teamTools = createTeamTools(toolDeps).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
+    const teamTools = createTeamTools(toolDeps).map(tool=>({...tool,execute:(args:unknown,exec:ToolExec)=>lead.run(exec.abortSignal,()=>Promise.resolve(tool.execute(args,exec)))})).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
       ? { ...tool, name: `team_${tool.name}` } : tool)
     // Tool names DERIVED from the created tools (Ruling 19) — mount and
     // unmount can never drift from each other or from Task 9's surface.
@@ -242,7 +227,7 @@ export async function mountAgentTeams(
       removeGeneratedRole()
       releaseTeam(teamId)
     })
-    return { teamName: teamId, unmount, drainLeadMessages: async () => { if (!unmounted) await mailbox.recoverRoot(teamId) } }
+    return { teamName: teamId, async unmount(){await lead.close();await unmount()}, drainLeadMessages: async () => { if (!unmounted) await mailbox.recoverRoot(teamId) } }
   } catch (err) {
     removeGeneratedRole()
     releaseTeam(teamId)

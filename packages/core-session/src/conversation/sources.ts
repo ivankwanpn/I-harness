@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
 
 /** Source coordinates belong to the original archive, even for a prefix view. */

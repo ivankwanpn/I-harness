@@ -1,5 +1,5 @@
 import { captureContextSnapshot, type ContextSnapshot, type ContextRevision, type RequestSurfaceInput } from "@i-harness/context-engine"
-import { renderConversation, type ContextBindingMetadata, type Session } from "@i-harness/core-session"
+import { renderConversation, type ContextBindingMetadata, type SessionView as Session } from "@i-harness/core-session"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { ModelClient } from "@i-harness/llm-seam"
 

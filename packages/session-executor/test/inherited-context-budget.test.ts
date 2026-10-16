@@ -14,7 +14,7 @@ import { createCredentialStore } from "../../credentials/src/index.ts"
 import { createSessionAssembly } from "../src/index.ts"
 
 it.each([true, false])("inherited followups capture their own descriptor; declared evidence present=%s", async declaredEvidence => {
-  const root = await mkdtemp(join(tmpdir(), "owned-child-binding-")), coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const root = await mkdtemp(join(tmpdir(), "owned-child-binding-")), coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const calls: string[] = []
   const release = Promise.withResolvers<void>(), mainEntered = Promise.withResolvers<void>(), mainRelease = Promise.withResolvers<void>()

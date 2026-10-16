@@ -309,7 +309,7 @@ describe("headless CLI (M2)", () => {
     it("session_search finds previously written session content", async () => {
       // M29: the store root is the workspace — the query surface is the
       // file-backed index over the jsonl store (reconcile-on-search).
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
       const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
@@ -328,6 +328,7 @@ describe("headless CLI (M2)", () => {
         expect(result.exitCode).toBe(0)
         const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; eventType: string; snippet: string }[] } } | undefined
         expect(resultEvent).toBeDefined()
+        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('hits')
         const hits = resultEvent!.output.hits
         // M70 CHANGED THIS EXPECTATION, deliberately and in the strict
         // direction. The search is a durable reader (reconcile-on-search over
@@ -353,7 +354,7 @@ describe("headless CLI (M2)", () => {
     })
 
     it("lineage shows the parent/child structure", async () => {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "parent" })
       await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
       const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
@@ -372,6 +373,7 @@ describe("headless CLI (M2)", () => {
         expect(result.exitCode).toBe(0)
         const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { nodes: { sessionId: string; parentSession?: string }[] } } | undefined
         expect(resultEvent).toBeDefined()
+        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('nodes')
         const nodes = resultEvent!.output.nodes
         expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
         expect(nodes[0]!.parentSession).toBe("parent")
@@ -434,7 +436,7 @@ describe("headless CLI (M2)", () => {
       // summary's shadowedSeqs [0] then hides the old user/message so the
       // resume surface leads with the summary. Without the KNOWN_EVENT_TYPES
       // registration this load path hard-fails (SessionFormatUnsupportedError).
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [
         { type: "user/message", text: "old work", seq: 0 },
@@ -710,7 +712,7 @@ describe("headless CLI persistence (M4)", () => {
   it("runHeadless with a coordinator persists the session to a JSONL file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       const result = await runHeadless("hello", {
         workspace: dir,
@@ -728,7 +730,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume restores the persisted history into the model request", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" },
@@ -766,7 +768,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume restores the session header alongside the history (G7)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-g7-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       // Seed the lineage header through the coordinator's create meta (the
       // coordinator rebuilds session.header from it on load — same path the
       // main resume uses).
@@ -798,7 +800,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume with a missing session id resolves cleanly instead of throwing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       // no session file was created → coordinator.load rejects; runHeadless must
       // turn that into a clean { exitCode: 1, error } result, not a throw.
       const result = await runHeadless("hello", {
@@ -836,7 +838,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
   it("runHeadless with a jsonl coordinator persists to the store (no sessions.db)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       const result = await runHeadless("hello", {
         workspace: dir,
@@ -857,7 +859,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
   it("resume restores the persisted history into the model request", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" },
@@ -932,7 +934,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
   it("persists subagent state via the coordinator document API on a run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
     const failures = vi.fn()
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures })
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures, lock: { enabled: true } })
     try {
       const { id } = await coordinator.create()
       // Deterministic spawn driver: a SHARED mock cassette would be consumed by
@@ -979,7 +981,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
   it("resume restores a user-overridden role and settled jobs", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" }, { type: "user/message", text: "first" },
@@ -1040,7 +1042,7 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("spawn persists the child session log (child-<uuid> file with events)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Deterministic driver: first stream yields spawn_agent; later streams (child + main) are text.
       let calls = 0
@@ -1073,7 +1075,7 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("resume keeps the child sessionId link in the restored registry snapshot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       let calls = 0
       const spawnModel: ModelClient = {
@@ -1125,7 +1127,7 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("fresh run: the main agent spawns a child then sends it a message; the inbox event lands in the child log", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Parent and child share the client but have distinct durable owners.
       // Their scheduling order is not part of the messaging contract.
@@ -1165,7 +1167,7 @@ describe("headless CLI multi-turn subagents (M9)", () => {
   it("followup_task drives a second turn on the child's durable session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Route by owner; a background child's first request may race the parent.
       let calls = 0
@@ -1204,7 +1206,7 @@ describe("headless CLI multi-turn subagents (M9)", () => {
   it("resume_agent cold-resumes a child and continues the conversation", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Run 1: spawn (fork none) + followup → child log has 2 turns.
       let calls = 0
@@ -2025,7 +2027,7 @@ describe("M19 CLI team integration", () => {
   it("runHeadless mounts team tools and the agent can use spawn_teammate", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       let parentRequests = 0
       const result = await runHeadless("use the team", {

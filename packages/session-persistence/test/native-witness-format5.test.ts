@@ -22,7 +22,7 @@ it('preserves the carrier through seed, snapshot, cold load and actual fork', as
   if (captured.kind !== 'captured') throw Error('snapshot required')
   expect(JSON.stringify(captured.snapshot)).toContain(d)
   const root = await mkdtemp(join(tmpdir(), 'ih-native5-')); roots.push(root)
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend)
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: 's' }); await coordinator.append('s', session.events)
   expect((await coordinator.snapshot!('s')).session.events[2]).toMatchObject({ providerContinuation: native })
   const child = await forkSession(coordinator, 's')
@@ -30,18 +30,20 @@ it('preserves the carrier through seed, snapshot, cold load and actual fork', as
   expect(deriveMessages(cold).find(message => message.role === 'assistant')).toMatchObject({ providerContinuation: native })
   await coordinator.close()
 })
-it.each([1, 2, 3, 4])('reads historical format%s without retrospective proof, then establishes durable5 before new native append', async version => {
+it.each([1, 2, 3, 4])('reads historical format%s without retrospective proof, then establishes owned durable6 before new native append', async version => {
   const root = await mkdtemp(join(tmpdir(), 'ih-native5-old-')); roots.push(root)
   const path = join(root, 's.jsonl'), body = '{ "type":"user/message", "text":"old", "seq":0 }\n'
   await writeFile(path, JSON.stringify({ formatVersion: version, sessionId: 's', createdAt: 'x' }) + '\n' + body)
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend)
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const session = (await coordinator.snapshot!('s')).session
   expect(JSON.stringify(session.events)).not.toContain('producerWitness')
-  await ownedContextReadiness(coordinator, 's', session)()
-  expect((await backend.profile('s')).meta.formatVersion).toBe(5)
+  const document = await coordinator.openManagedDocument('s')
+  await ownedContextReadiness(coordinator, 's', document.view)()
+  expect((await backend.profile('s')).meta.formatVersion).toBe(6)
   expect((await readFile(path, 'utf8')).split('\n').slice(1).join('\n')).toBe(body)
   const event = history().events[2]!
-  append(session, event); await coordinator.append('s', [session.events.at(-1)!])
+  if (event.type !== 'assistant/message') throw new Error('Expected assistant fixture')
+  expect((await document.agent.auditAssistant(event)).kind).toBe('committed')
   expect((await coordinator.snapshot!('s')).session.events.at(-1)).toMatchObject({ providerContinuation: native })
   await coordinator.close()
 })

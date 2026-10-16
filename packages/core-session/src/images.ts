@@ -32,7 +32,7 @@ function isValidBase64(s: string): boolean {
   return /^[A-Za-z0-9+/]*={0,2}$/.test(s) && s.length % 4 === 0 && !s.includes(" ")
 }
 
-export function validateImages(images: ImageInput[], evType: string): void {
+export function validateImages(images: readonly ImageInput[], evType: string): void {
   if (images.length > MAX_IMAGES_PER_MESSAGE) {
     throw new Error(`image attachment: at most ${MAX_IMAGES_PER_MESSAGE} images per ${evType}`)
   }
@@ -57,7 +57,7 @@ export function validateImages(images: ImageInput[], evType: string): void {
   }
 }
 
-export function imageDescriptor(images: ImageInput[] | undefined): string {
+export function imageDescriptor(images: readonly ImageInput[] | undefined): string {
   // Defensive: malformed persisted events may carry a truthy non-array here.
   if (!Array.isArray(images) || images.length === 0) return ""
   return (
@@ -66,7 +66,7 @@ export function imageDescriptor(images: ImageInput[] | undefined): string {
   )
 }
 
-export function imageSummaryDescriptor(images: ImageSummary[] | undefined): string {
+export function imageSummaryDescriptor(images: readonly ImageSummary[] | undefined): string {
   if (!Array.isArray(images) || images.length === 0) return ""
   return "\n" + images.map((image) => `image: ${image.name ?? "unnamed"} ${image.width ?? "?"}x${image.height ?? "?"} ${image.bytes}B`).join("\n")
 }

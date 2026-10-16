@@ -39,6 +39,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     },
     cancel: retirement.cancel,
     dispose: retirement.dispose,
+    async drainRetainedObservations() { for (const cell of state.values()) await cell.pendingProjection?.settle() },
   }
   return runtime
 }

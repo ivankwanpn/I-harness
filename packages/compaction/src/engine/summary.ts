@@ -1,4 +1,4 @@
-import { deriveMessages, deriveMessagesUpTo, type Session } from "@i-harness/core-session"
+import { deriveMessages, deriveMessagesUpTo, type SessionView as Session } from "@i-harness/core-session"
 import { projectionFingerprint } from "@i-harness/token-meter"
 import type { CompactionRunOptions } from "../index.ts"
 import { summarizeWithModel } from "../summarizer.ts"

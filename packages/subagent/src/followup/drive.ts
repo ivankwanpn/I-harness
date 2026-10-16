@@ -1,4 +1,4 @@
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionEventView } from "@i-harness/core-session"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { AgentTable, ChildAgentEntry } from "../agent-table.ts"
 import type { JobRegistry } from "../jobs.ts"
@@ -20,10 +20,10 @@ export interface FollowupDeps {
   // e.g. the agent-team scheduler without the seam) keeps the old no-op.
   rebuild?: (entry: ChildAgentEntry) => Promise<boolean>
 }
-export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string): Promise<void> {
+export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string, signal?: AbortSignal): Promise<void> {
   const prev = entry.followupChain ?? Promise.resolve()
   const next = prev.then(async () => {
-    if (entry.closing || deps.table.get(entry.path) !== entry) return
+    if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return
     let agent = deps.agents.get(sessionId)
     if (!agent) {
       if (!deps.rebuild) return // no rebuild ability → keep the old no-op
@@ -33,11 +33,11 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
       if (!agent) return
     }
     const pending = entry.session.events.filter(
-      (e): e is Extract<SessionEvent, { type: "subagent/inbox" }> =>
+      (e): e is Extract<SessionEventView, { type: "subagent/inbox" }> =>
         e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
     )
     for (const ev of pending) {
-      if (entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
+      if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
       entry.lastInboxSeq = ev.seq ?? 0
       // Errors belong to the previous turn; a new attempt has no failure yet.
       // W11: a re-drive starts a NEW run, so the start stamp moves with the

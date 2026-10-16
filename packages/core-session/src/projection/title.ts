@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 
 export interface SessionTitleView {
   title: string
@@ -12,7 +12,7 @@ export function deriveSessionTitle(session: Session): SessionTitleView | null {
   let view: SessionTitleView | null = null
   for (const ev of session.events) {
     if (ev.type !== "session/title") continue
-    view = { title: ev.title, messageSeqs: ev.messageSeqs, source: ev.source, eventSeq: ev.seq ?? 0 }
+    view = { title: ev.title, messageSeqs: [...ev.messageSeqs], source: ev.source, eventSeq: ev.seq ?? 0 }
   }
   return view
 }

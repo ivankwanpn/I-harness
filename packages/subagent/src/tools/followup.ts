@@ -1,7 +1,8 @@
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 import { randomUUID } from "node:crypto"
-import { append } from "@i-harness/core-session"
+import { committedFactSeqs } from "@i-harness/core-session"
+import { childFactOwner } from '../child/document.ts'
 import { declaredRoleModel, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { driveFollowups } from "../followup/drive.ts"
 import { ensureResidentAgent, followupDepsWithRebuild } from "../followup/resident.ts"
@@ -12,12 +13,14 @@ export function createSendTool(deps: SubagentToolDeps): Tool {
     description: "Send a message to an existing subagent. Queued; does not trigger a new turn.",
     inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
     isReadOnly: false,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-      // Durable inbox: append a model-hidden event through the child's mirror.
-      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } })
-      entry.mailbox.push(args.message)
+      const action = (await childFactOwner(entry, deps.childSessions?.coordinator)).beginAction(exec.abortSignal)
+      try {
+        committedFactSeqs(await action.facts.delivery.record({ type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } }))
+        entry.mailbox.push(args.message)
+      } finally { action.finish() }
       return { queued: true }
     },
   }
@@ -30,16 +33,19 @@ export function createFollowupTool(deps: SubagentToolDeps): Tool {
     description: "Send a follow-up task to a subagent and trigger a new turn. Queues the message durably and wakes the child to process it as a serialized followup turn.",
     inputSchema: { type: "object", properties: { target: { type: "string" }, message: { type: "string" } }, required: ["target", "message"] },
     isReadOnly: false,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const entry = deps.table.get(args.target)
       if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-      // Durable inbox + wake: queue the message and drive a turn on the child.
-      append(entry.session, { type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } })
-      entry.mailbox.push(args.message)
+      const action = (await childFactOwner(entry, deps.childSessions?.coordinator)).beginAction(exec.abortSignal)
+      try {
+        committedFactSeqs(await action.facts.delivery.record({ type: "subagent/inbox", messageId: randomUUID(), message: args.message, provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup", ...(deps.childSessions?.parentSessionId ? { originSessionId: deps.childSessions.parentSessionId } : {}) } }))
+        entry.mailbox.push(args.message)
       // M23 (Minor 4): inject the lazy rebuild so a wakeup for a restored
       // (fresh-registry) entry rebuilds the resident agent instead of
       // silently dropping the drive.
-      if (entry.sessionId) void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId)
+        action.assertOpen()
+        if (entry.sessionId) void driveFollowups(followupDepsWithRebuild(deps), entry, entry.sessionId, exec.abortSignal).catch(() => {})
+      } finally { action.finish() }
       return { delivered: true }
     },
   }
@@ -52,13 +58,14 @@ export function createResumeTool(deps: SubagentToolDeps): Tool {
     description: "Re-activate a previously settled subagent from its persisted session; queued inbox messages are processed.",
     inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
     isReadOnly: false,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       const existing = deps.table.get(args.target)
       if (!existing) throw new Error(`unknown subagent: ${args.target}`)
       if (existing.status === "running") throw new Error(`subagent already running: ${args.target}`)
       if (existing.sessionId && deps.agents.get(existing.sessionId)) {
         // already resident (e.g. a waiting child) → just re-drive pending inbox
-        void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId)
+        exec.abortSignal?.throwIfAborted()
+        void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId, exec.abortSignal).catch(() => {})
         return { resumed: true }
       }
       // M23 (Minor 4): the rebuild body moved into ensureResidentAgent so the
@@ -84,7 +91,8 @@ export function createResumeTool(deps: SubagentToolDeps): Tool {
         }
         throw new Error(`could not resume subagent: ${args.target}`)
       }
-      if (existing.sessionId) void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId)
+      exec.abortSignal?.throwIfAborted()
+      if (existing.sessionId) void driveFollowups(followupDepsWithRebuild(deps), existing, existing.sessionId, exec.abortSignal).catch(() => {})
       return { resumed: true }
     },
   }

@@ -1,4 +1,4 @@
-import type { SessionEvent } from "../events/types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, imageSummaryDescriptor } from "../images.ts"
 import type { ImageInput } from "../images.ts"
 

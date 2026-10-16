@@ -1,4 +1,4 @@
-import type { createSession } from "@i-harness/core-session"
+import type { SessionView } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ReasoningEffort } from "@i-harness/core-agent"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
@@ -27,7 +27,7 @@ export interface RoleModelHost {
   codeMode?: CodeModeConfig
   codeModeFactory?: CodeModeFactory
   /** Trusted parent context, rendered afresh for each child model request. */
-  inheritedSystemContext?: (session?: ReturnType<typeof createSession>) => string
+  inheritedSystemContext?: (session?: SessionView) => string
   /** Settings' `agents.roles.<name>` (or any host's equivalent): the model the
    * host declares for a role. Absent → the role's own `model`, then inherit. */
   roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined

@@ -1,4 +1,5 @@
-import type { Session, SessionEvent } from "../events/types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import { meldRewindCut, type RewindCut } from "../projection/rewind.ts"
 
 const boundaries = new Set(["step/start", "step/end", "step/failed", "turn/start"])

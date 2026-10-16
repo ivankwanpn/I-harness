@@ -1,64 +1,61 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append, type Session } from "@i-harness/core-session"
+import { committedFactSeqs, FactRecoveryRequiredError, type SessionView as Session } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { BatchCall, BatchSlot, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchCancellation } from "./cancel.ts"
 
 export function createBatchRecords(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted">) {
   const slots: (BatchSlot | undefined)[] = batch.map(() => undefined)
-  let committed = 0
-  let startedUpTo = 0
-  async function commitReady(): Promise<void> {
-    const control = cancellation()
+  let committed = 0, startedUpTo = 0, serial = Promise.resolve()
+  async function commitSlot(index: number, reconcile=false): Promise<void> {
+    const slot = slots[index]
+    if (!slot || slot.recorded) return
+    const control = cancellation(), call = batch[index]!
     control.observeAbort()
-    while (committed < batch.length) {
-      const slot = slots[committed]
-      if (slot === undefined) break
-      const call = batch[committed]!
-      if ("synthetic" in slot) {
-        // M51 B3: an abort fill whose outcome is already decided — retain/project
-        // through the owned output seam before append, without executing again,
-        // so the head-of-line cursor advances in model order without running
-        // finalize (tools/post-execute) or agent/post-tool.
-        const output = await ctx.cascade("tools/project-synthetic-result", { name: slot.name, output: slot.output }, async () => slot.output)
-        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output, isError: true })
-        committed += 1
-        continue
-      }
-      // finalize runs in the ordered commit lane (post-execute + wrap) — the
-      // parallel path must not skip the staged post-execute seam.
-      const finalized = await tools.finalize(slot.prepared, slot.output)
-      // Filesystem, terminal and timeout tools return expected failures as a
-      // typed {error, code} value so the model can retry without aborting the
-      // turn. Preserve that disposition for protocols with an error flag.
-      const outcome = finalized.output as { error?: unknown; code?: unknown } | null
-      const isError = outcome !== null && typeof outcome === "object" && !Array.isArray(outcome)
-        && typeof outcome.error === "string" && typeof outcome.code === "string"
-      append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output, ...(isError ? { isError: true } : {}) })
-      // The durable answer already exists. A throwing observation must not
-      // cause the abort drain to append this same call's answer a second time.
-      committed += 1
-      // finalize can await hooks while the owner presses Stop. Keep the real
-      // completed answer, but do not start post-tool effects after that abort.
-      control.observeAbort()
-      // M25: tool/end beside the tool/result commit (model-order lane).
-      opts.telemetry?.emit({ type: "tool/end", ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
-      // M10a ordering ruling: post-tool only for completed dispatches and only
-      // when not aborted (the abort check precedes the observation).
-      if (!control.aborted) {
-        await ctx.emit("agent/post-tool", { name: call.name, args: call.args, output: finalized.output, session })
+    if (!slot.fact) {
+      if ('synthetic' in slot) {
+        slot.projected ??= { output: await ctx.cascade('tools/project-synthetic-result', { name: slot.name, output: slot.output }, async () => slot.output) }
+        slot.fact = opts.sourceFacts!.captureResult({ type: 'tool/result', callId: slot.callId, name: slot.name, output: slot.projected.output, isError: true })
+      } else {
+        if ('retained' in slot && !slot.resolved) {
+          const result = await slot.retained.take()
+          if (result.kind !== 'ready') throw Object.assign(new FactRecoveryRequiredError(), { cause: slot.recoveryCause })
+          slot.resolved = { output: result.output }
+        }
+        slot.finalizing ??= tools.finalize(slot.prepared, 'retained' in slot ? slot.resolved!.output : slot.output)
+        try { slot.finalized ??= await slot.finalizing }
+        catch (error) { opts.requireFactRecovery?.(); throw error }
+        const outcome = slot.finalized.output as { error?: unknown; code?: unknown } | null
+        const isError = outcome !== null && typeof outcome === 'object' && !Array.isArray(outcome)
+          && typeof outcome.error === 'string' && typeof outcome.code === 'string'
+        slot.fact = opts.sourceFacts!.captureResult({ type: 'tool/result', callId: slot.callId, name: slot.name, output: slot.finalized.output, ...(isError ? { isError: true } : {}) })
       }
     }
+    committedFactSeqs(await (reconcile?slot.fact.reconcile():slot.fact.admit()))
+    slot.recorded = true
+    while (slots[committed]?.recorded) committed++
+    if ('synthetic' in slot) return
+    control.observeAbort()
+    opts.telemetry?.emit({ type: 'tool/end', ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
+    if (!control.aborted) await ctx.emit('agent/post-tool', { name: call.name, args: call.args, output: slot.finalized!.output, session, signal: opts.signal })
   }
-
-
+  const schedule = (work: () => Promise<void>) => { const next = serial.then(work); serial = next.catch(() => {}); return next }
   return {
-    commitReady,
-    get committed() { return committed },
-    get startedUpTo() { return startedUpTo },
+    commitReady() { return schedule(async () => { while (slots[committed]) await commitSlot(committed) }) },
+    drainSettled() { return schedule(async () => {
+      const errors: unknown[] = []
+      for (let index = 0; index < slots.length; index++) {
+        const slot = slots[index]
+        if (!slot) continue
+        if (!slot.recorded) try { await commitSlot(index,true) } catch (error) { if (!slot.recorded) errors.push(error) }
+        if ('retained' in slot) try { await slot.retained.drainReferences() } catch (error) { errors.push(error) }
+      }
+      if (errors.length) throw Object.assign(new AggregateError(errors, 'Real tool settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+    }) },
+    get committed() { return committed }, get startedUpTo() { return startedUpTo },
     markStarted(index: number) { startedUpTo = index + 1 },
     getSlot(index: number) { return slots[index] },
-    setSlot(index: number, slot: BatchSlot) { slots[index] = slot },
+    setSlot(index: number, slot: BatchSlot) { if (!slots[index]) slots[index] = slot },
   }
 }
 export type BatchRecords = ReturnType<typeof createBatchRecords>

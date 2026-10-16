@@ -1,4 +1,4 @@
-import { append, type Session } from "@i-harness/core-session"
+import { committedFactSeqs, type SessionView as Session } from "@i-harness/core-session"
 import { isPolicyRefusal, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
@@ -7,7 +7,7 @@ import type { BatchCancellation } from "./cancel.ts"
 // Return the registry promise directly; dispatch owns the original await site.
 export function prepareCall(tools: ToolRegistry, call: BatchCall, signal: AbortSignal, opts: ExecuteToolCallsOptions, session: Session) {
   return tools.prepare({ name: call.name, args: call.args }, signal,
-    { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq })
+    { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource })
 }
 
 export function recordPreparationFailure(index: number, call: BatchCall, error: unknown, records: BatchRecords, cancellation: BatchCancellation): void {
@@ -18,9 +18,10 @@ export function recordPreparationFailure(index: number, call: BatchCall, error: 
     output: { error: error.message, code: TOOL_FAILED } })
 }
 
-export function markDispatch(session: Session, index: number, call: BatchCall, records: BatchRecords): void {
+export async function markDispatch(session: Session, index: number, call: BatchCall, records: BatchRecords, opts: ExecuteToolCallsOptions): Promise<void> {
+  const eventSeq = call.eventSeq ?? session.events.findLast(event => event.type === 'tool/call' && event.callId === call.callId)?.seq
+  committedFactSeqs(await opts.facts!.dispatch(call.callId, eventSeq === undefined ? undefined : { kind: 'prior', seq: eventSeq, expectedType: 'tool/call' }))
   records.markStarted(index)
-  append(session, { type: "tool/dispatch", callId: call.callId, ...(call.eventSeq !== undefined ? { eventSeq: call.eventSeq } : {}) })
 }
 
 export function recordCheckpointFailure(index: number, call: BatchCall, error: unknown, records: BatchRecords, cancellation: BatchCancellation): void {

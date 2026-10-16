@@ -4,37 +4,36 @@ import type { TeamFoldState } from "../fold.ts"
 import type { createActivity } from "../activity.ts"
 import type { TeamCaller } from "../types.ts"
 import { AgentPath } from "../agent-path.ts"
+import { hasCommittedInitialInput } from '@i-harness/subagent'
 
 // The spawn checkpoint flushes first; crash reconciliation reads the existing
 // durable log without invoking load/loadOwned repair on a running child.
-export function createDurabilityProbes(sub: Pick<TeamSubagentDeps, "childSessions">) {
+export function createDurabilityProbes(sub: Pick<TeamSubagentDeps, "childSessions"|'table'>) {
   const realHoldsPrompt = (sessionId: string, signal?: AbortSignal): Promise<boolean> =>
-    probeChildDurable(sub.childSessions, sessionId, signal, { flushFirst: true })
+    probeChildDurable(sub, sessionId, signal)
   const realIsDurable = (sessionId: string, signal?: AbortSignal): Promise<boolean> =>
-    probeChildDurable(sub.childSessions, sessionId, signal, { flushFirst: false })
+    probeChildDurable(sub, sessionId, signal)
   return { realHoldsPrompt, realIsDurable }
 }
 
 async function probeChildDurable(
-  childSessions: TeamSubagentDeps["childSessions"],
+  sub:Pick<TeamSubagentDeps,'childSessions'|'table'>,
   sessionId: string,
   signal?: AbortSignal,
-  opts?: { flushFirst?: boolean },
 ): Promise<boolean> {
+  const {childSessions}=sub
   if (!childSessions) return false // no durable child sessions → cannot prove durability
   if (signal?.aborted) return false
+  const live=[...sub.table.entries().values()].find(entry=>entry.sessionId===sessionId)
+  if(live)return hasCommittedInitialInput(live,sessionId)
   // A durability probe observes a potentially RUNNING child. load() performs
   // crash repair and commits closers, which would shift the durable sequence
   // underneath its live mirror. Never substitute recovery for this read.
   if (!childSessions.coordinator.snapshot) return false
   try {
-    if (opts?.flushFirst) await childSessions.coordinator.flush(sessionId)
     const { session } = await childSessions.coordinator.snapshot(sessionId)
     if (signal?.aborted) return false
-    const events = session.events
-    if (events.some((e) => e.type === "user/message")) return true
-    if (events.some((e) => e.type === "subagent/inbox")) return true
-    return false
+    return session.events.slice(session.header?.seedLength??0).some(event=>event.type==='agent/input/admitted'&&event.intent==='user'&&event.provenance?.kind==='inherited'&&event.provenance.producer==='subagent.initial'&&event.provenance.originSessionId===session.header?.parentSession)
   } catch {
     return false
   }

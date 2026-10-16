@@ -1,4 +1,5 @@
 import type { SessionEvent } from "@i-harness/core-session"
+import { validJournalMetadata } from '@i-harness/core-session'
 import type { SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
 // The closed set is settings' — imported, never copied (a local list of the
 // five names would be a second place to edit one enum).
@@ -37,11 +38,13 @@ export function parseHeader(line: string): SessionMeta {
   const h = JSON.parse(line) as Partial<SessionMeta>
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
+  if (h.formatVersion === 6 && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,
     sessionId: h.sessionId,
     createdAt: typeof h.createdAt === "string" ? h.createdAt : "",
+    ...(h.journal !== undefined ? { journal: h.journal } : {}),
     ...(typeof h.parentSession === "string" ? { parentSession: h.parentSession } : {}),
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),

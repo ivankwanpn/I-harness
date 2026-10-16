@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { CURRENT_FORMAT_VERSION, isContextEventType, validateConversationHistory, type SessionEvent, type InputProvenance } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validateConversationHistory, copyConversationData, type SessionEvent, type SessionEventView, type InputProvenance } from "@i-harness/core-session"
 
 export class SessionForkUnavailableError extends Error {
   readonly code = "fork-unavailable" as const
@@ -10,10 +10,10 @@ export class SessionForkUnavailableError extends Error {
   }
 }
 
-export function materializeMissingImageAdmissions(source: readonly SessionEvent[], retained: readonly SessionEvent[]): SessionEvent[] {
+export function materializeMissingImageAdmissions(source: readonly SessionEventView[], retained: readonly SessionEventView[]): SessionEventView[] {
   const retainedSet = new Set(retained)
-  const admissions = new Map<string, Extract<SessionEvent, { type: "agent/input/admitted" }>>()
-  const replacements = new Map<SessionEvent, SessionEvent>()
+  const admissions = new Map<string, Extract<SessionEventView, { type: "agent/input/admitted" }>>()
+  const replacements = new Map<SessionEventView, SessionEventView>()
   for (const event of source) {
     if (event.type === "agent/input/admitted") admissions.set(event.inputId, event)
     if (event.type !== "user/message" || event.imageInputId === undefined || !retainedSet.has(event)) continue
@@ -26,13 +26,14 @@ export function materializeMissingImageAdmissions(source: readonly SessionEvent[
   return retained.map((event) => replacements.get(event) ?? event)
 }
 
-export function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
+export function remapSeedEvent(event: SessionEventView, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
   if (event.type === "conversation/semantics" || event.type === "model/exchange-accepted") throw new SessionForkUnavailableError("accepted semantics require batch seed transformation")
   return remapSeedCoordinates(event, index, renumbered)
 }
 
-function remapSeedCoordinates(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
-  const remap = (seqs: number[] | undefined): number[] =>
+function remapSeedCoordinates(input: SessionEventView, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
+  const event = copyConversationData(input)
+  const remap = (seqs: readonly number[] | undefined): number[] =>
     (seqs ?? []).flatMap((seq) => {
       const mapped = renumbered.get(seq)
       return mapped === undefined ? [] : [mapped]
@@ -85,7 +86,7 @@ function remapSeedCoordinates(event: SessionEvent, index: number, renumbered: Re
 }
 
 /** Batch semantics must precede coordinate remapping. An isolated event cannot recover a sliced fence. */
-export function remapConversationSeed(input: { source: readonly SessionEvent[]; retained: readonly SessionEvent[]; sourceFormat: number }): SessionEvent[] {
+export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number }): SessionEvent[] {
   const { source, retained } = input
   validateConversationHistory(source, input.sourceFormat)
   const retainedSeqs = new Set(retained.map(event => event.seq))
@@ -103,7 +104,7 @@ export function remapConversationSeed(input: { source: readonly SessionEvent[]; 
   }
   const originalFence = source.findIndex(event => event.type === "conversation/semantics")
   const sourcePositions = new Map(source.map((event, index) => [event.seq, index]))
-  const seed: SessionEvent[] = []
+  const seed: SessionEventView[] = []
   let fenced = false
   for (const event of retained) {
     if (event.type === "conversation/semantics" || isContextEventType(event.type)) continue

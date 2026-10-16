@@ -4,12 +4,10 @@ import type { TeamEvent } from "../src/index.ts"
 
 function fakeLead(opts?: { flush?: () => Promise<void> }) {
   const events: TeamEvent[] = []
-  let cb: (() => void) | undefined
+  const appended=new WeakSet<object>()
   return {
     events,
-    append: (e: TeamEvent) => { events.push(e); cb?.() },
-    flush: opts?.flush ?? (async () => {}),
-    onCommit: (fn: () => void) => { cb = fn },
+    async commit(candidate:readonly TeamEvent[]){if(!appended.has(candidate)){events.push(...candidate);appended.add(candidate)}await opts?.flush?.()},
   }
 }
 
@@ -84,14 +82,14 @@ describe("createTeamTransact", () => {
     expect(state.members.get("m")?.phase).toBe("active")
   })
 
-  it("a flush failure rejects but retains applied events (at-least-once)", async () => {
+  it("a failed receipt retains the candidate without publishing folded state", async () => {
     const lead = fakeLead({ flush: async () => { throw new Error("disk full") } })
     const state = createFoldState()
     const tx = createTeamTransact(lead, state)
     await expect(tx.transact(() => ({ events: [memberEvent("a", "provisioning")], result: 1 }))).rejects.toThrow(/disk full/)
     // appended + applied BEFORE flush; caller rejects but events are retained
     expect(lead.events.length).toBe(1)
-    expect(state.members.size).toBe(1)
+    expect(state.members.size).toBe(0)
   })
 
   it("the chain survives a flush failure", async () => {

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { ImageInput, SessionEvent } from "@i-harness/core-session"
+import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
-import { Inbox, validateImages } from "@i-harness/core-session"
+import { readInbox, validateImages } from "@i-harness/core-session"
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
@@ -51,16 +51,13 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)
   }
-  function schedulePending(id: string, inbox: Inbox) {
+  function schedulePending(id: string, inbox: Pick<AsyncInbox, 'pending'>) {
     const running = service.queueState(id).running
     for (const pending of inbox.pending()) {
       if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text)
     }
   }
-  async function acknowledgeExisting(id: string, existing: Extract<SessionEvent, { type: "agent/input/admitted" }>, shouldStart: boolean) {
-    // Inbox mutation happens before persistence. An event in the live session
-    // alone cannot acknowledge a retry after the earlier flush failed.
-    await coordinator.flush(id)
+  async function acknowledgeExisting(id: string, existing: Extract<SessionEventView, { type: "agent/input/admitted" }>, shouldStart: boolean) {
     if (closed) throw new Error("Input service closed")
     if (!coordinator.snapshot) throw new Error("Durable input snapshots unavailable")
     const persisted = (await coordinator.snapshot(id)).session.events.find((event) => event.type === "agent/input/admitted" && event.inputId === existing.inputId)
@@ -68,7 +65,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     if (closed) throw new Error("Input service closed")
     // A failed earlier barrier never reached scheduling. Pending inputs may
     // now start; promoted/completed/cancelled inputs are absent from pending.
-    if (shouldStart && persisted.delivery === "queue") schedulePending(id, new Inbox(await ownSession(id)))
+    if (shouldStart && persisted.delivery === "queue") schedulePending(id, await service.receivedInputFor(id))
     return { accepted: true as const, inputId: persisted.inputId, delivery: persisted.delivery }
   }
   return {
@@ -102,10 +99,11 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           const existing = (await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
           if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false)
         }
-        // Live admissions use the exact assembly session and its write hook.
-        // Recovery-only admissions can be saved without a configured model.
-        const session = raw.start === false ? await ownSession(id) : (await service.assemblyFor(id)).session
-        const inbox = new Inbox(session)
+        const assembly = raw.start === false ? undefined : await service.assemblyFor(id)
+        const session = assembly?.session ?? await ownSession(id)
+        const inbox = await service.receivedInputFor(id)
+        let blocked = false
+        try { assembly?.managedDocument?.assertReady() } catch { blocked = true }
         let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
         // recovery can use a deterministic new generation; pending/promoted
@@ -118,13 +116,12 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           if (duplicate.text !== raw.text || duplicate.delivery !== raw.delivery) throw new Error("Recovered input does not match its durable admission")
           return acknowledgeExisting(id, duplicate, raw.start !== false)
         }
-        const prepared = raw.start === false ? raw.text : await options.prepare?.(id, raw.text) ?? raw.text
+        const prepared = raw.start === false || blocked ? raw.text : await options.prepare?.(id, raw.text) ?? raw.text
         const text = raw.context ? `${prepared}\n\n${raw.context}` : prepared
         const delivery = raw.delivery === "steer" && !service.queueState(id).running ? "queue" : raw.delivery
-        inbox.admit({ inputId, text, delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" }, ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
-        await coordinator.flush(id)
+        await inbox.admit({ inputId, text, delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" }, ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
         if (closed) throw new Error("Input service closed")
-        if (raw.start !== false && delivery === "queue") {
+        if (raw.start !== false && !blocked && delivery === "queue") {
           schedulePending(id, inbox)
         }
         return { accepted: true as const, inputId, delivery }
@@ -138,7 +135,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         const saved = (await coordinator.snapshot(id)).session
         session = service.liveSession(id) ?? saved
       }
-      const pending = new Inbox(session).pending()
+      const pending = readInbox(session).pending()
       const rows = new Map(service.queue(id).map((row) => [row.id, row]))
       for (const input of pending) if (!rows.has(input.inputId)) rows.set(input.inputId, { id: input.inputId, text: input.text, delivery: input.delivery, intent: input.intent, state: "queued", order: input.admittedSeq })
       return { items: [...rows.values()], resumable: pending.some((input) => !scheduled.has(keyFor(id, input.inputId))) && !service.queueState(id).running }
@@ -146,8 +143,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     cancel(id: string, inputId: string) {
       return serial(id, async () => {
         await coordinator.profile(id)
-        const cancelled = service.cancelQueued(id, inputId).cancelled || new Inbox(await ownSession(id)).cancel(inputId)
-        await coordinator.flush(id)
+        const cancelled = (await service.cancelQueued(id, inputId)).cancelled || await (await service.receivedInputFor(id)).cancel(inputId)
         return { cancelled }
       })
     },
@@ -155,6 +151,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
         const assembly = await service.assemblyFor(id)
+        assembly.managedDocument?.assertReady()
         for (const input of assembly.inbox.pending()) start(id, input.inputId, input.text)
         return { resumed: true }
       })

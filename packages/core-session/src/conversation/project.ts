@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import { derivePruneSubstitutes } from "../projection/pruning.ts"
 import type { LLMMessage, ProviderContinuation, ProviderThinkingBlock } from "../projection/types.ts"
 import type { ConversationDiagnostic, ConversationProjection } from "./types.ts"
@@ -8,13 +8,14 @@ import { inferLegacy, type LegacyStep } from "./legacy.ts"
 import { addItemSource, awaitingItemResults, finishItem, projectedItem, type ItemBuilder } from "./exchange.ts"
 import { validateConversationHistory } from "./validation.ts"
 import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from "./payload.ts"
+import { copyConversationData } from './render.ts'
 
 /** Sole conversation fold: source metadata is attached before message flattening. */
 export function projectConversation(session: Session, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture } = {}): ConversationProjection {
   validateConversationHistory(session.events, session.formatVersion)
   const diagnostics: ConversationDiagnostic[] = []
   const sources = conversationSources(session, options.ownerSessionId, diagnostics)
-  const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string): T[K] => readConversationPayload(event, key, sources.ref(index, part), options.capturePayload)
+  const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readConversationPayload(event, key, sources.ref(index, part), options.capturePayload))
   const visibility = conversationVisibility(session, options.throughSeq)
   const legacy = inferLegacy(session, visibility, sources, diagnostics)
   // Prune is content-addressed; all markers remain applicable even past a prefix.

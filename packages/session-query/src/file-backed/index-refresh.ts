@@ -29,24 +29,26 @@ export function createIndexRefresh(
   const scanStore = createStoreScanner(storeRoot, signalGuard)
 
   async function rebuildSession(id: string, rev: string, file: string): Promise<void> {
-    const text = await readFile(file, "utf-8")
+    const bytes = await readFile(file)
     // Fail-loud wrap: a corrupt header/torn-beginning source is an observe
     // failure — never a raw SyntaxError, and never stale rows.
     let header: HeaderMeta
     let events: SessionEvent[]
     let contentLines: string[]
+    let contentBytes: Uint8Array | undefined
     try {
-      const decoded = parseLinePrefix(text)
+      const decoded = parseLinePrefix(bytes)
       header = decoded.header
       events = decoded.events
       contentLines = decoded.contentLines
+      contentBytes = decoded.contentBytes
     } catch (err) {
       throw observeFailed(`decode ${id}`, err)
     }
     if (header.formatVersion > CURRENT_FORMAT_VERSION) {
       throw observeFailed(`decode ${id}`, new Error(`format version ${header.formatVersion} is newer than this build (upgrade the harness)`))
     }
-    const fingerprint = createHash("sha256").update(contentLines.join("\n")).digest("hex")
+    const fingerprint = createHash("sha256").update(contentBytes ?? contentLines.join("\n")).digest("hex")
     const indexed = db.prepare("SELECT id, revision, fingerprint FROM indexed_sessions WHERE id = ?").get(id) as IndexedRow | undefined
     if (indexed !== undefined && indexed.fingerprint === fingerprint) {
       // fingerprint guard: the stat changed but the content is byte-identical —

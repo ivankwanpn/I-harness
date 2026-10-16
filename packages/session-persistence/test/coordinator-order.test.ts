@@ -6,8 +6,8 @@ function backend(): PersistenceBackend {
   return {
     id: "jsonl", capabilities: { seekableRead: false, rawArtifacts: true },
     async create() {}, async append() {}, async list() { return [] },
-    async read() { return { version: 5, events: [] } },
-    async repair() { return { version: 5, events: [] } },
+    async read() { return { version: 6, events: [] } },
+    async repair() { return { version: 6, events: [] } },
     async putDocument() {}, async getDocument() { return undefined },
     async profile() { throw new Error("unused") }, async updateMeta() { throw new Error("unused") },
   }
@@ -85,7 +85,7 @@ describe("coordinator callback and evaluation order", () => {
     await entered.promise
     let calls = 0
     store.replaceEvents = async function (_id, events) { expect(this).toBe(store); calls++; expect(events[0]?.seq).toBe(0) }
-    repaired.resolve({ version: 5, events: [{ type: "assistant/message", text: "persist me" }] })
+    repaired.resolve({ version: 6, events: [{ type: "assistant/message", text: "persist me" }] })
     await loaded
     expect(calls).toBe(1)
     await coordinator.close()

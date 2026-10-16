@@ -6,6 +6,88 @@ import { registerCodeMode } from "../src/register.ts"
 import { PNG } from '../../image-validation/test/fixtures.ts'
 import { createShellTools } from '../../shell/src/index.ts'
 import type { ExecCommand, ExecRunOptions, ExecService } from '../../exec/src/index.ts'
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
+
+it('awaits actual managed startup interruption and every cell output/store/terminal receipt', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-runtime-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create()
+  await coordinator.append(id, [{ type: 'code/cell', cellId: 'old', sessionId: id, state: 'started', seq: 0 }])
+  const document = await coordinator.openManagedDocument(id), ctx = createContext(), tools = createToolRegistry(ctx)
+  const mount = registerCodeMode(ctx, tools, { session: document.view as any, sessionId: id, factOwner: document, config: { mode: 'mixed' } } as any)
+  try {
+    await mount.ready!()
+    expect(document.view.events.slice(0, 2).map(event => event.type === 'code/cell' ? event.state : event.type)).toEqual(['started', 'interrupted'])
+    const result = await tools.get('code_exec')!.execute({ code: 'store("key", 7); text("actual output")', yield_time_ms: 60000 }, { session: document.view, sessionId: id })
+    expect(result).not.toHaveProperty('error')
+    expect(result).toMatchObject({ status: 'completed', text: 'actual output' })
+    expect((await backend.read(id)).events.slice(2).map(event => event.type)).toEqual(['code/cell', 'code/output', 'code/store', 'code/cell'])
+    expect((await backend.read(id)).events.at(-1)).toMatchObject({ type: 'code/cell', state: 'completed' })
+  } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
+it('retains actual guest completion across an unknown store receipt and Stop without fabricating a failed terminal', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-store-unknown-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  let bodies = 0, finalizations = 0, key: BatchKey | undefined, blocked=true
+  tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 7 } })
+  ctx.on('tools/post-execute', () => { finalizations++ })
+  const actual = backend.appendOwnedBatch!
+  const reconcile=backend.reconcileOwnedBatch!
+  backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
+  backend.appendOwnedBatch = async (...args) => {
+    const result = await actual(...args)
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
+    return result
+  }
+  const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
+  try {
+    await mount.ready!()
+    await expect(tools.get('code_exec')!.execute({ code: 'store("key", await tools.probe({})); text("actual output")', yield_time_ms: 5000 }, { session: document.view, sessionId: id })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect([bodies, finalizations]).toEqual([1, 1])
+    expect(key).toBeDefined()
+    await mount.cancel('human Stop after actual guest completion')
+    await expect(mount.dispose()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(document.view.events.some(event => event.type === 'code/cell' && ['failed', 'terminated', 'completed'].includes(event.state))).toBe(false)
+    blocked=false;await document.reconcile(key!)
+    await mount.dispose()
+    expect((await backend.read(id)).events.filter(event => event.type === 'code/cell').map(event => event.state)).toEqual(['started', 'completed'])
+    expect((await backend.read(id)).events.filter(event => event.type === 'code/store')).toHaveLength(1)
+    expect([bodies, finalizations]).toEqual([1, 1])
+  } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
+it('keeps a real terminated cell unavailable until its original terminal receipt is reconciled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-stop-receipt-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
+  let key: BatchKey | undefined, terminals = 0
+  const actual = backend.appendOwnedBatch!
+  backend.appendOwnedBatch = async (...args) => {
+    const result = await actual(...args)
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/cell' && event.state === 'terminated')) { terminals++; key = args[3].key; return { kind: 'unknown', key } }
+    return result
+  }
+  try {
+    const running = await tools.get('code_exec')!.execute({ code: 'await new Promise(() => {})', yield_time_ms: 0 }, { session: document.view, sessionId: id }) as { cell_id: string }
+    await expect(tools.get('code_wait')!.execute({ cell_id: running.cell_id, terminate: true, yield_time_ms: 5000 }, { session: document.view })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(document.view.events.filter(event => event.type === 'code/cell').map(event => event.state)).toEqual(['started'])
+    expect(key).toBeDefined()
+    await document.reconcile(key!)
+    await mount.dispose()
+    expect((await backend.read(id)).events.filter(event => event.type === 'code/cell').map(event => event.state)).toEqual(['started', 'terminated'])
+    expect(terminals).toBe(1)
+  } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
 
 it("nested shell receives no steer promotion source and completes one original invocation", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession(), inbox = new Inbox(session)
@@ -140,11 +222,15 @@ it("keeps selected only-mode declarations inside the existing total description 
 
 it("does not allow guest catch to hide failure in the host finalization stage", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
-  tools.register({ name: "read", description: "read", inputSchema: { type: "object" }, isReadOnly: true, execute: async () => 7 })
-  ctx.on("tools/post-execute", call => { if ((call as { name: string }).name === "read") throw new Error("finalize failed") })
+  let effects = 0, finalizations = 0
+  tools.register({ name: "read", description: "read", inputSchema: { type: "object" }, isReadOnly: true, execute: async () => { effects++; return 7 } })
+  ctx.on("tools/post-execute", call => { if ((call as { name: string }).name === "read") { finalizations++; throw new Error("finalize failed") } })
   const mount = registerCodeMode(ctx, tools, { session, config: { mode: "only" } })
   try {
     await expect(tools.execute({ name: "code_exec", args: { code: 'try { await tools.read({}); } catch {} text("pretend success");' } })).rejects.toMatchObject({ policyRefusal: true })
-    expect(session.events.filter(e => e.type === "code/result")).toHaveLength(1)
-  } finally { await mount.dispose() }
+    expect(session.events.filter(e => e.type === "code/result")).toHaveLength(0)
+    await expect(mount.dispose()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    await expect(mount.dispose()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect([effects, finalizations]).toEqual([1, 1])
+  } finally { await mount.dispose().catch(() => {}) }
 })

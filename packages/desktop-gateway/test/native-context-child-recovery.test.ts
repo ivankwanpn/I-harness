@@ -1,7 +1,8 @@
 import {expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
-import {append,deriveMessages,rewindCuts,type Session} from '@i-harness/core-session'
+import {committedFactSeqs,deriveMessages,rewindCuts,type SessionView as Session} from '@i-harness/core-session'
+import {recordFixture} from './managed-fixture.ts'
 import {createSessionCoordinator,forkSession} from '@i-harness/session-persistence'
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {createSessionAssembly,createDurableSessionLoader} from '@i-harness/session-executor'
@@ -12,7 +13,7 @@ import type {LLMRequest,ModelClient} from '../../llm-seam/src/index.ts'
 it.each(['off','only'] as const)('child %s captures own refs and recovers after compaction/reset/cold resume and fork',async mode=>{
   const base=resolve('build/native-child-recovery');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'child-'))
   const storage=join(root,'sessions')
-  let coordinator=createSessionCoordinator(createJsonlBackend(storage));await coordinator.create({sessionId:'parent'})
+  let coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
   const makeRuntime=()=>createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),visibleRefsFor:async id=>{
     const session=(await coordinator.snapshot!(id)).session,cuts=rewindCuts(session)
     return session.events.flatMap(event=>event.type==='context/result-ref'&&!cuts.some(cut=>event.seq!>=cut.cutFrom&&event.seq!<cut.markerSeq)?[event.ref]:[])
@@ -43,7 +44,7 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
   observe()
   try{
     const parentOnly=(await runtime.contextOutput.capture({sessionId:'parent',callId:'parent-only',label:'parent only',text:'parent private output',complete:true,source:await runtime.sourceFor('parent')}))!
-    append(assembly.session,{type:'context/result-ref',ref:parentOnly})
+    await recordFixture(assembly.factOwner,{type:'context/result-ref',ref:parentOnly})
     const spawned=await assembly.tools.execute({name:'spawn_agent',args:{message:'Capture long text',task_name:'native',agent_type:'native-child',fork_turns:'none',background:false}})
     const path=(spawned.output as {agent_path:string}).agent_path
     expect(childSession).toBeDefined()
@@ -66,24 +67,30 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     assertRecovery()
     const followup=async(message:string)=>{
       const before=requests.length
-      await assembly.tools.execute({name:'followup_task',args:{target:path,message}})
-      await vi.waitFor(()=>expect(requests.length).toBeGreaterThan(before))
+      const followed=await assembly.tools.execute({name:'followup_task',args:{target:path,message}})
+      expect(followed.output).toEqual({delivered:true})
+      await vi.waitFor(()=>{
+        expect(assembly.subagentState!().agentTable.find(entry=>entry.path===path)?.error).toBeUndefined()
+        expect(requests.length).toBeGreaterThan(before)
+      })
       await vi.waitFor(()=>expect(assembly.subagentState!().agentTable.find(entry=>entry.path===path)?.status).toBe('waiting'))
       assertRecovery()
     }
     const hidden=(await runtime.contextOutput.capture({sessionId:childId,callId:'hidden',label:'hidden',text:'hidden',complete:true,source:await runtime.sourceFor(childId)}))!
-    append(childSession!,{type:'turn/start'});append(childSession!,{type:'user/message',text:'rewound turn'});const anchor=childSession!.events.at(-1)!
-    append(childSession!,{type:'context/result-ref',ref:hidden});append(childSession!,{type:'turn/end'})
-    append(childSession!,{type:'rewind/point',version:1,targetTurn:2,anchorSeq:anchor.seq!,mode:'all',fileOps:[]})
-    const compactor=createCompactionEngine({model:summarizer,config:{contextWindow:100000,minSummaryChars:1}})
+    const childOwner=await coordinator.openManagedDocument(childId),compactionAction=childOwner.beginAction()
+    const [anchor]=committedFactSeqs(await compactionAction.facts.agent.lifecycle({type:'turn/start'}))
+    await recordFixture(childOwner,{type:'user/message',text:'rewound turn'})
+    await recordFixture(childOwner,{type:'context/result-ref',ref:hidden});await recordFixture(childOwner,{type:'turn/end'})
+    await recordFixture(childOwner,{type:'rewind/point',version:1,targetTurn:2,anchorSeq:anchor!,mode:'all',fileOps:[]})
+    const compactor=createCompactionEngine({model:summarizer,facts:()=>compactionAction.facts.compaction,config:{contextWindow:100000,minSummaryChars:1}})
     expect((await compactor.compact(childSession!)).compacted).toBe(true)
     expect(JSON.stringify(deriveMessages(childSession!))).not.toContain(refs[0]!.id)
     await followup('continue after compaction');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)
     expect((await compactor.resetWindow(childSession!,1)).reset).toBe(true)
-    await followup('continue after reset');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)
+    await followup('continue after reset');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id);compactionAction.finish()
     const restoredState=assembly.subagentState!()
     await assembly.dispose();await runtime.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(storage));runtime=await makeRuntime();await runtime.contextOutput.configure({enabled:true})
+    coordinator=createSessionCoordinator(createJsonlBackend(storage),{lock:{enabled:true}});runtime=await makeRuntime();await runtime.contextOutput.configure({enabled:true})
     assembly=await createSessionAssembly({...options,coordinator,session:await createDurableSessionLoader(coordinator)('parent'),restoredState,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor});observe()
     await followup('continue after cold resume');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)
     await coordinator.flush(childId)

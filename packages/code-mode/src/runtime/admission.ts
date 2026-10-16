@@ -81,7 +81,7 @@ export function createAdmission(
     }
     finally { admissions-- }
     const worker = new Worker(new URL(process.env.I_HARNESS_DIST === '1' ? './worker.mjs' : '../worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]})
-    const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false,admission:Promise.resolve(),pendingBytes:0,pendingItems:0}
+    const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false,admission:Promise.resolve(),pendingBytes:0,pendingItems:0,pendingOutputReceipts:0,retainedOutputItems:0,retainedOutputBytes:0}
     state.register(cell)
     workers.attach(cell)
     return observe(cell,yieldMs,maxTokens,undefined,false,observation)

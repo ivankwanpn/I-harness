@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionEventView as SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import type { TerminalView } from "@i-harness/terminal"
@@ -24,7 +24,7 @@ export type AgentProcessesRequest =
   | { kind: "desktop/session/processes/job-output"; workspaceId: string; sessionId: string; id: string }
   | { kind: "desktop/session/processes/terminal-output"; workspaceId: string; sessionId: string; id: string }
 
-function savedTerminals(events: SessionEvent[], sessionId: string) {
+function savedTerminals(events: readonly SessionEvent[], sessionId: string) {
   const calls = new Map<string, { name: string; args: Record<string, unknown> }>()
   const terminals = new Map<string, AgentProcessesView["terminals"][number] & { text: string; truncated: boolean; dropped: boolean; endOffset?: number }>()
   const names = new Set(["terminal_open", "process_spawn", "terminal_read", "terminal_close", "terminal_signal", "process_kill", "process_resize_pty"])
@@ -69,7 +69,7 @@ function savedTerminals(events: SessionEvent[], sessionId: string) {
 
 /** Saved shell tool results are evidence of submission/output, never of a
  * live process. A saved running state remains explicitly unconfirmed. */
-function savedShellJobs(events: SessionEvent[]) {
+function savedShellJobs(events: readonly SessionEvent[]) {
   const calls = new Map<string, { name: string; args: Record<string, unknown> }>()
   const jobs = new Map<string, JobView & { output: string; outputTruncated: boolean }>()
   for (const event of events) {

@@ -12,4 +12,6 @@ export const appendHooks = new WeakMap<Session, (ev: SessionEvent) => void>()
 // Clone semantics are decided by the subscriber (matches onAppend semantics —
 // write-behind clones separately). Subscriptions take effect for events
 // AFTER subscribe (no replay of past events); unsubscribe stops delivery.
-export const subscribers = new WeakMap<Session, Set<(ev: SessionEvent) => void>>()
+export const subscribers = new WeakMap<object, Set<(ev: SessionEvent) => void>>()
+export const managedSessions = new WeakSet<object>()
+export const managedFactOwners = new WeakMap<object, object>()

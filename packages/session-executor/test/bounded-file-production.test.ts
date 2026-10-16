@@ -9,7 +9,7 @@ import { createSessionAssembly } from "../src/assembly.ts"
 
 it("production main and actual child read reconstruct source-backed multilingual pages", async () => {
   const root = await mkdtemp(join(tmpdir(), "production-file-pages-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const text = '中🙂"\n'.repeat(13000), path = join(root, "large.txt")
   await writeFile(path, text)

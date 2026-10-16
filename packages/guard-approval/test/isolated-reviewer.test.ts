@@ -95,7 +95,9 @@ it("isolates reused conversations by effective model, policy, permission and use
   for (const field of ["provider", "model", "protocol", "reasoningEffort", "configurationKey"] as const) { state.identity[field] += "-changed"; await review() }
   state.permission("workspace-two:delegate:restricted"); await review()
   state.config.policyText = "A changed policy"; await review()
-  state.config.parentSession.events.push({ type: "user/message", text: "A different task", seq: 0 }); await review()
+  const { isNondurableSession, append } = await import('@i-harness/core-session')
+  if (!isNondurableSession(state.config.parentSession)) throw new Error('Expected standalone parent fixture')
+  append(state.config.parentSession, { type: "user/message", text: "A different task", seq: 0 }); await review()
   expect(lengths).toEqual([1, 3, 1, 1, 1, 1, 1, 1, 1, 1])
 })
 it("rolls back malformed and operational reviews instead of poisoning reusable context", async () => {

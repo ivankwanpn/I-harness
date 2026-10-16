@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { deriveSearchText, type Session } from "@i-harness/core-session"
+import { deriveSearchText, type SessionView as Session } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import {

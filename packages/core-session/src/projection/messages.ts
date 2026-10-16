@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import type { LLMMessage } from "./types.ts"
 import { projectConversation } from "../conversation/project.ts"
 import { renderConversation } from "../conversation/render.ts"

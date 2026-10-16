@@ -1,4 +1,4 @@
-import { projectConversation, readConversationState, type Session } from "@i-harness/core-session"
+import { projectConversation, readConversationState, type SessionView as Session } from "@i-harness/core-session"
 import type { ContextCapture, ContextCaptureInput, ContextCoordinateRead, ContextCoordinates, CapturedRequestSurface, UnsupportedContext } from "../contracts/snapshot.ts"
 import { captureData } from "./data.ts"
 import { contextRevision, semanticContextRevision } from "./revision.ts"

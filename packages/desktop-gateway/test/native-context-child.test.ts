@@ -7,11 +7,12 @@ import {createSessionService,createDurableSessionLoader} from '@i-harness/sessio
 import {createCodeRetrievalTools} from '@i-harness/code-retrieval'
 import {createNativeContextRuntime} from '../src/context-runtime.ts'
 import type {LLMRequest,ModelClient} from '../../llm-seam/src/index.ts'
-import {append} from '@i-harness/core-session'
+import {recordFixture} from './managed-fixture.ts'
+import {decodeFactBatch} from '@i-harness/core-session'
 
 it('live enabling lets a real explore child capture and search native refs through its role-limited broker',async()=>{
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'child-'))
-  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')));await coordinator.create({sessionId:'parent'})
+  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
   let service:ReturnType<typeof createSessionService>|undefined
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
@@ -45,14 +46,14 @@ it('live enabling lets a real explore child capture and search native refs throu
 
 it.each(['release','reject'] as const)('persists the trusted fork seed before granting refs or entering the child model (%s)',async outcome=>{
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'barrier-'))
-  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{maxDelayMs:60000});await coordinator.create({sessionId:'parent'})
+  const backend=createJsonlBackend(join(root,'sessions')),coordinator=createSessionCoordinator(backend,{maxDelayMs:60000,lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
   let service:ReturnType<typeof createSessionService>|undefined
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let transports=0
   const model:ModelClient={async *stream(){transports++;yield{type:'text/chunk',text:'child complete'};yield{type:'end'}}}
   service=createSessionService({workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),model,sandbox:'danger-full-access',approveAll:true,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
-  const grant=vi.spyOn(runtime.contextOutput,'grant'),actualFlush=coordinator.flush.bind(coordinator)
+  const grant=vi.spyOn(runtime.contextOutput,'grant'),actualAppend=backend.appendOwnedBatch!
   let release!:()=>void,entered!:()=>void
   const held=new Promise<void>(resolve=>{release=resolve}),started=new Promise<void>(resolve=>{entered=resolve})
   let childId=''
@@ -60,20 +61,23 @@ it.each(['release','reject'] as const)('persists the trusted fork seed before gr
     await runtime.contextOutput.configure({enabled:true})
     const assembly=await service.assemblyFor('parent')
     const ref=(await runtime.contextOutput.capture({sessionId:'parent',callId:'seed',label:'seed',text:'TRUSTED_SEED',complete:true,source:await runtime.sourceFor('parent')}))!
-    append(assembly.session,{type:'turn/start'});append(assembly.session,{type:'user/message',text:'seed'});append(assembly.session,{type:'context/result-ref',ref});append(assembly.session,{type:'turn/end'})
-    await actualFlush('parent')
-    coordinator.flush=async id=>{
-      if(id.startsWith('child-')){childId=id;entered();await held;if(outcome==='reject')throw new Error('required seed persistence rejected')}
-      await actualFlush(id)
+    await recordFixture(assembly.factOwner,{type:'turn/start'});await recordFixture(assembly.factOwner,{type:'user/message',text:'seed'});await recordFixture(assembly.factOwner,{type:'context/result-ref',ref});await recordFixture(assembly.factOwner,{type:'turn/end'})
+    backend.appendOwnedBatch=async(...args)=>{
+      if(args[0].startsWith('child-')&&args[3].key.firstSeq===0&&decodeFactBatch(args[3].bytes).events.some(event=>event.type==='context/result-ref')){
+        childId=args[0];entered();await held
+        if(outcome==='reject')return{kind:'not-issued',code:'FACT_RECOVERY_REQUIRED'}
+      }
+      return actualAppend(...args)
     }
     const spawned=assembly.tools.dispatch(await assembly.tools.prepare({name:'spawn_agent',args:{message:'Use trusted seed',task_name:'barrier',agent_type:'explore',fork_turns:'all',background:false}},undefined,{sessionId:'parent',callId:'spawn'}))
     await Promise.race([started,spawned.then(()=>{throw new Error('spawn completed before seed barrier')})])
     await new Promise<void>(resolve=>setImmediate(resolve))
     expect(transports).toBe(0);expect(grant).not.toHaveBeenCalled()
-    expect((await coordinator.snapshot!(childId)).session.events).toEqual([])
+    expect((await coordinator.openManagedDocument(childId)).view.events).toEqual([])
+    await expect(coordinator.snapshot!(childId)).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
     release()
     if(outcome==='reject'){
-      await expect(spawned).rejects.toThrow('required seed persistence rejected')
+      await expect(spawned).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
       expect(transports).toBe(0);expect(grant).not.toHaveBeenCalled()
     }else{
       const result=await spawned
@@ -81,12 +85,12 @@ it.each(['release','reject'] as const)('persists the trusted fork seed before gr
       expect(transports).toBe(1);expect(grant).toHaveBeenCalledWith({sessionId:'parent'},[ref.id],childId)
       expect((await coordinator.snapshot!(childId)).session.events.some(event=>event.type==='context/result-ref'&&event.ref.id===ref.id)).toBe(true)
     }
-  }finally{release();coordinator.flush=actualFlush;grant.mockRestore();await service.close();await runtime.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
+  }finally{release();backend.appendOwnedBatch=actualAppend;grant.mockRestore();await service.close();await runtime.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 },15000)
 
 it.each([false,true])('a real child owns its inherited native references before its first model request (disabled=%s)',async disabled=>{
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'seed-'))
-  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')));await coordinator.create({sessionId:'parent'})
+  const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}});await coordinator.create({sessionId:'parent'})
   let service:ReturnType<typeof createSessionService>|undefined
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
@@ -101,7 +105,7 @@ it.each([false,true])('a real child owns its inherited native references before 
     await runtime.contextOutput.configure({enabled:true})
     const assembly=await service.assemblyFor('parent')
     const ref=(await runtime.contextOutput.capture({sessionId:'parent',callId:'seed',label:'seed',text:'INHERITED_NATIVE',complete:true,source:await runtime.sourceFor('parent')}))!;refId=ref.id
-    append(assembly.session,{type:'turn/start'});append(assembly.session,{type:'user/message',text:'seed'});append(assembly.session,{type:'context/result-ref',ref});append(assembly.session,{type:'turn/end'})
+    await recordFixture(assembly.factOwner,{type:'turn/start'});await recordFixture(assembly.factOwner,{type:'user/message',text:'seed'});await recordFixture(assembly.factOwner,{type:'context/result-ref',ref});await recordFixture(assembly.factOwner,{type:'turn/end'})
     await coordinator.flush('parent')
     if(disabled)await runtime.contextOutput.configure({enabled:false})
     await assembly.tools.dispatch(await assembly.tools.prepare({name:'spawn_agent',args:{message:'Read inherited ref',task_name:'seed',agent_type:'explore',fork_turns:'all',background:false}},undefined,{sessionId:'parent',callId:'spawn'}))

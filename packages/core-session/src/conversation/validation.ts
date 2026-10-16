@@ -1,5 +1,5 @@
 import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./usage-validation.ts"
-import type { SessionEvent } from "../events/types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
 

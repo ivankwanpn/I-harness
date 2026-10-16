@@ -86,6 +86,7 @@ function makeStubService(): SessionService {
     submit: vi.fn(async () => {}),
     refreshExtensions: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
+    receivedInputFor: vi.fn(async () => { throw new Error('unused received-input capability in sdk ownership test') }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
     contextState: vi.fn(async () => ({ kind: "unavailable" as const, reason: "No model configured" })),
     // The server itself never rebinds (the host seam does, Task 4) — present
@@ -96,7 +97,7 @@ function makeStubService(): SessionService {
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
     queue: vi.fn(() => []),
-    cancelQueued: vi.fn(() => ({ cancelled: false })),
+    cancelQueued: vi.fn(async () => ({ cancelled: false })),
     tasks: vi.fn(() => []),
     cancelTask: vi.fn(() => "already-finished" as const),
     onAssembly: () => () => {},

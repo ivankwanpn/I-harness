@@ -1,6 +1,6 @@
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { createSession } from "@i-harness/core-session"
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
 import { createAgent, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -8,8 +8,8 @@ import type { SpawnOptions } from "./types.ts"
 import { composeSubagentPrompt, estimateChildOverhead } from "./prompt.ts"
 import { resolveRoleTools } from "./role-tools.ts"
 
-export function assembleChild(
-  opts: SpawnOptions, childCtx: PluginContext, childSession: ReturnType<typeof createSession>,
+export async function assembleChild(
+  opts: SpawnOptions, childCtx: PluginContext, childSession: SessionView, factOwner: FactOwner,
   sessionId: string | undefined, childPath: string, model: ModelClient,
   reasoningEffort: ReasoningEffort | undefined, contextWindow: number | undefined, maxOutputTokens: number | undefined,
   contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata,
@@ -21,9 +21,9 @@ export function assembleChild(
   const childReg = createToolRegistry(childCtx)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
   const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
-    session: childSession, sessionId, config: opts.codeMode,
-    ...(opts.childSessions !== undefined && sessionId !== undefined ? { flush: () => opts.childSessions!.coordinator.flush(sessionId!) } : {}),
+    session: childSession, factOwner, sessionId, config: opts.codeMode,
   })
+  await codeModeMount?.ready?.()
   const modelToolSchemas = () => codeModeMount?.schemas() ?? childReg.schemas()
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
@@ -50,6 +50,7 @@ export function assembleChild(
     ...(opts.childSessions && sessionId ? { ensureWritableContext: ownedContextReadiness(opts.childSessions.coordinator, sessionId, childSession) } : {}),
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
+    factOwner,
     tools: childReg,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),
@@ -112,18 +113,6 @@ export function assembleChild(
     // prepared ToolExec so the agent-team scheduler can attribute the child's
     // tool calls to its team member (the roster maps sessionId → member).
     ...(sessionId !== undefined ? { sessionId } : {}),
-    // M70: the child's own dispatch boundary gets the same checkpoint the
-    // parent's does. MEASURED before wiring it: this child's appends are
-    // mirrored into `opts.childSessions.coordinator` under THIS `sessionId`
-    // (the createSession hook above), so `coordinator.flush(sessionId)` drains
-    // the very write-behind that received the `tool/dispatch` marker — the same
-    // closure shape the assembly builds for the parent, from the same pair.
-    // Without `childSessions` there is no durable child session at all (the
-    // non-durable `createSession()` arm above), so no seam is built and the
-    // deps object is the pre-M70 one.
-    ...(opts.childSessions !== undefined && sessionId !== undefined
-      ? { flush: (): Promise<void> => opts.childSessions!.coordinator.flush(sessionId!) }
-      : {}),
   })
   if (childReg.get("get_context_remaining")) {
     childReg.unregister("get_context_remaining")

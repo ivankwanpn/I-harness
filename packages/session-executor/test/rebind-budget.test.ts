@@ -1,5 +1,6 @@
+import { appendStandalone as append } from "./helpers.ts"
 import { it, expect, vi } from "vitest"
-import { append } from "@i-harness/core-session"
+
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
 

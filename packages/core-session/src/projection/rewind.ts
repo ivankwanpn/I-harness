@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 
 // M42 (G2): conversation rewind — the resolved hidden region derived from one
 // `rewind/point` event. Spec §3: after a rewind at markerSeq, every event with

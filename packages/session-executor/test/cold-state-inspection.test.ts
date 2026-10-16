@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, metadataFactsFor } from "@i-harness/core-session"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
@@ -21,7 +21,7 @@ it.each([
   { name: "ambiguous provider identity", tuple: { modelId: "model-b", protocol: "openai-compatible" }, required: true },
 ])("cold context matches the live B owner with unresolved recovery for $name", async ({ tuple, required }) => {
   const root = await mkdtemp(join(tmpdir(), "ih-cold-binding-")), store = join(root, "sessions"), id = "owned"
-  const coordinator = createSessionCoordinator(createJsonlBackend(store))
+  const coordinator = createSessionCoordinator(createJsonlBackend(store),{lock:{enabled:true}})
   await coordinator.create({ sessionId: id })
   const metadata = { version: 1 as const, providerId: "fixture", modelId: "model-b", protocol: "openai-compatible", contextWindow: 100_000,
     maxOutputTokens: 2000, identityCoverage: "complete" as const, bindingConfigFingerprint: "b".repeat(64) }
@@ -39,9 +39,9 @@ it.each([
       bindingFingerprint: "a".repeat(64), rejectedInputFingerprint: "c".repeat(64), ...tuple }
     // A's unresolved evidence precedes B's valid prepared/accepted budget.
     // Applicable restrictions are appended after B's accepted turn as controls.
-    if (!required) append(assembly.session, { type: "context/recovery", ...recovery })
+    if (!required) await metadataFactsFor(assembly.session,assembly.metadataFacts).admit({ type: "context/recovery", ...recovery })
     await live.submit(id, "Use model B", new AbortController().signal)
-    if (required) append(assembly.session, { type: "context/recovery", ...recovery })
+    if (required) await metadataFactsFor(assembly.session,assembly.metadataFacts).admit({ type: "context/recovery", ...recovery })
     await coordinator.flush(id)
     const counts = { prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }
     const expected = await live.contextState(id)
@@ -178,7 +178,7 @@ it("shares simultaneous owned loading across adapters instead of creating two li
   try {
     await entered.promise; release.resolve()
     const [firstLive, secondLive] = await Promise.all([one, two])
-    append(firstLive, { type: "user/message", text: "One admitted cache" })
+    await (await coordinator.openManagedDocument('owned')).agent.feedback({type:'user/message',text:'One admitted cache',source:{kind:'plugin',plugin:'fixture'}})
     expect(secondLive.events).toEqual(firstLive.events)
     expect(secondLive).toBe(firstLive)
     await coordinator.flush("owned")
@@ -188,7 +188,7 @@ it("shares simultaneous owned loading across adapters instead of creating two li
 
 it("retries a failed shared owned load without retaining its rejected cache", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-owned-load-retry-")), backend = createJsonlBackend(root)
-  const coordinator = createSessionCoordinator(backend)
+  const coordinator = createSessionCoordinator(backend,{lock:{enabled:true}})
   await coordinator.create({ sessionId: "owned" })
   const read = backend.read.bind(backend)
   let fail = true
@@ -197,7 +197,7 @@ it("retries a failed shared owned load without retaining its rejected cache", as
     const failures = await Promise.allSettled([createDurableSessionLoader(coordinator)("owned"), createDurableSessionLoader(coordinator)("owned")])
     expect(failures.map(result => result.status)).toEqual(["rejected", "rejected"])
     const live = await createDurableSessionLoader(coordinator)("owned")
-    append(live, { type: "user/message", text: "Retry remains writable" })
+    await (await coordinator.openManagedDocument('owned')).agent.feedback({type:'user/message',text:'Retry remains writable',source:{kind:'plugin',plugin:'fixture'}})
     await coordinator.flush("owned")
     expect((await coordinator.snapshot!("owned")).session.events).toEqual(live.events)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }

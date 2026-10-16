@@ -21,7 +21,7 @@ async function fixture(): Promise<{
   cleanup(): Promise<void>
 }> {
   const root = await mkdtemp(join(tmpdir(), "ih-session-fork-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   return {
     root,
     coordinator,
@@ -89,7 +89,7 @@ describe("forkSession", () => {
       "",
     ].join("\n")
     await writeFile(outsidePath, outside, "utf8")
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     try {
       await expect(forkSession(coordinator, "../secret")).rejects.toThrow(/outside the JSONL store root/)
       expect(await coordinator.list()).toEqual([])

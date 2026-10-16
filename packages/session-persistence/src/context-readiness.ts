@@ -1,11 +1,11 @@
-import { CURRENT_FORMAT_VERSION, migrate, type Session } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, type SessionView as Session } from '@i-harness/core-session'
 import type { SessionCoordinator } from './coordinator/types.ts'
-/** Composition port: durable readiness first, then explicit in-memory migration. */
+/** Readiness belongs to the exact owned view established by fenced recovery. */
 export function ownedContextReadiness(coordinator: SessionCoordinator, sessionId: string, session: Session): () => Promise<void> {
   return async () => {
-    if (!coordinator.ensureWritableFormat) throw new Error('Owned coordinator must support ensureWritableFormat before context execution')
-    const ready = await coordinator.ensureWritableFormat(sessionId)
-    if (ready.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Owned coordinator did not establish the current session format')
-    if (session.formatVersion !== CURRENT_FORMAT_VERSION) Object.assign(session, migrate(session, CURRENT_FORMAT_VERSION))
+    if (!coordinator.openManagedDocument) throw Object.assign(new Error('Owned fact capability is required before context execution'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    const document = await coordinator.openManagedDocument(sessionId)
+    if (document.view !== session || session.formatVersion !== CURRENT_FORMAT_VERSION) throw Object.assign(new Error('Owned context view does not match this document'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    document.assertReady()
   }
 }

@@ -1,31 +1,32 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append, deriveMessages } from "@i-harness/core-session"
+import { deriveMessages } from "@i-harness/core-session"
 import { activeTokens, normalizeInputUsage } from "@i-harness/token-meter"
 import type { AgentDeps, AgentResult, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import type { ModelStep } from "./model-loop.ts"
 import { acceptModelExchange } from "./exchange.ts"
+import { closeStepBoundary, closeTurnBoundary, failStepBoundary } from './boundaries.ts'
+import { savingFailure } from './saving-failure.ts'
 
-type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush">
+type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts'>
 
 export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown): Promise<never> {
   // Preparation hooks and context getters can refuse before the provider
   // stream opens. Close only this run's live boundaries; cold recovery and
   // tool outcomes remain owned by their existing paths.
   if (lifecycle.turnOpen) {
-    try {
-      if (lifecycle.stepOpen) {
-        // An incomplete provider step must not replay partial tool calls.
-        // A completed provider/tool result keeps its existing provenance.
-        if (!lifecycle.providerCompleted && !lifecycle.stepFailed) append(deps.session, { type: "step/failed" })
-        append(deps.session, { type: "step/end" })
-      }
-      append(deps.session, { type: "turn/end" })
-      await deps.flush?.()
-    } catch (cause) {
-      const actionReason = error instanceof Error ? error.message : String(error)
-      const savingReason = cause instanceof Error ? cause.message : String(cause)
-      throw new AggregateError([error, cause], `${actionReason}; session saving failed: ${savingReason}`, { cause: error })
+    const savingErrors: unknown[] = []
+    const attempt = async (save: () => Promise<void>) => { try { await save() } catch (cause) { savingErrors.push(cause) } }
+    if (lifecycle.stepOpen) {
+      // An incomplete provider step must not replay partial tool calls.
+      // A completed provider/tool result keeps its existing provenance.
+      if (!lifecycle.providerCompleted && !lifecycle.stepFailed) await attempt(() => failStepBoundary(deps, lifecycle))
+      await attempt(() => closeStepBoundary(deps, lifecycle, { type: 'step/end' }))
+    }
+    await attempt(() => closeTurnBoundary(deps, lifecycle))
+    await attempt(async () => { await deps.flush?.() })
+    if (savingErrors.length) {
+      throw savingFailure(error, savingErrors, 'session saving failed')
     }
   }
   throw error
@@ -47,14 +48,14 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
   } })
 }
 
-export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2) {
+export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2) {
   const { stepUsage } = step
   reportModelUsage(deps, step)
 
   // Acceptance owns assistant/native persistence; this owner only reports usage
   // and calibrates the measured request that produced the completed response.
   // The caller has the accepted fact. A later Stop cannot revoke real usage.
-  context.ownedBudget.record(measurement, stepUsage, accepted)
+  await context.ownedBudget.record(measurement, stepUsage, accepted)
 
 }
 
@@ -66,12 +67,12 @@ export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, conte
   try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request, onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
   finally {
     lifecycle.providerCompleted = !!written && deps.session.events[written.seq!] === written && JSON.stringify(written) === exactWritten
-    if (lifecycle.providerCompleted) completeModelStep(deps, context, step, measurement, written?.type === "model/exchange-accepted" && written.version === 2 ? written : undefined)
+    if (lifecycle.providerCompleted) await completeModelStep(deps, context, step, measurement, written?.type === "model/exchange-accepted" && written.version === 2 ? written : undefined)
     else reportModelUsage(deps, step)
   }
 }
 
-export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {
+export async function closeStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {
   const { stepText, toolCallsThisStep, truncatedThisStep, refusedThisStep } = step
   // M77: a REFUSED step still appends this message, and its text stays `""`.
   // The choice is deliberate and is the spec's (§1.3): the log must carry
@@ -93,15 +94,13 @@ export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecy
   const emptyThisStep = stepText === "" && toolCallsThisStep === 0 && !truncatedThisStep && !refusedThisStep
   if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: getSteps() } })
 
-  append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
-  lifecycle.stepOpen = false
+  await closeStepBoundary(deps,lifecycle,{ type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
 
   return emptyThisStep
 }
 
 export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, getSteps: () => number, reasoning: string[]): Promise<AgentResult> {
-  append(deps.session, { type: "turn/end" })
-  lifecycle.turnOpen = false
+  await closeTurnBoundary(deps,lifecycle)
   // M25: turn/end + token/usage at the turn boundary. The token count is the
   // SAME estimate the M20 budget check uses (activeTokens over the derived
   // surface); guarded so an absent telemetry never pays for it.

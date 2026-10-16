@@ -1,5 +1,7 @@
 // Stable package facade. Internal owners import each other directly.
 export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
+export { readInbox } from './inbox-view.ts'
+export { AsyncInbox } from './managed/inbox.ts'
 export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic, InputDisplay, UserMessageInput } from "./inbox.ts"
 
 export { CURRENT_FORMAT_VERSION } from "./events/types.ts"
@@ -58,3 +60,17 @@ export { validAcceptedRequest, sameAcceptedRequest } from "./events/attribution.
 export type { ExchangeAcceptedEventV2 } from "./events/conversation.ts"
 
 export { contextUsageAnchorId } from "./events/usage-anchor.ts"
+export type { DeepReadonly, SessionView, SessionEventView, SeqRef, OwnerToken, BatchKey, FactReceipt, FactCode, FactOutcome, JournalPrefix, JournalMetadata, EncodedFactBatch } from './managed/types.ts'
+export { FactRecoveryRequiredError } from './managed/types.ts'
+export { captureLegacyFact, isStrictFactData } from './managed/capture.ts'
+export { validSettlementEvent, type SettlementEventKind } from './managed/settlement-event.ts'
+export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts'
+export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
+export { captureFactGroup, resolveFactGroup } from './managed/groups.ts'
+export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, LifecycleFact } from './managed/groups.ts'
+export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, LegacyCompactionFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
+export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'
+export { createFactPorts } from './managed/ports-factory.ts'
+export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource } from './managed/source-scope.ts'
+export { createNondurableFactOwner, isNondurableSession, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
+export { committedFactSeqs } from './managed/outcome.ts'

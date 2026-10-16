@@ -13,7 +13,7 @@
 // @i-harness/subagent (its graph drags the whole subagent runtime); core-session
 // inlines team/* the same way. The producer (subagent persist.ts) owns the
 // shape; if it drifts the route's `jobs` mapping warns loudly (never silent).
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionEventView as SessionEvent } from "@i-harness/core-session"
 
 export type JobStatusView = "running" | "completed" | "killed" | "error"
 
@@ -118,7 +118,7 @@ export function projectJobsDoc(doc: unknown): JobView[] {
  * other types are ignored; a job first seen mid-log keeps whatever stamps its
  * first event carried (the producer emits full snapshots).
  */
-export function foldJobs(events: SessionEvent[]): JobView[] {
+export function foldJobs(events: readonly SessionEvent[]): JobView[] {
   const byId = new Map<string, JobView>()
   for (const ev of events) {
     if (ev.type !== "job/status") continue

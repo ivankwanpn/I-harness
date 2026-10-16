@@ -1,3 +1,4 @@
+import { fromJSONL } from "@i-harness/core-session"
 // M27 R-A3: log-semantic repair (packages/session-persistence/src/repair.ts).
 // repairTurnTail is a PURE function: it never mutates its input (the raw log
 // must stay byte-preservable) and appends synthetic closers ONLY to the LAST
@@ -384,8 +385,7 @@ describe("repairTurnTail through coordinator.load()", () => {
       )).toBe(true)
       await second.close()
 
-      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as SessionEvent)
+      const raw = fromJSONL(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")).events
       expect(raw.map((event) => event.seq)).toEqual(raw.map((_, index) => index))
       expect(JSON.stringify(raw)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
     } finally {
@@ -453,8 +453,7 @@ describe("repairTurnTail through coordinator.load()", () => {
       ].join("\n"), "utf8")
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       await expect(coordinator.loadOwned(sessionId)).rejects.toThrow(/sequence/i)
-      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as SessionEvent)
+      const raw = fromJSONL(readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")).events
       expect(raw[1]?.seq).toBe(20)
       expect((raw[1] as { shadowedSeqs?: number[] }).shadowedSeqs).toEqual([0])
     } finally {

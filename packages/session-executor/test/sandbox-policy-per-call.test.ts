@@ -8,6 +8,8 @@ import { createSession, append } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import type { SandboxDenial } from "@i-harness/sandbox"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 
 /**
  * PER-CALL sandbox resolution.
@@ -303,7 +305,7 @@ describe("restored history does not decide the sandbox mode", () => {
     }
   })
 
-  it("a distinct policySession is what resolution reads, not the live session", async () => {
+  it("a distinct owned policy view governs resolution independently of the live session", async () => {
     const base = mkdtempSync(join(tmpdir(), "i-harness-policy-session-"))
     const workspace = join(base, "ws")
     const outside = join(base, "outside")
@@ -312,10 +314,12 @@ describe("restored history does not decide the sandbox mode", () => {
     const first = join(outside, "first.txt")
     const second = join(outside, "second.txt")
     const live = createSession()
-    const policySession = createSession()
+    const coordinator = createSessionCoordinator(createJsonlBackend(join(base, 'policy')), { lock: { enabled: true } })
+    await coordinator.create({ sessionId: 'policy' })
+    const policyDocument = await coordinator.openManagedDocument('policy'), policySession = policyDocument.view
     append(live, { type: "user/message", text: "go" })
     const assembly = await createSessionAssembly({
-      workspace, session: live, policySession,
+      workspace, session: live, policySession, policyDocument,
       model: modelWritingTargets([first, second]),
       approveAll: true,
       sandbox: "danger-full-access",
@@ -329,9 +333,9 @@ describe("restored history does not decide the sandbox mode", () => {
       expect(readFileSync(first, "utf8")).toBe("escaped")
 
       // The resolution session tightens; the NEXT call must obey it.
-      append(policySession, { type: "sandbox/mode", mode: "read-only" })
+      await policyDocument.metadata.admit({ type: "sandbox/mode", mode: "read-only" })
       await runTurn(assembly)
       expect(existsSync(second)).toBe(false)
-    } finally { await assembly.dispose(); rmSync(base, { recursive: true, force: true }) }
+    } finally { await assembly.dispose(); await coordinator.close(); rmSync(base, { recursive: true, force: true }) }
   })
 })

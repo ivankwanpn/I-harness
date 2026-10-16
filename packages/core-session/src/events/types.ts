@@ -235,6 +235,7 @@ export interface GoalSnapshot extends GoalRef {
 // Lineage/identity carried on a session (M8): who spawned it and how deep in
 // the subagent delegation chain it sits. Optional — a root session has none.
 export interface SessionHeader {
+  journal?: import('../managed/types.ts').JournalMetadata
   parentSession?: string
   seedLength?: number
   delegationDepth?: number
@@ -247,4 +248,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 5
+export const CURRENT_FORMAT_VERSION = 6

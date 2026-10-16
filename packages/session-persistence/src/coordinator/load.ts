@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, stringifyJsonData, type SessionEvent } from "@i-harness/core-session"
 import { repairTurnTail } from "../repair.ts"
 import { preflightSessionFormat, migrate, guardIgnorable, buildSession } from "../format/validation.ts"
 import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writable-format.ts"
@@ -42,7 +42,7 @@ export function createLoads(
         preflightSessionFormat(version, events)
         const guarded = guardIgnorable(events)
         const migrated = await migrate(version, guarded)
-        const repairedTail = repairTurnTail(migrated)
+        const repairedTail = repairTurnTail(migrated, { appendOnly: meta?.journal !== undefined })
         // M51 B5: canonicalize UNDEFINED seqs to their array index (in-memory
         // only — load() stays read-only) so load() agrees with loadOwned() for
         // the repair shape. DEFINED seqs are never renumbered (shadowedSeqs /
@@ -99,7 +99,7 @@ export function createLoads(
           preflightSessionFormat(repaired.version, repaired.events)
           const guarded = guardIgnorable(repaired.events, true)
           const migrated = await migrate(repaired.version, guarded)
-          const semantic = repairTurnTail(migrated)
+          const semantic = repairTurnTail(migrated, { appendOnly: repaired.meta?.journal !== undefined })
           const canonical = semantic.map((event, index): SessionEvent => {
             if (event.seq !== undefined && event.seq !== index) {
               throw new Error(`session sequence invariant failed for ${sessionId}: event ${index} has seq ${event.seq}`)
@@ -107,11 +107,11 @@ export function createLoads(
             return event.seq === index ? event : { ...event, seq: index }
           })
           const needsRewrite = canonical.length !== repaired.events.length
-            || canonical.some((event, index) => JSON.stringify(event) !== JSON.stringify(repaired.events[index]))
+            || canonical.some((event, index) => stringifyJsonData(event) !== stringifyJsonData(repaired.events[index]))
           preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical)
           if (needsRewrite) {
-            const fenced = repaired.events.some(event => event.type === "conversation/semantics")
-            const unchangedPrefix = canonical.slice(0, repaired.events.length).every((event, index) => JSON.stringify(event) === JSON.stringify(repaired.events[index]))
+            const fenced = repaired.meta?.journal !== undefined || repaired.events.some(event => event.type === "conversation/semantics")
+            const unchangedPrefix = canonical.slice(0, repaired.events.length).every((event, index) => stringifyJsonData(event) === stringifyJsonData(repaired.events[index]))
             if (fenced && unchangedPrefix) {
               await ensureWritableFormatUnlocked(backend, sessionId)
               await backend.append(sessionId, canonical.slice(repaired.events.length))

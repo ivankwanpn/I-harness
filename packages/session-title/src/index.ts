@@ -1,5 +1,5 @@
-import type { Session } from "@i-harness/core-session"
-import { append, deriveSessionTitle } from "@i-harness/core-session"
+import type { SessionView as Session, MetadataFactSource } from "@i-harness/core-session"
+import { committedFactSeqs, metadataFactsFor, deriveSessionTitle } from "@i-harness/core-session"
 import { clampOutputCap } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
@@ -124,14 +124,15 @@ export async function suggestTitle(deps: {
   }
 }
 
-export function applyTitle(session: Session, title: string, source: "fallback" | "provider" | "user", messageSeqs?: number[]): void {
-  append(session, { type: "session/title", title: normalizeTitle(title), messageSeqs: messageSeqs ?? [], source })
+export async function applyTitle(session: Session, title: string, source: "fallback" | "provider" | "user", messageSeqs?: number[], metadata?: MetadataFactSource): Promise<void> {
+  committedFactSeqs(await metadataFactsFor(session, metadata).admit({ type: "session/title", title: normalizeTitle(title), messageSeqs: messageSeqs ?? [], source }))
 }
 
 // First-prompt mode (roadmap). Fail-soft: a provider failure degrades to the
 // deterministic fallback; a coordinator failure never rejects the caller
 // (putDocument reports internally).
 export async function maybeAutoTitle(deps: {
+  metadata?: MetadataFactSource
   session: Session
   model: ModelClient
   coordinator?: SessionCoordinator
@@ -165,7 +166,7 @@ export async function maybeAutoTitle(deps: {
     ...(deps.titleMaxOutputTokens !== undefined ? { titleMaxOutputTokens: deps.titleMaxOutputTokens } : {}),
     ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
   })
-  applyTitle(deps.session, title, source, inputs.map((i) => i.seq))
+  await applyTitle(deps.session, title, source, inputs.map((i) => i.seq), deps.metadata)
   if (deps.coordinator && deps.sessionId) {
     void deps.coordinator.putDocument(`session-title/${deps.sessionId}`, {
       formatVersion: 1,

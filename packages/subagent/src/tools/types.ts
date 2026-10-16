@@ -1,5 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { createSession } from "@i-harness/core-session"
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -19,7 +19,8 @@ export interface SubagentToolDeps extends RoleModelHost {
   jobs: JobRegistry
   roles: RoleRegistry
   parentRegistry: ToolRegistry
-  parentSession: ReturnType<typeof createSession>
+  parentSession: SessionView
+  factOwner?: FactOwner
   parentCtx: PluginContext
   parentModel: ModelClient
   /** Resolve a selection to a live client through the HOST's provider plane —

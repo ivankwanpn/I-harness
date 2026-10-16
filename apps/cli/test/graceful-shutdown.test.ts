@@ -5,7 +5,8 @@ import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { failureReport, runHeadless } from "../src/run.ts"
+import { failureReport, runHeadless, HeadlessCleanupError } from "../src/run.ts"
+import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 
 // M3, deliverable 2: **fail-loud crash handling and graceful shutdown.**
 //
@@ -59,7 +60,7 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     const sigintBefore = process.listenerCount("SIGINT")
     const sigtermBefore = process.listenerCount("SIGTERM")
 
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
     await coordinator.create({ sessionId: "s-shutdown" })
     const { model, release, started } = gatedModel()
     const controller = new AbortController()
@@ -95,23 +96,49 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore)
   }, 30_000)
 
-  it("names both the interrupted action and failed saving when abort finalization cannot flush", async () => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
-    await coordinator.create({ sessionId: "s-abort-save" })
-    const { model, release, started } = gatedModel(), controller = new AbortController()
-    const actualFlush = coordinator.flush.bind(coordinator)
-    coordinator.flush = async id => {
-      if (controller.signal.aborted) throw new Error("Owned abort finalization storage failure")
-      await actualFlush(id)
+  it('preserves the interrupted action and failed saving through an actual unknown closure receipt and source close', async () => {
+    const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+    await coordinator.create({ sessionId: 's-abort-receipt' })
+    const controller = new AbortController(), gated = gatedModel()
+    const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!
+    let key: BatchKey | undefined, blocked = true, writes = 0, sends = 0
+    backend.appendOwnedBatch = async (...args) => {
+      const outcome = await append(...args)
+      if (!key && controller.signal.aborted && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'step/failed' || event.type === 'step/end')) {
+        key = args[3].key; writes++; return { kind: 'unknown', key }
+      }
+      return outcome
     }
-    const running = runHeadless("Owned interrupted action", { workspace: root, sessionId: "s-abort-save", coordinator, model, signal: controller.signal })
-    try { await started; controller.abort() }
-    finally { release() }
-    const result = await running
-    expect(result.exitCode).toBe(1)
-    expect(result.finalText).toBe("")
-    expect(result.error).toMatch(/abort/i)
-    expect(result.error).toContain("Owned abort finalization storage failure")
+    backend.reconcileOwnedBatch = async (...args) => blocked && key ? { kind: 'unknown', key } : reconcile(...args)
+    const running = runHeadless('Owned interrupted journal action', {
+      workspace: root, sessionId: 's-abort-receipt', coordinator, signal: controller.signal,
+      model: { async *stream(request) { sends++; yield* gated.model.stream(request) } },
+    })
+    const settled = running.then(result => ({ kind: 'returned' as const, result }), error => ({ kind: 'failed' as const, error }))
+    let cleanup: HeadlessCleanupError | undefined
+    try {
+      await Promise.race([gated.started, running.then(result => { throw new Error(`Run ended before model entry: ${result.error}`) })])
+      controller.abort(new Error('Original interrupted action abort'))
+      gated.release()
+      const failure = await settled
+      expect(failure.kind).toBe('failed')
+      if (failure.kind !== 'failed') throw new Error('Unresolved owned journal cannot report successful cleanup')
+      expect(failure.error).toBeInstanceOf(HeadlessCleanupError)
+      cleanup = failure.error
+      expect(cleanup!.message).toMatch(/abort/i)
+      expect(cleanup!.message).toContain('session saving failed')
+      expect(cleanup!.cause).toBeInstanceOf(AggregateError)
+      expect([writes, sends]).toEqual([1, 1])
+    } finally {
+      gated.release(); blocked = false
+      await settled
+      if (key) await (await coordinator.openManagedDocument('s-abort-receipt')).reconcile(key)
+      await cleanup?.retryCleanup()
+      const events = (await backend.read('s-abort-receipt')).events
+      expect(events.filter(event => event.type === 'step/end')).toHaveLength(1)
+      expect(events.filter(event => event.type === 'turn/end')).toHaveLength(1)
+      await coordinator.close()
+    }
   }, 30_000)
 })
 

@@ -2,7 +2,7 @@ import { sameAcceptedRequest, type AcceptedRequestAttributionV1, type ContextUsa
 import { validContextEvent } from '../events/context.ts'
 import { conversationFormatError as fail } from '../events/conversation.ts'
 import { contextUsageAnchorId } from '../events/usage-anchor.ts'
-import type { SessionEvent } from '../events/types.ts'
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 export interface AcceptanceFact {
   index: number
   exchangeId: string

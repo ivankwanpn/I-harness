@@ -45,6 +45,7 @@ export interface HeaderMeta {
   seedLength?: number
   delegationDepth?: number
   origin?: string
+  journal?: import('@i-harness/core-session').JournalMetadata
 }
 
 export interface IndexedRow {

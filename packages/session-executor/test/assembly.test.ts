@@ -13,7 +13,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
     if (Date.now() >= deadline) throw new Error("waitFor: condition not met within budget")
   }
 }
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, copyConversationData, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -73,7 +73,7 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
 describe("createSessionAssembly", () => {
   it("owns live child observation and closes it once before discarding children", async () => {
     const root = await mkdtemp(join(tmpdir(), "assembly-child-observation-"))
-    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
     await coordinator.create({ sessionId: "observed-root" })
     const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock" })
     const changes: string[] = []
@@ -85,13 +85,14 @@ describe("createSessionAssembly", () => {
       const live = assembly.liveChildSession!(row.sessionId!)!
       expect(live).toBeDefined()
       const before = changes.length
-      append(live, { type: "tool/result", name: "controlled", callId: "controlled-result", output: "unflushed" })
+      const childDocument=await coordinator.openManagedDocument(row.sessionId!)
+      await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})
       expect(changes.length).toBe(before + 1)
       expect(changes.at(-1)).toBe("changed")
       await assembly.dispose()
       expect(assembly.liveChildSession!(row.sessionId!)).toBeUndefined()
       expect(changes.at(-1)).toBe("closed")
-      append(live, { type: "user/message", text: "after disposal" })
+      expect(await childDocument.metadata.admit({type:'todo/write',version:1,items:[]})).toEqual({kind:'not-issued',code:'FACT_CLOSED'})
       expect(changes.filter(kind => kind === "closed")).toHaveLength(1)
       expect(changes.at(-1)).toBe("closed")
     } finally { await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
@@ -392,28 +393,29 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
-  it("does not duplicate persistence for a host-owned session", async () => {
+  it("attaches only the actual owner or an explicit detached import and saves each continuation once", async () => {
     const mirrored: SessionEvent[] = []
-    const coordinator = {
-      enqueue: (_sessionId: string, events: SessionEvent[]) => { mirrored.push(...events) },
-      flush: async (_sessionId: string) => {},
-    } as unknown as SessionCoordinator
+    const root=await mkdtemp(join(tmpdir(),'ih-f1-explicit-attachment-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
     const sessionId = "mirror-session"
+    await coordinator.create({sessionId})
     const session = createSession((ev) => {
       mirrored.push(ev)
     })
+    await expect(createSessionAssembly({workspace:root,sessionId,session,coordinator,modelPolicy:'test-mock'})).rejects.toMatchObject({code:'FACT_OWNER_UNSUPPORTED'})
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       sessionId,
-      session,
+      detachedSession:session,
       coordinator,
       model: createMockClient([{ role: "assistant", text: "ok" }]),
     })
     try {
       await assembly.agent.run("hello")
-      expect(mirrored).toEqual(session.events)
+      expect(mirrored).toEqual([])
+      expect((await backend.read(sessionId)).events).toEqual(assembly.session.events)
+      expect(assembly.session.events.map(event=>event.seq)).toEqual(assembly.session.events.map((_,index)=>index))
     } finally {
-      await assembly.dispose()
+      await assembly.dispose();await coordinator.close()
     }
   }, 30_000)
 })
@@ -720,28 +722,11 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
  * packages/agent-team/test/lifecycle.test.ts:515 (`const coordinator = {`
  * … `as unknown as SessionCoordinator` at :533): a coordinator double, NOT a
  * model client — the recorder shapes above are untouched. */
-function memoryCoordinator(): SessionCoordinator {
-  const events = new Map<string, SessionEvent[]>()
-  return {
-    create: async (meta?: { sessionId?: string }) => {
-      const id = meta?.sessionId ?? `mem-${events.size}`
-      events.set(id, [])
-      return { id }
-    },
-    append: async (sessionId: string, evs: SessionEvent[]) => { events.get(sessionId)?.push(...evs) },
-    enqueue: (sessionId: string, evs: SessionEvent[]) => {
-      const list = events.get(sessionId) ?? []
-      list.push(...evs)
-      events.set(sessionId, list)
-    },
-    load: async (sessionId: string) => ({ session: { formatVersion: 2, events: [...(events.get(sessionId) ?? [])] } }),
-    snapshot: async (sessionId: string) => ({ session: { formatVersion: 2, events: [...(events.get(sessionId) ?? [])] } }),
-    list: async () => [...events.keys()],
-    flush: async () => {},
-    close: async () => {},
-    putDocument: async () => {},
-    getDocument: async () => undefined,
-  } as unknown as SessionCoordinator
+async function memoryCoordinator(): Promise<SessionCoordinator> {
+  const root=await mkdtemp(join(tmpdir(),'ih-f1-assembly-team-'))
+  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await coordinator.create({sessionId:'lead-1'})
+  return coordinator
 }
 
 describe("createSessionAssembly — every handle-reachable holder follows a rebind (Task 2, R-B1)", () => {
@@ -903,7 +888,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
   }, 30_000)
 
   it("holder 5c — a team-mate's first turn inherits the rebound client", async () => {
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const first = capturingModel()
     const second = scriptedModel([
       { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
@@ -1272,7 +1257,7 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
  * assert the SAME reason on the channel it travels. Returns the string
  * "undefined" when no such result exists, so a missing result fails the match
  * instead of raising a shape error. */
-function toolErrorOf(events: SessionEvent[], name: string): string {
+function toolErrorOf(events: readonly SessionEventView[], name: string): string {
   const result = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
     e.type === "tool/result" && e.name === name)
   return String((result?.output as { error?: string } | undefined)?.error)
@@ -1416,7 +1401,7 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     })
     try {
       const run = await assembly.agent.run("start")
-      return { run, events: [...assembly.session.events] }
+      return { run, events: copyConversationData(assembly.session.events) }
     } finally {
       await assembly.dispose()
     }
@@ -1817,7 +1802,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
   // hop 2 (`assembly.ts:1182`) + hop 3 (`agent-team/src/scheduler.ts:221`).
   it("hop 2+3: a TEAMMATE's budget carries the session's WINDOW, not its cap", async () => {
     agentCalls.deps.length = 0
-    const coordinator = memoryCoordinator()
+    const coordinator = await memoryCoordinator()
     const model = teamLeadModel()
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),

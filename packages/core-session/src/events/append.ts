@@ -1,6 +1,6 @@
 import { CURRENT_FORMAT_VERSION } from "./types.ts"
 import type { Session, SessionEvent } from "./types.ts"
-import { appendHooks, subscribers, conversationIndexes } from "./state.ts"
+import { appendHooks, subscribers, conversationIndexes, managedSessions } from "./state.ts"
 import { createConversationIndex } from "../conversation/validation.ts"
 import { prepareSessionEvent } from "./intake.ts"
 
@@ -11,6 +11,7 @@ export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
 }
 
 export function append(session: Session, event: SessionEvent): void {
+  if (managedSessions.has(session)) throw new TypeError('Managed Session requires asynchronous fact admission')
   const ev = prepareSessionEvent(session, event, session.events.length)
   let cached = conversationIndexes.get(session)
   if (!cached || cached.formatVersion !== session.formatVersion || cached.events !== session.events || cached.index.eventCount !== session.events.length) {

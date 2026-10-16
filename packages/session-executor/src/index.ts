@@ -7,6 +7,9 @@ export {
   type SessionProjectContext,
 } from "./assembly.ts"
 export { createDurableSessionLoader } from "./durable-session.ts"
+export { openExecutorDocument } from './lifecycle/managed-document.ts'
+export { actionMetadataFacts } from './lifecycle/action-facts.ts'
+export { withRewindFacts } from './lifecycle/rewind-facts.ts'
 export {
   createSessionService,
   type SessionModelBindingResult,

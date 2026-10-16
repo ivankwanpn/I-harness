@@ -1,5 +1,6 @@
+import { resolveBatchFacts } from "./facts.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import { createBatchCancellation, finishCancelledBatch, finishCheckpointFailure } from "./cancel.ts"
@@ -38,12 +39,20 @@ import { createStartCall } from "./dispatch.ts"
 // its REAL result instead of being orphaned behind the failed slot.
 
 export async function executeToolCalls(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions): Promise<void> {
+  opts = resolveBatchFacts(session, opts)
   // Allocate model-order slots before reading the owner's signal, matching the
   // original initialization. The commit capability is resolved only on use.
   const records = createBatchRecords(ctx, session, tools, batch, opts, () => cancellation)
   const cancellation = createBatchCancellation(opts)
   const inFlight = new Map<number, Promise<number>>()
   const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) })
+  const finished = Promise.withResolvers<void>()
+  const source = opts.registerFactSource!(async () => { await finished.promise; await records.drainSettled() })
+  opts.sourceFacts = source.tools
+  opts.settlementSource = source
+  opts.requireFactRecovery = () => source.requireRecovery()
+  let executionFailure: unknown
+  try {
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
   // Partition into groups (batch-index runs): maximal runs of parallel-safe
   // calls; each exclusive call is a singleton group.
@@ -96,7 +105,17 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   inFlight.clear()
   // Cancellation can arrive while draining after any stopping condition.
   cancellation.observeAbort()
-  if (cancellation.aborted) return finishCancelledBatch(session, batch, records, cancellation)
-  if (cancellation.hasRefusal) throw cancellation.firstRefusal
-  if (cancellation.hasFlushError) return finishCheckpointFailure(session, batch, records, cancellation)
+  if (cancellation.aborted) return await finishCancelledBatch(session, batch, records, cancellation)
+  if (cancellation.hasRefusal) {
+    try { await records.drainSettled() }
+    catch (cause) { throw Object.assign(new AggregateError([cancellation.firstRefusal, cause], `${cancellation.firstRefusal instanceof Error ? cancellation.firstRefusal.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
+    throw cancellation.firstRefusal
+  }
+  if (cancellation.hasFlushError) return await finishCheckpointFailure(session, batch, records, cancellation)
+  } catch (error) { executionFailure = error; throw error }
+  finally {
+    finished.resolve()
+    try { await source.close() }
+    catch (cause) { throw Object.assign(new AggregateError([...(executionFailure === undefined ? [] : [executionFailure]), cause], `${executionFailure instanceof Error ? executionFailure.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
+  }
 }

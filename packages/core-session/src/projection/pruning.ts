@@ -1,4 +1,4 @@
-import type { Session } from "../events/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 
 // M33: one pruned tool/result — the stringified output is narrowed on the
 // projection surface to `head` + a placeholder + `tail` (`removedBytes` is the

@@ -96,6 +96,9 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   }
 
   return {
+    assertHeld(sessionId: string) {
+      if (!lockEnabled || !heldLocks.get(sessionId)?.held) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    },
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership, releaseOwnershipUnlocked,
     ownerOf: (sessionId: string) => heldLocks.has(sessionId),
     pendingOperations: () => [...sessionOperations.values()],

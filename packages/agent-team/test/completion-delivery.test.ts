@@ -7,11 +7,11 @@ import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import type { ParentInputAdmission } from "@i-harness/subagent"
-import { SYSTEM_INPUT_PLUGIN, type SessionEvent } from "@i-harness/core-session"
+import { SYSTEM_INPUT_PLUGIN, decodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 
 async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[]) {
   const root = await mkdtemp(join(tmpdir(), "team-completion-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "lead" })
   if (seed?.length) await coordinator.append("lead", seed)
   const service = createSessionService({
@@ -24,11 +24,11 @@ async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: Par
   })
   const assembly = await service.assemblyFor("lead")
   const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "lead" })
-  return { root, service, assembly, coordinator, execute, close: async () => { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
+  return { root, service, assembly, coordinator, backend, execute, close: async () => { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
 
 async function assertColdDoesNotWake(root: string, marker: string) {
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const seen: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Unexpected wake" }; yield { type: "end" } } }
   const service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
@@ -300,10 +300,10 @@ it("cancels an admitted notification if Stop arrives during its persistence flus
   let release!: () => void
   const held = new Promise<void>((done) => { release = done })
   let flushing = false
-  const originalFlush = f.coordinator.flush.bind(f.coordinator)
-  f.coordinator.flush = async (sessionId) => {
-    if (!flushing && f.assembly.inbox.pending().some((input) => input.text.includes("STOP_DURING_FLUSH"))) { flushing = true; await held }
-    await originalFlush(sessionId)
+  const originalAppend = f.backend.appendOwnedBatch!
+  f.backend.appendOwnedBatch = async (...args) => {
+    if (!flushing && args[0] === 'lead' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted' && event.text.includes('STOP_DURING_FLUSH'))) { flushing = true; await held }
+    return originalAppend(...args)
   }
   try {
     const run = f.service.submit("lead", "active parent", new AbortController().signal).catch(() => {})
@@ -311,8 +311,9 @@ it("cancels an admitted notification if Stop arrives during its persistence flus
     await f.execute("spawn_teammate", { name: "helper", description: "flush fixture", prompt: "first", context: "fresh" })
     await vi.waitFor(() => expect(flushing).toBe(true))
     expect(f.service.cancelRunning?.("lead").cancelled).toBe(true)
-    await run
+    expect(seen).toHaveLength(1)
     release()
+    await run
     await vi.waitFor(() => expect(f.assembly.inbox.pending().some((input) => input.text.includes("STOP_DURING_FLUSH"))).toBe(false))
     const notification = f.assembly.session.events.find((event) => event.type === "agent/input/admitted" && event.text.includes("STOP_DURING_FLUSH"))
     expect(f.assembly.session.events.some((event) => event.type === "agent/input/cancelled" && notification?.type === "agent/input/admitted" && event.inputId === notification.inputId)).toBe(true)

@@ -1,5 +1,5 @@
 import type { Worker } from 'node:worker_threads'
-import type { CodeModeOrigin, CodeModeStatus, CodeModeItem, CodeModeStoreEntries, CodeModeRuntimeOptions } from '../types.js'
+import type { CodeModeOrigin, CodeModeStatus, CodeModeItem, CodeModeStoreEntries, CodeModeRuntimeOptions, CodeModeObservation } from '../types.js'
 import type { RuntimeLimits } from './limits.js'
 import { json } from './limits.js'
 
@@ -24,12 +24,23 @@ export interface Cell {
   stop?: Promise<number>
   knownTools: Set<string>
   finishing: boolean
+  completionPending?: boolean
+  completionRetained?: boolean
+  terminalReceiptPending?: boolean
+  recoveryRequired?: boolean
+  pendingOutputReceipts: number
+  retainedOutputItems: number
+  retainedOutputBytes: number
+  resumeCompletion?: () => void
+  stopRequested?: string
   commitStop: AbortController
   retentionStop: AbortController
   textIncomplete: boolean
   admission: Promise<void>
   pendingBytes: number
   pendingItems: number
+  pendingProjection?: { settle(): Promise<void> }
+  recoveredProjection?: CodeModeObservation
 }
 
 /** Sole registry, session JSON store, and accepted producer membership. */

@@ -1,8 +1,9 @@
-import type { Session, SessionEvent } from "../events/types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
+import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationCall, ConversationDiagnostic } from "./types.ts"
 import type { ConversationSources } from "./sources.ts"
 import type { ConversationVisibility } from "./visibility.ts"
-import type { ExchangeAcceptedEvent } from "../events/conversation.ts"
+type ExchangeAcceptedEvent = Extract<SessionEvent, { type: 'model/exchange-accepted' }>
 import { outcomeField } from "./payload.ts"
 
 export interface LegacyStep {

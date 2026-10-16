@@ -131,7 +131,17 @@ const STEP_CONTENT_TYPES = new Set<SessionEvent["type"]>([
  *   the WHOLE log, earlier turns included: the Q8 read needs them.
  * @returns a NEW array (input untouched); the original log is never modified.
  */
-export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
+export function repairTurnTail(events: SessionEvent[], options?: { appendOnly?: boolean }): SessionEvent[] {
+  const repaired = repairLegacyTail(events)
+  if (!options?.appendOnly || events.some(event => event.type === 'conversation/semantics')) return repaired
+  // Framing makes every recorded coordinate immutable even for a legacy
+  // semantic region. Recovery facts join the archive after that exact prefix.
+  if (events.some(event => event.seq === undefined)) throw new Error('Framed recovery requires addressable history')
+  const additions = repaired.filter(event => event.seq === undefined)
+  return [...events, ...additions.map((event, index) => ({ ...event, seq: events.length + index }))]
+}
+
+function repairLegacyTail(events: SessionEvent[]): SessionEvent[] {
   if (events.length === 0) return []
   const fence = events.findIndex(event => event.type === "conversation/semantics")
   if (fence >= 0) return repairFencedTail(events, fence)

@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, Inbox } from "@i-harness/core-session"
+import { createSession, Inbox } from "@i-harness/core-session"
+import { appendStandalone as append } from './standalone-fixture.ts'
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgentRegistry } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"

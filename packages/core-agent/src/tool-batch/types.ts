@@ -1,5 +1,6 @@
-import type { PreparedCall } from "@i-harness/core-tools"
+import type { PreparedCall, RetainedToolOutcome } from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
+import type { ToolFacts, SettlementFacts, ProducerFactOutcome, CapturedSettlementFact } from '@i-harness/core-session'
 
 export interface BatchCall {
   callId: string
@@ -11,6 +12,12 @@ export interface BatchCall {
 }
 
 export interface ExecuteToolCallsOptions {
+  facts?: ToolFacts<ProducerFactOutcome>
+  sourceFacts?: SettlementFacts<ProducerFactOutcome>['tools']
+  settlementSource?: SettlementFacts<ProducerFactOutcome>
+  requireFactRecovery?: () => void
+  registerFactSource?: (drain: () => Promise<void>) => SettlementFacts<ProducerFactOutcome>
+  assertFactOpen?: () => void
   maxParallel: number
   signal?: AbortSignal
   // M19 (Ruling 24): the identity of the session whose agent is executing the
@@ -33,7 +40,8 @@ export interface ExecuteToolCallsOptions {
 }
 
 
-export interface Slot { name: string; callId: string; prepared: PreparedCall; output: unknown }
+export interface Slot { name: string; callId: string; prepared: PreparedCall; output: unknown; finalized?: import('@i-harness/core-tools').ToolResult; finalizing?: Promise<import('@i-harness/core-tools').ToolResult>; fact?: CapturedSettlementFact<ProducerFactOutcome>; recorded?: true }
 // Synthetic results have no finalize/post-tool authority.
-export interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true }
-export type BatchSlot = Slot | SyntheticSlot
+export interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true; projected?: { output: unknown }; fact?: CapturedSettlementFact<ProducerFactOutcome>; recorded?: true }
+export interface RetainedSlot extends Omit<Slot, 'output'> { retained: RetainedToolOutcome; recoveryCause: unknown; resolved?: { output: unknown } }
+export type BatchSlot = Slot | SyntheticSlot | RetainedSlot

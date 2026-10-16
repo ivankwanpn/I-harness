@@ -17,7 +17,7 @@ afterEach(()=>vi.unstubAllGlobals())
 it('replays actual native Agent and Code Mode refs across five protocol framings, compaction and restart',async()=>{
   const base=resolve('build/native-lifecycle-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'run-'))
   const store=join(root,'sessions'),nativeRoot=join(root,'native')
-  let coordinator=createSessionCoordinator(createJsonlBackend(store))
+  let coordinator=createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
   await coordinator.create({sessionId:'s'})
   let context=createContextOutputService({root:nativeRoot,workspaceId:'w',config:{enabled:true}})
   const requests:LLMRequest[]=[];let step=0
@@ -72,7 +72,7 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     expect(requests.at(-1)!.systemPrompt).toContain(refs[0]!.id)
     expect(requests.at(-1)!.systemPrompt).toContain(refs[1]!.id)
     await coordinator.flush('s');await service.close();await context.close();await coordinator.close()
-    coordinator=createSessionCoordinator(createJsonlBackend(store))
+    coordinator=createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
     context=createContextOutputService({root:nativeRoot,workspaceId:'w',config:{enabled:true}})
     service=createSessionService({...options,coordinator,sessionFor:createDurableSessionLoader(coordinator),contextOutput:context})
     await service.submit('s','resume after restart',new AbortController().signal)

@@ -3,6 +3,101 @@ import { createContext } from "@i-harness/core-plugin"
 import { createSession, projectConversation, Inbox } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgent } from "../src/index.ts"
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { decodeFactBatch } from '@i-harness/core-session'
+import { registerCodeMode } from '../../code-mode/src/register.ts'
+
+it('uses the actual managed input, acceptance and dispatch receipts before exactly one tool effect', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-agent-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  await document.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId: 'u', text: 'request', delivery: 'queue', intent: 'user' })
+  const ctx = createContext(), tools = createToolRegistry(ctx), frames: string[][] = []
+  const actual = backend.appendOwnedBatch!
+  backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
+  let effects = 0
+  tools.register({ name: 'write', description: 'write', inputSchema: { type: 'object' }, execute: async (_args, exec) => {
+    const facts = (await backend.read(id)).events
+    expect(facts.some(event => event.type === 'model/exchange-accepted')).toBe(true)
+    expect(facts.some(event => event.type === 'tool/dispatch')).toBe(true)
+    expect(exec.callEventSeq).toBe(facts.find(event => event.type === 'tool/call')?.seq)
+    effects++; return { content: 'done' }
+  } })
+  try {
+    const agent = createAgent(ctx, { session: document.view as any, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
+      if (!effects) yield { type: 'tool_call', call: { id: 'c', name: 'write', args: {} } }
+      else yield { type: 'text/chunk', text: 'done' }
+      yield { type: 'end' }
+    } } })
+    expect((await agent.run('request', undefined, undefined, 'u')).finalText).toBe('done')
+    expect(effects).toBe(1)
+    expect(frames.filter(frame => frame.includes('model/exchange-accepted'))).toEqual([
+      ['assistant/message', 'model/exchange-accepted'], ['assistant/message', 'model/exchange-accepted'],
+    ])
+    expect((await backend.read(id)).events.filter(event => event.type === 'agent/input/promoted')).toHaveLength(1)
+  } finally { await coordinator.close().catch(() => {}) }
+})
+
+it('rechecks the actual action recovery latch before model preparation after a pre-step source failure', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-prepare-fence-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx), action = document.beginAction()
+  const source = action.registerSettlementSource(async () => { throw new Error('Retained source outcome') })
+  action.finish()
+  let preparations = 0, transports = 0
+  ctx.on('agent/pre-step', () => { source.requireRecovery() })
+  const agent = createAgent(ctx, { session: document.view, factOwner: document, sessionId: id, tools, systemPrompt: '', model: {
+    async prepare() { preparations++; throw new Error('Preparation must be fenced') },
+    async *stream() { transports++; yield { type: 'end' } },
+  } })
+  try {
+    await expect(agent.run('received task')).rejects.toThrow()
+    expect(preparations).toBe(0)
+    expect(transports).toBe(0)
+    expect((await backend.read(id)).events.at(-1)?.type).toBe('turn/end')
+  } finally { await coordinator.close().catch(() => {}) }
+})
+
+it('preserves the actual outer Agent tool result when a completed Code Mode store is unknown and later reconciled', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-parent-code-outcome-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  let bodies = 0, nestedFinalizations = 0, outerFinalizations = 0, sends = 0, key: import('@i-harness/core-session').BatchKey | undefined
+  tools.register({ name: 'probe', description: '', inputSchema: {}, execute: async () => { bodies++; return 7 } })
+  ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'probe') nestedFinalizations++; else if ((event as { name: string }).name === 'code_exec') outerFinalizations++ })
+  const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' } })
+  const actual = backend.appendOwnedBatch!
+  backend.appendOwnedBatch = async (...args) => {
+    const outcome = await actual(...args)
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
+    return outcome
+  }
+  const agent = createAgent(ctx, { session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
+    sends++
+    yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'store("key", await tools.probe({})); text("actual output")', yield_time_ms: 5000 } } }
+    yield { type: 'end' }
+  } } })
+  try {
+    await mount.ready!()
+    await expect(agent.run('execute the original cell')).rejects.toThrow()
+    expect([bodies, nestedFinalizations, sends]).toEqual([1, 1, 1])
+    expect(key).toBeDefined()
+    await mount.cancel('human Stop after computed completion')
+    await document.reconcile(key!)
+    document.revokeNewWork()
+    await document.close()
+    const results = (await backend.read(id)).events.filter(event => event.type === 'tool/result').filter(event => event.name === 'code_exec')
+    expect(results).toEqual([expect.objectContaining({ callId: 'outer', output: expect.objectContaining({ status: 'completed', text: 'actual output' }) })])
+    expect(results[0]!.output).not.toHaveProperty('code', 'TOOL_FAILED')
+    expect([bodies, nestedFinalizations, outerFinalizations, sends]).toEqual([1, 1, 1, 1])
+  } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
 
 it("rejects a response without explicit end before tool preparation", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)

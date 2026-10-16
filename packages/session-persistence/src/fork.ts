@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, rewindCuts, isContextEventType, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, committedFactSeqs, rewindCuts, isContextEventType, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
 import { remapConversationSeed, SessionForkUnavailableError } from "./seed.ts"
 export { materializeMissingImageAdmissions, remapSeedEvent, SessionForkUnavailableError } from "./seed.ts"
 import type { SessionCoordinator } from "./index.ts"
@@ -26,10 +26,10 @@ export async function forkSession(
     throw new TypeError("atSeq must be a non-negative integer")
   }
 
-  const [{ session }, profile] = await Promise.all([
-    coordinator.load(sourceSessionId),
-    coordinator.profile(sourceSessionId),
-  ])
+  const profile = await coordinator.profile(sourceSessionId)
+  const source = await coordinator.openManagedDocument(sourceSessionId)
+  source.assertReady()
+  const session = source.view
   const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion)
   const title = options.title ?? profile.meta.title
   const workspaceId = options.workspaceId ?? profile.meta.workspaceId
@@ -40,7 +40,8 @@ export async function forkSession(
     parentSession: sourceSessionId,
     seedLength: prefix.length,
   })
-  if (prefix.length > 0) await coordinator.append(id, prefix)
+  const target = await coordinator.openManagedDocument(id)
+  if (prefix.length > 0) committedFactSeqs(await target.importSeed(prefix))
   return {
     sessionId: id,
     seedLength: prefix.length,
@@ -49,7 +50,7 @@ export async function forkSession(
 }
 
 export function completedTurnPrefix(
-  events: readonly SessionEvent[],
+  events: readonly SessionEventView[],
   sourceSessionId: string,
   atSeq: number | undefined,
   sourceFormat = CURRENT_FORMAT_VERSION,

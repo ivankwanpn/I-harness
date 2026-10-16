@@ -6,7 +6,6 @@ import { runHeadless } from "../src/run.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createSession } from "@i-harness/core-session"
 
 describe("CLI input tiers", () => {
   let dir: string
@@ -16,8 +15,9 @@ describe("CLI input tiers", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it("drives the initial task through the executor (one submitted input = one serial turn)", async () => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
-    const session = createSession()
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
+    const { id } = await coordinator.create({ sessionId: 'sess-tiers' })
+    const session = (await coordinator.openManagedDocument(id)).view
     const model = createMockClient([
       { role: "assistant", text: "initial answer" },
     ])
@@ -36,7 +36,7 @@ describe("CLI input tiers", () => {
   })
 
   it("resumes pending inputs from the log, promoted before the new task", async () => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
     const { id } = await coordinator.create({ sessionId: "sess-recover" })
     coordinator.enqueue(id, [
       { type: "agent/input/admitted", version: 1, inputId: "old", text: "stale queued", delivery: "queue", intent: "user" },

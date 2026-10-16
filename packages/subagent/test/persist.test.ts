@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createSession, type SessionEvent } from "@i-harness/core-session"
+import { createSession, isNondurableSession, type SessionEvent } from "@i-harness/core-session"
 import { createJobRegistry, type JobRegistry } from "../src/jobs.ts"
 import { createAgentTable, type AgentTable } from "../src/agent-table.ts"
 import { createRoleRegistry, builtinRoles, type RoleRegistry } from "../src/roles.ts"
@@ -75,7 +75,10 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/running")?.status).toBe("error") // running → error
     expect(fresh.roles.get("custom")).toBeDefined()
     // restored entries have fresh (non-persisted) session/controller
-    expect(typeof fresh.table.get("root/helper")?.session.events.push).toBe("function")
+    const restored = fresh.table.get("root/helper")!.session
+    expect(isNondurableSession(restored)).toBe(true)
+    if (!isNondurableSession(restored)) throw new Error('Expected standalone restored fixture')
+    expect(typeof restored.events.push).toBe("function")
   })
 
   it("snapshotState/restoreState round-trip the child sessionId link", () => {

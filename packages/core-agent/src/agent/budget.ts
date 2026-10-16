@@ -1,14 +1,18 @@
-import { append, deriveContextRecovery, type BudgetRead, type Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason } from "@i-harness/core-session"
+import { deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
+import { agentFacts, committedFactSeqs } from './facts.ts'
 import { checkBudget, createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { readContextCoordinates } from "@i-harness/context-engine"
 import { sameRequestCandidate, requestContextIdentity, type RequestEvidence } from "./request-snapshot.ts"
 import { assertPreparedValidation, preparedBindingError, freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 
 /** The only owner of prepared admission, pressure, calibration and scalar reads. */
-export function createOwnedBudget(session: Session, ownerSessionId: string, freshness: () => RequestEvidence, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation) {
+export function createOwnedBudget(session: Session, ownerSessionId: string, freshness: () => RequestEvidence, observationLifetimeId: string, expectedExecution: (base: import("@i-harness/llm-seam").LiveExecutionIdentity | undefined) => import("./execution.ts").EpochObservation,
+  facts: () => FactPorts<ProducerFactOutcome> = () => agentFacts({ session }), settlement: () => SettlementFacts<ProducerFactOutcome> | undefined = () => undefined) {
   const calibration = createAcceptedCalibration(ownerSessionId, observationLifetimeId)
   const compatibility = (evidence: RequestEvidence): Parameters<ReturnType<typeof createAcceptedCalibration>["probe"]>[1] => { const expected = expectedExecution(evidence.executionIdentity); return { ownerSessionId, observationLifetimeId, executionEpochId: expected.kind === "known" ? expected.identity.authEpoch : undefined, branchId: evidence.snapshot.coordinates.branchId, contextEpoch: evidence.snapshot.coordinates.contextEpoch, projectionRevision: evidence.projectionRevision } }
-  const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) append(session, event) }
+  const retirements: Extract<SessionEvent, { type: 'context/usage'; version: 2; op: 'retire' }>[] = []
+  const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) retirements.push(event) }
+  const drainRetirements = async () => { while (retirements.length) { committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage(retirements[0]!)); retirements.shift() } }
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
   let bindingRevision = 0
   let captured: RequestEvidence | undefined
@@ -89,11 +93,12 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       invalidated = undefined
       return { prepared: candidate, snapshot, disposition: estimate.disposition, calibrated: estimate.calibrated }
     },
-    checkpoint() { if (latest.kind === "ready") append(session, { type: "context/budget", version: 1, snapshot: latest.snapshot }) },
-    record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined) {
+    async checkpoint() { await drainRetirements(); if (latest.kind === "ready") committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 1, snapshot: latest.snapshot })) },
+    async record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined) {
+      await drainRetirements()
       if (accepted && session.events[accepted.seq!] === accepted) {
         const sample = calibration.recordAccepted(measurement.input, accepted.request, accepted, usage)
-        if (sample.kind === "sample") append(session, { type: "context/usage", version: 2, op: "sample", checkpoint: sample.checkpoint })
+        if (sample.kind === "sample") committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage({ type: "context/usage", version: 2, op: "sample", checkpoint: { ...sample.checkpoint, accepted: { ...sample.checkpoint.accepted, acceptedSeq: { kind: 'prior', seq: sample.checkpoint.accepted.acceptedSeq, expectedType: 'model/exchange-accepted' } } } }))
       }
       // Accepted provider output belongs to this owned attempt. A subsequent
       // local edit becomes unavailable until admission measures it again.
@@ -101,7 +106,7 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       try { const observation = readContextCoordinates(session, { ownerSessionId }); if (observation.kind === "available") postResponseContextRevision = observation.observationRevision } catch { /* Observation cannot revoke real usage. */ }
       if (latest.kind === "ready") {
         latest = { kind: "ready", snapshot: freezePreparedFacts({ ...latest.snapshot, ...(postResponseContextRevision ? { postResponseContextRevision } : {}), admission: "unavailable", reason: "Accepted output awaits the next protocol projection" }) }
-        append(session, { type: "context/budget", version: 1, snapshot: latest.snapshot })
+        committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 1, snapshot: latest.snapshot }))
       }
     },
   }

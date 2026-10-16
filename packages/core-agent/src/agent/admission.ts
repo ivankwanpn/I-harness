@@ -11,6 +11,7 @@ export function stalePreparedInput(): Error { return Object.assign(new Error("Mo
 export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>, recovery: ReturnType<typeof createRecovery>) {
   return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } & CandidateExecutionState = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }) {
     while (true) {
+      deps.assertFactOpen?.()
       abort?.throwIfAborted()
       context.refreshBinding()
       const captured = context.captureCandidate()
@@ -37,7 +38,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       if (snapshot.coverage === "incomplete") throw new Error(snapshot.reason)
       let checkpointed = false
       const checkpoint = async () => {
-        context.ownedBudget.checkpoint()
+        await context.ownedBudget.checkpoint()
         await deps.flush?.()
         abort?.throwIfAborted()
         checkpointed = true
@@ -68,6 +69,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       if (!checkpointed) await checkpoint()
       if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const validateBeforeTransport = () => {
+        deps.assertFactOpen?.()
         abort?.throwIfAborted()
         if (!current()) throw stalePreparedInput()
         recovery.validate(prepared.measurement, state)

@@ -1,4 +1,4 @@
-import { append, type Session } from "@i-harness/core-session"
+import { type SessionView as Session } from "@i-harness/core-session"
 import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_MID_FLIGHT, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
@@ -80,7 +80,7 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
 }
 export type BatchCancellation = ReturnType<typeof createBatchCancellation>
 
-export async function finishCancelledBatch(session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<never> {
+export async function finishCancelledBatch(_session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<never> {
   // Abort dominates coincident failures. Own rejection identity wins over the
   // defensive fallback, including a recorded rejection with undefined.
   const fallbackMessage = cancellation.firstError instanceof Error
@@ -92,18 +92,19 @@ export async function finishCancelledBatch(session: Session, batch: BatchCall[],
     const message = cancellation.failureMessage(i, () => fallbackMessage)
     records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } })
   }
-  try { await records.commitReady() } catch { /* abort dominates */ }
   for (let i = records.startedUpTo; i < batch.length; i += 1) {
     // A typed preparation failure may already fill a never-started slot.
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
-    append(session, { type: "tool/result", callId: call.callId, name: call.name, isError: true,
+    records.setSlot(i, { callId: call.callId, name: call.name, synthetic: true,
       output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH } })
   }
+  try { await records.drainSettled() }
+  catch (cause) { throw Object.assign(new Error('agent aborted; real tool settlement requires recovery', { cause }), { code: 'FACT_RECOVERY_REQUIRED' }) }
   throw new Error("agent aborted")
 }
 
-export async function finishCheckpointFailure(session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {
+export async function finishCheckpointFailure(_session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {
   for (let i = records.committed; i < records.startedUpTo; i += 1) {
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
@@ -114,13 +115,14 @@ export async function finishCheckpointFailure(session: Session, batch: BatchCall
   // checkpoint failure keeps its original precedence, even when undefined.
   let commitError: unknown
   let hasCommitError = false
-  try { await records.commitReady() } catch (error) { hasCommitError = true; commitError = error }
+  try { await records.drainSettled() } catch (error) { hasCommitError = true; commitError = error }
   for (let i = records.startedUpTo; i < batch.length; i += 1) {
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
-    append(session, { type: "tool/result", callId: call.callId, name: call.name, isError: true,
+    records.setSlot(i, { callId: call.callId, name: call.name, synthetic: true,
       output: { error: "tool call cancelled: the batch checkpoint failed", code: TOOL_CANCELLED_BY_SIBLING } })
   }
+  try { await records.drainSettled() } catch (error) { hasCommitError = true; commitError = error }
   // Inherited cursor limitation: an ordered-lane throw can leave settled slots
   // beyond the cursor unrecorded. S17 preserves it for later completion work.
   if (cancellation.hasFlushError) throw cancellation.firstFlushError

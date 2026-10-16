@@ -1,4 +1,5 @@
 import type { LLMMessage } from "../projection/types.ts"
+import type { DeepMutable } from '../managed/types.ts'
 type ReadonlyData<T> = T extends readonly (infer E)[] ? readonly ReadonlyData<E>[] : T extends object ? { readonly [K in keyof T]: ReadonlyData<T[K]> } : T
 type ReadonlyMessage = ReadonlyData<LLMMessage>
 
@@ -11,7 +12,7 @@ export function copyConversationMessage(message: ReadonlyMessage): LLMMessage {
 
 /** Fresh containers for validated conversation/request data. Legacy non-plain
  * values remain opaque, as on the renderer's original compatibility path. */
-export function copyConversationData<T>(input: T): T {
+export function copyConversationData<T>(input: T): DeepMutable<T> {
   const seen = new WeakMap<object, unknown>()
   let result: unknown
   const stack: { value: unknown; put: (value: unknown) => void }[] = [{ value: input, put: value => { result = value } }]
@@ -25,7 +26,7 @@ export function copyConversationData<T>(input: T): T {
     seen.set(value, copy); put(copy)
     for (const [key, child] of Object.entries(value).reverse()) stack.push({ value: child, put: owned => Object.defineProperty(copy, key, { value: owned, enumerable: true, configurable: true, writable: true }) })
   }
-  return result as T
+  return result as DeepMutable<T>
 }
 
 /** Selection is item based: every item's already ordered full bundle is emitted. */

@@ -1,4 +1,4 @@
-import { deriveMessagesUpTo, type Session } from "@i-harness/core-session"
+import { deriveMessagesUpTo, type SessionView as Session } from "@i-harness/core-session"
 import type { LLMMessage } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
 

@@ -1,5 +1,5 @@
 import type { CompactionConfig, CompactionResult, CompactionRunOptions } from "@i-harness/compaction"
-import type { ImageInput, Session, BudgetRead, ContextBindingMetadata, InputProvenance } from "@i-harness/core-session"
+import type { ImageInput, SessionView as Session, BudgetRead, ContextBindingMetadata, InputProvenance, FactOwner, FactPorts, ProducerFactOutcome, SettlementFacts } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -36,6 +36,11 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  factOwner?: FactOwner
+  facts?: FactPorts<ProducerFactOutcome>
+  sourceFacts?: SettlementFacts<ProducerFactOutcome>
+  assertFactOpen?: () => void
+  registerFactSource?: (drain: () => Promise<void>) => SettlementFacts<ProducerFactOutcome>
   ensureWritableContext?: () => Promise<void>
   executionIdentity?: () => import("@i-harness/llm-seam").LiveExecutionIdentity | undefined
   /** Pure inherited host descriptor. Each Agent copies its own limits and calibration. */
@@ -75,7 +80,7 @@ export interface AgentDeps {
   // the log before the model sees this step's messages. The seam itself appends
   // the promoted user/messages to the session (inbox.claimAtStepBoundary).
   // Absent → byte-identical pre-R-A1 behavior.
-  stepInputs?: { claimAtStepBoundary(): void }
+  stepInputs?: { claimAtStepBoundary(facts?: import('@i-harness/core-session').InputFacts<ProducerFactOutcome>): void | Promise<void> }
   // M32 T3: per-session reasoning effort — copied VERBATIM onto every
   // LLMRequest of this agent (the adapter owns the wire translation; see
   // translateReasoning in the llm-* adapters). Absent → the request never
@@ -107,6 +112,7 @@ export interface AgentResult {
 }
 
 export interface Agent {
+  runAdmitted?: Agent['run']
   contextBudget?(): BudgetRead
   run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal, options?: AgentInputOptions): Promise<AgentResult>
@@ -128,4 +134,7 @@ export interface AgentRegistry {
 }
 
 
-export type TurnLifecycle = { turnOpen: boolean; stepOpen: boolean; providerCompleted: boolean; stepFailed: boolean }
+export type TurnLifecycle = {
+  turnOpen: boolean; stepOpen: boolean; providerCompleted: boolean; stepFailed: boolean
+  stepEnd?: Promise<void>; stepFailure?: Promise<void>; turnEnd?: Promise<void>
+}

@@ -1,4 +1,4 @@
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session } from "@i-harness/core-session"
 import type { CompactionEngine, CompactionResult } from "../index.ts"
 import { resetWindowOnce, safeActiveTokens } from "../projection/window.ts"
 import type { CompactPass, CompactSettings } from "./contracts.ts"
@@ -8,6 +8,7 @@ export function createAdmission(
   config: CompactSettings, contextWindow: number,
   readContextTokens: (session: Session) => number, overheadNow: () => number,
   compactOnce: CompactPass,
+  reset: CompactionEngine['resetWindow'] = resetWindowOnce,
 ): CompactionEngine {
   return {
     async maybeCompact(session: Session, options): Promise<CompactionResult> {
@@ -101,7 +102,7 @@ export function createAdmission(
       return result
     },
     recover: (session, options) => compactOnce(session, true, undefined, { ...options, reason: "recovery" }),
-    resetWindow: resetWindowOnce,
+    resetWindow: reset,
   }
 }
 

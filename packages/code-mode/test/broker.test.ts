@@ -1,8 +1,48 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession } from "@i-harness/core-session"
+import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createCodeModeBroker } from "../src/broker.ts"
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+
+it('retains the real finalized managed result through uncertainty without redispatch or synthetic replacement', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-code-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  let effects = 0, finalizations = 0, conversions = 0, key: import('@i-harness/core-session').BatchKey | undefined
+  ctx.on('tools/post-execute', () => { finalizations++ })
+  tools.register({ name: 'read', description: 'read', inputSchema: { type: 'object' }, execute: async (_args, exec) => {
+    const facts = (await backend.read(id)).events
+    expect(facts.find(event => event.type === 'code/call')?.seq).toBe(exec.callEventSeq)
+    expect(facts.some(event => event.type === 'code/dispatch')).toBe(true)
+    effects++; return { toJSON() { conversions++; return { actual: 'result' } } }
+  } })
+  const actual = backend.appendOwnedBatch!
+  backend.appendOwnedBatch = async (...args) => {
+    const events = decodeFactBatch(args[3].bytes).events
+    const outcome = await actual(...args)
+    if (events.some(event => event.type === 'code/result')) { key = args[3].key; return { kind: 'unknown', key } }
+    return outcome
+  }
+  const broker = createCodeModeBroker(ctx, tools, { session: document.view as any, sessionId: id, factOwner: document } as any)
+  broker.startCell('cell')
+  try {
+    await expect(broker.invoke({ cellId: 'cell', invocationId: 'call', name: 'read', args: {}, origin: { sessionId: id, callId: 'outer' }, signal: new AbortController().signal })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect([effects, finalizations, conversions]).toEqual([1, 1, 1])
+    expect(document.view.events.filter(event => event.type === 'code/result')).toEqual([])
+    expect(key).toBeDefined()
+    await document.reconcile(key!)
+    await broker.dispose()
+    const results = (await backend.read(id)).events.filter(event => event.type === 'code/result')
+    expect(results).toEqual([{ type: 'code/result', cellId: 'cell', callId: 'call', name: 'read', output: { actual: 'result' }, seq: 2 }])
+    expect([effects, finalizations, conversions]).toEqual([1, 1, 1])
+  } finally { await broker.dispose().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
 
 function setup() {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()

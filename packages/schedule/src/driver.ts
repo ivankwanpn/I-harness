@@ -23,7 +23,7 @@
  * model message, so N overdue records cost one turn, not N (spec §6.3).
  */
 
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionEvent, SessionEventView } from "@i-harness/core-session"
 import { currentDiagnostics } from "@i-harness/diagnostics"
 import {
   decideDue,
@@ -53,7 +53,7 @@ export interface ScheduleDue {
  */
 export interface ScheduleDelivery {
   sessionId: string
-  dispatchEvents: SessionEvent[]
+  dispatchEvents: Extract<SessionEvent, { type: 'schedule/change' }>[]
   text: string
   inputId: string
   due: ScheduleDue[]
@@ -70,7 +70,7 @@ export interface ScheduleDriverOptions {
   /** Enumerate the sessions this driver owns. */
   sessions(): string[]
   /** The session's foldable events; undefined = unknown session (skipped). */
-  events(sessionId: string): readonly SessionEvent[] | undefined
+  events(sessionId: string): readonly SessionEventView[] | undefined
   /** Hand one delivery to the host — the ONLY writer of the log (spec §3.4). Throwing = the host
    *  did not accept; on the session-executor host a failed flush still means in-memory acceptance
    *  happened (the batch is retained & retried — `deliveryErrors` is a durability report). */
@@ -91,7 +91,7 @@ export interface ScheduleDriver {
   tick(): Promise<ScheduleTickResult>
 }
 
-function dispatchEventFor(record: ScheduleRecord, acceptedAt: number): SessionEvent {
+function dispatchEventFor(record: ScheduleRecord, acceptedAt: number): Extract<SessionEvent, { type: 'schedule/change' }> {
   if (record.kind !== "every") {
     return { type: "schedule/change", version: 1, operation: "dispatch", id: record.id }
   }

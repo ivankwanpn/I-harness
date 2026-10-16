@@ -71,7 +71,8 @@ import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
-import { append, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
+import { withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
@@ -166,7 +167,7 @@ export interface RewindServiceSurface {
   execute(
     targetTurnIndex: number,
     mode: RewindMode,
-    hooks: { appendEvent: (event: unknown) => void },
+    hooks: { appendEvent: (event: Extract<MutableSessionEvent,{type:'rewind/point'}>) => unknown },
   ): Promise<RewindExecuteResponse>
 }
 
@@ -541,7 +542,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
         // Honest answer inside the success payload — a finished/unknown id is
         // a legitimate client question, never an error frame.
-        return makeSuccess(id, service.cancelQueued(p.sessionId, p.id))
+        return makeSuccess(id, await service.cancelQueued(p.sessionId, p.id))
       }
       case "session/tasks": {
         // M49 Task 12: the REAL per-session task projection — serialized
@@ -772,9 +773,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try {
           // The appendEvent closure binds the LIVE session (the same identity
           // session/prompt submits to — the marker's append target)).
-          const result = await surface.execute(parsed.target, parsed.mode, {
-            appendEvent: (event) => { append(live, event as SessionEvent) },
-          })
+          const owner=service.liveAssembly(p.sessionId)?.factOwner??(isNondurableSession(live)?createNondurableFactOwner(live):undefined)
+          if(!owner)throw Object.assign(new Error('Rewind requires its owned source'),{code:'FACT_OWNER_UNSUPPORTED'})
+          const result = await withRewindFacts(owner,appendEvent=>surface.execute(parsed.target,parsed.mode,{appendEvent}))
           return makeSuccess(id, result)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -993,7 +994,7 @@ function isSessionNotFoundError(message: string): boolean {
 
 /** The live session events for an error response (best effort; the submit
  * rejection may arrive before/after the assembly's events are visible). */
-function liveEventsFor(service: SessionService, sessionId: string): SessionEvent[] {
+function liveEventsFor(service: SessionService, sessionId: string): readonly SessionEvent[] {
   const live = service.liveSession(sessionId)
   return live?.events ?? []
 }

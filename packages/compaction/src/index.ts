@@ -1,4 +1,5 @@
-import type { Session, ContextBindingMetadata } from "@i-harness/core-session"
+import { resetWindowOnce } from "./projection/window.ts"
+import type { SessionView as Session, ContextBindingMetadata } from "@i-harness/core-session"
 import type { ModelClient, ToolSchema, ReasoningEffort } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -60,6 +61,7 @@ export interface CompactionEngine {
 }
 
 export function createCompactionEngine(deps: {
+  facts?: () => import('@i-harness/core-session').LegacyCompactionFacts<import('@i-harness/core-session').ProducerFactOutcome>
   model: ModelClient
   config: CompactionConfig
   profile?: ProviderProfile // M15: optional context catalog
@@ -131,5 +133,6 @@ export function createCompactionEngine(deps: {
     (session, allowPruneOnly, instructions, options) => runCompactionPass(
       session, allowPruneOnly, instructions, options, config, contextWindow, deps, overheadNow,
     ),
+    (session, retainLast) => resetWindowOnce(session, retainLast, deps.facts),
   )
 }

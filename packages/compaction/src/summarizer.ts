@@ -4,7 +4,7 @@ import { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts
 export { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
 import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
-import { deriveMessages, type Session } from "@i-harness/core-session"
+import { deriveMessages, type SessionView as Session } from "@i-harness/core-session"
 import { sliceMessages } from "./slices.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —

@@ -1,8 +1,13 @@
-import { describe, expect, it, vi } from "vitest"
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { decodeFactBatch } from '@i-harness/core-session'
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, CURRENT_FORMAT_VERSION, deriveMessages, deriveSearchText, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, deriveSearchText, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
-import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
+import { createSessionCoordinator, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
 import { estimateContent } from "@i-harness/token-meter"
 import { createAgentRegistry } from "@i-harness/core-agent"
@@ -218,52 +223,38 @@ describe("spawnChild", () => {
   }, 10_000)
 })
 
-function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enqueued: { id: string; events: unknown[] }[]; flushed: { id: string; types: string[] }[] } {
-  const created: SessionMeta[] = []
-  const enqueued: { id: string; events: unknown[] }[] = []
-  // M70: a flush is recorded with WHAT HAD BEEN ENQUEUED FOR THAT SESSION when
-  // it ran. That is the discriminator this fake needs and the reason it is not
-  // "flush was called" (this mirror also flushes on `turn/end`), but it is NOT
-  // a model of the write-behind: the real drain persists a stable ordered
-  // PREFIX and re-queues what a failed write retained, while this recording is
-  // the whole enqueue history and never empties.
-  const flushed: { id: string; types: string[] }[] = []
-  return {
-    created,
-    enqueued,
-    flushed,
-    async create(meta) {
-      created.push({ ...meta, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
-      return { id: (meta as { sessionId?: string }).sessionId ?? "sess-x" }
-    },
-    async ensureWritableFormat(id) { const meta = created.find(m => m.sessionId === id); if (!meta || meta.formatVersion !== CURRENT_FORMAT_VERSION) throw Error("Fixture header is not writable"); return { formatVersion: meta.formatVersion } },
-    async append() {},
-    enqueue(id, events) { enqueued.push({ id, events: [...events] }) },
-    async load() { return { session: { formatVersion: 2, events: [] } } },
-    async loadOwned() { return { session: { formatVersion: 2, events: [] } } },
-    async list() { return [] },
-    async flush(id) {
-      flushed.push({
-        id,
-        types: enqueued.filter((batch) => batch.id === id).flatMap((batch) => batch.events.map((ev) => (ev as { type?: string }).type ?? "?")),
-      })
-    },
-    async close() {},
-    async putDocument() {},
-    async getDocument() { return undefined },
-    ownerOf() { return false },
-    async adoptOwnership() {},
-    async releaseOwnership() {},
-    async profile() { throw new Error("unused") },
-    async updateMeta() { throw new Error("unused") },
-  }
-}
+const ownedCoordinators: SessionCoordinator[] = []
+afterEach(async () => {
+  await Promise.allSettled(ownedCoordinators.splice(0).map(coordinator => coordinator.close()))
+})
 
+function ownedCoordinatorFixture() {
+  const backend = createJsonlBackend(mkdtempSync(join(tmpdir(), 'ih-f1-child-consumer-')))
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  ownedCoordinators.push(coordinator)
+  const created: SessionMeta[] = []
+  const enqueued: { id: string; events: SessionEvent[] }[] = []
+  const flushed: { id: string; types: string[] }[] = []
+  const actualCreate = coordinator.create.bind(coordinator), actualAppend = backend.appendOwnedBatch!
+  coordinator.create = async meta => {
+    const result = await actualCreate(meta)
+    created.push((await coordinator.profile(result.id)).meta)
+    return result
+  }
+  backend.appendOwnedBatch = async (...args) => {
+    const events = [...decodeFactBatch(args[3].bytes).events]
+    enqueued.push({ id: args[0], events })
+    const outcome = await actualAppend(...args)
+    if (outcome.kind === 'committed') flushed.push({ id: args[0], types: enqueued.filter(batch => batch.id === args[0]).flatMap(batch => batch.events.map(event => event.type)) })
+    return outcome
+  }
+  return Object.assign(coordinator, { created, enqueued, flushed })
+}
 describe("spawnChild durable child sessions (M8)", () => {
   it("S18: waits for inherited ownership before mounting tools and keeps host prompt callbacks live", async () => {
     const parentCtx = createContext(), parentRegistry = createToolRegistry(parentCtx)
     parentRegistry.register(makeTool("read"))
-    const parentSession = createSession(), coordinator = fakeCoordinator()
+    const parentSession = createSession(), coordinator = ownedCoordinatorFixture()
     append(parentSession, { type: "turn/start" })
     append(parentSession, { type: "user/message", text: "inherited seed" })
     append(parentSession, { type: "turn/end" })
@@ -322,7 +313,7 @@ describe("spawnChild durable child sessions (M8)", () => {
   })
 
   it("with childSessions: creates a child-<uuid> session, mirrors seed + events, records sessionId", async () => {
-    const coordinator = fakeCoordinator()
+    const coordinator = ownedCoordinatorFixture()
     const jobs = createJobRegistry()
     const table = createAgentTable()
     const roles = createRoleRegistry()
@@ -356,14 +347,11 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(path).toBe("root/helper")
     expect(coordinator.created).toHaveLength(1)
     expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-main", origin: "subagent", seedLength: 4, delegationDepth: 1 })
-    // append() fires the mirror once per event → the 4 fork-seed events are
-    // enqueued as single-event batches (seq 0..3). The child's own run appends
-    // further events right after spawnChild returns, so only the seed prefix is
-    // asserted (count is >= 4, not exactly 4).
-    expect(coordinator.enqueued.length).toBeGreaterThanOrEqual(4)
+    // The trusted seed is one atomic frame before the initial admission.
+    expect(coordinator.enqueued.length).toBeGreaterThanOrEqual(2)
     expect(coordinator.enqueued[0]!.id).toBe(sessionId)
-    expect(coordinator.enqueued[0]!.events).toHaveLength(1)
-    expect(coordinator.enqueued.slice(0, 4).map((b) => (b.events[0]! as { type: string }).type))
+    expect(coordinator.enqueued[0]!.events).toHaveLength(4)
+    expect(coordinator.enqueued[0]!.events.map(event => event.type))
       .toEqual(["turn/start", "user/message", "assistant/message", "turn/end"])
     const entry = table.get("root/helper")
     expect(entry?.sessionId).toBe(sessionId)
@@ -379,7 +367,7 @@ describe("spawnChild durable child sessions (M8)", () => {
   // hook, so `coordinator.flush(childSessionId)` drains the very write-behind
   // that received the `tool/dispatch` marker.
   it("M70: a child's tool dispatch is durable BEFORE its body — flushed under the child's own id", async () => {
-    const coordinator = fakeCoordinator()
+    const coordinator = ownedCoordinatorFixture()
     const jobs = createJobRegistry()
     const table = createAgentTable()
     const roles = createRoleRegistry()
@@ -432,17 +420,19 @@ describe("spawnChild durable child sessions (M8)", () => {
     // …and by then the child's marker had been DRAINED through the coordinator,
     // under the child's own session id: the checkpoint is the child's, not the
     // parent's, and it covers the marker that recovery reads.
-    expect(drainsAtBody).toHaveLength(3)
-    expect(drainsAtBody![0]!.id).toBe(sessionId)
-    expect(drainsAtBody![0]!.types).toContain("context/budget")
-    expect(drainsAtBody![1]!.types).toContain("model/exchange-accepted")
-    expect(drainsAtBody![2]!.types).toContain("tool/dispatch")
+    expect(drainsAtBody!.every(frame => frame.id === sessionId)).toBe(true)
+    const budget = drainsAtBody!.findIndex(frame => frame.types.includes('context/budget'))
+    const acceptance = drainsAtBody!.findIndex(frame => frame.types.includes('model/exchange-accepted'))
+    const dispatch = drainsAtBody!.findIndex(frame => frame.types.includes('tool/dispatch'))
+    expect(budget).toBeGreaterThanOrEqual(0)
+    expect(acceptance).toBeGreaterThan(budget)
+    expect(dispatch).toBeGreaterThan(acceptance)
   }, 10_000)
 
   // M24a (B1): delegationDepth recursion — a child of a depth-1 subagent is
   // depth 2 (resolveChildDepth = parent + 1), not the hardcoded 1.
   it("spawnChild sets delegationDepth = parent depth + 1 (nested delegation)", async () => {
-    const coordinator = fakeCoordinator()
+    const coordinator = ownedCoordinatorFixture()
     const jobs = createJobRegistry()
     const table = createAgentTable()
     const roles = createRoleRegistry()
@@ -515,7 +505,7 @@ describe("spawnChild durable child sessions (M8)", () => {
 describe("M76: the seed's bound — the model resolves first, and an over-window seed is visible", () => {
   it("a spawn whose binding does not resolve leaves NO durable child session behind", async () => {
     const f = spawnFixture()
-    const coordinator = fakeCoordinator()
+    const coordinator = ownedCoordinatorFixture()
     // Seed content that is real, so "nothing was written" is a claim about
     // something that could have been. MEASURED against the old order (the
     // resolver moved back below the seeding arm): `created` 1, `enqueued` 4 —
@@ -1565,11 +1555,13 @@ describe("the child's request carries the resolved budget", () => {
     expect(childSession.events.some((e) => e.type === "compaction/reset")).toBe(false)
     // the summary names the WHOLE inherited region, the head's two messages
     // (seqs 1/2) included — the content a reset would have dropped unseen
-    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toEqual(expect.arrayContaining([1, 2]))
-    // MEASURED: 51 seqs — every non-marker event in the log (48 seed events,
-    // plus the child's own turn/start, user/message and step/start). Nothing of
-    // the inherited surface is left unaccounted for on the surface.
-    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(53)
+    expect(marker!.shadowedSeqs).toEqual(expect.arrayContaining([1, 2]))
+    // The original 53-event region gains the initial admission and promotion.
+    // The existing semantic marker stays between those two records.
+    expect(childSession.events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ seq: 48, provenance: expect.objectContaining({ producer: 'subagent.initial' }) })])
+    expect(childSession.events.find(event => event.seq === 49)).toMatchObject({ type: 'conversation/semantics' })
+    expect(childSession.events.filter(event => event.type === 'agent/input/promoted')).toEqual([expect.objectContaining({ seq: 50 })])
+    expect(marker!.shadowedSeqs).toHaveLength(55)
 
     // the mechanism, request by request: the summarizer's calls are the ones
     // whose last message is the directive, and there are several — the pieces
@@ -1717,7 +1709,10 @@ describe("the child's request carries the resolved budget", () => {
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
     // inherited turns the parent's own marker did NOT hide (see the fixture);
     // 16 is the marker and is NOT in the set (region.ts skips markers).
-    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21])
+    expect(childSession.events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ seq: 17, provenance: expect.objectContaining({ producer: 'subagent.initial' }) })])
+    expect(childSession.events.find(event => event.seq === 18)).toMatchObject({ type: 'conversation/semantics' })
+    expect(childSession.events.filter(event => event.type === 'agent/input/promoted')).toEqual([expect.objectContaining({ seq: 19 })])
+    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")

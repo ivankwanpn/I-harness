@@ -57,7 +57,7 @@ it("serves the actual prepared owner without inspecting transport and retains po
 
 it.each([false, true])("child context reader preserves its owner and current parent grant (revoked=%s)", async revoked => {
   const root = await mkdtemp(join(tmpdir(), "admitted-child-context-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const actual = createAnthropicClient({ model: "controlled", apiKey: "fixture" })
   const measurements: PreparedModelRequest["measurement"][] = []

@@ -1,4 +1,4 @@
-import type { SessionEvent } from '../events/types.ts'
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const digest = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
 function closed(value: Record<string, unknown>, required: readonly string[], optional: readonly string[] = []): boolean {

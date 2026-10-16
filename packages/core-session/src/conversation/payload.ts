@@ -1,5 +1,5 @@
 import type { ConversationSourceRef } from "./types.ts"
-import type { SessionEvent } from "../events/types.ts"
+import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, type ImageInput } from "../images.ts"
 import { renderPruneSubstitute, type PruneRecord } from "../projection/pruning.ts"
 import { stringifyJsonData } from "../serialization/json-data.ts"

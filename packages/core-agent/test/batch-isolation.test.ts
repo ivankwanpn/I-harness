@@ -226,18 +226,20 @@ describe("batch stopping conditions remain fail closed", () => {
     const tools = createToolRegistry(ctx)
     const hookArmed = deferred()
     const errorObserved = deferred()
+    const runningEntered = deferred()
     const refusal = Object.assign(new Error("hook blocked"), { policyRefusal: true as const })
     let bodyRan = false
     let siblingAborted = false
     ctx.onCascade("tools/execute", async (input, next) => {
       if ((input as { name: string }).name !== "veto") return next()
       hookArmed.resolve()
-      await errorObserved.promise
+      await Promise.all([errorObserved.promise, runningEntered.promise])
       throw refusal
     })
     tools.register({ name: "fail", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => { await hookArmed.promise; throw new Error("ordinary") } })
     tools.register({ name: "veto", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => { bodyRan = true; return {} } })
     tools.register({ name: "running", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async (_args, exec) => {
+      runningEntered.resolve()
       await new Promise<void>((resolve) => {
         const aborted = () => { siblingAborted = true; resolve() }
         if (exec.abortSignal?.aborted) aborted()

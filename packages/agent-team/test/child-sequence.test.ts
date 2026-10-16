@@ -3,13 +3,13 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionView } from "@i-harness/core-session"
 import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
 import type { SubagentStateSnapshot } from "@i-harness/subagent"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
 
-function expectDense(events: SessionEvent[]): void {
+function expectDense(events: SessionView['events']): void {
   expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index))
 }
 
@@ -25,7 +25,7 @@ it("keeps concurrent normal and teammate child logs positional through live chec
     yield { type: "end" }
   } }
   const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "lead" }; yield { type: "end" } } }
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), {lock:{enabled:true}})
   await coordinator.create({ sessionId: "lead" })
   const createService = (store: SessionCoordinator, restoredState?: SubagentStateSnapshot) => createSessionService({
     workspace: root, model: parent, coordinator: store, sessionFor: createDurableSessionLoader(store),
@@ -54,7 +54,7 @@ it("keeps concurrent normal and teammate child logs positional through live chec
     for (const id of ids) {
       await coordinator.flush(id)
       const { session } = await coordinator.snapshot!(id)
-      expect(session.events.map((event) => event.type)).toEqual(["conversation/semantics", "turn/start", "user/message", "step/start", "context/budget"])
+      expect(session.events.map((event) => event.type)).toEqual(['agent/input/admitted',"conversation/semantics",'agent/input/promoted', "turn/start", "user/message", "step/start", "context/budget"])
       expectDense(session.events)
     }
     release()
@@ -73,12 +73,12 @@ it("keeps concurrent normal and teammate child logs positional through live chec
     await execute("team_followup_task", { target: "helper", message: "second teammate" })
     await waitForTurns(coordinator, 2)
     await vi.waitFor(() => expect(service.tasks("lead").some((row) => row.status === "running")).toBe(false))
-    await coordinator.close()
+    await service.close()
     const state = await coordinator.getDocument("lead") as SubagentStateSnapshot
     expect(state.agentTable.map((entry) => entry.sessionId)).toEqual(expect.arrayContaining(ids))
     await service.close()
     await coordinator.close()
-    reopened = createSessionCoordinator(createJsonlBackend(root))
+    reopened = createSessionCoordinator(createJsonlBackend(root), {lock:{enabled:true}})
     // Strict owned recovery must accept both histories unchanged.
     for (const id of ids) expectDense((await reopened.loadOwned(id)).session.events)
     resumed = createService(reopened, state)

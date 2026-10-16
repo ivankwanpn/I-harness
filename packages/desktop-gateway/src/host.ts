@@ -244,7 +244,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     },actionSessionId:nativeContext.humanSessionId})
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
-  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
+  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
@@ -329,6 +329,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       if (meta.title?.trim()) return
       await maybeAutoTitle({
         session: assembly.session,
+        metadata:assembly.metadataFacts,
         model: assembly.model,
         coordinator,
         sessionId,

@@ -1,4 +1,4 @@
-import { SYSTEM_INPUT_PLUGIN, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { SYSTEM_INPUT_PLUGIN, type ImageInput, type SessionView as Session, type SessionEvent } from "@i-harness/core-session"
 import type { AgentInputOptions } from "./types.ts"
 
 /** Resolve the recorded source before opening a turn; a conflict cannot append a partial turn. */
@@ -15,7 +15,7 @@ export function prepareTurnInput(session: Session, input: { message: string; ima
   return {
     type: "user/message", text: message,
     ...(provenance ? { provenance } : {}),
-    ...(images?.length ? admission ? { imageInputId: admission.inputId } : { images } : {}),
+    ...(images?.length ? admission ? { imageInputId: admission.inputId } : { images: [...images] } : {}),
     ...(admission ? {
       input: { inputId: admission.inputId, intent: admission.intent,
         ...(admission.provenance ? { provenance: admission.provenance } : {}),
