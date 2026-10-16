@@ -26,18 +26,22 @@ export function anthropicValidator(config: AnthropicConfig, source: readonly LLM
     validateAnthropicCache(body.cache_control, check)
     if (Array.isArray(body.system)) for (const block of body.system) if (record(block)) validateAnthropicCache(block.cache_control, check)
     if (body.metadata !== undefined) {
-      if (!record(body.metadata) || body.metadata.user_id !== undefined && typeof body.metadata.user_id !== 'string') check.issue('parameter-type', 'request')
+      if (!record(body.metadata) || body.metadata.user_id != null && (typeof body.metadata.user_id !== 'string' || [...body.metadata.user_id].length > 512)) check.issue('parameter-type', 'request')
       else if (Object.keys(body.metadata).some(key => key !== 'user_id')) check.gap('extension-unchecked')
     }
     if (body.system !== undefined && typeof body.system !== 'string' && (!Array.isArray(body.system) || body.system.some(block => !record(block) || block.type !== 'text' || typeof block.text !== 'string'))) check.issue('shape', 'input')
-    for (const key of ['temperature', 'top_p', 'top_k']) if (body[key] !== undefined && (typeof body[key] !== 'number' || !Number.isFinite(body[key]))) check.issue('parameter-type', 'generation')
+    for (const key of ['temperature', 'top_p', 'top_k']) if (body[key] !== undefined && (typeof body[key] !== 'number' || !Number.isFinite(body[key]) || (body[key] as number) < 0 || key !== 'top_k' && (body[key] as number) > 1)) check.issue('parameter-type', 'generation')
     if (body.stop_sequences !== undefined && (!Array.isArray(body.stop_sequences) || !body.stop_sequences.every(v => typeof v === 'string'))) check.issue('parameter-type', 'generation')
+    if (body.service_tier !== undefined && !['auto', 'standard_only'].includes(body.service_tier as string)) check.issue('parameter-type', 'request')
     const cap = anthropicCapabilities(config)
     if (!cap) check.gap('protocol-contract-unavailable')
     const thinking = body.thinking, output = body.output_config
     if (output !== undefined && !record(output)) check.issue('parameter-type', 'generation')
     const effort = record(output) ? output.effort : undefined
-    if (effort !== undefined && typeof effort !== 'string') check.issue('parameter-type', 'generation')
+    // Messages explicitly permits null here; it remains a tagged present/null
+    // producer identity, distinct from an omitted default. Other fields keep
+    // their own null contracts. API reference checked 2026-10-16.
+    if (effort != null && !['low', 'medium', 'high', 'xhigh', 'max'].includes(effort as string)) check.issue('parameter-type', 'generation')
     if (record(output) && Object.keys(output).some(key => key !== 'effort')) check.gap('extension-unchecked')
     const choice = body.tool_choice
     if (choice !== undefined && (!record(choice) || !['auto', 'none', 'any', 'tool'].includes(choice.type as string) || choice.type === 'tool' && typeof choice.name !== 'string')) check.issue('shape', 'tools')
@@ -68,7 +72,7 @@ export function anthropicValidator(config: AnthropicConfig, source: readonly LLM
             }
           }
         }
-        if ((mode === 'between_tools' || mode === 'disabled' && cap?.limitedDisabled) && effort !== undefined && !['low', 'medium', 'high'].includes(effort as string)) check.issue('parameter-conflict', 'generation')
+        if ((mode === 'between_tools' || mode === 'disabled' && cap?.limitedDisabled) && effort != null && !['low', 'medium', 'high'].includes(effort as string)) check.issue('parameter-conflict', 'generation')
         const forced = record(choice) && ['any', 'tool'].includes(choice.type as string)
         if (forced && cap && (mode === 'enabled' || mode === 'adaptive' && cap.forcedAdaptive === false)) check.issue('parameter-conflict', 'tools')
       }

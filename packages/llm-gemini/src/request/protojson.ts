@@ -10,6 +10,9 @@ const aliases: Record<string, string> = {
   willContinue: 'will_continue', continuationToken: 'continuation_token',
   parametersJsonSchema: 'parameters_json_schema', responseJsonSchema: 'response_json_schema', allowedFunctionNames: 'allowed_function_names',
   toolCall: 'tool_call', toolResponse: 'tool_response', displayName: 'display_name',
+  candidateCount: 'candidate_count', stopSequences: 'stop_sequences', topP: 'top_p', topK: 'top_k',
+  responseMimeType: 'response_mime_type', responseSchema: 'response_schema', presencePenalty: 'presence_penalty', frequencyPenalty: 'frequency_penalty',
+  safetySettings: 'safety_settings', videoMetadata: 'video_metadata',
 }
 export function field(value: unknown, key: string): unknown {
   if (!record(value)) return undefined
@@ -40,4 +43,24 @@ export function int32(value: unknown): number | undefined {
   else { const divisor = 10n ** BigInt(-exponent); if (exact % divisor) throw new TypeError('Invalid int32'); exact /= divisor }
   if (exact < -2147483648n || exact > 2147483647n) throw new TypeError('Invalid int32')
   return Number(exact)
+}
+/** ProtoJSON float syntax includes decimal/exponent strings and its three
+ * special names. Application range checks stay at the field's actual owner. */
+export function float32(value: unknown): number | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'string') {
+    if (['NaN', 'Infinity', '-Infinity'].includes(value)) return Number(value)
+    if (!/^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)) throw new TypeError('Invalid float')
+    value = Number(value)
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isFinite(Math.fround(value))) throw new TypeError('Invalid float')
+  return value
+}
+/** Open numeric protobuf enums remain representable but need caller coverage
+ * uncertainty. Unknown symbolic names are not legal ProtoJSON enum values. */
+export function enumValue(value: unknown, names: readonly string[]): string | number | undefined {
+  if (value == null) return undefined
+  if (typeof value === 'number') return int32(value)
+  if (typeof value === 'string' && names.includes(value)) return value
+  throw new TypeError('Invalid enum')
 }

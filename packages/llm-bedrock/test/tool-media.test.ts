@@ -8,6 +8,31 @@ vi.mock('@aws-sdk/client-bedrock-runtime', async importOriginal => {
 })
 beforeEach(() => { sdk.commands.length = 0 })
 const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+it.each([{ counts: [20] }, { counts: [21] }, { counts: [10, 10] }, { counts: [10, 11] }])('counts native images across containing tool-result siblings %j', async ({ counts }) => {
+  const messages: LLMRequest['messages'] = [{ role: 'assistant', content: '', toolCalls: counts.map((_, index) => ({ id: `c${index}`, name: 'read', args: {} })) }, ...counts.map((count, index) => ({ role: 'tool' as const, toolCallId: `c${index}`, content: Array.from({ length: count }, () => ({ type: 'image' as const, image: { mediaType: 'image/png' as const, dataBase64: image } })) }))]
+  const model = createBedrockClient({ model: 'anthropic.claude-sonnet-4-6', region: 'us-east-1', inputModalities: ['text', 'image'] })
+  const request = { systemPrompt: '', tools: [], messages }, before = structuredClone(messages), total = counts.reduce((sum, count) => sum + count, 0)
+  if (total > 20) await expect(model.prepare!(request)).rejects.toMatchObject({ modelFailure: { reason: 'media-limit' } })
+  else {
+    const prepared = await model.prepare!(request)
+    for await (const _ of prepared.stream()) {}
+    expect(prepared.measurement.input.components.images.imageCount).toBe(20)
+  }
+  expect(messages).toEqual(before); expect(sdk.commands).toHaveLength(total > 20 ? 0 : 1)
+})
+it.each([20, 21])('keeps the same message limit on unknown-capability user image companions (%s)', async count => {
+  let sent: any, sends = 0
+  const client = createBedrockClient({ model: 'custom-model', inputModalities: ['text', 'image'] }, { destroy() {}, async send(command) { sends++; sent = command.input; return { $metadata: {} } } })
+  const request: LLMRequest = { systemPrompt: '', tools: [], messages: [{ role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] }, { role: 'tool', toolCallId: 'a', content: Array.from({ length: count }, () => ({ type: 'image', image: { mediaType: 'image/png', dataBase64: image } })) }] }
+  if (count === 21) await expect(client.prepare!(request)).rejects.toMatchObject({ modelFailure: { reason: 'media-limit' } })
+  else {
+    const prepared = await client.prepare!(request)
+    for await (const _ of prepared.stream()) {}
+    expect(sent.messages[2].content).toHaveLength(20)
+    expect(prepared.measurement.input.components.images.imageCount).toBe(20)
+  }
+  expect(sends).toBe(count === 20 ? 1 : 0)
+})
 it.each([false, true])('uses evidenced native tool images/status on actual AWS surface (isError=%s)', async isError => {
   const content: any[] = [{ type: 'text', text: 'original' }, { type: 'image', image: { mediaType: 'image/png', dataBase64: image } }]
   const request: LLMRequest = { systemPrompt: '', tools: [], messages: [{ role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'read', args: {} }] }, { role: 'tool', toolCallId: 'a', content, ...(isError ? { isError: true } : {}) }] }

@@ -21,15 +21,18 @@ function reasoning(value: unknown, check: Checks): void {
     else extras(item, ['text', 'signature'], check)
   } else if (!(value.redactedContent instanceof Uint8Array)) check.issue('native-replay', 'native', 'native-replay')
 }
-function resultContent(value: unknown, check: Checks) {
-  if (!Array.isArray(value)) { check.issue('shape', 'messages'); return }
+function resultContent(value: unknown, check: Checks): { images: number; documents: number } {
+  const counts = { images: 0, documents: 0 }
+  if (!Array.isArray(value)) { check.issue('shape', 'messages'); return counts }
   for (const part of value) {
     if (!record(part) || Object.keys(part).length !== 1) { check.issue('shape', 'messages'); continue }
     if (part.text !== undefined) { if (typeof part.text !== 'string') check.issue('shape', 'messages') }
     else if (Object.hasOwn(part, 'json')) { /* Smithy Document accepts any JSON value. */ }
-    else if (part.image !== undefined) image(part.image, check)
+    else if (part.image !== undefined) { counts.images++; image(part.image, check) }
+    else if (part.document !== undefined) { counts.documents++; check.gap('extension-unchecked') }
     else check.gap('extension-unchecked')
   }
+  return counts
 }
 /** Converse closes ordinary groups before another assistant message. It does
  * not import Messages' immediate single-user-message or text ordering rule. */
@@ -42,12 +45,12 @@ export function validateConverseMessages(value: unknown, check: Checks, status?:
     if (!record(message) || !['user', 'assistant'].includes(message.role as string) || !Array.isArray(message.content) || !message.content.length) { check.issue('shape', 'messages'); continue }
     extras(message, ['role', 'content'], check)
     if (message.role === 'assistant' && pending.size) check.issue('tool-group', 'messages', 'message-order')
-    let images = 0, documents = 0
+    let images = 0, documents = 0, topLevelDocuments = 0
     for (const part of message.content) {
       if (!record(part) || Object.keys(part).filter(key => part[key] !== undefined).length !== 1) { check.issue('shape', 'messages'); continue }
       if (part.text !== undefined) { if (typeof part.text !== 'string') check.issue('shape', 'messages') }
       else if (part.image !== undefined) { images++; image(part.image, check); if (message.role !== 'user') check.issue('shape', 'media') }
-      else if (part.document !== undefined) { documents++; check.gap('extension-unchecked'); if (message.role !== 'user') check.issue('shape', 'media') }
+      else if (part.document !== undefined) { documents++; topLevelDocuments++; check.gap('extension-unchecked'); if (message.role !== 'user') check.issue('shape', 'media') }
       else if (part.reasoningContent !== undefined) {
         if (message.role !== 'assistant') check.issue('shape', 'messages')
         reasoning(part.reasoningContent, check)
@@ -67,14 +70,15 @@ export function validateConverseMessages(value: unknown, check: Checks, status?:
           if (!['success', 'error'].includes(tool.status as string)) check.issue('shape', 'messages')
           if (!status) check.gap('protocol-contract-unavailable')
         }
-        resultContent(tool.content, check)
+        const nested = resultContent(tool.content, check)
+        images += nested.images; documents += nested.documents
         extras(tool, ['toolUseId', 'content', 'status'], check)
       } else check.gap('extension-unchecked')
     }
     // https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Message.html
     // Counts have exact units; SDK byte estimates are never HTTP byte limits.
     if (images > 20 || documents > 5) check.issue('media-limit', 'media', 'media-limit')
-    if (documents && !message.content.some(part => record(part) && typeof part.text === 'string' && part.text.length > 0)) check.issue('shape', 'media')
+    if (topLevelDocuments && !message.content.some(part => record(part) && typeof part.text === 'string' && part.text.length > 0)) check.issue('shape', 'media')
   }
   if (pending.size) check.issue('tool-group', 'messages', 'message-order')
 }

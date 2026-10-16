@@ -31,18 +31,19 @@ export function validateGeminiContents(value: unknown, check: Checks, signatureR
         if (!record(item) || (kind === 'inlineData' ? !text(field(item, 'mimeType')) : field(item, 'mimeType') !== undefined && typeof field(item, 'mimeType') !== 'string') || !text(field(item, kind === 'inlineData' ? 'data' : 'fileUri'))) check.issue('shape', 'media')
         if (kind === 'fileData') check.gap('remote-input-unavailable')
       } else if (kind === 'functionCall' || kind === 'functionResponse') {
-        if (!record(item) || !name(item.name) || field(item, 'id') !== undefined && !text(item.id)) { check.issue('shape', 'messages'); continue }
+        const identifier = field(item, 'id')
+        if (!record(item) || !name(item.name) || identifier !== undefined && !text(identifier)) { check.issue('shape', 'messages'); continue }
         const isCall = kind === 'functionCall'
         extras(item, isCall ? ['id', 'name', 'args'] : ['id', 'name', 'response', 'willContinue', 'scheduling', 'parts'], check)
         if (isCall) {
           if (!model || field(item, 'args') !== undefined && !record(item.args)) check.issue('shape', 'messages')
           if (signatureRequired && index > turnStart && callIndex === 0 && signature === undefined) { check.issue('native-replay', 'native', 'native-replay'); check.gap('native-contract-unavailable') }
           callIndex++
-          if (pending.some(call => item.id !== undefined ? call.id === item.id : call.id === undefined && call.name === item.name)) {
-            if (item.id === undefined) { check.gap('native-contract-unavailable'); check.issue('unsupported-parameter', 'native', 'unsupported-parameter') }
+          if (pending.some(call => identifier !== undefined ? call.id === identifier : call.id === undefined && call.name === item.name)) {
+            if (identifier === undefined) { check.gap('native-contract-unavailable'); check.issue('unsupported-parameter', 'native', 'unsupported-parameter') }
             else check.issue('tool-id', 'messages', 'message-order')
           }
-          pending.push({ ...(item.id !== undefined ? { id: item.id as string } : {}), name: item.name })
+          pending.push({ ...(identifier !== undefined ? { id: identifier as string } : {}), name: item.name })
         } else {
           if (model || !record(item.response)) check.issue('shape', 'messages')
           const media = field(item, 'parts')
@@ -57,7 +58,7 @@ export function validateGeminiContents(value: unknown, check: Checks, signatureR
           const continuing = field(item, 'willContinue'), scheduling = field(item, 'scheduling')
           if (continuing !== undefined && typeof continuing !== 'boolean') check.issue('shape', 'messages')
           if (continuing === true || scheduling !== undefined && ![0, 'SCHEDULING_UNSPECIFIED'].includes(scheduling as string | number)) { check.gap('native-contract-unavailable'); check.issue('unsupported-parameter', 'native', 'unsupported-parameter') }
-          const matches = pending.flatMap((call, n) => call.name === item.name && (call.id === undefined && item.id === undefined || call.id !== undefined && call.id === item.id) ? [n] : [])
+          const matches = pending.flatMap((call, n) => call.name === item.name && call.id === identifier ? [n] : [])
           if (matches.length !== 1) check.issue('tool-id', 'messages', 'message-order')
           else pending.splice(matches[0]!, 1)
         }

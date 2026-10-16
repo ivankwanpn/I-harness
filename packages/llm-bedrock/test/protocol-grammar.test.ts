@@ -27,3 +27,22 @@ it('uses exact per-message image counts independently of SDK byte estimates', ()
 it.each([{ tools: [{ toolSpec: null }] }, { tools: [], toolChoice: 'auto' }])('refuses known malformed tool-config envelopes %j', toolConfig => {
   expect(validate({ ...body, toolConfig }).kind).toBe('rejected')
 })
+it.each([{ count: 20 }, { count: 21 }])('counts top-level and sibling nested images together (%s)', ({ count }) => {
+  const image = { image: { format: 'png', source: { bytes: new Uint8Array([1]) } } }
+  const command = { modelId: 'fixture', messages: [
+    { role: 'assistant', content: ['a', 'b'].map(toolUseId => ({ toolUse: { toolUseId, name: 'read', input: {} } })) },
+    { role: 'user', content: [image, { toolResult: { toolUseId: 'a', content: Array(9).fill(image) } }, { toolResult: { toolUseId: 'b', content: Array(count - 10).fill(image) } }] },
+  ] }
+  const before = structuredClone(command)
+  expect(validate(command).kind).toBe(count === 20 ? 'accepted' : 'rejected')
+  expect(command).toEqual(before)
+})
+it.each([{ count: 5 }, { count: 6 }])('counts supported nested tool-result documents without treating JSON data as media (%s)', ({ count }) => {
+  const document = { document: { format: 'txt', name: 'fixture', source: { bytes: new Uint8Array([1]) } } }
+  const command = { modelId: 'fixture', messages: [
+    { role: 'assistant', content: [{ toolUse: { toolUseId: 'a', name: 'read', input: {} } }] },
+    { role: 'user', content: [{ text: 'describe these documents' }, { toolResult: { toolUseId: 'a', content: [...Array(count).fill(document), { json: { images: Array(50).fill({ image: true }), document: true } }] } }] },
+  ] }
+  if (count === 6) expect(validate(command)).toMatchObject({ kind: 'rejected', reason: 'media-limit' })
+  else expect(validate(command).kind).toBe('accepted')
+})
