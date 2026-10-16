@@ -165,7 +165,7 @@ function requireReplacementSeedProof(source: readonly SessionEventView[], retain
     visited.add(seq)
     for (const dependency of dependencies.get(seq) ?? []) pending.push(dependency)
     if (event.type === 'compaction/summary') for (const dependency of event.shadowedSeqs) pending.push(dependency)
-    if (event.type === 'compaction/reset') for (const dependency of event.removedSeqs) pending.push(dependency)
+    if (event.type === 'compaction/reset') for (const dependency of event.removedSeqs ?? []) pending.push(dependency)
     if (event.type === 'rewind/point') pending.push(event.anchorSeq)
   }
   // Later markers affecting the selected prefix cannot be smuggled in, nor
@@ -175,7 +175,7 @@ function requireReplacementSeedProof(source: readonly SessionEventView[], retain
   for (const event of source) if ((event.seq ?? -1) > end && (
     event.type === 'compaction/replacement' && event.coverage.some(entry => entry.sources.some(at => selectedSeqs.has(at.seq)))
     || event.type === 'compaction/summary' && event.shadowedSeqs.some(seq => selectedSeqs.has(seq))
-    || event.type === 'compaction/reset' && event.removedSeqs.some(seq => selectedSeqs.has(seq))
+    || event.type === 'compaction/reset' && (event.removedSeqs ?? []).some(seq => selectedSeqs.has(seq))
     || event.type === 'rewind/point' && retained.some(item => item.seq !== undefined && item.seq >= event.anchorSeq && item.seq < event.seq!))) throw new SessionForkUnavailableError('source view requires a marker outside selected boundary')
 }
 

@@ -1,7 +1,39 @@
 import { expect, it } from 'vitest'
-import { deriveMessages, type SessionEvent } from '@i-harness/core-session'
+import { deriveMessages, validateConversationHistory, type SessionEvent } from '@i-harness/core-session'
 import { remapConversationSeed, SessionForkUnavailableError } from '../src/seed.ts'
 import { completedTurnPrefix } from '../src/fork.ts'
+
+it('compiles a complete replacement prefix containing an absent legacy reset list', () => {
+  const parent: SessionEvent[] = [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
+    { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+    { type: 'compaction/reset', seq: 6 } as SessionEvent,
+    { type: 'compaction/replacement', version: 1, seq: 7, replacementId: 'r7', text: 'S',
+      coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+      insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+  ]
+  const original = JSON.stringify(parent)
+  expect(() => validateConversationHistory(parent, 7)).not.toThrow()
+  expect(deriveMessages({ formatVersion: 7, events: parent }).map(message => message.content)).toEqual(['H', 'S'])
+  const seed = remapConversationSeed({ source: parent, retained: parent, sourceFormat: 7 })
+  expect(seed.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  expect(seed[6]).toEqual({ type: 'compaction/reset', seq: 6, removedSeqs: [] })
+  expect(seed[7]).toMatchObject({ type: 'compaction/replacement', seq: 7, replacementId: 'seed:15f868c37d857ce231050ad17156edb4325509bd188b2442d13c52faf3b4a676',
+    coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+    insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } })
+  expect(deriveMessages({ formatVersion: 7, events: seed }).map(message => message.content)).toEqual(['H', 'S'])
+  for (const missing of [2, 3, 4]) expect(() => remapConversationSeed({ source: parent, retained: parent.filter(event => event.seq !== missing), sourceFormat: 7 })).toThrow(SessionForkUnavailableError)
+  expect(JSON.stringify(parent)).toBe(original)
+  const later: SessionEvent[] = [...parent, { type: 'turn/start', seq: 8 }, { type: 'user/message', seq: 9, text: 'later' }, { type: 'turn/end', seq: 10 }, { type: 'compaction/reset', seq: 11 } as SessionEvent]
+  const selected = completedTurnPrefix(later, 'parent', 3, 7)
+  expect(selected.map(event => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  expect(selected[7]).toMatchObject({ seq: 7, coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }] })
+  expect(deriveMessages({ formatVersion: 7, events: selected }).map(message => message.content)).toEqual(['H', 'S'])
+  const affecting: SessionEvent[] = [...later.slice(0, -1), { type: 'compaction/reset', seq: 11, removedSeqs: [7] }]
+  expect(() => validateConversationHistory(affecting, 7)).not.toThrow()
+  expect(deriveMessages({ formatVersion: 7, events: affecting }).map(message => message.content)).toEqual(['H', 'later'])
+  expect(() => completedTurnPrefix(affecting, 'parent', 3, 7)).toThrow(SessionForkUnavailableError)
+})
 
 const source = (): SessionEvent[] => [
   { type: 'context/recovery', version: 1, seq: 0, ownerSessionId: 'parent', recoveryId: 'audit', logicalStepSeq: 0, bindingFingerprint: 'a'.repeat(64), rejectedInputFingerprint: 'b'.repeat(64), state: 'resolved' },
