@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. One implementer, then one fresh GPT6.1Sol task reviewer; no recursive agents. Steps use checkbox (`- [ ]`) syntax.
 
-**Status:** Ready for root's final rebase/documentation BASE after reviewed F3a through `c87b0e599e3ba00a7b90e92a8323840694def52a`. No product implementation in this plan is implied. Root's read-only source probes establish the two concrete closure inconsistencies described below.
+**Status:** COMPLETE through `468fb62678351e0e22279bfa2516fe3686894697` from exact BASE `321607c7f2715491bbfb0242a07b4dfbe2c8880e`; fresh full-range spec/quality review approved. Root separately sealed the review's self-output-log evidence correction. [Verification and user-requested pause checkpoint](../../research/2026-10-17-context-engine-r3-f3b-verification.md). Connected selection/publication remains pending.
 
 **Goal:** Make replacement validation, projected unit metadata and context protection agree on complete source units before a production selector/publisher is enabled.
 
@@ -71,11 +71,11 @@ The lifecycle/outcome rules are explicit: failed, or suppressed-and-ended, is un
 
 Physical metadata is optional: inferred stepless exchanges keep their existing exchange identity/state and have no invented step/start source. Summary/input outside a physical step has no physical-unit descriptor. Members of the same actual physical step receive equal descriptor values/source identity, not separately inferred grouping.
 
-- [ ] **Step 1: Bind exact BASE and capture the existing owners.**
+- [x] **Step 1: Bind exact BASE and capture the existing owners.**
 
 Record root-provided BASE and clean product/index status. Inspect actual `history/group.ts:makeItem`, `legacy.ts:inferLegacy/close/callMetadata`, `exchange.ts:finishItem`, `history/replacements.ts:validateHistoricalReplacement`, `state.ts:protectedItems` and `events/replacement.ts`. Current input descriptors privately retain LegacyStep membership, but public inputs have no exchange/closure state; current R validation checks closure only in its exchange branch. The current semantic digest explicitly selects fields and excludes exchange.state; preserve that distinction for unit metadata.
 
-- [ ] **Step 2: Write the two literal closure RED cases.**
+- [x] **Step 2: Write the two literal closure RED cases.**
 
 First fixture has an ordinary readable prefix with an open physical step, followed by an invalid replacement:
 
@@ -101,13 +101,13 @@ Second fixture is a complete stepless inferred exchange: `user0(H),assistant1(E)
 
 Run focused `pnpm exec vitest run test/replacement.test.ts --maxWorkers=2 --minWorkers=1` in core-session, preserving actual missing-behavior failures before edits.
 
-- [ ] **Step 3: Write scalar-array and protection RED controls.**
+- [x] **Step 3: Write scalar-array and protection RED controls.**
 
 F2-M1: make `coverage.sources` length2 with own entry0 and a hole at1. It must reject with the existing scalar code/reason and safe seq, never a TypeError. Also cover sparse coverage, a missing own slot filled by an inherited property, and an indexed accessor whose getter must not run. Valid dense arrays retain their order and exact coverage behavior. Full/staged failures must leave history/count/dependencies/tombstones unchanged; a valid subsequent R still commits once. No raw source/body appears in the error.
 
 For the open input-only fixture above, ContextEngine capture must still succeed as a read, expose input.unit source1/step with state open, and protect that input/unit source. Closing the step before any R makes unit state closed and permits the intended replacement after the turn is closed. The same text-only before/after closure retains semanticRevision and exact rendered messages; protectionRevision changes. An unrelated budget/usage/diagnostic append changes neither semantic/protection identity and never triggers prepare/auth/model calls.
 
-- [ ] **Step 4: Implement the shared data-only completion owner.**
+- [x] **Step 4: Implement the shared data-only completion owner.**
 
 Move the existing awaitingItemResults helper into unit-state.ts and update its actual imports; no compatibility re-export without a real consumer. `finishItem` and historical replacement checks use the shared exchangeCompletion instead of separate closure expressions. Allow an honestly closed stepless inferred exchange; preserve explicit acceptance/fence/native/unknown-effect requirements.
 
@@ -115,7 +115,7 @@ HistoryGrouping computes a descriptor for each actual LegacyStep from its existi
 
 The historical validator requires each selected physical unit to be closed and addressable, regardless of whether the selected item is input or exchange. Retain complete same-unit/shared-source coverage, pending admission/current input/session protection, exact source comparison, prefix dependency and staged rollback checks. Per-bundle incomplete/unknown checks still apply even when the physical unit is closed. Do not change LegacyStep's existing boundary inference to make a future turn/end close an earlier R.
 
-- [ ] **Step 5: Connect real protection and dense-array validation.**
+- [x] **Step 5: Connect real protection and dense-array validation.**
 
 `readConversationState` protects items whose physical unit is not closed or whose unit source is unsafe, alongside its existing current-input/session-scope/exchange/effect protection. For protected members include their actual unit source ID in protection sourceIds, so the shared whole unit cannot be partially selected. Preserve pending admissions/promotions/delegations and inherited seed boundaries. This is a pure read of existing facts, not execution or delivery authority.
 
@@ -123,7 +123,7 @@ Leave `semanticContextRevision`'s explicit model/source mapping free of the new 
 
 At replacement shape validation, require ordinary dense data arrays before iteration/map. Validate own enumerable indexed data descriptors for every position, reject holes/inherited/accessor slots and unexpected own names/symbols; do not invoke a supplied iterator/getter to validate it. Reuse one small helper for coverage and sources. Existing plain record data-descriptor checks, seq/part limits, exact source order and duplicate checks remain. Use the existing shape/unsafe-address reason vocabulary; no new raw error/body field or format revision.
 
-- [ ] **Step 6: Verify real reader/seed and protocol consumers.**
+- [x] **Step 6: Verify real reader/seed and protocol consumers.**
 
 Add a complete physical input+exchange shared-unit test and an input associated with failed/unaccepted/unknown-effect work. It must remain protected/ineligible until the existing facts establish a complete eligible unit; do not reinterpret an unknown effect as no dispatch. Known tool error results in an otherwise successfully closed accepted unit remain usable. Exercise full/prefix/staged readers and a dependency-complete remapped seed; lifecycle closure proof omitted from a selected seed must still refuse before child creation.
 
@@ -135,7 +135,7 @@ Typecheck actual core-session/context-engine/core-agent/session-persistence/suba
 
 Build fresh distinct Gateway/CLI copies with the existing builder/verifier commands. Extend the existing zero-call copied reader smoke with the open-input-unit negative R and closed-unit/stepless positives through actual copied readers/import/fork. Verify raw source immutability, typed refusal, child-owned receipt, unchanged message order and current source/copy hashes. Do not reinstall the app, use user data or redo the unrelated F1 transport suite.
 
-- [ ] **Step 7: Commit and report this source boundary.**
+- [x] **Step 7: Commit and report this source boundary.**
 
 Keep extraction and behavior commits coherent where possible. Explicitly stage task code/tests only; root owns plans/progress/research. Report BASE/HEAD, literal RED/GREEN, each actual consumer, descriptor/protection versus semantic identity, sparse-array getter/rollback behavior, exact commands/output/source hashes, copied execution and remaining qualifications. No selector/publisher or whole-F3 completion claim. Root dispatches the fresh whole-task reviewer; do not spawn one.
 
