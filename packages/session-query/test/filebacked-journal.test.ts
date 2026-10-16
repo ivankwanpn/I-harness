@@ -29,6 +29,15 @@ it('reads actual format7 replacement history as structural searchable records wi
   } finally { closeSessionQueries() }
 })
 
+it.each([1, 2, 3, 4, 5])('refuses replacement records in the actual legacy format%s decoder', formatVersion => {
+  const records = [
+    { type: 'step/start', seq: 0 }, { type: 'assistant/message', seq: 1, text: 'E' }, { type: 'step/end', seq: 2 },
+    { type: 'compaction/replacement', version: 1, seq: 3, replacementId: 'wrong-format', text: 'S', coverage: [{ item: { kind: 'exchange', at: { seq: 1, part: 'message' } }, sources: [{ seq: 0, part: 'step' }, { seq: 1, part: 'message' }] }], insertBefore: { kind: 'exchange', at: { seq: 1, part: 'message' } } },
+  ]
+  const raw = [JSON.stringify({ formatVersion, sessionId: 's' }), ...records.map(record => JSON.stringify(record)), ''].join('\n')
+  expect(() => parseLinePrefix(raw)).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'format' }))
+})
+
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const metadata = () => ({ version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }) as const
 

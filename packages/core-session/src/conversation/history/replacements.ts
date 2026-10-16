@@ -1,7 +1,7 @@
 import { addressKey, compareAddresses, itemRefKey, replacementFormatError as fail, type ConversationAddress, type ConversationItemRef } from '../../events/replacement.ts'
 import { awaitingItemResults } from '../exchange.ts'
 import type { HistoryItem } from './types.ts'
-import { historyEntries, type HistoryArchive, type HistoryFact } from './facts.ts'
+import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { groupConversationHistory } from './group.ts'
 import { historyVisibility } from './visibility.ts'
 import { conversationSeq } from '../../events/conversation.ts'
@@ -60,15 +60,23 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
   if (start < 0) fail('missing-source', seq)
   const selected = items.slice(start, start + coverage.length)
   if (coverage.some((entry, index) => keys[start + index] !== itemRefKey(entry.item))) fail('noncontiguous', seq)
+  const selectedSources = new Set(selected.flatMap(item => historyItemCoverage(item).map(addressKey)))
+  if (items.some(item => !selected.includes(item) && touches(item, selectedSources))) fail('incomplete-unit', seq)
   const dependencies = new Set<number>()
-  const visibility = historyVisibility(archive)
+  const visibility = historyVisibility(historyFacts(archive))
   let turn: number | undefined
   let ambiguousTurn = false
+  const pending = new Map<string, number | undefined>(), consumedInputs = new Set<string>()
   for (const [index, event] of historyEntries(archive)) if (visibility.branch(event)) {
     if (event.type === 'turn/start') { if (turn !== undefined) ambiguousTurn = true; turn = index }
     else if (event.type === 'turn/end') { if (turn === undefined) ambiguousTurn = true; turn = undefined }
+    if (event.type === 'agent/input/admitted') pending.set(event.inputId!, event.seq)
+    else if (event.type === 'agent/input/cancelled') pending.delete(event.inputId!)
+    else if (event.type === 'user/message') { const id = event.inputId ?? event.imageInputId; if (id) consumedInputs.add(id) }
   }
   if (ambiguousTurn) fail('protected-source', seq)
+  for (const id of consumedInputs) pending.delete(id)
+  if ([...pending.values()].some(seq => seq !== undefined && selectedSources.has(addressKey({ seq, part: 'admission' })))) fail('protected-source', seq)
   for (const [index, item] of selected.entries()) {
     const actual = historyItemCoverage(item), expected = coverage[index]!.sources
     if (actual.length !== expected.length || actual.some((at, index) => at.seq !== expected[index]!.seq || at.part !== expected[index]!.part)) fail('coverage-mismatch', seq)
@@ -100,7 +108,7 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
   // Prior rewrite evidence and semantics fences make the prefix interpretation
   // reproducible. Seed compilation recursively requires the records they name.
   for (const [, fact] of historyEntries(archive)) if (['conversation/semantics', 'compaction/replacement', 'compaction/summary', 'compaction/reset', 'rewind/point'].includes(fact.type) && fact.seq !== undefined) dependencies.add(fact.seq)
-  for (const [, fact] of historyEntries(archive)) if ((fact.type === 'agent/input/promoted' || fact.type === 'agent/input/admitted') && selected.some(item => item.admissionIndex !== undefined && archive.get(item.admissionIndex).inputId === fact.inputId) && fact.seq !== undefined) dependencies.add(fact.seq)
+  for (const [, fact] of historyEntries(archive)) if ((fact.type === 'agent/input/promoted' || fact.type === 'agent/input/admitted') && selected.some(item => [item.admissionIndex, item.imageAdmissionIndex].some(index => index !== undefined && archive.get(index).inputId === fact.inputId)) && fact.seq !== undefined) dependencies.add(fact.seq)
   const counts = new Map<number, number>()
   for (const [, fact] of historyEntries(archive)) if (conversationSeq(fact.seq)) counts.set(fact.seq, (counts.get(fact.seq) ?? 0) + 1)
   for (const dependency of dependencies) if (!conversationSeq(dependency) || dependency >= seq || counts.get(dependency) !== 1) fail('unsafe-address', seq)

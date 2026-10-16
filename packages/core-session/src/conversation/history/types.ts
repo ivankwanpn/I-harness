@@ -10,5 +10,6 @@ export interface HistoryItem extends Omit<ItemBuilder, 'messages'> {
   readonly unit?: import('../legacy.ts').LegacyStep
   readonly establishmentIndex: number
   readonly admissionIndex?: number
+  readonly imageAdmissionIndex?: number
   recipes: HistoryRecipe[]
 }

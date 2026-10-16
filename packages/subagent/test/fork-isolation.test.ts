@@ -6,6 +6,38 @@ import { registerExec } from "@i-harness/exec"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { registerSubagent } from "../src/index.ts"
 import { spawnChild } from "../src/child.ts"
+import { mkdtemp } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { createSessionCoordinator, SessionForkUnavailableError } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { createAgentRegistry } from '@i-harness/core-agent'
+import { createAgentTable } from '../src/agent-table.ts'
+import { createJobRegistry } from '../src/jobs.ts'
+import { forkTurns } from '../src/fork.ts'
+
+it('refuses last-one-turn replacement tails before actual child creation or model resolution', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f2-partial-child-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const ctx = createContext(), parentRegistry = createToolRegistry(ctx), table = createAgentTable(), jobs = createJobRegistry(), agents = createAgentRegistry()
+  const parentSession: import('@i-harness/core-session').Session = { formatVersion: 7, events: [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H1' }, { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E1' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+    { type: 'turn/start', seq: 6 }, { type: 'user/message', seq: 7, text: 'H2' }, { type: 'step/start', seq: 8 }, { type: 'assistant/message', seq: 9, text: 'tail' }, { type: 'step/end', seq: 10 }, { type: 'turn/end', seq: 11 },
+    { type: 'compaction/replacement', version: 1, seq: 12, replacementId: 'partial', text: 'S', coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }], insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } },
+  ] }
+  const create = vi.spyOn(coordinator, 'create'), resolve = vi.fn(async () => ({ status: 'unconfigured' as const, reason: 'unused' }))
+  let sends = 0
+  try {
+    expect(forkTurns(parentSession.events, Infinity, 7).at(-1)).toMatchObject({ type: 'compaction/replacement' })
+    await expect(spawnChild({ taskName: 'partial', message: 'instruction', parentPath: 'root', parentCtx: ctx, parentSession, parentRegistry,
+      role: { name: 'observer', description: '', systemPrompt: 'Observe', tools: [] }, parentModel: { async *stream() { sends++; yield { type: 'end' } } }, resolveModel: resolve,
+      table, jobs, agents, forkTurns: 1, childSessions: { coordinator, parentSessionId: 'parent' },
+    })).rejects.toBeInstanceOf(SessionForkUnavailableError)
+    expect(create).not.toHaveBeenCalled(); expect(resolve).not.toHaveBeenCalled(); expect(sends).toBe(0)
+    expect(await coordinator.list()).toEqual([])
+    expect(table.entries().size).toBe(0); expect(jobs.listAll()).toEqual([])
+  } finally { await coordinator.close(); await ctx.scope.unmount() }
+})
 
 it.each([
   { fork: undefined, first: false, last: false },

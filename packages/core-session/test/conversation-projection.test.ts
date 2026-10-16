@@ -19,6 +19,24 @@ const continuation: ProviderContinuation = {
 }
 
 describe("semantic conversation projection", () => {
+  it('keeps a distinct image admission alongside the promoted input admission', () => {
+    const image = { mediaType: 'image/png' as const, dataBase64: 'aW1hZ2U=' }
+    const session = log(
+      { type: 'agent/input/admitted', version: 1, inputId: 'text', text: 'H', delivery: 'queue', intent: 'user' },
+      { type: 'agent/input/admitted', version: 1, inputId: 'picture', text: 'image source', delivery: 'queue', intent: 'user', images: [image] },
+      { type: 'user/message', text: 'H', input: { inputId: 'text', intent: 'user' }, imageInputId: 'picture' },
+    )
+    expect(deriveMessages(session)).toEqual([{ role: 'user', content: [{ type: 'text', text: 'H' }, { type: 'image', image }] }])
+    expect(projectConversation(session).items[0]!.sources.map(source => [source.seq, source.part])).toEqual(expect.arrayContaining([[1, 'admission'], [2, 'message']]))
+  })
+  it('renders a result body once when the same descriptor also supplies an image companion', () => {
+    let serializations = 0
+    const value = { toJSON() { serializations++; return 'lowered' } }
+    const session = log(call(), { type: 'tool/result', callId: 'a', name: 'read', output: { value, images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] } })
+    const messages = deriveMessages(session)
+    expect(messages.map(message => message.role)).toEqual(['assistant', 'tool', 'user'])
+    expect(serializations).toBe(1)
+  })
   // Removing the projector or flattening source metadata must fail these independent expectations.
   it("groups the concrete assistant, reverse results, dispatch and image sources while attributing a deferred reminder", () => {
     const image = { mediaType: "image/png" as const, dataBase64: "aW1hZ2U=" }

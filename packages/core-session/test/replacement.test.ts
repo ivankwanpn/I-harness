@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createConversationValidationIndex, deriveMessages, deriveMessagesUpTo, fromJSONL, projectConversation, toJSONL, validateConversationHistory, type Session, type SessionEvent } from '../src/index.ts'
+import { append, captureFactGroup, createConversationValidationIndex, deriveMessages, deriveMessagesUpTo, fromJSONL, projectConversation, toJSONL, validateConversationHistory, type Session, type SessionEvent } from '../src/index.ts'
 
 // Coordinates and expected order are literal: no production selector/publisher.
 function fixture(): Session {
@@ -42,6 +42,109 @@ function acceptedParallel(): Session {
 }
 
 describe('strict positional replacement readers', () => {
+  it.each(['admitted', 'promoted'] as const)('protects a distinct image admission that is still %s', state => {
+    const session: Session = { formatVersion: 7, events: [
+      { type: 'agent/input/admitted', version: 1, seq: 0, inputId: 'picture', text: 'image', delivery: 'queue', intent: 'user', images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] },
+      state === 'promoted' ? { type: 'agent/input/promoted', version: 1, seq: 1, inputId: 'picture' } : { type: 'plan/mode', seq: 1, mode: 'off' },
+      { type: 'agent/input/admitted', version: 1, seq: 2, inputId: 'text', text: 'H', delivery: 'queue', intent: 'user' }, { type: 'turn/start', seq: 3 },
+      { type: 'user/message', seq: 4, text: 'H', input: { inputId: 'text', intent: 'user' }, imageInputId: 'picture' }, { type: 'turn/end', seq: 5 },
+      { type: 'compaction/replacement', version: 1, seq: 6, replacementId: 'pending-image', text: 'S', coverage: [{ item: { kind: 'input', at: { seq: 4, part: 'message' } }, sources: [{ seq: 0, part: 'admission' }, { seq: 2, part: 'admission' }, { seq: 4, part: 'message' }] }], insertBefore: { kind: 'input', at: { seq: 4, part: 'message' } } },
+    ] }
+    expect(() => validateConversationHistory(session.events, 7)).toThrowError(expect.objectContaining({ reason: 'protected-source' }))
+  })
+  it('rejects later reuse of consumed admission/image evidence at that stage and permits a fresh admission', () => {
+    const prefix: SessionEvent[] = [
+      { type: 'agent/input/admitted', version: 1, seq: 0, inputId: 'image', text: 'H', delivery: 'queue', intent: 'user', images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] },
+      { type: 'agent/input/promoted', version: 1, seq: 1, inputId: 'image' }, { type: 'turn/start', seq: 2 },
+      { type: 'user/message', seq: 3, text: 'H', imageInputId: 'image', input: { inputId: 'image', intent: 'user' } }, { type: 'turn/end', seq: 4 },
+      { type: 'compaction/replacement', version: 1, seq: 5, replacementId: 'r5', text: 'S', coverage: [{ item: { kind: 'input', at: { seq: 3, part: 'message' } }, sources: [{ seq: 0, part: 'admission' }, { seq: 3, part: 'message' }] }], insertBefore: { kind: 'input', at: { seq: 3, part: 'message' } } },
+    ]
+    const index = createConversationValidationIndex(prefix, { formatVersion: 7 })
+    const stale: SessionEvent = { type: 'user/message', seq: 6, text: 'H', imageInputId: 'image', input: { inputId: 'image', intent: 'user' } }
+    expect(() => index.stage([stale])).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'missing-source', seq: 6 }))
+    expect(index.eventCount).toBe(6)
+    expect(() => validateConversationHistory([...prefix, stale], 7)).toThrowError(expect.objectContaining({ reason: 'missing-source', seq: 6 }))
+    const audit: SessionEvent = { type: 'operator/run-end', version: 1, seq: 6, runId: 'late', exitCode: 0, durationMs: 1, phase: 'session' }
+    index.stage([audit]).commit()
+    const fresh: SessionEvent[] = [
+      { type: 'agent/input/admitted', version: 1, seq: 7, inputId: 'image', text: 'fresh', delivery: 'queue', intent: 'user', images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] },
+      { type: 'agent/input/promoted', version: 1, seq: 8, inputId: 'image' }, { type: 'turn/start', seq: 9 },
+      { type: 'user/message', seq: 10, text: 'fresh', imageInputId: 'image', input: { inputId: 'image', intent: 'user' } },
+    ]
+    index.stage(fresh).commit()
+    expect(index.eventCount).toBe(11)
+    expect(deriveMessages({ formatVersion: 7, events: [...prefix, audit, ...fresh] }).map(message => typeof message.content === 'string' ? message.content : message.content[0])).toEqual(['S', { type: 'text', text: 'fresh' }])
+    expect(() => validateConversationHistory([...prefix.slice(0, 5), { ...stale, seq: 5 }], 7)).not.toThrow()
+  })
+  it('requires every item sharing an admission/image source even across distinct stepless input units', () => {
+    const session: Session = { formatVersion: 7, events: [
+      { type: 'agent/input/admitted', version: 1, seq: 0, inputId: 'shared', text: 'H', delivery: 'queue', intent: 'user', images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] },
+      { type: 'agent/input/promoted', version: 1, seq: 1, inputId: 'shared' }, { type: 'turn/start', seq: 2 },
+      { type: 'user/message', seq: 3, text: 'H', imageInputId: 'shared', input: { inputId: 'shared', intent: 'user' } },
+      { type: 'user/message', seq: 4, text: 'H', imageInputId: 'shared', input: { inputId: 'shared', intent: 'user' } }, { type: 'turn/end', seq: 5 },
+    ] }
+    expect(() => validateConversationHistory(session.events, 7)).not.toThrow()
+    expect(deriveMessages(session)).toHaveLength(2)
+    const event: SessionEvent = { type: 'compaction/replacement', version: 1, seq: 6, replacementId: 'shared', text: 'S',
+      coverage: [{ item: { kind: 'input', at: { seq: 3, part: 'message' } }, sources: [{ seq: 0, part: 'admission' }, { seq: 3, part: 'message' }] }],
+      insertBefore: { kind: 'input', at: { seq: 3, part: 'message' } } }
+    expect(() => validateConversationHistory([...session.events, event], 7)).toThrowError(expect.objectContaining({ reason: 'incomplete-unit' }))
+    const complete = { ...event, coverage: [...event.coverage, { item: { kind: 'input' as const, at: { seq: 4, part: 'message' } }, sources: [{ seq: 0, part: 'admission' }, { seq: 4, part: 'message' }] }] }
+    session.events.push(complete)
+    expect(labels(session)).toEqual(['S'])
+  })
+  it('refuses accessor-bearing replacement DTOs without executing them on full, append or seed-import paths', () => {
+    const session = fixture(), event = replacement(session)
+    session.events.pop()
+    let reads = 0
+    Object.defineProperty(event, 'text', { enumerable: true, get() { reads++; return 'SENSITIVE_BODY' } })
+    expect(() => validateConversationHistory([...session.events, event], 7)).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'shape' }))
+    expect(() => append(session, event)).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'shape' }))
+    expect(captureFactGroup({ kind: 'seed-import', events: [event] })).toEqual({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' })
+    expect(reads).toBe(0)
+    expect(session.events).toHaveLength(11)
+  })
+  it('replaces only the literal contiguous span before a steer and preserves its later suffix', () => {
+    const session = fixture(), record = replacement(session)
+    session.events = [...session.events.slice(0, 8),
+      { type: 'user/message', seq: 8, text: 'steer' },
+      { type: 'step/start', seq: 9 }, { type: 'assistant/message', seq: 10, text: 'E3' }, { type: 'step/end', seq: 11 },
+      { type: 'step/start', seq: 12 }, { type: 'assistant/message', seq: 13, text: 'E4' }, { type: 'step/end', seq: 14 },
+      { type: 'step/start', seq: 15 }, { type: 'assistant/message', seq: 16, text: 'tail' }, { type: 'step/end', seq: 17 }, { ...record, seq: 18 },
+    ]
+    expect(labels(session)).toEqual(['H', 'S11', 'steer', 'E3', 'E4', 'tail'])
+    expect(deriveMessagesUpTo(session, 17).map(message => message.content)).toEqual(['H', 'E1', 'E2', 'steer', 'E3', 'E4', 'tail'])
+    ;(session.events[18] as any).coverage[1] = { item: { kind: 'exchange', at: { seq: 10, part: 'message' } }, sources: [{ seq: 9, part: 'step' }, { seq: 10, part: 'message' }] }
+    expect(() => validateConversationHistory(session.events, 7)).toThrowError(expect.objectContaining({ reason: 'noncontiguous' }))
+  })
+
+  it.each(['version', 'ignorable', 'empty-id', 'nonascii-id', 'long-id', 'blank-text', 'extra', 'duplicate-item', 'duplicate-source', 'unsafe-seq', 'unknown-part', 'reordered-sources'])( 'rejects closed schema/source fault %s with scalar-only diagnostics', fault => {
+    const session = fixture(), event = replacement(session)
+    if (fault === 'version') event.version = 2
+    if (fault === 'ignorable') event.ignorable = true
+    if (fault === 'empty-id') event.replacementId = ''
+    if (fault === 'nonascii-id') event.replacementId = '中文'
+    if (fault === 'long-id') event.replacementId = 'x'.repeat(257)
+    if (fault === 'blank-text') event.text = '  \n '
+    if (fault === 'extra') event.candidate = { private: 'SENSITIVE_BODY' }
+    if (fault === 'duplicate-item') event.coverage.push(event.coverage[0])
+    if (fault === 'duplicate-source') event.coverage[0].sources.push({ seq: 2, part: 'step' })
+    if (fault === 'unsafe-seq') event.coverage[0].sources[0].seq = Number.MAX_SAFE_INTEGER + 1
+    if (fault === 'unknown-part') event.coverage[0].sources[0].part = 'invented-part'
+    if (fault === 'reordered-sources') event.coverage[0].sources.reverse()
+    const error = (() => { try { validateConversationHistory(session.events, 7) } catch (cause) { return cause } })()
+    expect(error).toMatchObject({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT' })
+    expect(Object.keys(error as object).sort()).toEqual(['code', 'reason', 'seq'])
+    expect(String(error)).not.toContain('SENSITIVE_BODY')
+  })
+
+  it.each(['reset', 'summary'] as const)('keeps consumed sources hidden after a later legacy %s hides R itself', kind => {
+    const session = fixture()
+    session.events.push(kind === 'reset' ? { type: 'compaction/reset', seq: 12, removedSeqs: [11] } : { type: 'compaction/summary', seq: 12, text: 'legacy', shadowedSeqs: [11] })
+    expect(labels(session)).toEqual(kind === 'reset' ? ['H', 'tail'] : ['H', 'tail', 'legacy'])
+    session.events.push({ ...replacement(session), seq: 13, replacementId: 'stale' })
+    expect(() => validateConversationHistory(session.events, 7)).toThrowError(expect.objectContaining({ reason: 'missing-source' }))
+  })
   it('requires the exact accepted parallel/native/image bundle and preserves native prefix data', () => {
     const session = acceptedParallel(), raw = JSON.stringify(session)
     expect(labels(session)).toEqual(['H', 'S'])

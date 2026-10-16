@@ -80,7 +80,7 @@ export function captureFactGroup(draft: FactGroupDraft):
       if (!value || typeof value !== 'object') return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
       const fields = Object.getOwnPropertyDescriptors(value), type = fields.type?.value
       if (typeof type !== 'string' || Object.values(fields).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
-      if ((type.startsWith('context/') && type !== 'context/result-ref' || type === 'model/exchange-accepted') && !isStrictFactData(value)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+      if ((type.startsWith('context/') && type !== 'context/result-ref' || type === 'model/exchange-accepted' || type === 'compaction/replacement') && !isStrictFactData(value)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
       if (type === 'assistant/message' && (!isStrictFactData(fields.providerContinuation?.value) || !isStrictFactData(fields.thinkingBlocks?.value))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     }
   } catch { return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' } }

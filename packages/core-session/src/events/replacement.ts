@@ -15,20 +15,23 @@ export function replacementFormatError(reason: ReplacementReason, seq?: number):
   })
 }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
-const fields = (value: object, allowed: readonly string[]) => Object.keys(value).every(key => allowed.includes(key))
+const fields = (value: object, allowed: readonly string[]) => [Object.prototype, null].includes(Object.getPrototypeOf(value))
+  && Reflect.ownKeys(value).every(key => typeof key === 'string' && allowed.includes(key)
+    && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true && Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, 'value'))
 export const addressKey = (value: ConversationAddress) => JSON.stringify([value.seq, value.part])
 export const itemRefKey = (value: ConversationItemRef) => JSON.stringify([value.kind, value.at.seq, value.at.part])
 export const compareAddresses = (a: ConversationAddress, b: ConversationAddress) => a.seq - b.seq || Buffer.compare(Buffer.from(a.part), Buffer.from(b.part))
 
 /** Closed reader DTO; this deliberately creates no producer capability. */
-export function validateReplacementShape(event: ContextReplacementRecordV1, format: number): void {
-  if (format < 7) replacementFormatError('format', event.seq)
+export function validateReplacementShape(event: ContextReplacementRecordV1, format: number, assignedSeq?: number): void {
+  const seq = assignedSeq ?? Object.getOwnPropertyDescriptor(event, 'seq')?.value
+  if (format < 7) replacementFormatError('format', seq)
   if (!fields(event, ['type', 'version', 'replacementId', 'coverage', 'insertBefore', 'text', 'seq']) || event.version !== 1
     || typeof event.replacementId !== 'string' || !/^[\x00-\x7f]{1,256}$/.test(event.replacementId)
-    || typeof event.text !== 'string' || !event.text.trim() || !Array.isArray(event.coverage) || !event.coverage.length) replacementFormatError('shape', event.seq)
-  if (!conversationSeq(event.seq)) replacementFormatError('unsafe-address')
+    || typeof event.text !== 'string' || !event.text.trim() || !Array.isArray(event.coverage) || !event.coverage.length) replacementFormatError('shape', seq)
+  if (!conversationSeq(seq)) replacementFormatError('unsafe-address')
   const address = (value: unknown): value is ConversationAddress => object(value) && fields(value, ['seq', 'part'])
-    && conversationSeq(value.seq) && value.seq < event.seq! && typeof value.part === 'string' && value.part.length > 0 && Buffer.byteLength(value.part) <= 64
+    && conversationSeq(value.seq) && value.seq < seq && typeof value.part === 'string' && value.part.length > 0 && Buffer.byteLength(value.part) <= 64
   const ref = (value: unknown): value is ConversationItemRef => object(value) && fields(value, ['kind', 'at'])
     && ['input', 'exchange', 'summary'].includes(value.kind as string) && address(value.at)
   if (!ref(event.insertBefore)) replacementFormatError('unsafe-address', event.seq)

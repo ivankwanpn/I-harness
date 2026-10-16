@@ -15,18 +15,23 @@ export function renderConversationItems(session: SessionView, history: { items: 
   const sources = conversationSources(session, options.ownerSessionId, diagnostics)
   const source = (ref: { eventIndex: number; part: string }) => sources.ref(ref.eventIndex, ref.part)
   const pruned = derivePruneSubstitutes(session)
+  const results = new Map<number, ReturnType<typeof projectToolResult>>()
   const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readConversationPayload(event, key, sources.ref(index, part), options.capturePayload))
   const result = (index: number) => {
+    const previous = results.get(index)
+    if (previous) return previous
     const event = session.events[index] as Extract<SessionEventView, { type: 'tool/result' }>
-    return projectToolResult(event, pruned.get(event.callId), sources.ref(index, 'result'), sources.ref(index, 'image'), options.capturePayload)
+    const rendered = projectToolResult(event, pruned.get(event.callId), sources.ref(index, 'result'), sources.ref(index, 'image'), options.capturePayload)
+    results.set(index, rendered)
+    return rendered
   }
   const render = (recipe: HistoryRecipe, item: HistoryItem): LLMMessage => {
     const index = recipe.index!
     const event = session.events[index]
     if (recipe.kind === 'input') {
       if (event?.type !== 'user/message') throw new Error('Invalid input recipe')
-      const admission = session.events[item.admissionIndex ?? -1]
-      const images = event.imageInputId === undefined ? payload(event, 'images', index, 'image') : admission?.type === 'agent/input/admitted' ? payload(admission, 'images', item.admissionIndex!, 'admission') : undefined
+      const admission = session.events[item.imageAdmissionIndex ?? -1]
+      const images = event.imageInputId === undefined ? payload(event, 'images', index, 'image') : admission?.type === 'agent/input/admitted' ? payload(admission, 'images', item.imageAdmissionIndex!, 'admission') : undefined
       return images?.length ? { role: 'user', content: [{ type: 'text', text: event.text }, ...images.map(image => ({ type: 'image' as const, image }))] } : { role: 'user', content: event.text }
     }
     if (recipe.kind === 'summary') {

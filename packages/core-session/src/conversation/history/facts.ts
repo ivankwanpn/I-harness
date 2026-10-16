@@ -48,3 +48,6 @@ export function historyFact(event: SessionEventView, index: number): HistoryFact
 export function* historyEntries(archive: HistoryArchive): Generator<[number, HistoryFact]> {
   for (let index = 0; index < archive.length; index++) yield [index, archive.get(index)]
 }
+export function* historyFacts(archive: HistoryArchive): Generator<HistoryFact> {
+  for (let index = 0; index < archive.length; index++) yield archive.get(index)
+}

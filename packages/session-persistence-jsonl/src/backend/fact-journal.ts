@@ -1,5 +1,5 @@
 import { open, readFile, type FileHandle } from 'node:fs/promises'
-import { decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix } from '@i-harness/core-session'
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
 import { isHeldFactOwner } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
@@ -16,7 +16,7 @@ async function header(handle: FileHandle) {
   const end = bytes.subarray(0, bytesRead).indexOf(0x0a)
   if (end < 0) throw new TypeError('Invalid managed header')
   const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-  if (![6, 7].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+  if (meta.formatVersion !== CURRENT_FORMAT_VERSION || !validJournalMetadata(meta.journal)) throw new TypeError('Current managed journal format required')
   return { meta, bytes: end + 1 }
 }
 function checkBatch(prefix: JournalPrefix, batch: EncodedFactBatch) {

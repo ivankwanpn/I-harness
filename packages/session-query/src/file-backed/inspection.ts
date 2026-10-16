@@ -1,6 +1,6 @@
 import { readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { CURRENT_FORMAT_VERSION, readFactJournal, validJournalMetadata, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, readFactJournal, validJournalMetadata, validateConversationHistory, type SessionEvent } from "@i-harness/core-session"
 import { observeFailed, type HeaderMeta, type SnapshotRow } from "./contracts.ts"
 
 // Read-only mirrors of the JSONL format; source bytes are never repaired.
@@ -48,6 +48,7 @@ export function parseLinePrefix(input: string | Uint8Array): { header: HeaderMet
       break // torn tail — preserve the existing legacy structural prefix
     }
   }
+  if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion)
   return { header, events, contentLines: [lines[0]!, ...lines.slice(1, 1 + events.length)] }
 }
 

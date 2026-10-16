@@ -2,7 +2,7 @@ import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
-import { projectHistory, validateHistoricalReplacement } from './history/replacements.ts'
+import type { projectHistory } from './history/replacements.ts'
 import { createHistoryIndex } from './history/index.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }

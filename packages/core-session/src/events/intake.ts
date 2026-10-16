@@ -2,12 +2,14 @@ import type { SessionEvent } from './types.ts'
 import { validateConversationEventShape } from './conversation.ts'
 import { validateImages, type ImageInput, type ImageSummary } from '../images.ts'
 import { isContextEventType, validContextEvent } from './context.ts'
+import { validateReplacementShape } from './replacement.ts'
 
 type IntakeSession = { readonly formatVersion: number; readonly events: readonly { type: string; inputId?: string; images?: readonly ImageInput[] }[] }
 
 /** The existing event intake contract shared by explicit memory append and
  * owned staging. Only the newly allocated event is normalized. */
 export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
+  if (event.type === 'compaction/replacement') validateReplacementShape(event, session.formatVersion, seq)
   if (isContextEventType(event.type) && (session.formatVersion < 2 || !validContextEvent({ ...event, seq }))) throw new Error('invalid operational context event or session format')
   if (event.type === 'model/activity') throw new Error('model/activity must be published as a transient event')
   if (event.type === 'reasoning/chunk') throw new Error('reasoning/chunk must be published as a transient event')

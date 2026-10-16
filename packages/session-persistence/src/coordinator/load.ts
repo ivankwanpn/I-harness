@@ -16,7 +16,7 @@ export function createLoads(
   const read = async (sessionId: string) => {
     try { return await backend.read(sessionId) }
     catch (cause) {
-      if ((cause as { code?: string })?.code === 'SESSION_CONTEXT_REPLACEMENT_FORMAT') throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
+      if (['SESSION_CONTEXT_REPLACEMENT_FORMAT', 'SESSION_CONVERSATION_FORMAT'].includes((cause as { code?: string })?.code ?? '')) throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
       throw cause
     }
   }

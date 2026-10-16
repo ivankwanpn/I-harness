@@ -156,20 +156,21 @@ function requireReplacementSeedProof(source: readonly SessionEventView[], retain
   const bySeq = new Map<number, SessionEventView | null>()
   for (const event of source) if (event.seq !== undefined) bySeq.set(event.seq, bySeq.has(event.seq) ? null : event)
   const visited = new Set<number>(), dependencies = index.replacementDependencies()
-  const require = (seq: number): void => {
-    if (visited.has(seq)) return
+  const pending = retained.flatMap(event => event.type === 'compaction/replacement' ? [event.seq!] : [])
+  while (pending.length) {
+    const seq = pending.pop()!
+    if (visited.has(seq)) continue
     const event = bySeq.get(seq)
     if (!event || !retainedIdentities.has(event) || isContextEventType(event.type)) throw new SessionForkUnavailableError('partial replacement proof in selected boundary')
     visited.add(seq)
-    for (const dependency of dependencies.get(seq) ?? []) require(dependency)
-    if (event.type === 'compaction/summary') for (const dependency of event.shadowedSeqs) require(dependency)
-    if (event.type === 'compaction/reset') for (const dependency of event.removedSeqs) require(dependency)
-    if (event.type === 'rewind/point') require(event.anchorSeq)
+    for (const dependency of dependencies.get(seq) ?? []) pending.push(dependency)
+    if (event.type === 'compaction/summary') for (const dependency of event.shadowedSeqs) pending.push(dependency)
+    if (event.type === 'compaction/reset') for (const dependency of event.removedSeqs) pending.push(dependency)
+    if (event.type === 'rewind/point') pending.push(event.anchorSeq)
   }
-  for (const event of retained) if (event.type === 'compaction/replacement') require(event.seq!)
   // Later markers affecting the selected prefix cannot be smuggled in, nor
   // omitted while claiming that the selected source view was preserved.
-  const end = Math.max(-1, ...retained.map(event => event.seq ?? -1))
+  const end = retained.reduce((last, event) => Math.max(last, event.seq ?? -1), -1)
   const selectedSeqs = new Set(retained.map(event => event.seq))
   for (const event of source) if ((event.seq ?? -1) > end && (
     event.type === 'compaction/replacement' && event.coverage.some(entry => entry.sources.some(at => selectedSeqs.has(at.seq)))
@@ -179,7 +180,7 @@ function requireReplacementSeedProof(source: readonly SessionEventView[], retain
 }
 
 function compareReplacementSeedView(source: ConversationValidationIndex, result: SessionEvent[], retained: readonly SessionEventView[], remap: ReadonlyMap<number, number>): void {
-  const end = Math.max(-1, ...retained.map(event => event.seq ?? -1))
+  const end = retained.reduce((last, event) => Math.max(last, event.seq ?? -1), -1)
   const parent = source.history(end).items.filter(item => remap.has(item.establishment.seq!))
   const child = createConversationValidationIndex(result, { formatVersion: CURRENT_FORMAT_VERSION }).history().items
   const identity = (item: typeof parent[number], map: (seq: number) => number | undefined) => [item.kind, map(item.establishment.seq!), item.establishment.part,

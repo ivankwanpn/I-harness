@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
@@ -144,6 +144,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
       const events = [6, 7].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion).events : parseEventLines(lines.slice(1))
+      if (![6, 7].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion)
       return { version: header.formatVersion, events, meta: header }
     },
 
@@ -175,6 +176,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         return { version: header.formatVersion, events: [...decoded.events, ...closers], meta: header }
       }
       const events = parseEventLines(lines.slice(1))
+      if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion)
       const torn = hasTornTail(lines.slice(1))
       const closers = missingClosers(events)
       if (events.some(event => event.type === "conversation/semantics")) {
@@ -204,6 +206,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const headerLine = text.split("\n")[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
+      if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion)
       if ([6, 7].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()

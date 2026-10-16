@@ -79,3 +79,27 @@ it('refuses wrong format before repair or mutation and hides every event of a to
     expect(await readFile(path)).toEqual(torn)
   } finally { await coordinator.close() }
 })
+
+it('refuses a replacement batch if the actual owned file header was changed back to6', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f2-header-downgrade-')), backend = createJsonlBackend(root)
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const path = join(root, `${id}.jsonl`)
+  try {
+    const raw = await readFile(path, 'utf8'), changed = raw.replace('"formatVersion":7', '"formatVersion":6')
+    expect(changed).not.toBe(raw); await writeFile(path, changed)
+    expect((await document.importSeed(events())).kind).not.toBe('committed')
+    expect(document.view.events).toEqual([])
+    expect(await readFile(path, 'utf8')).toBe(changed)
+  } finally { await coordinator.close() }
+})
+
+it.each([1, 2, 3, 4, 5])('rejects a replacement in backend legacy format%s reads and repair before writing', async formatVersion => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f2-flat-refusal-')), path = join(root, 's.jsonl')
+  const records = events(); records[1] = { type: 'user/message', seq: 1, text: 'H' }
+  const raw = [JSON.stringify({ formatVersion, sessionId: 's' }), ...records.map(record => JSON.stringify(record)), '{"torn":'].join('\n')
+  await writeFile(path, raw)
+  const backend = createJsonlBackend(root)
+  await expect(backend.read('s')).rejects.toMatchObject({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'format' })
+  await expect(backend.repair('s')).rejects.toMatchObject({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'format' })
+  expect(await readFile(path, 'utf8')).toBe(raw)
+})

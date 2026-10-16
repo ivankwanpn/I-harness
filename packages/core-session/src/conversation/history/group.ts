@@ -3,7 +3,7 @@ import { inferLegacy, type LegacyStep } from '../legacy.ts'
 import { projectedItem, addItemSource, awaitingItemResults } from '../exchange.ts'
 import { historySources } from './sources.ts'
 import { historyVisibility } from './visibility.ts'
-import { historyEntries, type HistoryArchive, type HistoryFact } from './facts.ts'
+import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
 import type { HistoryItem, HistoryRecipe } from './types.ts'
 
 
@@ -27,13 +27,13 @@ class HistoryGrouping {
 
   constructor(private readonly archive: HistoryArchive, throughSeq?: number) {
     this.sources = historySources(archive, this.diagnostics)
-    this.visibility = historyVisibility(archive, throughSeq)
+    this.visibility = historyVisibility(historyFacts(archive), throughSeq)
     this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics)
   }
 
-  private makeItem = (kind: HistoryItem["kind"], index: number, part: string, admissionIndex?: number): HistoryItem => {
+  private makeItem = (kind: HistoryItem["kind"], index: number, part: string, admissionIndex?: number, imageAdmissionIndex?: number): HistoryItem => {
     const { messages: _messages, ...item } = projectedItem(kind, index, part, this.sources, kind === 'exchange' ? this.legacy.stepByEvent.get(index) : undefined, this.legacy.fenceIndex, admissionIndex)
-    return { ...item, ...(kind === 'summary' ? {} : { unit: this.legacy.stepByEvent.get(index) }), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), recipes: [] }
+    return { ...item, ...(kind === 'summary' ? {} : { unit: this.legacy.stepByEvent.get(index) }), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), ...(imageAdmissionIndex === undefined ? {} : { imageAdmissionIndex }), recipes: [] }
   }
   private addCall = (item: HistoryItem, index: number) => {
     const call = this.legacy.callMetadata(index)
@@ -72,10 +72,12 @@ class HistoryGrouping {
     if (!this.visibility.lifecycle(event)) return
     if (event.type === "user/message") {
       const admissionIndex = this.admissions.get(event.inputId ?? event.imageInputId ?? "")
-      const imageAdmission = event.imageInputId === undefined ? undefined : this.archive.get(this.admissions.get(event.imageInputId) ?? -1)
+      const imageAdmissionIndex = event.imageInputId === undefined ? undefined : this.admissions.get(event.imageInputId)
+      const imageAdmission = imageAdmissionIndex === undefined ? undefined : this.archive.get(imageAdmissionIndex)
       const images = event.imageInputId === undefined ? event.images : imageAdmission?.type === "agent/input/admitted" ? imageAdmission.images : undefined
       if (event.imageInputId !== undefined && !images) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
-      const item = this.makeItem("input", index, "message", admissionIndex)
+      const item = this.makeItem("input", index, "message", admissionIndex, imageAdmissionIndex)
+      if (imageAdmissionIndex !== undefined && imageAdmissionIndex !== admissionIndex) addItemSource(item, this.sources.ref(imageAdmissionIndex, 'admission'))
       if (event.images && event.imageInputId === undefined) addItemSource(item, this.sources.ref(index, 'image'))
       item.recipes.push({ kind: "input", index })
       if (this.stepOpen && (this.pendingCalls || this.toolResultsPending)) this.deferredUser.push(item)
