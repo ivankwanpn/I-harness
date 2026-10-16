@@ -1,4 +1,5 @@
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
+import { validateReplacementShape } from './replacement.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 
 export interface InputProvenance {
@@ -32,6 +33,7 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
+  if (event.type === 'compaction/replacement') validateReplacementShape(event, formatVersion)
   validateNativeWitness(event, formatVersion)
   const e = event as SessionEvent & { provenance?: unknown; actionId?: unknown; attemptId?: unknown }
   if ((event.type === "model/exchange-accepted" || event.type === "context/usage") && event.version === 2 && formatVersion < 4) conversationFormatError("fields require format 4")

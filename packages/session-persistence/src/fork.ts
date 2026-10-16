@@ -92,6 +92,9 @@ export function completedTurnPrefix(
   let cut = boundaryIndex + 1
   while (cut < events.length && events[cut]!.type !== "turn/start") cut++
   const prefix = events.slice(0, cut)
+  // Positional replacements require their historical proof and cuts intact.
+  // The central compiler refuses missing/out-of-boundary dependencies.
+  if (events.some(event => event.type === 'compaction/replacement')) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
 
   // M54 A3 (research G5): apply the SAME hidden-region semantics deriveMessages
   // uses on the source (core-session `rewindCuts`): a rewind/point marker hides

@@ -7,6 +7,28 @@ import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest } from '@i-harness
 import { createFileBackedSessionQuery, closeSessionQueries } from '../src/index.ts'
 import { parseLinePrefix } from '../src/file-backed/inspection.ts'
 
+it('reads actual format7 replacement history as structural searchable records without writing the file', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f2-query-')), path = join(root, 's.jsonl'), journal = metadata()
+  const events = [
+    { type: 'step/start', seq: 0 }, { type: 'assistant/message', seq: 1, text: 'ORIGINAL_SOURCE' }, { type: 'step/end', seq: 2 },
+    { type: 'compaction/replacement', version: 1, seq: 3, replacementId: 'query', text: 'POSITIONAL_SUMMARY',
+      coverage: [{ item: { kind: 'exchange', at: { seq: 1, part: 'message' } }, sources: [{ seq: 0, part: 'step' }, { seq: 1, part: 'message' }] }],
+      insertBefore: { kind: 'exchange', at: { seq: 1, part: 'message' } } },
+  ] as import('@i-harness/core-session').SessionEvent[]
+  const frame = encodeFactBatch('query7', journal.legacyPrefixDigest, events)
+  const raw = Buffer.concat([Buffer.from(JSON.stringify({ formatVersion: 7, sessionId: 's', createdAt: 'literal', journal }) + '\n'), frame.bytes])
+  await writeFile(path, raw)
+  const query = createFileBackedSessionQuery({ storeRoot: root })
+  try {
+    expect(parseLinePrefix(raw).events[3]).toEqual(events[3])
+    expect(await query.search('POSITIONAL_SUMMARY')).toEqual([expect.objectContaining({ seq: 3, eventType: 'compaction/replacement' })])
+    expect(await query.search('ORIGINAL_SOURCE')).toEqual([expect.objectContaining({ seq: 1, eventType: 'assistant/message' })])
+    expect(await readFile(path)).toEqual(raw)
+    const wrong = Buffer.from(raw.toString().replace('"formatVersion":7', '"formatVersion":6'))
+    expect(() => parseLinePrefix(wrong)).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'format' }))
+  } finally { closeSessionQueries() }
+})
+
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const metadata = () => ({ version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }) as const
 
@@ -65,7 +87,7 @@ it.each(['metadata', 'prefix', 'future'] as const)('refuses changed %s evidence 
     const prior = await stat(path)
     const changed = mode === 'metadata'
       ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, journal: { ...journal, legacyPrefixDigest: '0'.repeat(64) } }) + '\n'), frame.bytes])
-      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: 7 }) + '\n'), frame.bytes])
+      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: 8 }) + '\n'), frame.bytes])
         : Buffer.from(original.toString('utf8').replace('ORIGINAL_MARKER', 'CORRUPT__MARKER'))
     await writeFile(path, changed)
     // Exercise a changed observed revision explicitly; NTFS can report the

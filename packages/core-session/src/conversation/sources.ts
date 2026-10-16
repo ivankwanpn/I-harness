@@ -34,7 +34,7 @@ export function conversationSources(session: Session, ownerSessionId: string | u
     let scope: ConversationProvenance["scope"] = "turn"
     let producer: string | undefined
     let originSessionId: string | undefined
-    if (event.type === "compaction/summary") { kind = "summary"; authority = "derived" }
+    if (event.type === "compaction/summary" || event.type === 'compaction/replacement') { kind = "summary"; authority = "derived" }
     else if (event.type === "assistant/message" || event.type === "tool/call") { kind = "model"; authority = "observation" }
     else if (event.type === "tool/result") { kind = "tool"; authority = "observation"; producer = event.name }
     else if (event.type === "user/message") {

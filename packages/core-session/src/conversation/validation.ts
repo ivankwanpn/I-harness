@@ -2,6 +2,8 @@ import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
+import { projectHistory, validateHistoricalReplacement } from './history/replacements.ts'
+import { createHistoryIndex } from './history/index.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
 
@@ -12,6 +14,8 @@ export interface ConversationValidationIndex {
   readonly eventCount: number
   readonly semanticsStartSeq: number | undefined
   stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void }
+  history(throughSeq?: number): ReturnType<typeof projectHistory>
+  replacementDependencies(): ReadonlyMap<number, ReadonlySet<number>>
 }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
@@ -30,6 +34,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   const attempts = new Set<string>()
   const acceptedCalls = new Set<number>()
   const callsById = new Map<string, number | null>()
+  const history = createHistoryIndex(formatVersion)
   let count = 0, revision = 0
   let fence: number | undefined, activeStep: number | undefined
   const verify = (seq: number, target: Address, readCurrent = read) => {
@@ -43,8 +48,11 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
     get formatVersion() { return formatVersion },
     get eventCount() { return count },
     get semanticsStartSeq() { return fence },
+    history: history.history,
+    replacementDependencies: history.dependencies,
     stage(suffix, options) {
       const readCurrent = options?.readCurrentEvent ?? read
+      const stagedHistory = history.stage(suffix, readCurrent)
       const newAcceptances = new Map<number, AcceptanceFact>()
       const newCompletions = new Map<number, string>()
       const newAnchors = new Map<string, UsageAnchorFact>()
@@ -165,6 +173,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         for (const [key, value] of newAddresses) addresses.set(key, value)
         for (const [key, value] of newSteps) steps.set(key, value)
         for (const [key, value] of newCalls) callsById.set(key, value)
+        stagedHistory.commit()
         for (const id of newExchanges) exchanges.add(id)
         for (const id of newAttempts) attempts.add(id)
         for (const seq of newAccepted) acceptedCalls.add(seq)

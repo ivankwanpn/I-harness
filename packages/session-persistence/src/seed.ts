@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { CURRENT_FORMAT_VERSION, isContextEventType, validateConversationHistory, copyConversationData, type SessionEvent, type SessionEventView, type InputProvenance } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validateConversationHistory, createConversationValidationIndex, copyConversationData, type SessionEvent, type SessionEventView, type InputProvenance, type ConversationValidationIndex, type ConversationAddress, type ConversationItemRef } from "@i-harness/core-session"
 
 export class SessionForkUnavailableError extends Error {
   readonly code = "fork-unavailable" as const
@@ -27,7 +27,7 @@ export function materializeMissingImageAdmissions(source: readonly SessionEventV
 }
 
 export function remapSeedEvent(event: SessionEventView, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
-  if (event.type === "conversation/semantics" || event.type === "model/exchange-accepted") throw new SessionForkUnavailableError("accepted semantics require batch seed transformation")
+  if (event.type === "conversation/semantics" || event.type === "model/exchange-accepted" || event.type === 'compaction/replacement') throw new SessionForkUnavailableError("conversation semantics require batch seed transformation")
   return remapSeedCoordinates(event, index, renumbered)
 }
 
@@ -38,6 +38,16 @@ function remapSeedCoordinates(input: SessionEventView, index: number, renumbered
       const mapped = renumbered.get(seq)
       return mapped === undefined ? [] : [mapped]
     })
+  if (event.type === 'compaction/replacement') {
+    const address = (at: ConversationAddress): ConversationAddress => {
+      const seq = renumbered.get(at.seq)
+      if (seq === undefined) throw new SessionForkUnavailableError('partial replacement proof in seed')
+      return { seq, part: at.part }
+    }
+    const ref = (item: ConversationItemRef): ConversationItemRef => ({ kind: item.kind, at: address(item.at) })
+    return { ...event, seq: index, replacementId: seedNamespace('replacement', event.replacementId),
+      coverage: event.coverage.map(entry => ({ item: ref(entry.item), sources: entry.sources.map(address) })), insertBefore: ref(event.insertBefore) }
+  }
   if (event.type === "compaction/summary") return { ...event, seq: index, shadowedSeqs: remap(event.shadowedSeqs) }
   if (event.type === "compaction/reset") return { ...event, seq: index, removedSeqs: remap(event.removedSeqs) }
   if (event.type === "session/title") return { ...event, seq: index, messageSeqs: remap(event.messageSeqs) }
@@ -88,7 +98,9 @@ function remapSeedCoordinates(input: SessionEventView, index: number, renumbered
 /** Batch semantics must precede coordinate remapping. An isolated event cannot recover a sliced fence. */
 export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number }): SessionEvent[] {
   const { source, retained } = input
-  validateConversationHistory(source, input.sourceFormat)
+  const sourceIndex = createConversationValidationIndex(source, { formatVersion: input.sourceFormat })
+  const replacements = source.some(event => event.type === 'compaction/replacement')
+  if (replacements) requireReplacementSeedProof(source, retained, sourceIndex)
   const retainedSeqs = new Set(retained.map(event => event.seq))
   const calls = new Map<string, number | null>()
   for (const event of source) if (event.type === "tool/call" && event.seq !== undefined) calls.set(event.callId, calls.has(event.callId) ? null : event.seq)
@@ -117,17 +129,60 @@ export function remapConversationSeed(input: { source: readonly SessionEventView
   const materialized = materializeMissingImageAdmissions(source, seed)
   const renumbered = new Map<number, number>()
   for (const [index, event] of materialized.entries()) if (event.seq !== undefined) renumbered.set(event.seq, index)
-  const namespace = (kind: string, id: string) => `seed:${createHash("sha256").update(JSON.stringify([kind, id])).digest("hex")}`
   const inherit = (provenance?: InputProvenance): InputProvenance => ({ kind: "inherited", authority: "observation", scope: provenance?.scope ?? "turn", producer: provenance?.producer ?? "session.seed", ...(provenance?.originSessionId ? { originSessionId: provenance.originSessionId } : {}) })
   const result = materialized.map((event, index) => {
     let mapped = remapSeedCoordinates(event, index, renumbered)
-    if (mapped.type === "step/start" && mapped.actionId && mapped.attemptId) mapped = { ...mapped, actionId: namespace("action", mapped.actionId), attemptId: namespace("attempt", mapped.attemptId) }
-    if (mapped.type === "model/exchange-accepted") mapped = { ...mapped, actionId: namespace("action", mapped.actionId), attemptId: namespace("attempt", mapped.attemptId), exchangeId: namespace("exchange", mapped.exchangeId) }
+    if (mapped.type === "step/start" && mapped.actionId && mapped.attemptId) mapped = { ...mapped, actionId: seedNamespace("action", mapped.actionId), attemptId: seedNamespace("attempt", mapped.attemptId) }
+    if (mapped.type === "model/exchange-accepted") mapped = { ...mapped, actionId: seedNamespace("action", mapped.actionId), attemptId: seedNamespace("attempt", mapped.attemptId), exchangeId: seedNamespace("exchange", mapped.exchangeId) }
     if (mapped.type === "agent/input/admitted" || mapped.type === "subagent/inbox") mapped = { ...mapped, provenance: inherit(mapped.provenance) }
     if (mapped.type === "user/message") mapped = { ...mapped, provenance: inherit(mapped.provenance), ...(mapped.input ? { input: { ...mapped.input, provenance: inherit(mapped.input.provenance) } } : {}) }
     return mapped
   })
   try { validateConversationHistory(result, CURRENT_FORMAT_VERSION) }
   catch (cause) { throw new SessionForkUnavailableError("retained seed cannot preserve conversation semantics", { cause }) }
+  if (replacements) compareReplacementSeedView(sourceIndex, result, retained, renumbered)
   return result
+}
+
+function seedNamespace(kind: string, id: string): string {
+  return `seed:${createHash('sha256').update(JSON.stringify([kind, id])).digest('hex')}`
+}
+
+/** Resolve proof over source identities before operational removal or remapping.
+ * Missing proof is a refusal, never an instruction to widen the chosen tail. */
+function requireReplacementSeedProof(source: readonly SessionEventView[], retained: readonly SessionEventView[], index: ConversationValidationIndex): void {
+  const retainedIdentities = new Set(retained), sourceIdentities = new Set(source)
+  if (retained.some(event => !sourceIdentities.has(event))) throw new SessionForkUnavailableError('seed event does not belong to source')
+  const bySeq = new Map<number, SessionEventView | null>()
+  for (const event of source) if (event.seq !== undefined) bySeq.set(event.seq, bySeq.has(event.seq) ? null : event)
+  const visited = new Set<number>(), dependencies = index.replacementDependencies()
+  const require = (seq: number): void => {
+    if (visited.has(seq)) return
+    const event = bySeq.get(seq)
+    if (!event || !retainedIdentities.has(event) || isContextEventType(event.type)) throw new SessionForkUnavailableError('partial replacement proof in selected boundary')
+    visited.add(seq)
+    for (const dependency of dependencies.get(seq) ?? []) require(dependency)
+    if (event.type === 'compaction/summary') for (const dependency of event.shadowedSeqs) require(dependency)
+    if (event.type === 'compaction/reset') for (const dependency of event.removedSeqs) require(dependency)
+    if (event.type === 'rewind/point') require(event.anchorSeq)
+  }
+  for (const event of retained) if (event.type === 'compaction/replacement') require(event.seq!)
+  // Later markers affecting the selected prefix cannot be smuggled in, nor
+  // omitted while claiming that the selected source view was preserved.
+  const end = Math.max(-1, ...retained.map(event => event.seq ?? -1))
+  const selectedSeqs = new Set(retained.map(event => event.seq))
+  for (const event of source) if ((event.seq ?? -1) > end && (
+    event.type === 'compaction/replacement' && event.coverage.some(entry => entry.sources.some(at => selectedSeqs.has(at.seq)))
+    || event.type === 'compaction/summary' && event.shadowedSeqs.some(seq => selectedSeqs.has(seq))
+    || event.type === 'compaction/reset' && event.removedSeqs.some(seq => selectedSeqs.has(seq))
+    || event.type === 'rewind/point' && retained.some(item => item.seq !== undefined && item.seq >= event.anchorSeq && item.seq < event.seq!))) throw new SessionForkUnavailableError('source view requires a marker outside selected boundary')
+}
+
+function compareReplacementSeedView(source: ConversationValidationIndex, result: SessionEvent[], retained: readonly SessionEventView[], remap: ReadonlyMap<number, number>): void {
+  const end = Math.max(-1, ...retained.map(event => event.seq ?? -1))
+  const parent = source.history(end).items.filter(item => remap.has(item.establishment.seq!))
+  const child = createConversationValidationIndex(result, { formatVersion: CURRENT_FORMAT_VERSION }).history().items
+  const identity = (item: typeof parent[number], map: (seq: number) => number | undefined) => [item.kind, map(item.establishment.seq!), item.establishment.part,
+    [...new Set([...item.sources, ...item.provenance.evidence].map(at => JSON.stringify([map(at.seq!), at.part])))].sort()]
+  if (JSON.stringify(parent.map(item => identity(item, seq => remap.get(seq)))) !== JSON.stringify(child.map(item => identity(item, seq => seq)))) throw new SessionForkUnavailableError('seed cannot preserve ordered active source view')
 }

@@ -1,7 +1,37 @@
 import { expect, it } from "vitest"
-import { append, createSession, renderConversation } from "@i-harness/core-session"
+import { append, createSession, renderConversation, type Session } from "@i-harness/core-session"
 import { captureContextSnapshot } from "../src/index.ts"
 import type { ModelBudgetBinding } from "@i-harness/llm-seam"
+
+it('captures positional summary order, manifest identity and unchanged operational-only semantics', () => {
+  const session: Session = { formatVersion: 7, events: [
+    { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
+    { type: 'step/start', seq: 2 }, { type: 'assistant/message', seq: 3, text: 'E' }, { type: 'step/end', seq: 4 },
+    { type: 'step/start', seq: 5 }, { type: 'assistant/message', seq: 6, text: 'tail' }, { type: 'step/end', seq: 7 },
+  ] }
+  const input = { ownerSessionId: 'owner', surface: { systemPrompt: 's', tools: [] } }
+  const before = captureContextSnapshot(session, input)
+  session.events.push({ type: 'compaction/replacement', version: 1, seq: 8, replacementId: 'r', text: 'S',
+    coverage: [{ item: { kind: 'exchange', at: { seq: 3, part: 'message' } }, sources: [{ seq: 2, part: 'step' }, { seq: 3, part: 'message' }] }],
+    insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } })
+  const after = captureContextSnapshot(session, input)
+  if (before.kind !== 'captured' || after.kind !== 'captured') throw Error('captured snapshot required')
+  expect(renderConversation(after.snapshot.conversation).map(message => message.content)).toEqual(['H', 'S', 'tail'])
+  expect(after.snapshot.coordinates.contextEpoch).not.toBe(before.snapshot.coordinates.contextEpoch)
+  expect(after.snapshot.conversation.items[1]!.provenance).toMatchObject({ kind: 'summary', authority: 'derived' })
+  const record = session.events[8]
+  if (record?.type !== 'compaction/replacement') throw Error('replacement required')
+  session.events[8] = { ...record, replacementId: 'different-manifest-id' }
+  const changed = captureContextSnapshot(session, input)
+  if (changed.kind !== 'captured') throw Error('captured snapshot required')
+  expect(changed.snapshot.coordinates.semanticRevision).not.toBe(after.snapshot.coordinates.semanticRevision)
+  append(session, { type: 'operator/run-end', version: 1, runId: 'audit', exitCode: 0, durationMs: 1, phase: 'session' })
+  const audit = captureContextSnapshot(session, input)
+  if (audit.kind !== 'captured') throw Error('captured snapshot required')
+  expect(audit.snapshot.coordinates.semanticRevision).toBe(changed.snapshot.coordinates.semanticRevision)
+  expect(audit.snapshot.coordinates.contextEpoch).toBe(changed.snapshot.coordinates.contextEpoch)
+  expect(Object.isFrozen(after.snapshot.conversation.items[1]!.replacement?.coverage)).toBe(true)
+})
 
 it("owns nested model evidence and changes the surface digest when only provenance changes", () => {
   const budgetBinding: ModelBudgetBinding = { version: 1, metadata: { version: 1, modelId: "m", protocol: "gemini", identityCoverage: "partial" },

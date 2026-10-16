@@ -5,6 +5,7 @@ import { dirname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { SessionMeta } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 
 /** A one-time streamed header migration. The legacy body is byte-identical;
  * only a necessary separator LF is outside its hashed legacy boundary. */
@@ -20,8 +21,11 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
     old = parseHeader(header.subarray(0, end).toString('utf8'))
     rawHeader = JSON.parse(header.subarray(0, end).toString('utf8'))
   } finally { await source.close() }
-  if (old.formatVersion === 6) return old
-  if (old.formatVersion !== expected || expected < 1 || expected > 5) throw new TypeError('Unexpected journal upgrade')
+  if (old.formatVersion === CURRENT_FORMAT_VERSION) return old
+  if (old.formatVersion !== expected || expected < 1 || expected > 6) throw new TypeError('Unexpected journal upgrade')
+  // Framed format6 already owns its exact legacy boundary and frame chain.
+  // Only the header changes; never count frames as legacy event records.
+  if (old.formatVersion === 6) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
   let legacyBodyBytes = 0, legacyEventCount = 0, last = 0x0a, line = ''
   const decoder = new StringDecoder('utf8')
   const consume = (text: string) => {
@@ -45,7 +49,11 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
   for await (const chunk of createReadStream(path, { start: bodyStart })) digest.update(chunk as Buffer)
   const separatorBytes = legacyBodyBytes > 0 && last !== 0x0a ? 1 : 0
   const journal = { version: 1 as const, legacyBodyBytes, legacyEventCount, legacyPrefixDigest: digest.digest('hex'), separatorBytes: separatorBytes as 0 | 1 }
-  const meta = { ...rawHeader, ...old, modelSelection: rawHeader.modelSelection, formatVersion: 6, journal } as SessionMeta
+  const meta = { ...rawHeader, ...old, modelSelection: rawHeader.modelSelection, formatVersion: CURRENT_FORMAT_VERSION, journal } as SessionMeta
+  return copyWithHeader(path, bodyStart, meta, separatorBytes)
+}
+
+async function copyWithHeader(path: string, bodyStart: number, meta: SessionMeta, separatorBytes = 0): Promise<SessionMeta> {
   const temporary = `${path}.${randomUUID()}.tmp`
   const target = await open(temporary, 'wx')
   try {

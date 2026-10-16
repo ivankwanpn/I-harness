@@ -3,7 +3,7 @@ import type { SessionView as Session } from "../managed/types.ts"
 /** M5/D3: the three markers that share the shadow mechanism (see the pre-pass
  * inside deriveMessages). A rewrite of the model-visible projection is possible
  * ONLY through one of these, which is what makes it derivable. */
-type ProjectionRewriteCause = "compaction/summary" | "compaction/reset" | "rewind"
+type ProjectionRewriteCause = "compaction/summary" | "compaction/reset" | "rewind" | 'compaction/replacement'
 
 interface ProjectionRewrite {
   /** How many rewrite markers the log carries right now. A CONSUMER COMPARES
@@ -25,7 +25,11 @@ export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
   let lastCause: ProjectionRewriteCause | undefined
   let hiddenSeqs = 0
   for (const ev of session.events) {
-    if (ev.type === "compaction/summary") {
+    if (ev.type === 'compaction/replacement') {
+      markers++
+      lastCause = 'compaction/replacement'
+      hiddenSeqs += new Set(ev.coverage.flatMap(entry => entry.sources.map(source => source.seq))).size
+    } else if (ev.type === "compaction/summary") {
       markers += 1
       lastCause = "compaction/summary"
       hiddenSeqs += ev.shadowedSeqs.length

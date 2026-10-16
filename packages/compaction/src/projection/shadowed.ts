@@ -1,8 +1,14 @@
 import type { SessionView as Session, SessionEventView as SessionEvent } from "@i-harness/core-session"
 import { deriveSearchText, derivePruneSubstitutes, renderPruneSubstitute, rewindCuts, type PruneRecord } from "@i-harness/core-session"
 
+export const hasReplacementHistory = (session: Session): boolean => session.events.some(event => event.type === 'compaction/replacement')
+export function assertLegacyReductionCompatible(session: Session): void {
+  if (hasReplacementHistory(session)) throw Object.assign(new Error('Positional replacement reduction is not supported by this reader version'), { code: 'SESSION_REPLACEMENT_REDUCTION_UNSUPPORTED' })
+}
+
 /** Mirror the additive shadow/rewind fold; raw source events remain untouched. */
 export function activeEvents(session: Session): SessionEvent[] {
+  assertLegacyReductionCompatible(session)
   const hidden = new Set<number>()
   for (const event of session.events) {
     if (event.type === "compaction/summary") for (const seq of event.shadowedSeqs) hidden.add(seq)
@@ -17,6 +23,7 @@ export function activeSummary(session: Session) {
 }
 
 export function renderShadowed(session: Session, shadowedSeqs: number[], pruneRecords: PruneRecord[] = []): string {
+  assertLegacyReductionCompatible(session)
   const set = new Set(shadowedSeqs)
   // M33: summary-input substitution — the shadow region's pruned results are
   // rendered as substitutes so the summarizer never pays for the removed

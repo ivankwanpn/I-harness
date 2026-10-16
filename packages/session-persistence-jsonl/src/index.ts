@@ -107,11 +107,11 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lastByte = Buffer.alloc(1)
         if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
         const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
-        const data = header.formatVersion === 6
+        const data = [6, 7].includes(header.formatVersion)
           ? (() => {
             const raw = readFile(path)
             return raw.then(bytes => {
-              const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!)
+              const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion)
               if (journal.torn) throw new Error('Journal recovery required')
               const addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
               return addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed).bytes : new Uint8Array()
@@ -143,7 +143,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
-      const events = header.formatVersion === 6 ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!).events : parseEventLines(lines.slice(1))
+      const events = [6, 7].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion).events : parseEventLines(lines.slice(1))
       return { version: header.formatVersion, events, meta: header }
     },
 
@@ -164,15 +164,15 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const headerLine = lines[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
-      if (header.formatVersion === 6) {
-        const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!)
+      if ([6, 7].includes(header.formatVersion)) {
+        const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion)
         const closers = missingClosers(decoded.events).map((event, position) => ({ ...event, seq: decoded.events.length + position }))
         if (decoded.torn || closers.length) {
           const raw = Buffer.from(lines.slice(1).join('\n')).subarray(0, decoded.prefix.bodyBytes)
           const addition = closers.length ? encodeFactBatch(randomUUID(), decoded.prefix.prefixDigest, closers).bytes : new Uint8Array()
           await replaceRawSessionFile(path, Buffer.concat([Buffer.from(headerLine + '\n'), raw, Buffer.from(addition)]))
         }
-        return { version: 6, events: [...decoded.events, ...closers], meta: header }
+        return { version: header.formatVersion, events: [...decoded.events, ...closers], meta: header }
       }
       const events = parseEventLines(lines.slice(1))
       const torn = hasTornTail(lines.slice(1))
@@ -204,7 +204,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const headerLine = text.split("\n")[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
-      if (header.formatVersion === 6) {
+      if ([6, 7].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
         await replaceRawSessionFile(path, Buffer.concat([Buffer.from(serializeHeader({ ...header, journal }) + '\n'), Buffer.from(frame)]))
@@ -215,19 +215,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
-      if (target === 6) return upgradeFactJournal(path, expected)
-      const raw = await readFile(path)
-      const end = raw.indexOf(0x0a)
-      if (end < 0) throw new Error("invalid session header")
-      const headerLine = raw.subarray(0, end).toString("utf8")
-      const meta = parseHeader(headerLine)
-      if (meta.formatVersion === target) return meta
-      if (meta.formatVersion !== expected) throw new Error("unexpected session format version")
-      const upgraded = { ...JSON.parse(headerLine), formatVersion: target }
-      await replaceRawSessionFile(path, Buffer.concat([Buffer.from(JSON.stringify(upgraded) + "\n"), raw.subarray(end + 1)]))
-      return { ...meta, formatVersion: target }
+      return upgradeFactJournal(path, expected)
     },
 
     async profile(sessionId) {
@@ -240,8 +230,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: (parseHeader(lines[0]!).formatVersion === 6
-            ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!).events
+          blank: ([6, 7].includes(parseHeader(lines[0]!).formatVersion)
+            ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion).events
             : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }
       }
@@ -348,7 +338,7 @@ async function readHeader(path: string): Promise<SessionMeta> {
 
 // Track turn/step nesting; a session stopped inside either gets synthetic
 // closers so deriveMessages() reconstructs normally (F01-2 commitRepair).
-function missingClosers(events: SessionEvent[]): SessionEvent[] {
+function missingClosers(events: SessionEvent[]): Array<Extract<SessionEvent, { type: 'step/end' | 'turn/end' }>> {
   let inTurn = false
   let inStep = false
   for (const ev of events) {
@@ -357,7 +347,7 @@ function missingClosers(events: SessionEvent[]): SessionEvent[] {
     if (ev.type === "step/end") inStep = false
     if (ev.type === "turn/end") inTurn = false
   }
-  const closers: SessionEvent[] = []
+  const closers: Array<Extract<SessionEvent, { type: 'step/end' | 'turn/end' }>> = []
   if (inStep) closers.push({ type: "step/end" })
   if (inTurn) closers.push({ type: "turn/end" })
   return closers

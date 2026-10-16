@@ -5,7 +5,7 @@ import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { CompactionResult, CompactionRunOptions } from "../index.ts"
 import { selectShadowableRange, walkOffToolEvents } from "../region.ts"
 import { safeActiveTokens } from "../projection/window.ts"
-import { activeEvents, renderShadowed } from "../projection/shadowed.ts"
+import { activeEvents, renderShadowed, hasReplacementHistory } from "../projection/shadowed.ts"
 import { planPrune, surfaceTokensAfterPrune } from "./prune.ts"
 import { prepareSummary, requestSummary } from "./summary.ts"
 import { SummaryBlockedError, SummaryCheckpointError } from "../summarizer.ts"
@@ -19,6 +19,7 @@ export async function runCompactionPass(
   options: CompactionRunOptions | undefined, config: CompactSettings, contextWindow: number,
   deps: SummaryDependencies, overheadNow: () => number,
 ): Promise<CompactionResult> {
+  if (hasReplacementHistory(session)) return { compacted: false, reason: 'replacement-history-unsupported', shadowedSeqs: [] }
   const signal = options?.signal && deps.signal ? AbortSignal.any([options.signal, deps.signal]) : options?.signal ?? deps.signal
   const check = () => signal?.throwIfAborted()
   check()

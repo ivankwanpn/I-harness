@@ -27,7 +27,7 @@ it("admits acceptance references into an earlier durable batch", async () => {
   await coordinator.append("s", events().slice(0, 5))
   await coordinator.append("s", events().slice(5))
   expect((await coordinator.snapshot!("s")).session.events).toEqual(events())
-  expect((await backend.profile("s")).meta.formatVersion).toBe(6)
+  expect((await backend.profile("s")).meta.formatVersion).toBe(7)
   await coordinator.close()
 })
 it("rejects malformed complete format3 before any repair, retaining cause", async () => {
@@ -90,8 +90,8 @@ it.each([3, 4, 5, 6, 7])("recovers a crash after prefix length %s without accept
   expect((await backend.read("s")).events).toEqual(once)
   await coordinator.close()
 })
-it("rejects actual future format7 before repairing its file", async () => {
-  const { coordinator, backend, path } = await fixture([], 7)
+it("rejects actual future format8 before repairing its file", async () => {
+  const { coordinator, backend, path } = await fixture([], 8)
   const raw = await readFile(path, "utf8"), repair = vi.spyOn(backend, "repair")
   await expect(coordinator.loadOwned("s")).rejects.toBeInstanceOf(SessionFormatUnsupportedError)
   expect(repair).not.toHaveBeenCalled(); expect(await readFile(path, "utf8")).toBe(raw)

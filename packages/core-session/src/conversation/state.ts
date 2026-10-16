@@ -27,7 +27,7 @@ export function readConversationState(session: Session, projection: Conversation
     if (!visibility.branch(event)) continue
     const sourceId = sources.ref(index, "event").id
     if (event.type === "rewind/point") branch.push({ sourceId, anchorSeq: event.anchorSeq })
-    if (["rewind/point", "compaction/summary", "compaction/reset", "compaction/prune"].includes(event.type)) rewrites.push({ sourceId, type: event.type })
+    if (["rewind/point", "compaction/summary", "compaction/reset", "compaction/prune", 'compaction/replacement'].includes(event.type)) rewrites.push({ sourceId, type: event.type })
     if (index < seedEnd) continue
     // Both lifecycle boundaries survive compaction content hiding.
     if (event.type === "turn/start") {

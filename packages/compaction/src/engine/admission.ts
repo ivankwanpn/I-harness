@@ -2,6 +2,7 @@ import type { SessionView as Session } from "@i-harness/core-session"
 import type { CompactionEngine, CompactionResult } from "../index.ts"
 import { resetWindowOnce, safeActiveTokens } from "../projection/window.ts"
 import type { CompactPass, CompactSettings } from "./contracts.ts"
+import { hasReplacementHistory } from '../projection/shadowed.ts'
 
 // Both WeakMaps belong to this module, shared across engines for a Session.
 export function createAdmission(
@@ -12,6 +13,7 @@ export function createAdmission(
 ): CompactionEngine {
   return {
     async maybeCompact(session: Session, options): Promise<CompactionResult> {
+      if (hasReplacementHistory(session)) return { compacted: false, reason: 'replacement-history-unsupported', shadowedSeqs: [] }
       options?.signal?.throwIfAborted()
       // M33 §3.1: the host-known charge the session log does not carry
       // (system prompt + tool schemas — CompactionConfig.overheadTokens).
@@ -91,6 +93,7 @@ export function createAdmission(
       return result
     },
     compact: async (session, instructions, options) => {
+      if (hasReplacementHistory(session)) return { compacted: false, reason: 'replacement-history-unsupported', shadowedSeqs: [] }
       const result = await compactOnce(session, false, instructions, { ...options, reason: options?.reason ?? "manual" })
       // M34 ⑦d: a MANUAL compaction success shares the until-success reset
       // (breaker close + sticky release) — the only other release condition
@@ -101,7 +104,7 @@ export function createAdmission(
       }
       return result
     },
-    recover: (session, options) => compactOnce(session, true, undefined, { ...options, reason: "recovery" }),
+    recover: (session, options) => hasReplacementHistory(session) ? Promise.resolve({ compacted: false, reason: 'replacement-history-unsupported', shadowedSeqs: [] }) : compactOnce(session, true, undefined, { ...options, reason: "recovery" }),
     resetWindow: reset,
   }
 }

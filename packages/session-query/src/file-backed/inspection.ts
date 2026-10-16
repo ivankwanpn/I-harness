@@ -9,7 +9,7 @@ function parseHeader(line: string): HeaderMeta {
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
   if (h.formatVersion > CURRENT_FORMAT_VERSION) throw new Error(`format version ${h.formatVersion} is newer than this build (upgrade the harness)`)
-  if (h.formatVersion === 6 && !validJournalMetadata(h.journal)) throw new Error('invalid managed journal metadata')
+  if ([6, 7].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid managed journal metadata')
   return {
     formatVersion: h.formatVersion,
     sessionId: h.sessionId,
@@ -18,7 +18,7 @@ function parseHeader(line: string): HeaderMeta {
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
     ...(typeof h.origin === "string" ? { origin: h.origin } : {}),
-    ...(h.formatVersion === 6 ? { journal: h.journal as import('@i-harness/core-session').JournalMetadata } : {}),
+    ...([6, 7].includes(h.formatVersion) ? { journal: h.journal as import('@i-harness/core-session').JournalMetadata } : {}),
   }
 }
 
@@ -31,10 +31,10 @@ export function parseLinePrefix(input: string | Uint8Array): { header: HeaderMet
   const lines = text.split("\n")
   if (lines.length === 0 || lines[0]!.trim() === "") throw new Error("empty session file")
   const header = parseHeader(lines[0]!)
-  if (header.formatVersion === 6) {
+  if ([6, 7].includes(header.formatVersion)) {
     const end = bytes.indexOf(0x0a)
     if (end < 0) throw new Error('incomplete managed session header')
-    const journal = readFactJournal(bytes.subarray(end + 1), header.journal!)
+    const journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion)
     const contentBytes = bytes.subarray(0, end + 1 + journal.prefix.bodyBytes)
     return { header, events: journal.events, contentLines: contentBytes.toString().trimEnd().split('\n'), contentBytes }
   }

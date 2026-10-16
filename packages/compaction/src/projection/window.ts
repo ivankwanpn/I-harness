@@ -4,6 +4,7 @@ import { ordinaryCompactionFacts } from '../engine/facts.ts'
 import type { CompactionResult } from "../index.ts"
 import { activeTokens } from "../tokens.ts"
 import { walkOffToolEvents } from "../region.ts"
+import { hasReplacementHistory } from './shadowed.ts'
 
 // M20: pure reset (absorbs codex token-budget `start_new_context_window`) —
 // new context window: keeps the last `retainLast` events (by seq) visible and
@@ -20,6 +21,7 @@ import { walkOffToolEvents } from "../region.ts"
 // user messages the agent loop must retain. Nothing removable →
 // `{ compacted: false, reset: false }` (caller falls through to fail-closed).
 export async function resetWindowOnce(session: Session, retainLast: number, facts?: () => LegacyCompactionFacts<ProducerFactOutcome>): Promise<CompactionResult> {
+  if (hasReplacementHistory(session)) return { compacted: false, reason: 'replacement-history-unsupported', shadowedSeqs: [], reset: false }
   if (!Number.isInteger(retainLast) || retainLast < 1) {
     throw new Error(`compaction: resetWindow retainLast must be a positive integer (got ${retainLast})`)
   }

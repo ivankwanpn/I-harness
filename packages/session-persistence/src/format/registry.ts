@@ -17,6 +17,7 @@ upgrades.set(2, events => events)
 upgrades.set(3, events => events)
 upgrades.set(4, events => events)
 upgrades.set(5, events => events)
+upgrades.set(6, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }
@@ -145,3 +146,4 @@ registerEventType("context/usage")
 registerEventType("context/recovery")
 registerEventType("conversation/semantics")
 registerEventType("model/exchange-accepted")
+registerEventType('compaction/replacement')

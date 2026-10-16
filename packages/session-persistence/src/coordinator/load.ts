@@ -5,6 +5,7 @@ import { assertUpgradeCapability, ensureWritableFormatUnlocked } from "./writabl
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
+import { SessionFormatUnsupportedError } from '../format/registry.ts'
 
 export function createLoads(
   backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
@@ -12,9 +13,16 @@ export function createLoads(
     Pick<Ownership, "withSessionOperation" | "borrowOwnership" | "releaseOwnershipUnlocked">,
   { assertWritable, pendingWriteBehind, invalidateConversation }: Pick<Mutations, "assertWritable" | "pendingWriteBehind" | "invalidateConversation">,
 ) {
+  const read = async (sessionId: string) => {
+    try { return await backend.read(sessionId) }
+    catch (cause) {
+      if ((cause as { code?: string })?.code === 'SESSION_CONTEXT_REPLACEMENT_FORMAT') throw new SessionFormatUnsupportedError('unsupported conversation history', { cause })
+      throw cause
+    }
+  }
   return {
     async snapshot(sessionId: string) {
-      const { version, events, meta } = await backend.read(sessionId)
+      const { version, events, meta } = await read(sessionId)
       preflightSessionFormat(version, events)
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
@@ -25,13 +33,13 @@ export function createLoads(
     async load(sessionId: string) {
       return withSessionOperation(sessionId, async () => {
         invalidateConversation(sessionId)
-        const peeked = await backend.read(sessionId)
+        const peeked = await read(sessionId)
         preflightSessionFormat(peeked.version, peeked.events)
         await migrate(peeked.version, guardIgnorable(peeked.events, true))
         const borrowed = await borrowOwnership(sessionId)
         let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
         try {
-          const owned = await backend.read(sessionId)
+          const owned = await read(sessionId)
           preflightSessionFormat(owned.version, owned.events)
           await migrate(owned.version, guardIgnorable(owned.events, true))
           repaired = await backend.repair(sessionId)
@@ -87,11 +95,11 @@ export function createLoads(
         invalidateConversation(sessionId)
         const acquired = await borrowOwnership(sessionId)
         try {
-          const peeked = await backend.read(sessionId)
+          const peeked = await read(sessionId)
           preflightSessionFormat(peeked.version, peeked.events)
           assertUpgradeCapability(backend, peeked.version)
           if (backend.replaceEvents === undefined && !peeked.events.some(event => event.type === "conversation/semantics") && repairTurnTail(peeked.events).some((event, index) => event.seq !== index || JSON.stringify(event) !== JSON.stringify(peeked.events[index]))) throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
-          const checked = await backend.read(sessionId)
+          const checked = await read(sessionId)
           preflightSessionFormat(checked.version, checked.events)
           await migrate(checked.version, guardIgnorable(checked.events, true))
           assertUpgradeCapability(backend, checked.version)

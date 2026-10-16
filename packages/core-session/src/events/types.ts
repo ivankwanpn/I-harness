@@ -197,6 +197,7 @@ export type SessionEvent =
     | import("./context.ts").ContextEvent
     | import("./conversation.ts").ConversationSemanticsEvent
     | import("./conversation.ts").ExchangeAcceptedEvent
+    | import("./replacement.ts").ContextReplacementRecordV1
   )
   & { ignorable?: true }
 
@@ -248,4 +249,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 6
+export const CURRENT_FORMAT_VERSION = 7

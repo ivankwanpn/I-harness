@@ -38,7 +38,7 @@ export function parseHeader(line: string): SessionMeta {
   const h = JSON.parse(line) as Partial<SessionMeta>
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
-  if (h.formatVersion === 6 && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
+  if ([6, 7].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,

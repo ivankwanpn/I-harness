@@ -13,7 +13,7 @@ export function contextRevision(domain: string, value: unknown): string {
 /** Input/source/acceptance identity excludes lifecycle and effect observations. */
 export function semanticContextRevision(owner: string, conversation: Captured<ConversationProjection>): string {
   const items = conversation.items.filter(item => item.messages.length > 0 || item.exchange?.acceptance === "explicit").map(item => ({
-    id: item.id, kind: item.kind, messages: item.messages, provenance: item.provenance,
+    id: item.id, kind: item.kind, messages: item.messages, provenance: item.provenance, ...(item.replacement ? { replacement: item.replacement } : {}),
     sources: item.sources.filter(source => source.part !== "dispatch"),
     ...(item.exchange ? { exchange: { id: item.exchange.id, step: item.exchange.step, acceptance: item.exchange.acceptance,
       calls: item.exchange.calls.map(call => ({ callId: call.callId, name: call.name, call: call.call, result: call.result })) } } : {}),

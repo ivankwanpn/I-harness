@@ -36,7 +36,7 @@ export interface CompactionResult {
    * summarizer failure names a reason, because it is the only arm that can be
    * a real FAILURE; the other seven mean "nothing to do" and stay absent
    * (pre-M73 behavior, unchanged). */
-  reason?: "summarizer-failed"
+  reason?: "summarizer-failed" | 'replacement-history-unsupported'
   /** Safe engine-owned policy/admission failure, never a provider response body. */
   blockedReason?: string
 }

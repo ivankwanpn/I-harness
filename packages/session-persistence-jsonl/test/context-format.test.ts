@@ -31,9 +31,9 @@ it("cold v1 snapshots preserve bytes; owned upgrade durably preserves raw event 
   await coordinator.snapshot!("s")
   expect(await readFile(path, "utf8")).toBe(raw)
   const owned = await coordinator.loadOwned("s")
-  expect(owned.session.formatVersion).toBe(6)
+  expect(owned.session.formatVersion).toBe(7)
   const upgraded = await readFile(path, "utf8")
-  expect(JSON.parse(upgraded.split("\n")[0]!)).toMatchObject({ formatVersion: 6, title: "keep" })
+  expect(JSON.parse(upgraded.split("\n")[0]!)).toMatchObject({ formatVersion: 7, title: "keep" })
   expect(upgraded.slice(upgraded.indexOf("\n") + 1)).toBe(body)
   await expect(coordinator.updateMeta("s", { formatVersion: 1 })).rejects.toThrow(/downgrade|format/)
   await expect(coordinator.updateMeta("s", { formatVersion: undefined })).rejects.toThrow(/downgrade|format/)
@@ -66,7 +66,7 @@ it("a held/rejected writer upgrade retains a pending batch once and orders the d
   const actualUpgrade = backend.upgradeSessionFormat!.bind(backend), actualAppend = backend.append.bind(backend)
   let appends = 0
   backend.upgradeSessionFormat = async () => { entered.resolve(); await release.promise; throw new Error("upgrade refused") }
-  backend.append = async (id, events) => { expect((await backend.profile(id)).meta.formatVersion).toBe(6); appends++; await actualAppend(id, events) }
+  backend.append = async (id, events) => { expect((await backend.profile(id)).meta.formatVersion).toBe(7); appends++; await actualAppend(id, events) }
   const coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000 })
   coordinator.enqueue("s", [{ type: "user/message", text: "new", seq: 1 }])
   const failed = coordinator.flush("s")
@@ -86,9 +86,9 @@ it("the durable header upgrade preserves metadata fields outside this reader's s
   const original = await readFile(path, "utf8"), end = original.indexOf("\n")
   const header = { ...JSON.parse(original.slice(0, end)), extension: { exact: "preserve", nested: 7 }, modelSelection: { provider: "route", model: "m", futureLabel: "retain" } }
   await writeFile(path, JSON.stringify(header) + original.slice(end))
-  await backend.upgradeSessionFormat!("s", 1, 6)
+  await backend.upgradeSessionFormat!("s", 1, 7)
   const upgraded = await readFile(path, "utf8")
-  expect(JSON.parse(upgraded.split("\n")[0]!)).toMatchObject({ ...header, formatVersion: 6, journal: { version: 1, legacyEventCount: 1 } })
+  expect(JSON.parse(upgraded.split("\n")[0]!)).toMatchObject({ ...header, formatVersion: 7, journal: { version: 1, legacyEventCount: 1 } })
   expect(upgraded.slice(upgraded.indexOf("\n") + 1)).toBe(original.slice(end + 1))
 })
 
@@ -111,6 +111,6 @@ it("keeps operational context facts at minimum format2 while upgrading the write
   expect(fromJSONL(JSON.stringify({ formatVersion: 2 }) + "\n" + JSON.stringify(fact) + "\n").events).toEqual([fact])
   expect(() => fromJSONL(JSON.stringify({ formatVersion: 1 }) + "\n" + JSON.stringify(fact) + "\n")).toThrow()
   await coordinator.loadOwned("s")
-  expect((await backend.profile("s")).meta.formatVersion).toBe(6)
+  expect((await backend.profile("s")).meta.formatVersion).toBe(7)
   await coordinator.close()
 })

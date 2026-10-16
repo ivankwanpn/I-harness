@@ -16,7 +16,7 @@ async function header(handle: FileHandle) {
   const end = bytes.subarray(0, bytesRead).indexOf(0x0a)
   if (end < 0) throw new TypeError('Invalid managed header')
   const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-  if (meta.formatVersion !== 6 || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+  if (![6, 7].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
   return { meta, bytes: end + 1 }
 }
 function checkBatch(prefix: JournalPrefix, batch: EncodedFactBatch) {
@@ -53,8 +53,8 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       const path = filePath(id), bytes = await readFile(path)
       const end = bytes.indexOf(0x0a)
       const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-      if (meta.formatVersion !== 6 || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
-      const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal)
+      if (![6, 7].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+      const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion)
       const handle = await open(path, 'r+')
       try {
         scope(id, owner)

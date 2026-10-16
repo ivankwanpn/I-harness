@@ -27,6 +27,8 @@ export interface ConversationCall {
 }
 
 export interface ConversationItem {
+  readonly ref?: import('../events/replacement.ts').ConversationItemRef
+  readonly replacement?: Pick<import('../events/replacement.ts').ContextReplacementRecordV1, 'replacementId' | 'coverage' | 'insertBefore'>
   id: string
   kind: "input" | "summary" | "exchange" | "legacy-fragment"
   sources: readonly ConversationSourceRef[]

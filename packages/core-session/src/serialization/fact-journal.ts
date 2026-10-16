@@ -39,7 +39,7 @@ export function validJournalPrefix(value: JournalPrefix): boolean {
   return count(value.eventCount) && count(value.bodyBytes) && digest(value.prefixDigest)
 }
 
-export function encodeFactBatch(batchId: string, previousPrefixDigest: string, events: readonly SessionEvent[]): EncodedFactBatch {
+export function encodeFactBatch(batchId: string, previousPrefixDigest: string, events: readonly import('../managed/types.ts').SessionEventView[]): EncodedFactBatch {
   const firstSeq = events[0]?.seq, eventCount = events.length
   if (typeof batchId !== 'string' || !/^[\x21-\x7e]{1,256}$/.test(batchId) || !digest(previousPrefixDigest)
     || !count(firstSeq) || !eventCount || !count(firstSeq + eventCount)

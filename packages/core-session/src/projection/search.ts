@@ -40,6 +40,7 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "subagent/inbox":
       return ev.message
     case "compaction/summary":
+    case 'compaction/replacement':
       return ev.text
     // M19: only the two content-bearing team events are FTS-searchable
     // (team/member and team/message/delivered carry no user-facing text —
