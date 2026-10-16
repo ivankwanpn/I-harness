@@ -1,5 +1,5 @@
 import { CURRENT_FORMAT_VERSION } from "../events/types.ts"
-import type { Session, SessionEvent } from "../events/types.ts"
+import type { Session, SessionEvent, SessionHeader } from "../events/types.ts"
 import { isContextEventType, validContextEvent } from "../events/context.ts"
 import { validateConversationHistory } from "../conversation/validation.ts"
 import { validateNativeWitness } from '../projection/native-witness.ts'
@@ -11,7 +11,8 @@ export function toJSONL(session: import('../managed/types.ts').SessionView): str
   if (session.formatVersion === 6 || session.formatVersion === 7) {
     validateConversationHistory(session.events, session.formatVersion)
     const journal: JournalMetadata = { version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }
-    const header = stringifyJsonData({ ...session.header, formatVersion: session.formatVersion, journal })! + '\n'
+    const { journal: _sourceJournal, formatVersion: _sourceFormat, ...metadata } = session.header as (SessionHeader & { formatVersion?: number }) ?? {}
+    const header = stringifyJsonData({ formatVersion: session.formatVersion, ...metadata, journal })! + '\n'
     return header + (session.events.length ? Buffer.from(encodeFactBatch('structural-export', journal.legacyPrefixDigest, session.events).bytes).toString('utf8') : '')
   }
   const lines: string[] = [JSON.stringify({ formatVersion: session.formatVersion })]

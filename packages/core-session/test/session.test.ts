@@ -4,6 +4,13 @@ import { deriveSearchText } from "../src/index.ts"
 import type { SessionEvent } from "../src/index.ts"
 
 describe("session log", () => {
+  it('keeps fresh structural header bytes stable across a cold roundtrip', () => {
+    const session = createSession()
+    session.header = { origin: 'literal' }
+    append(session, { type: 'user/message', text: 'H' })
+    const source = toJSONL(session)
+    expect(toJSONL(fromJSONL(source))).toBe(source)
+  })
   it("appends events in order with seq", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" })
