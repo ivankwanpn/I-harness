@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
@@ -102,6 +102,11 @@ type SessionModelState =
   | Exclude<SessionModelBindingResult, { status: "ready" }>
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
+type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'assertOpen'> & {
+  readonly view: Session
+  readonly facts: Pick<ManagedAction<ProducerFactOutcome>['facts'], 'metadata'>
+}
+
 export interface SessionServiceOptions extends AssemblyOptions {
   /** Loaded settings only; never resolves authentication or constructs a model client. */
   modelMetadataFor?: (sessionId: string, meta: SessionMeta | undefined) => import("@i-harness/core-session").ContextBindingMetadata | undefined | Promise<import("@i-harness/core-session").ContextBindingMetadata | undefined>
@@ -116,7 +121,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
-  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }) => Promise<void>
+  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }, action: PostTurnAction) => Promise<void>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
     options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral" | "hookContext">
@@ -361,6 +366,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     controller: AbortController
     state: "wait" | "queued" | "running" | "cancelled"
     scheduled?: boolean
+    postTurn?: true
   }
   interface SessionQueueState {
     byId: Map<string, QueueRowRecord>
@@ -821,14 +827,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         execution.then(
           async () => {
             if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
+              record.postTurn = true
+              let action: ManagedAction<ProducerFactOutcome> | undefined
               try {
+                if (assembly.factOwner.view !== assembly.session) throw Object.assign(new Error('Post-turn action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
+                action = assembly.factOwner.beginAction(controller.signal)
                 const state = await bindingFor(sessionId)
+                action.assertOpen()
                 await opts.afterSuccessfulSubmit(sessionId, assembly, state.status === "ready"
                   ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
-                  : {})
+                  : {}, { view: assembly.session, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata } })
               } catch (error) {
                 d.warn(`[i-harness] post-turn host callback failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
-              }
+              } finally { delete record.postTurn; action?.finish() }
             }
             settle()
           },
@@ -922,7 +933,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
         continue
       }
-      if (rec.scheduled && rec.state === "running") {
+      if (rec.postTurn || rec.scheduled && rec.state === "running") {
         // Lane execution finished, but this service submission still owns
         // post-turn settlement work. Its cleanup removes the row.
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "running", order: rec.order })
@@ -951,7 +962,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const rec = queues.get(sessionId)?.byId.get(id)
     // Already-cancelled / running / unknown ids are all an honest false — the
     // row is no longer cancellable at the moment (the UI refresh shows truth).
-    if (rec === undefined || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
+    if (rec === undefined || rec.postTurn || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
     // Abort the row controller (settles the submit's chain gate without
     // executing) and retract a lane-admitted input synchronously — the inbox
     // cancel is append-marked, so the projection drops the row immediately.
@@ -972,9 +983,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return result
     }
     const records = queues.get(sessionId)?.byId
-    const record = current === undefined
+    const postTurn = current === undefined ? [...(records?.values() ?? [])].find(record => record.postTurn) : undefined
+    const record = postTurn ?? (current === undefined
       ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
-      : records?.get(current.inputId)
+      : records?.get(current.inputId))
     if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
     record.controller.abort()
     stopNotifications(sessionId)

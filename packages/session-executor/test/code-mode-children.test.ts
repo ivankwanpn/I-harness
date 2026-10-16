@@ -7,6 +7,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
+import { inspect } from 'node:util'
 
 it("ordinary and Team children keep role-local Code Mode through followup and resident reconstruction", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-children-"))
@@ -36,6 +37,7 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     resolveRoleModel: async () => ({ status: "ready" as const, binding: { client: child, contextWindow: 100_000, maxOutputTokens: 123 } }),
   }
   let service = createSessionService(options)
+  let primaryFailure: unknown, failed = false
   try {
     let assembly = await service.assemblyFor("parent")
     const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "parent" })
@@ -74,5 +76,17 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
       const numbers = events.filter(e => e.type === "code/output").map(e => (e as { content: { text?: string } }).content.text).filter(text => /^\d+$/.test(text ?? ""))
       expect(numbers).toEqual(["1", "2", "3"])
     }
-  } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } catch (error) {
+    failed = true
+    primaryFailure = error
+    console.error('Code Mode child primary failure', inspect(error, { depth: 12 }))
+    throw error
+  } finally {
+    try { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    catch (cleanup) {
+      console.error('Code Mode child cleanup failure', inspect(cleanup, { depth: 12 }))
+      if (failed) throw new AggregateError([primaryFailure, cleanup], 'Code Mode child assertion and cleanup failed', { cause: primaryFailure })
+      throw cleanup
+    }
+  }
 }, 15_000)

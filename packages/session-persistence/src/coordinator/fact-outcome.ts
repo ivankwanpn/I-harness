@@ -1,12 +1,13 @@
 import { factPrefixDigest, type BatchKey, type FactCode, type OwnerToken } from '@i-harness/core-session'
 import type { BackendFactOutcome } from './fact-types.ts'
 
-function fields(value: unknown, names: readonly string[]): Record<string, unknown> | undefined {
+function fields(value: unknown, names: readonly string[], optional: readonly string[] = []): Record<string, unknown> | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) return
   const descriptors = Object.getOwnPropertyDescriptors(value)
-  if (Reflect.ownKeys(value).length !== names.length || names.some(name => !descriptors[name] || !('value' in descriptors[name]!))) return
+  if (Reflect.ownKeys(value).some(name => typeof name !== 'string' || !names.includes(name) && !optional.includes(name))
+    || names.some(name => !descriptors[name] || !('value' in descriptors[name]!))) return
   return value as Record<string, unknown>
 }
 export function sameBatchKey(value: unknown, expected: BatchKey): boolean {
@@ -25,11 +26,12 @@ export function ownBackendOutcome(value: unknown, key: BatchKey, owner: OwnerTok
     const kind = Object.getOwnPropertyDescriptor(value, 'kind')?.value
     if (kind === 'committed') {
       if (!issued) return unknown()
-      const envelope = fields(value, ['kind', 'receipt']), receipt = envelope && fields(envelope.receipt, ['owner', 'key', 'lastSeq', 'prefixDigest'])
+      const envelope = fields(value, ['kind', 'receipt'], ['cleanupDiagnostic']), receipt = envelope && fields(envelope.receipt, ['owner', 'key', 'lastSeq', 'prefixDigest'])
       const scope = receipt && fields(receipt.owner, ['sessionId', 'incarnation'])
       if (!receipt || !scope || scope.sessionId !== owner.sessionId || scope.incarnation !== owner.incarnation || !sameBatchKey(receipt.key, key)
         || receipt.lastSeq !== key.firstSeq + key.count - 1 || receipt.prefixDigest !== factPrefixDigest(key.previousPrefixDigest, key.batchDigest)) return unknown()
-      return Object.freeze({ kind, receipt: Object.freeze({ owner: Object.freeze({ ...owner }), key, lastSeq: key.firstSeq + key.count - 1, prefixDigest: receipt.prefixDigest as string }) })
+      const cleanup = Object.getOwnPropertyDescriptor(value, 'cleanupDiagnostic')?.value === 'file-close-failed'
+      return Object.freeze({ kind, receipt: Object.freeze({ owner: Object.freeze({ ...owner }), key, lastSeq: key.firstSeq + key.count - 1, prefixDigest: receipt.prefixDigest as string }), ...(cleanup ? { cleanupDiagnostic: 'file-close-failed' as const } : {}) })
     }
     if (kind === 'not-issued') {
       const envelope = fields(value, ['kind', 'code'])

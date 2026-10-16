@@ -8,7 +8,7 @@ export interface HeldFactOwner {
 }
 export interface IssuingFactOwner extends HeldFactOwner { beforeIssue(): void }
 export type BackendFactOutcome =
-  | { kind: 'committed'; receipt: FactReceipt }
+  | { kind: 'committed'; receipt: FactReceipt; cleanupDiagnostic?: 'file-close-failed' }
   | { kind: 'absent' | 'unknown' | 'conflict'; key: BatchKey }
   | { kind: 'not-issued'; code: FactCode }
 export interface OwnedFactBackend {

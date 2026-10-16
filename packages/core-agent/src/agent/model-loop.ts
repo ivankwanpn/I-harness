@@ -2,6 +2,7 @@ import { agentFacts, committedFactSeqs } from './facts.ts'
 import type { LLMStreamEvent } from "@i-harness/llm-seam"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import { createModelStep } from "./model-step.ts"
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 export type { ModelStep } from "./model-step.ts"
 
 export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>) {
@@ -20,7 +21,9 @@ export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry" | 
     usedCallIds.add(callId)
     // Capture the durable tool/call sequence before append assigns it.
     const [eventSeq] = committedFactSeqs(await agentFacts(deps).tools.call({ type: "tool/call", callId, name: ev.call.name, args: ev.call.args }))
-    return { callId, name: ev.call.name, args: ev.call.args, eventSeq }
+    const call = eventSeq === undefined ? undefined : deps.session.events[eventSeq]
+    if (!call || call.type !== 'tool/call' || call.callId !== callId || call.seq !== eventSeq) throw new FactRecoveryRequiredError()
+    return { callId: call.callId, name: call.name, args: call.args, eventSeq }
   }
   return {
     start: (lifecycle: TurnLifecycle, startSeq: number, abort: AbortSignal | undefined, getSteps: () => number) =>

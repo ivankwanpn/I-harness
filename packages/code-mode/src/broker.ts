@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { captureLegacyFact, committedFactSeqs, FactRecoveryRequiredError, stringifyJsonData } from "@i-harness/core-session"
-import { isPolicyRefusal, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
+import { isPolicyRefusal, retainedToolOutcome, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
 import type { Cell, Queued } from './broker/types.ts'
@@ -10,12 +10,29 @@ import { codeModeFactOwner } from './facts.ts'
 /** The broker owns admission/dispatch; real results retain their original slot
  * through a failed join. Only the document's exact receipt marks them recorded. */
 export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) {
-  const owner = codeModeFactOwner(options), records = createCodeModeRecords()
+  const owner = codeModeFactOwner(options), records = createCodeModeRecords(complete)
   const cells = new Map<string, Cell>(), queue: Queued[] = [], active = new Set<Queued>(), jobs = new Set<Promise<void>>(), unsettled = new Set<Queued>()
   const stop = new AbortController(), parallel = Math.min(16, Math.max(1, options.maxParallel ?? 4))
   let pumping = false, disposed = false, closed = false, exclusive = false, closeAttempt: Promise<void> | undefined
   let finalizers: Promise<void> = Promise.resolve()
   const recovery = (cause: unknown) => Object.assign(new FactRecoveryRequiredError(), { cause })
+  function complete(item: Queued): Promise<unknown> {
+    if (item.completion) return item.completion
+    const completion = finalizers.then(async () => {
+      if (!item.prepared) throw recovery(item.recoveryCause)
+      item.finalizing ??= tools.finalize(item.prepared, item.bodyOutput)
+      const result = await item.finalizing
+      await records.record(item, result.output)
+      if (!item.signal.aborted) {
+        try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, output: result.output, session: options.session, signal: item.signal }) }
+        catch (error) { throw fatal(`Code Mode post-tool hook failed: ${message(error)}`) }
+      }
+      return result.output
+    })
+    item.completion = completion
+    finalizers = completion.then(() => {}, () => {})
+    return completion
+  }
   function retireCell(id: string) { const cell = cells.get(id); cells.delete(id); cell?.stop.abort(); void pump() }
   const track = (job: Promise<void>) => { jobs.add(job); void job.then(() => { jobs.delete(job); void pump() }, () => { jobs.delete(job); void pump() }) }
   async function release(item: Queued) {
@@ -41,20 +58,19 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during checkpoint")
       item.admitted()
-      item.bodyOutput = await tools.dispatch(prepared); item.hasOutput = true
-      const completion = finalizers.then(async () => {
-        item.finalizing ??= tools.finalize(prepared, item.bodyOutput)
-        const result = await item.finalizing
-        await records.record(item, result.output)
-        if (!item.signal.aborted) {
-          try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, output: result.output, session: options.session, signal: item.signal }) }
-          catch (error) { throw fatal(`Code Mode post-tool hook failed: ${message(error)}`) }
-        }
-        return result.output
-      })
-      finalizers = completion.then(() => {}, () => {})
-      records.settle(item, { value: await completion })
+      item.prepared = prepared
+      try { item.bodyOutput = await tools.dispatch(prepared); item.hasOutput = true }
+      catch (error) {
+        const retained = retainedToolOutcome(error, prepared)
+        if (retained) { item.retained = retained; item.recoveryCause = error }
+        throw error
+      }
+      records.settle(item, { value: await complete(item) })
     } catch (error) {
+      if (item.retained) {
+        records.settle(item, { error: recovery(error) })
+        return
+      }
       if (isPolicyRefusal(error)) retireCell(item.call.cellId)
       // A real body/finalizer value can never be overwritten with a synthetic
       // storage error. Its retained source is reconciled without execution.

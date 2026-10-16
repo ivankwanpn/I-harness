@@ -9,9 +9,21 @@ export function actionMetadataFacts(owner: FactOwner, signal?: AbortSignal): Met
   }
   return { admit: event => run(facts => facts.admit(event)), enterPlan: proposal => run(facts => facts.enterPlan(proposal)), importPolicy: modes => run(facts => facts.importPolicy(modes)) }
 }
-export function actionFeedbackFacts(owner: FactOwner, signal?: AbortSignal): Pick<AgentFacts<ProducerFactOutcome>, 'feedback'> {
-  return { async feedback(event) {
+type FeedbackPort = Pick<AgentFacts<ProducerFactOutcome>, 'feedback'>
+const feedbackSources = new WeakMap<FactOwner, { signals: WeakMap<AbortSignal, FeedbackPort>; unscoped?: FeedbackPort }>()
+
+/** Identity belongs to this actual document/source and original signal. Merely
+ * resolving the composition factory creates no action or later-turn authority. */
+export function actionFeedbackFacts(owner: FactOwner, signal?: AbortSignal): FeedbackPort {
+  let source = feedbackSources.get(owner)
+  if (!source) { source = { signals: new WeakMap() }; feedbackSources.set(owner, source) }
+  const existing = signal ? source.signals.get(signal) : source.unscoped
+  if (existing) return existing
+  const port: FeedbackPort = { async feedback(event) {
     const action = owner.beginAction(signal)
     try { return await action.facts.agent.feedback(event) } finally { action.finish() }
   } }
+  if (signal) source.signals.set(signal, port)
+  else source.unscoped = port
+  return port
 }

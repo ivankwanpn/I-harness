@@ -41,6 +41,7 @@ type Pending = {
     install(): void;
     receipt?: FactReceipt;
     issued: boolean;
+    cleanupReported?: boolean;
 };
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
@@ -97,9 +98,12 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const finish = (current: Pending, backendOutcome: BackendFactOutcome): {
         results: FactOutcome[];
         observe: boolean;
+        cleanupDiagnostic?: boolean;
     } => {
         const outcome = ownBackendOutcome(backendOutcome, current.batch.key, owner, current.issued);
         if (outcome.kind === 'committed') {
+            const cleanupDiagnostic = outcome.cleanupDiagnostic === 'file-close-failed' && !current.cleanupReported;
+            if (cleanupDiagnostic) current.cleanupReported = true;
             const receipt = outcome.receipt;
             current.receipt = receipt;
             try {
@@ -107,7 +111,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             }
             catch {
                 failQueued();
-                return { results: current.entries.map(() => ({ kind: 'recovery-required', code: 'FACT_INSTALL_FAILED', receipt })), observe: false };
+                return { results: current.entries.map(() => ({ kind: 'recovery-required', code: 'FACT_INSTALL_FAILED', receipt })), observe: false, cleanupDiagnostic };
             }
             prefix = { eventCount: prefix.eventCount + current.batch.key.count, bodyBytes: prefix.bodyBytes + current.batch.bytes.length, prefixDigest: receipt.prefixDigest };
             pending = undefined;
@@ -118,7 +122,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 sourceDispositions.set(entry.group, outcome);
                 return outcome;
             });
-            return { results, observe: true };
+            return { results, observe: true, cleanupDiagnostic };
         }
         if (outcome.kind === 'unknown' || outcome.kind === 'conflict')
             failQueued();
@@ -130,6 +134,11 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             }
         }
         return { results: current.entries.map(() => outcome), observe: false };
+    };
+    const reportCleanup = () => {
+        try {
+            void Promise.resolve(report(new Error('Managed journal file close failed after sync'))).catch(() => {});
+        } catch { /* Diagnostics cannot change the known committed disposition. */ }
     };
     const run = async () => {
         while (queue.length && !pending) {
@@ -194,6 +203,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     entry.resolve(completed.results[index]!);
                 if (completed.observe)
                     state.observe(current.events, report);
+                if (completed.cleanupDiagnostic) reportCleanup();
             }
         }
     };
@@ -333,6 +343,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
             if (completed.observe)
                 state.observe(current.events, report);
+            if (completed.cleanupDiagnostic) reportCleanup();
             if (!pending) {
                 quarantined = false;
                 capacity.resume();

@@ -1,4 +1,4 @@
-import type { Tool, ToolResult } from '@i-harness/core-tools'
+import type { PreparedCall, RetainedToolOutcome, Tool, ToolResult } from '@i-harness/core-tools'
 import type { ManagedAction, SettlementFacts, CapturedSettlementFact, ProducerFactOutcome } from '@i-harness/core-session'
 import type { CodeModeInvocation } from '../types.ts'
 
@@ -10,5 +10,6 @@ export interface Queued {
   action: ManagedAction<ProducerFactOutcome>; source: SettlementFacts<ProducerFactOutcome>
   done: ReturnType<typeof Promise.withResolvers<void>>
   hasOutput: boolean; bodyOutput?: unknown; finalizing?: Promise<ToolResult>
+  prepared?: PreparedCall; retained?: RetainedToolOutcome; recoveryCause?: unknown; completion?: Promise<unknown>
   result?: CapturedSettlementFact<ProducerFactOutcome>
 }

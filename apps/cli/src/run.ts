@@ -961,16 +961,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // R-A6: first-prompt auto title after a successful run (fail-soft — LLM
     // failure degrades to the deterministic fallback; a coordinator document
     // mirror only when a session id is known).
-    await maybeAutoTitle({
-      session, model: assembly.model, metadata,
-      // M73 (fix wave, I3): the title request is built by session-title and runs
-      // on the session's model, so it gets the session model's resolved pair —
-      // the same two numbers the binding above produced, read at call time
-      // (absent stays absent: a test-mock run resolves no binding at all).
-      ...(contextWindow !== undefined ? { contextWindow } : {}),
-      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-      ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
-    })
+    if (assembly.factOwner.view !== session) throw Object.assign(new Error('Title action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    const titleAction = assembly.factOwner.beginAction(runSignal)
+    try {
+      await maybeAutoTitle({
+        session, model: assembly.model,
+        action: { view: session, signal: titleAction.signal, assertOpen: titleAction.assertOpen, facts: { metadata: titleAction.facts.metadata } },
+        // M73 (fix wave, I3): the title request is built by session-title and runs
+        // on the session's model, so it gets the session model's resolved pair —
+        // the same two numbers the binding above produced, read at call time
+        // (absent stays absent: a test-mock run resolves no binding at all).
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+        ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
+      })
+    } finally { titleAction.finish() }
     if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
     emitSessionEnd(0)
     const ending = readEnding()

@@ -106,7 +106,8 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
         if (handle) try { await handle.close() } catch {
           // A successful fsync is already a durable commit. Cleanup cannot
           // erase that receipt or authorize rewriting the committed batch.
-          if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
+          if (synced && outcome!.kind === 'committed') outcome = { ...outcome!, cleanupDiagnostic: 'file-close-failed' }
+          else if (!synced && issued) outcome = { kind: 'unknown', key: batch.key }
         }
       }
       return outcome!
@@ -140,7 +141,11 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
           outcome = { kind: 'absent', key: batch.key }
         }
       } catch (error) { if (error instanceof JournalPrefixConflict) outcome = { kind: 'conflict', key: batch.key } }
-      finally { if (handle) await handle.close().catch(() => {}) }
+      finally {
+        if (handle) await handle.close().catch(() => {
+          if (outcome.kind === 'committed') outcome = { ...outcome, cleanupDiagnostic: 'file-close-failed' }
+        })
+      }
       return outcome
     },
   }

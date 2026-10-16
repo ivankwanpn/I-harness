@@ -10,6 +10,7 @@ import { enterPlanMode } from '@i-harness/plan-mode'
 import { createRuntimeContext } from '@i-harness/runtime-context'
 import { createScheduleTools } from '@i-harness/schedule/tools'
 import { applyTitle } from '../../session-title/src/index.ts'
+import { createSessionAssembly } from '../src/assembly.ts'
 
 it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s through its actual producer only after the managed receipt', async producer => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-producer-'))
@@ -35,6 +36,30 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
     expect(document.view.events.map(event => event.type)).toEqual(expected)
     expect((await backend.read(id)).events.map(event => event.type)).toEqual(expected)
   } finally { release.resolve(); await coordinator.close() }
+})
+
+it('shares adjacent runtime snapshots through the actual assembly feedback factory while its receipt is held', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-runtime-assembly-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create()
+  let sends = 0
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, codeMode: { mode: 'off' }, sandbox: 'read-only', model: { async *stream() { sends++; yield { type: 'end' } } } })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), append = backend.appendOwnedBatch!
+  let writes = 0, settled = 0
+  backend.appendOwnedBatch = async (...args) => { writes++; entered.resolve(); await release.promise; return append(...args) }
+  const signal = new AbortController().signal
+  const payload = { task: 'runtime snapshot', session: assembly.session, signal }
+  const first = assembly.ctx.emit('agent/pre-step', payload).then(() => { settled++ })
+  await Promise.race([entered.promise, first.then(() => { throw new Error('No runtime receipt hold') })])
+  const second = assembly.ctx.emit('agent/pre-step', payload).then(() => { settled++ })
+  try {
+    expect(settled).toBe(0)
+    expect(assembly.session.events.filter(event => event.type === 'user/message')).toEqual([])
+    release.resolve()
+    await Promise.all([first, second])
+    expect([writes, sends, settled]).toEqual([1, 0, 2])
+    expect(assembly.session.events.filter(event => event.type === 'user/message' && event.source?.plugin === 'i-harness/runtime-context')).toHaveLength(1)
+  } finally { release.resolve(); await Promise.allSettled([first, second]); await assembly.dispose(); await coordinator.close() }
 })
 
 it('invalidates runtime dedupe knowledge after unknown so a reconciled newer snapshot cannot hide a return to old text', async () => {

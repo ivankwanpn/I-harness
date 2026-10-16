@@ -41,7 +41,10 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
       if (!latest || latest.kind === 'not-issued') return admit()
       if (latest.kind === 'committed' || latest.kind === 'absent') return latest
       const key = latest.kind === 'recovery-required' ? latest.receipt.key : latest.key
-      latest = await operations.reconcile(key)
+      const disposition = await operations.reconcile(key)
+      // Reconciliation installs the whole shared physical frame. This source
+      // owns only its captured group's slice, even when another group was first.
+      latest = capture.kind === 'captured' ? operations.status(capture.group) ?? disposition : disposition
       return latest
     }),
     retryAbsent: () => track(async () => {
