@@ -1,6 +1,6 @@
 # R6 archive and qualification obligations
 
-2026-10-17, root planning note only. F1 is in its first review correction round at candidate `e17202f6`; no R6 product work or completion is implied.
+2026-10-17, root planning note only. The archive obligations were first recorded during F1's correction round at candidate `e17202f6` and remain open after the reviewed F1/F2 deliveries. No R6 product work or completion is implied.
 
 The approved redesign's data section requires streamed large-file cold reading, incremental effective-checkpoint-plus-tail restoration, and paged historical UI/search access. R6 is therefore not merely a command that reruns the whole test suite. These actual reader/recovery consumers must be implemented and verified after the reviewed F2/F3 replacement, R4 artifact/semantic-seed and R5 observation contracts are available. Rebase actual interfaces then; do not create a speculative second store or unused paging facade now.
 
@@ -17,3 +17,9 @@ Root ruling: keep these original implementation obligations visible in the R6 ro
 `F1-CLOSE-OBS-01`: `.tmp/context-r3-f1-validation/fix1-executor-covering.log`/manifest records81pass/1fail at the original Code Mode child test's `service.close()` AggregateError. Its finally hid the original inner chain. The later same-combination plus exact-boundary run `fix1-executor-final-close-controls` passed83; the original reviewer independently confirmed identical production source hashes between these runs, with only diagnostic/additional test changes. No product fix or harmlessness explanation has been established for that occurrence.
 
 Preserve this distinction in R6. The retained synthetic fixture's three child results/cells/turn-end records are structural observations only, not proof of live fsync/disposal. Revisit actual source/producer/worker closing with the improved primary/cleanup diagnostics and the cold/warm full qualification; report the observed disposition explicitly. A new local pass must not silently erase or baseline-label the old failed receipt. This does not reopen already-reviewed F1 corrections or change their exact ownership contracts.
+
+## F2 review follow-ups for final qualification
+
+The F2 reader review at `7fc5fc35` records two deferred Minors in `.superpowers/sdd/2026-10-16-context-engine-r3-replacement-readers/task-1-review.md` and its progress ledger. `F2-M1` is a sparse in-memory replacement source array that is refused through a bare TypeError instead of the scalar replacement diagnostic. It is assigned to the connected F3 publication/validation boundary; final review must confirm its disposition. This is separate from F2's blocking complete-prefix empty-reset seed finding, which enters the immediate fix loop.
+
+`F2-M2` preserves expected cleanup, rewind-binding and title-cancellation diagnostics plus the existing36 dynamic TypeScript-import warnings. Where a controlled fixture intentionally emits an error, the eventual qualification should assert/capture the expected output so new unexpected stderr is visible. Unexecuted dynamic routes remain outside the copied-smoke claim until actually qualified. Neither warning cleanup nor a later green reader test resolves the original F1 close observation or proves all runtime paths.
