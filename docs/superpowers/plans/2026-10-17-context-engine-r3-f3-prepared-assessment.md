@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. One implementer, followed by one fresh GPT6.1Sol task reviewer. No recursive agents. Steps use checkbox (`- [ ]`) syntax.
 
-**Status:** READY FOR SINGLE-WRITER EXECUTION after independently accepted F2 through `7a151340419501833cc4029378b9edf7b36e18ac`. Root verified that the listed main assessment/request/execution, token comparison, snapshot contract and prepared-request interfaces are unchanged across the accepted F2 range. The task ledger will bind the exact documentation commit as BASE immediately before dispatch. No F3a product implementation is implied by this status.
+**Status:** COMPLETE — independently approved at `c87b0e599e3ba00a7b90e92a8323840694def52a` from BASE `6178b8ec908d5e897031874f8c891018dd018757`. [Verification](../../research/2026-10-17-context-engine-r3-f3a-verification.md) records exact source/receipt scope, the resolved test-provenance question and retained qualification warnings. The required agent scope includes18 individually reproduced BASE failures with named later integration obligations; this is not a full-program pass or whole-F3 completion. Root's consumer-graph amendment below was included in the approved review.
 
 **Goal:** Make the current main request construction and prepared budget calculation reusable without mutating the live context observation, execution identity or calibration state during a private candidate probe.
 
@@ -19,6 +19,7 @@
 - ContextEngine does not import core-agent, session-executor, subagent, Desktop, concrete llm adapters or compaction. It may consume core-session, token-meter and llm-seam contracts/primitives. Do not add a second budget, calibration, request or raw-history owner.
 - No replacement publication, new policy defaults, F4 physical-attempt mechanism, E capacity-domain policy, R4 retention/seed/delivery or R5 observation overhaul in this task.
 - Preserve current main admission semantics, including the unresolved recovery restriction, current unsupported/unknown cap behavior and unknown-window unavailability. Capacity fit is not send authorization.
+- Retire the old internal `checkBudget(Session,...)` entry when its last production caller moves to the scalar primitive. This is an explicit package-API removal, not a claim that the old fallback is still supported; retain actual runtime semantics and other activeTokens consumers.
 - New cohesive leaves normally 150–400 lines, functions at most 120; facade 150–250. Extract the touched responsibility, not an unrelated file-size campaign. Tests/scripts are exempt from decomposition targets.
 - Keep RED receipts, failed manifests, known baselines and source/artifact identities. No audit reseed, exemption, synthetic consumer, timeout weakening or erasure of F1-CLOSE-OBS-01/B2/R6 obligations.
 
@@ -26,7 +27,7 @@
 
 | Path under packages/ | Responsibility |
 |---|---|
-| `token-meter/src/budget.ts`, `src/index.ts` | One scalar `compareBudgetTotal` primitive shared by existing `checkBudget` and the new actual assessment caller; no fake Session to reach the explicit-total branch. |
+| `token-meter/src/budget.ts`, `src/index.ts` | One scalar `compareBudgetTotal` primitive consumed by actual prepared assessment; retire the now-unused legacy `checkBudget` wrapper/export instead of a fake Session or synthetic consumer. |
 | `context-engine/src/contracts/assessment.ts` | Data-only exact input/result types for the current named legacy calculation. |
 | `context-engine/src/admission/assess.ts` | Pure A-to-optional-B selection, final B validation/pricing, capacity-only comparison and existing snapshot construction. |
 | `context-engine/src/index.ts`, `package.json`, workspace lock importer | Export only the function/types used by core-agent; declare the existing framework's direct token-meter edge. |
@@ -105,11 +106,11 @@ export function buildContextRequest(
 
 No public `OwnedBudget.probe` or injectable private-candidate service is added before its actual F3 reduction consumer exists. The exported assessment function already has the live main consumer in this task. `capacityFit` supplies the same calculation's authorization-independent result; it does not alter the existing authorization-sensitive `snapshot.admission`.
 
-- [ ] **Step 1: Record actual BASE and freeze the extraction boundary.**
+- [x] **Step 1: Record actual BASE and freeze the extraction boundary.**
 
 Read this task, Global Constraints and F3 preflight. Record `git rev-parse HEAD`, source hashes and exact commands in the task report. Verify the actual current `budget.ts:assess`, `execution.expected`, `step-input.ts:prepareRequest`, token-meter `checkBudget` and ContextEngine index. Root binds the accepted F2 revision; do not use `HEAD~1` or a historical F1 whole-suite pass as this task's evidence. Preserve F2's source/receipt work and root docs.
 
-- [ ] **Step 2: Write literal RED for pure arithmetic and final derivative use.**
+- [x] **Step 2: Write literal RED for pure arithmetic and final derivative use.**
 
 Create `context-engine/test/prepared-assessment.test.ts` with controlled prepared capabilities; no live transport. Each fixture's stream throws if called. Handwrite expected values rather than calling the production comparator for the oracle.
 
@@ -128,9 +129,11 @@ Construct A whose derivative B changes the input measurement and identity; asser
 
 Run `pnpm exec vitest run test/prepared-assessment.test.ts --maxWorkers=2 --minWorkers=1` in `packages/context-engine`; retain the expected missing-interface RED, not an unrelated invalid fixture error.
 
-- [ ] **Step 3: Extract the scalar comparison and existing calculation once.**
+- [x] **Step 3: Extract the scalar comparison and existing calculation once.**
 
-`compareBudgetTotal` performs the existing validation and exact `tokens > floor(contextWindow*reserveRatio)` comparison. Existing `checkBudget` retains its fallback/overhead handling, then calls this primitive. The prepared assessor never takes or creates a Session and never invokes activeTokens.
+`compareBudgetTotal` performs the existing validation and exact `tokens > floor(contextWindow*reserveRatio)` comparison. The prepared assessor never takes or creates a Session and never invokes activeTokens.
+
+Root consumer-graph ruling2026-10-17: the initial extraction exposed a contradiction in the plan's proposal to retain the old wrapper. Main was `checkBudget`'s only production consumer; after the move it has none, and this private workspace package has no other source/apps/e2e/scripts caller. Retire the wrapper body and barrel export rather than hiding dead code behind an internal import or inventing a consumer/audit exemption. Keep activeTokens and its real callers untouched. Migrate the original valid scalar under/over/ratio/numeric-total tests to literal `compareBudgetTotal` controls; prove full prepared input is charged once in the actual assessor/owned-caller tests. Retire only the removed wrapper's Session-fallback/overhead-parameter-specific tests, recording their disposition explicitly; do not recreate the wrapper in test code. This intentionally removes the old internal package entry; main runtime policy/output behavior remains unchanged. Also remove any unconsumed `ProjectionEstimate` barrel exposure while retaining the real contract-module type.
 
 Preserve these existing selection rules verbatim in meaning:
 
@@ -150,7 +153,7 @@ Validate A and B through existing llm-seam guards and binding comparison. Calcul
 
 The calculator performs no awaits, prepare/auth/send, telemetry, append, calibration record/retire, latest/captured/invalidated mutation or execution confirmation. Its two narrow readers must be existing pure observations captured synchronously by the live caller; no permission minting or recovery.admit callback. Add the direct token-meter workspace edge and update only that lockfile importer.
 
-- [ ] **Step 4: Wire the real live owner and prove observation purity.**
+- [x] **Step 4: Wire the real live owner and prove observation purity.**
 
 `createOwnedBudget.assess` builds the scalar input and read-only readers, calls `assessLegacyPreparedRequest`, then installs latest/captured/invalidated exactly once after success. Its existing `record`, `retire`, `checkpoint` and accepted-v2 lineage remain the only mutation/publication owners. A failed assessment preserves the previous observation and anchor. Main admission still retires an advisory disposition only after its current-candidate check.
 
@@ -158,7 +161,7 @@ Add `peekExpected(base): EpochObservation` to the existing execution owner, usin
 
 Extend `core-agent/test/owned-budget.test.ts` and `execution-calibration.test.ts` with the actual owner controls. A hypothetical mismatch followed by compatible assessment produces no extra usage-retire/budget facts or lost execution observation. A real committed rewrite still retires through the existing B2 path once. Use real owned/calibration fixtures where the behavior requires accepted lineage, not arbitrary fabricated request attributes.
 
-- [ ] **Step 5: Separate captured request construction from live telemetry.**
+- [x] **Step 5: Separate captured request construction from live telemetry.**
 
 Move only `renderConversation`, `assertMessagesFromLog`, copied tool schema, captured system/effort/output cap, requestScope/retryOutput/sessionId/promptCache and signal assembly into `buildContextRequest`. It accepts only the captured conversation/surface pair plus the small options object above, never Session/AgentDeps or publication coordinates. The live caller passes its actual snapshot. This keeps the later private candidate caller from fabricating a committed ContextSnapshot merely to build a request. Preserve existing cache key `ih_` plus first48 SHA256 hex characters of sessionId, `retryOutput:'discard'`, absence behavior and exact message/native order.
 
@@ -166,7 +169,7 @@ Move only `renderConversation`, `assertMessagesFromLog`, copied tool schema, cap
 
 Create `core-agent/test/request-input.test.ts`: exact literal text/image/tool/native arrays and system/schema/effort/output fields, repeated build equality, immutable snapshot unchanged, no sessionId means no cache key, signal identity preserved. Compare the actual main caller's prepared body and observer counts in existing `context-snapshot`, `final-validation-routes` and `owned-budget` tests. The pure helper does not assert invented adapter compatibility; actual adapter validation continues to own it.
 
-- [ ] **Step 6: Finish structural extraction and qualification.**
+- [x] **Step 6: Finish structural extraction and qualification.**
 
 Run the new tests and affected covering tests sequentially, with `--maxWorkers=2 --minWorkers=1`:
 
@@ -180,7 +183,7 @@ Run `pnpm --filter @i-harness/token-meter typecheck`, then the same command for 
 
 Make fresh Gateway and CLI copies using the existing build commands and distinct `.tmp/context-r3-f3a-*` output paths, verify the CLI dist, and smoke the actual copied main path with controlled transport: one accepted ordinary step, exact final cap measurement, then a controlled cap-changing derivative; no extra preparation from repeated context observations. Hash copied source against the qualified final source. No installer/profile or live-provider work.
 
-- [ ] **Step 7: Commit and hand off to the fresh review.**
+- [x] **Step 7: Commit and hand off to the fresh review.**
 
 Use coherent extraction and behavior commits, explicitly stage only task files. Keep root documentation/other writer files unstaged. The report records BASE/HEAD, exact active consumer map, tests/receipts, source identity, copied-runtime proof and any limitation. Return DONE or DONE_WITH_CONCERNS with commits and report path. Root reviews the entire task range; do not push, merge, publish, spawn reviewers or mark all F3 complete.
 
