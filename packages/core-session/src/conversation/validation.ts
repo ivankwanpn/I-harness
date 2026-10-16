@@ -52,7 +52,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
     replacementDependencies: history.dependencies,
     stage(suffix, options) {
       const readCurrent = options?.readCurrentEvent ?? read
-      const stagedHistory = history.stage(suffix, readCurrent)
+      const stagedHistory = history.stage(readCurrent)
       const newAcceptances = new Map<number, AcceptanceFact>()
       const newCompletions = new Map<number, string>()
       const newAnchors = new Map<string, UsageAnchorFact>()
@@ -69,6 +69,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       }
       for (const [offset, event] of suffix.entries()) {
         validateConversationEventShape(event, formatVersion)
+        stagedHistory.advance(event)
         if ((event.type === "conversation/semantics" || event.type === "model/exchange-accepted") && !conversationSeq(event.seq)) fail("unaddressable explicit record")
         const position = count + offset
         if (event.type === "conversation/semantics") {
