@@ -5,5 +5,5 @@
   "type": "module",
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@i-harness/core-session": "workspace:*", "@i-harness/llm-seam": "workspace:*" }
+  "dependencies": { "@i-harness/core-session": "workspace:*", "@i-harness/llm-seam": "workspace:*", "@i-harness/token-meter": "workspace:*" }
 }

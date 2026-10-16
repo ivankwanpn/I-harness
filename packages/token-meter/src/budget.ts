@@ -7,6 +7,14 @@ export interface BudgetResult {
   budget: number
 }
 
+/** Scalar comparison shared by prepared admission and the legacy Session read. */
+export function compareBudgetTotal(tokens: number, contextWindow: number, reserveRatio = 0.9): BudgetResult {
+  if (!(reserveRatio > 0 && reserveRatio <= 1)) throw new Error(`reserveRatio must be in (0, 1] (got ${reserveRatio})`)
+  if (!Number.isSafeInteger(tokens) || tokens < 0) throw new Error('tokens must be a non-negative integer')
+  const budget = Math.floor(contextWindow * reserveRatio)
+  return { state: tokens > budget ? 'overflow' : 'ok', tokens, budget }
+}
+
 // reserveRatio: 保留給輸出的比例（budget = contextWindow * reserveRatio；預設 0.9）
 // overheadTokens (M33 §3.1): the host-known charge the session log does NOT
 // carry (system prompt + tool schemas) — added to the measured tokens. 0
@@ -17,6 +25,5 @@ export function checkBudget(session: Session, contextWindow: number, reserveRati
   if (calibratedInputTokens !== undefined && (!Number.isSafeInteger(calibratedInputTokens) || calibratedInputTokens < 0)) throw new Error("calibratedInputTokens must be a non-negative integer")
   // A calibrated measurement already includes system/tools. Charge it once.
   const tokens = calibratedInputTokens ?? activeTokens(session) + overheadTokens
-  const budget = Math.floor(contextWindow * reserveRatio)
-  return { state: tokens > budget ? "overflow" : "ok", tokens, budget }
+  return compareBudgetTotal(tokens, contextWindow, reserveRatio)
 }
