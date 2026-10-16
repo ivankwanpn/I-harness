@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import { compareBudgetTotal, ProjectionCounter, createAcceptedCalibration, type ProjectedInputFacts } from '@i-harness/token-meter'
-import { type PreparedModelRequest } from '@i-harness/llm-seam'
+import { prepareModelRequest, type PreparedModelRequest } from '@i-harness/llm-seam'
 import { assessLegacyPreparedRequest, type LegacyPreparedAssessmentInput, type PreparedAssessmentReaders } from '../src/index.ts'
 
 const d = 'a'.repeat(64)
@@ -55,6 +55,15 @@ it('freezes returned facts without freezing the caller-owned scalar input', () =
   expect(Object.isFrozen(requestContext)).toBe(false)
   expect(result.snapshot.requestContext).not.toBe(requestContext)
 })
+it('charges a complete estimate once while reporting its fixed components separately', () => {
+  const input = facts()
+  input.components = { ...input.components, system: { ...input.components.system, heuristicTokens: 50 }, toolSchemas: { ...input.components.toolSchemas, heuristicTokens: 30 } }
+  const result = assessLegacyPreparedRequest(prepared(input, { effectiveCap: 40 }), { ...policy, contextWindow: 1000 }, {
+    estimate: () => ({ tokens: 850, calibrated: true }), recoveryRequired: () => false,
+  })
+  expect(result).toMatchObject({ capacityFit: 'yes', snapshot: { admission: 'fit', admissionInputTokens: 850, estimatedInputTokens: 850,
+    systemTokens: 50, schemaTokens: 30, outputReserve: 40, safetyMargin: 100, remainingInputBudget: 10 } })
+})
 it.each(['window', 'input'] as const)('keeps unknown %s unavailable', missing => {
   const result = assessLegacyPreparedRequest(prepared(facts('final', missing === 'input' ? 'incomplete' : 'complete')), { ...policy, ...(missing === 'window' ? { contextWindow: undefined } : {}) }, readers())
   expect(result.capacityFit).toBe('unavailable'); expect(result.snapshot.admission).toBe('unavailable')
@@ -89,13 +98,15 @@ it.each(['unsupported', 'unknown'] as const)('retains actual %s reserve and orig
   expect(result.snapshot).toMatchObject({ outputReserve: 2000, capSupport, admission: 'compact' }); expect(result.capacityFit).toBe('no')
   expect(result.snapshot).not.toHaveProperty('effectiveOutputCap')
 })
-it('labels the existing unknown-cap neutral-only compatibility and derives once', () => {
-  const a = prepared(facts('custom', 'neutral-only'), { capSupport: 'unknown', effectiveCap: undefined, configuredCap: 2000 })
-  const b = prepared(facts('custom', 'neutral-only'), { capSupport: 'unknown', effectiveCap: undefined, configuredCap: 1601 })
-  const derive = vi.fn(() => b); a.withOutputCap = derive
+it('labels the existing unknown-cap neutral-only compatibility and derives once', async () => {
+  const original = await prepareModelRequest({ stream() { throw Error('No custom stream is permitted during assessment') } }, {
+    messages: [{ role: 'user', content: 'custom input' }], tools: [], systemPrompt: 'system', maxOutputTokens: 2000,
+  })
+  const derive = vi.fn(original.withOutputCap), a = { ...original, withOutputCap: derive }
   const result = assessLegacyPreparedRequest(a, policy, readers())
   expect(derive.mock.calls).toEqual([[1601]])
   expect(result).toMatchObject({ capacityFit: 'yes', snapshot: { admission: 'fit', coverage: 'neutral-only', estimateSource: 'neutral-only', outputReserve: 1601 } })
+  expect(result.prepared.validation).toMatchObject({ route: 'custom', status: 'partial', coverage: 'neutral-only' })
   expect(result.snapshot).not.toHaveProperty('effectiveOutputCap')
 })
 it('preserves route minimum and explicit no-selection', () => {
@@ -116,5 +127,3 @@ it('does not retire a real accepted anchor on provisional A shape miss when fina
   expect(result.calibrated).toBe(true); expect(result.disposition).toBeUndefined()
   expect(calibration.probe(input, compatibility)).toEqual({ tokens: 7399, calibrated: true })
 })
-
-
