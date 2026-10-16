@@ -3,6 +3,22 @@ import { append, createSession, renderConversation, type Session } from "@i-harn
 import { captureContextSnapshot } from "../src/index.ts"
 import type { ModelBudgetBinding } from "@i-harness/llm-seam"
 
+it('owns physical unit DTOs without exposing private membership or changing source events', () => {
+  const session = createSession()
+  append(session, { type: 'step/start' }); append(session, { type: 'user/message', text: 'H' }); append(session, { type: 'step/end' })
+  const raw = JSON.stringify(session)
+  const result = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 's', tools: [] } })
+  if (result.kind !== 'captured') throw Error('capture required')
+  const unit = result.snapshot.conversation.items[0]?.unit
+  expect(unit).toEqual({ source: { id: '["owner",0,"step"]', eventIndex: 0, seq: 0, part: 'step', addressable: true }, state: 'closed' })
+  expect(Object.keys(unit!).sort()).toEqual(['source', 'state'])
+  expect(Object.isFrozen(unit)).toBe(true)
+  expect(Object.isFrozen(unit?.source)).toBe(true)
+  expect(renderConversation(result.snapshot.conversation)).toEqual([{ role: 'user', content: 'H' }])
+  expect(JSON.stringify(session)).toBe(raw)
+  expect(Object.isFrozen(session.events[0])).toBe(false)
+})
+
 it('captures positional summary order, manifest identity and unchanged operational-only semantics', () => {
   const session: Session = { formatVersion: 7, events: [
     { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },

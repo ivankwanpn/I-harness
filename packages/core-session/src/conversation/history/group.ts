@@ -1,6 +1,7 @@
-import type { ConversationDiagnostic } from '../types.ts'
+import type { ConversationDiagnostic, ConversationUnit } from '../types.ts'
 import { inferLegacy, type LegacyStep } from '../legacy.ts'
-import { projectedItem, addItemSource, awaitingItemResults } from '../exchange.ts'
+import { projectedItem, addItemSource } from '../exchange.ts'
+import { awaitingItemResults, physicalUnitState } from '../unit-state.ts'
 import { historySources } from './sources.ts'
 import { historyVisibility } from './visibility.ts'
 import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
@@ -24,6 +25,7 @@ class HistoryGrouping {
   private block: HistoryItem | undefined
   private readonly auditSteps = new Map<LegacyStep, HistoryItem>()
   private readonly explicitCalls = new Map<string, HistoryItem>()
+  private readonly units = new Map<LegacyStep, ConversationUnit>()
 
   constructor(private readonly archive: HistoryArchive, throughSeq?: number) {
     this.sources = historySources(archive, this.diagnostics)
@@ -33,7 +35,13 @@ class HistoryGrouping {
 
   private makeItem = (kind: HistoryItem["kind"], index: number, part: string, admissionIndex?: number, imageAdmissionIndex?: number): HistoryItem => {
     const { messages: _messages, ...item } = projectedItem(kind, index, part, this.sources, kind === 'exchange' ? this.legacy.stepByEvent.get(index) : undefined, this.legacy.fenceIndex, admissionIndex)
-    return { ...item, ...(kind === 'summary' ? {} : { unit: this.legacy.stepByEvent.get(index) }), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), ...(imageAdmissionIndex === undefined ? {} : { imageAdmissionIndex }), recipes: [] }
+    const unit = kind === 'summary' ? undefined : this.legacy.stepByEvent.get(index)
+    let unitInfo = unit && this.units.get(unit)
+    if (unit && !unitInfo) {
+      unitInfo = Object.freeze({ source: this.sources.ref(unit.start, 'step'), state: physicalUnitState(unit, unit.calls.map(this.legacy.callMetadata)) })
+      this.units.set(unit, unitInfo)
+    }
+    return { ...item, ...(unit ? { unit, unitInfo } : {}), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), ...(imageAdmissionIndex === undefined ? {} : { imageAdmissionIndex }), recipes: [] }
   }
   private addCall = (item: HistoryItem, index: number) => {
     const call = this.legacy.callMetadata(index)

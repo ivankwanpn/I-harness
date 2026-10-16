@@ -1,5 +1,5 @@
 import { addressKey, compareAddresses, itemRefKey, replacementFormatError as fail, type ConversationAddress, type ConversationItemRef } from '../../events/replacement.ts'
-import { awaitingItemResults } from '../exchange.ts'
+import { exchangeCompletion } from '../unit-state.ts'
 import type { HistoryItem } from './types.ts'
 import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { groupConversationHistory } from './group.ts'
@@ -81,8 +81,9 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
     const actual = historyItemCoverage(item), expected = coverage[index]!.sources
     if (actual.length !== expected.length || actual.some((at, index) => at.seq !== expected[index]!.seq || at.part !== expected[index]!.part)) fail('coverage-mismatch', seq)
     if (item.provenance.scope === 'session' || item.kind === 'input' && turn !== undefined && item.establishmentIndex > turn) fail('protected-source', seq)
-    if (item.kind === 'legacy-fragment' || item.kind === 'exchange' && (!item.step || !item.step.ended || item.step.failed || item.step.suppressed
-      || item.calls.some(call => call.outcome === 'unknown' || call.outcome === 'pending') || awaitingItemResults(item))) fail('incomplete-unit', seq)
+    if (item.unitInfo && item.unitInfo.state !== 'closed' || item.kind === 'legacy-fragment'
+      || item.kind === 'exchange' && exchangeCompletion(item) !== 'closed') fail('incomplete-unit', seq)
+    if (item.unitInfo && !item.unitInfo.source.addressable) fail('unsafe-address', seq)
     if (item.unit && items.some(other => other.unit === item.unit && !selected.includes(other))) fail('incomplete-unit', seq)
     for (const source of [...item.sources, ...item.provenance.evidence]) {
       if (!source.addressable || source.seq! >= seq) fail('unsafe-address', seq)

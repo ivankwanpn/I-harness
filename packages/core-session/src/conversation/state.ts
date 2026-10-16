@@ -51,9 +51,9 @@ export function readConversationState(session: Session, projection: Conversation
   const effects = projection.items.flatMap(item => (item.exchange?.calls ?? []).filter(call => call.outcome === "unknown" || call.outcome === "pending")
     .map(call => ({ itemId: item.id, callId: call.callId, outcome: call.outcome, sourceIds: [call.call, call.dispatch, call.result].flatMap(source => source ? [source.id] : []) })))
   const unsettledItems = new Set(effects.map(effect => effect.itemId))
-  const protectedItems = projection.items.filter(item => item.provenance.scope === "session" || item.kind === "input" && turn !== undefined && item.sources.some(source => source.eventIndex > turn!) || item.exchange && item.exchange.state !== "closed" || unsettledItems.has(item.id))
+  const protectedItems = projection.items.filter(item => item.provenance.scope === "session" || item.kind === "input" && turn !== undefined && item.sources.some(source => source.eventIndex > turn!) || item.unit && (item.unit.state !== 'closed' || !item.unit.source.addressable) || item.exchange && item.exchange.state !== "closed" || unsettledItems.has(item.id))
   const itemIds = protectedItems.map(item => item.id)
-  const sourceIds = [...new Set([...protectedItems.flatMap(item => [...item.sources, ...item.provenance.evidence].map(source => source.id)), ...[...pending.values()].flatMap(input => input.sourceIds), ...delegations.values()])]
+  const sourceIds = [...new Set([...protectedItems.flatMap(item => [...item.sources, ...item.provenance.evidence, ...item.unit ? [item.unit.source] : []].map(source => source.id)), ...[...pending.values()].flatMap(input => input.sourceIds), ...delegations.values()])]
   const lastSeq = session.events.at(-1)?.seq
   return { kind: "available", state: {
     archive: { eventCount: session.events.length, ...(lastSeq === undefined ? {} : { lastSeq }) }, branch, rewrites,

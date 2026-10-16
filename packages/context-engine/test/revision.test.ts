@@ -2,6 +2,28 @@ import { expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import { captureContextSnapshot, readContextCoordinates } from "../src/index.ts"
 
+it('keeps physical input closure in protection identity and telemetry outside both identities', () => {
+  const session = createSession()
+  append(session, { type: 'turn/start' }); append(session, { type: 'step/start' })
+  append(session, { type: 'user/message', text: 'H' }); append(session, { type: 'turn/end' })
+  const capture = () => {
+    const result = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 's', tools: [] } })
+    if (result.kind !== 'captured') throw Error('capture required')
+    return result.snapshot
+  }
+  const before = capture()
+  append(session, { type: 'step/end' })
+  const closed = capture()
+  expect(closed.conversation.items.map(item => item.messages)).toEqual(before.conversation.items.map(item => item.messages))
+  expect(closed.coordinates.semanticRevision).toBe(before.coordinates.semanticRevision)
+  expect(closed.coordinates.protectionRevision).not.toBe(before.coordinates.protectionRevision)
+  expect(closed.protection.itemIds).toEqual([])
+  append(session, { type: 'operator/run-end', version: 1, runId: 'diagnostic', exitCode: 0, durationMs: 1, phase: 'session' })
+  const telemetry = capture()
+  expect(telemetry.coordinates.semanticRevision).toBe(closed.coordinates.semanticRevision)
+  expect(telemetry.coordinates.protectionRevision).toBe(closed.coordinates.protectionRevision)
+})
+
 it("keeps archive telemetry outside semantic identity and reproduces cold coordinates", () => {
   const session = createSession()
   append(session, { type: "user/message", text: "retain" })

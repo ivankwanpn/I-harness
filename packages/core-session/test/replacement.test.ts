@@ -42,6 +42,116 @@ function acceptedParallel(): Session {
 }
 
 describe('strict positional replacement readers', () => {
+  it('rejects an open input-only physical unit at its prefix without rejecting the readable input', () => {
+    const prefix: SessionEvent[] = [
+      { type: 'turn/start', seq: 0 }, { type: 'step/start', seq: 1 },
+      { type: 'user/message', seq: 2, text: 'H' }, { type: 'turn/end', seq: 3 },
+    ]
+    const r: SessionEvent = { type: 'compaction/replacement', version: 1, seq: 4, replacementId: 'open-step-input', text: 'S',
+      coverage: [{ item: { kind: 'input', at: { seq: 2, part: 'message' } }, sources: [{ seq: 2, part: 'message' }] }],
+      insertBefore: { kind: 'input', at: { seq: 2, part: 'message' } } }
+    expect(labels({ formatVersion: 7, events: prefix })).toEqual(['H'])
+    const index = createConversationValidationIndex(prefix, { formatVersion: 7 })
+    const refusal = expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'incomplete-unit', seq: 4 })
+    expect(() => validateConversationHistory([...prefix, r], 7)).toThrowError(refusal)
+    expect(() => index.stage([r])).toThrowError(refusal)
+    expect(index.eventCount).toBe(4)
+    expect(() => validateConversationHistory([...prefix, r, { type: 'step/end', seq: 5 }], 7)).toThrowError(refusal)
+    const closed = [...prefix.slice(0, 3), { type: 'step/end', seq: 3 } as SessionEvent, { type: 'turn/end', seq: 4 } as SessionEvent]
+    const valid = { ...r, seq: 5 }
+    expect(labels({ formatVersion: 7, events: [...closed, valid] })).toEqual(['S'])
+    const closedIndex = createConversationValidationIndex(closed, { formatVersion: 7 })
+    closedIndex.stage([valid]).commit()
+    expect([...closedIndex.replacementDependencies().get(5)!].sort()).toEqual([0, 1, 2, 3, 4])
+  })
+
+  it('replaces an honestly complete stepless inferred exchange at its literal source', () => {
+    const session: Session = { formatVersion: 7, events: [
+      { type: 'user/message', seq: 0, text: 'H' }, { type: 'assistant/message', seq: 1, text: 'E' }, { type: 'user/message', seq: 2, text: 'tail' },
+      { type: 'compaction/replacement', version: 1, seq: 3, replacementId: 'stepless', text: 'S',
+        coverage: [{ item: { kind: 'exchange', at: { seq: 1, part: 'message' } }, sources: [{ seq: 1, part: 'message' }] }],
+        insertBefore: { kind: 'exchange', at: { seq: 1, part: 'message' } } },
+    ] }
+    expect(projectConversation({ formatVersion: 7, events: session.events.slice(0, 3) }).items[1]).toMatchObject({ exchange: { state: 'closed' }, provenance: { kind: 'model' } })
+    expect(labels(session)).toEqual(['H', 'S', 'tail'])
+    expect(projectConversation(session).items[1]).toMatchObject({ provenance: { kind: 'summary', authority: 'derived' } })
+  })
+
+  it('replaces a complete stepless call/result bundle and retains every literal source', () => {
+    const prefix: SessionEvent[] = [
+      { type: 'user/message', seq: 0, text: 'H' }, { type: 'tool/call', seq: 1, callId: 'c', name: 'read', args: { a: 1 } },
+      { type: 'assistant/message', seq: 2, text: 'E' }, { type: 'tool/result', seq: 3, callId: 'c', name: 'read', output: 'ok' },
+      { type: 'user/message', seq: 4, text: 'tail' },
+    ]
+    const r: SessionEvent = { type: 'compaction/replacement', version: 1, seq: 5, replacementId: 'bundle', text: 'S',
+      coverage: [{ item: { kind: 'exchange', at: { seq: 1, part: 'call' } }, sources: [{ seq: 1, part: 'call' }, { seq: 2, part: 'message' }, { seq: 3, part: 'result' }] }],
+      insertBefore: { kind: 'exchange', at: { seq: 1, part: 'call' } } }
+    const index = createConversationValidationIndex(prefix, { formatVersion: 7 })
+    expect(index.history().items[1]?.sources.map(source => [source.seq, source.part])).toEqual([[1, 'call'], [3, 'result'], [2, 'message']])
+    index.stage([r]).commit()
+    expect(labels({ formatVersion: 7, events: [...prefix, r] })).toEqual(['H', 'S', 'tail'])
+    expect([...index.replacementDependencies().get(5)!].sort()).toEqual([1, 2, 3])
+    for (const fault of ['unknown', 'interrupted'] as const) {
+      const broken = structuredClone(prefix)
+      if (fault === 'unknown') broken[3] = { type: 'tool/result', seq: 3, callId: 'c', name: 'read', output: { code: 'TOOL_OUTCOME_UNKNOWN', replay: false }, isError: true }
+      else { broken[3] = { type: 'user/message', seq: 3, text: 'interrupt' }; broken[4] = { type: 'tool/result', seq: 4, callId: 'c', name: 'read', output: 'ok' } }
+      const record = fault === 'unknown' ? r : { ...r, coverage: [{ item: { kind: 'exchange' as const, at: { seq: 1, part: 'call' } }, sources: [{ seq: 1, part: 'call' }, { seq: 2, part: 'message' }, { seq: 4, part: 'result' }] }] }
+      expect(() => validateConversationHistory([...broken, record], 7)).toThrowError(expect.objectContaining({ reason: 'incomplete-unit' }))
+      expect(() => createConversationValidationIndex(broken, { formatVersion: 7 }).stage([record])).toThrowError(expect.objectContaining({ reason: 'incomplete-unit' }))
+    }
+    const missing: SessionEvent[] = [prefix[0]!, prefix[1]!, { type: 'user/message', seq: 2, text: 'tail' }]
+    const missingR: SessionEvent = { ...r, seq: 3, coverage: [{ item: { kind: 'exchange', at: { seq: 1, part: 'call' } }, sources: [{ seq: 1, part: 'call' }] }] }
+    expect(() => validateConversationHistory([...missing, missingR], 7)).toThrowError(expect.objectContaining({ reason: 'incomplete-unit' }))
+  })
+
+  it('requires whole physical input/exchange coverage and keeps a known tool error eligible', () => {
+    const prefix: SessionEvent[] = [
+      { type: 'turn/start', seq: 0 }, { type: 'step/start', seq: 1 }, { type: 'user/message', seq: 2, text: 'H' },
+      { type: 'tool/call', seq: 3, callId: 'c', name: 'read', args: {} }, { type: 'assistant/message', seq: 4, text: 'E' },
+      { type: 'tool/result', seq: 5, callId: 'c', name: 'read', output: 'known error', isError: true },
+      { type: 'step/end', seq: 6 }, { type: 'turn/end', seq: 7 },
+    ]
+    const coverage = [
+      { item: { kind: 'input' as const, at: { seq: 2, part: 'message' } }, sources: [{ seq: 2, part: 'message' }] },
+      { item: { kind: 'exchange' as const, at: { seq: 3, part: 'call' } }, sources: [{ seq: 1, part: 'step' }, { seq: 3, part: 'call' }, { seq: 4, part: 'message' }, { seq: 5, part: 'result' }] },
+    ]
+    const r: SessionEvent = { type: 'compaction/replacement', version: 1, seq: 8, replacementId: 'whole-unit', text: 'S', coverage, insertBefore: coverage[0]!.item }
+    expect(projectConversation({ formatVersion: 7, events: prefix }).items.map(item => item.unit?.state)).toEqual(['closed', 'closed'])
+    expect(labels({ formatVersion: 7, events: [...prefix, r] })).toEqual(['S'])
+    for (const entry of coverage) expect(() => validateConversationHistory([...prefix, { ...r, coverage: [entry], insertBefore: entry.item }], 7)).toThrowError(expect.objectContaining({ reason: 'incomplete-unit' }))
+  })
+
+  it.each(['sources-hole', 'coverage-hole', 'inherited', 'accessor', 'symbol', 'extra'] as const)('rejects %s arrays with scalar diagnostics and staged rollback', fault => {
+    const session = fixture(), r = replacement(session)
+    const prefix = session.events.slice(0, 11), index = createConversationValidationIndex(prefix, { formatVersion: 7 })
+    const valid = structuredClone(r)
+    let getterCalls = 0
+    if (fault === 'coverage-hole') delete r.coverage[1]
+    else if (fault === 'symbol') r.coverage[Symbol('extra')] = 'SENSITIVE_BODY'
+    else if (fault === 'extra') r.coverage.extra = 'SENSITIVE_BODY'
+    else {
+      const sources = r.coverage[0].sources
+      if (fault === 'accessor') Object.defineProperty(sources, '1', { enumerable: true, get() { getterCalls++; return { seq: 3, part: 'message' } } })
+      else {
+        delete sources[1]
+        if (fault === 'inherited') Object.setPrototypeOf(sources, Object.assign(Object.create(Array.prototype), { 1: { seq: 3, part: 'message' } }))
+      }
+    }
+    for (const read of [() => validateConversationHistory([...prefix, r], 7), () => index.stage([r])]) {
+      let error: unknown
+      try { read() } catch (cause) { error = cause }
+      expect(error).toMatchObject({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT', reason: 'shape', seq: 11 })
+      expect(Object.keys(error as object).sort()).toEqual(['code', 'reason', 'seq'])
+      expect(String(error)).not.toContain('SENSITIVE_BODY')
+    }
+    expect(getterCalls).toBe(0)
+    expect(index.eventCount).toBe(11)
+    expect(index.replacementDependencies().get(11)).toBeUndefined()
+    index.stage([valid]).commit()
+    expect(index.eventCount).toBe(12)
+    expect(labels({ formatVersion: 7, events: [...prefix, valid] })).toEqual(['H', 'S11', 'tail'])
+    expect(() => index.stage([{ ...valid, seq: 12 }])).toThrowError(expect.objectContaining({ reason: 'duplicate-id' }))
+  })
   it.each(['admitted', 'promoted'] as const)('protects a distinct image admission that is still %s', state => {
     const session: Session = { formatVersion: 7, events: [
       { type: 'agent/input/admitted', version: 1, seq: 0, inputId: 'picture', text: 'image', delivery: 'queue', intent: 'user', images: [{ mediaType: 'image/png', dataBase64: 'aW1hZ2U=' }] },

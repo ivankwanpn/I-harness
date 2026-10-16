@@ -2,6 +2,18 @@ import { expect, it } from "vitest"
 import { append, createSession, fromJSONL, toJSONL } from "@i-harness/core-session"
 import { captureContextSnapshot, readContextCoordinates } from "../src/index.ts"
 
+it('captures and protects an open input-only unit after the turn ends', () => {
+  const session = createSession()
+  append(session, { type: 'turn/start' }); append(session, { type: 'step/start' })
+  append(session, { type: 'user/message', text: 'H' }); append(session, { type: 'turn/end' })
+  const result = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 's', tools: [] } })
+  if (result.kind !== 'captured') throw Error('capture required')
+  expect(result.snapshot.conversation.items[0]?.unit).toEqual({ source: { id: '["owner",1,"step"]', eventIndex: 1, seq: 1, part: 'step', addressable: true }, state: 'open' })
+  expect(result.snapshot.protection.itemIds).toEqual(['["owner",2,"message"]:input'])
+  expect(result.snapshot.protection.sourceIds).toContain('["owner",1,"step"]')
+  expect(Object.isFrozen(result.snapshot.conversation.items[0]?.unit)).toBe(true)
+})
+
 it("protects active inputs and the open bundle while 50 closed exchanges stay eligible", () => {
   const session = createSession()
   append(session, { type: "turn/start" }); append(session, { type: "user/message", text: "exact anchor" })

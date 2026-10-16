@@ -26,7 +26,14 @@ export interface ConversationCall {
   outcome: "pending" | "success" | "error" | "not-dispatched" | "unknown"
 }
 
+export type ConversationUnitState = 'open' | 'closed' | 'unresolved'
+export interface ConversationUnit {
+  readonly source: ConversationSourceRef
+  readonly state: ConversationUnitState
+}
+
 export interface ConversationItem {
+  readonly unit?: ConversationUnit
   readonly ref?: import('../events/replacement.ts').ConversationItemRef
   readonly replacement?: Pick<import('../events/replacement.ts').ContextReplacementRecordV1, 'replacementId' | 'coverage' | 'insertBefore'>
   id: string

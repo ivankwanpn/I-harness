@@ -19,6 +19,22 @@ const continuation: ProviderContinuation = {
 }
 
 describe("semantic conversation projection", () => {
+  it('exposes only physical unit DTOs through the actual owner source factory', () => {
+    const session = log({ type: 'turn/start' }, { type: 'step/start' }, { type: 'user/message', text: 'H' },
+      { type: 'assistant/message', text: 'E' }, { type: 'step/end' }, { type: 'turn/end' })
+    const raw = JSON.stringify(session)
+    for (const owner of ['owner-A', 'owner-B']) {
+      const projection = projectConversation(session, { ownerSessionId: owner })
+      expect(projection.items.map(item => item.unit)).toEqual([
+        { source: { id: JSON.stringify([owner, 1, 'step']), eventIndex: 1, seq: 1, part: 'step', addressable: true }, state: 'closed' },
+        { source: { id: JSON.stringify([owner, 1, 'step']), eventIndex: 1, seq: 1, part: 'step', addressable: true }, state: 'closed' },
+      ])
+      for (const item of projection.items) expect(Object.isFrozen(item.unit)).toBe(true)
+      expect(projectConversation(session, { ownerSessionId: owner, throughSeq: 3 }).items.map(item => item.unit?.state)).toEqual(['open', 'open'])
+    }
+    expect(JSON.stringify(session)).toBe(raw)
+    expect(projectConversation(log({ type: 'user/message', text: 'H' }, { type: 'assistant/message', text: 'E' })).items.every(item => item.unit === undefined)).toBe(true)
+  })
   it('keeps a distinct image admission alongside the promoted input admission', () => {
     const image = { mediaType: 'image/png' as const, dataBase64: 'aW1hZ2U=' }
     const session = log(

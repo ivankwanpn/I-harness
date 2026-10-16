@@ -18,6 +18,17 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
 const fields = (value: object, allowed: readonly string[]) => [Object.prototype, null].includes(Object.getPrototypeOf(value))
   && Reflect.ownKeys(value).every(key => typeof key === 'string' && allowed.includes(key)
     && Object.getOwnPropertyDescriptor(value, key)?.enumerable === true && Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, 'value'))
+/** Validate slots before any iteration: holes and accessors are not data. */
+const denseArray = (value: unknown): value is readonly unknown[] => {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return false
+  const keys = Reflect.ownKeys(value)
+  if (keys.length !== value.length + 1) return false
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) return false
+  }
+  return true
+}
 export const addressKey = (value: ConversationAddress) => JSON.stringify([value.seq, value.part])
 export const itemRefKey = (value: ConversationItemRef) => JSON.stringify([value.kind, value.at.seq, value.at.part])
 export const compareAddresses = (a: ConversationAddress, b: ConversationAddress) => a.seq - b.seq || Buffer.compare(Buffer.from(a.part), Buffer.from(b.part))
@@ -28,7 +39,7 @@ export function validateReplacementShape(event: ContextReplacementRecordV1, form
   if (format < 7) replacementFormatError('format', seq)
   if (!fields(event, ['type', 'version', 'replacementId', 'coverage', 'insertBefore', 'text', 'seq']) || event.version !== 1
     || typeof event.replacementId !== 'string' || !/^[\x00-\x7f]{1,256}$/.test(event.replacementId)
-    || typeof event.text !== 'string' || !event.text.trim() || !Array.isArray(event.coverage) || !event.coverage.length) replacementFormatError('shape', seq)
+    || typeof event.text !== 'string' || !event.text.trim() || !denseArray(event.coverage) || !event.coverage.length) replacementFormatError('shape', seq)
   if (!conversationSeq(seq)) replacementFormatError('unsafe-address')
   const address = (value: unknown): value is ConversationAddress => object(value) && fields(value, ['seq', 'part'])
     && conversationSeq(value.seq) && value.seq < seq && typeof value.part === 'string' && value.part.length > 0 && Buffer.byteLength(value.part) <= 64
@@ -37,7 +48,7 @@ export function validateReplacementShape(event: ContextReplacementRecordV1, form
   if (!ref(event.insertBefore)) replacementFormatError('unsafe-address', event.seq)
   const items = new Set<string>()
   for (const coverage of event.coverage) {
-    if (!object(coverage) || !fields(coverage, ['item', 'sources']) || !ref(coverage.item) || !Array.isArray(coverage.sources) || !coverage.sources.length) replacementFormatError('shape', event.seq)
+    if (!object(coverage) || !fields(coverage, ['item', 'sources']) || !ref(coverage.item) || !denseArray(coverage.sources) || !coverage.sources.length) replacementFormatError('shape', event.seq)
     const key = itemRefKey(coverage.item)
     if (items.has(key) || !coverage.sources.every(address) || new Set(coverage.sources.map(addressKey)).size !== coverage.sources.length) replacementFormatError('unsafe-address', event.seq)
     items.add(key)

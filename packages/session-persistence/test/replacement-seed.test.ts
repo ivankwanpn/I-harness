@@ -3,6 +3,22 @@ import { deriveMessages, validateConversationHistory, type SessionEvent } from '
 import { remapConversationSeed, SessionForkUnavailableError } from '../src/seed.ts'
 import { completedTurnPrefix } from '../src/fork.ts'
 
+it('retains input-unit lifecycle proof when remapping and refuses omitted closure', () => {
+  const parent: SessionEvent[] = [
+    { type: 'plan/mode', seq: 0, mode: 'off' }, { type: 'turn/start', seq: 1 }, { type: 'step/start', seq: 2 },
+    { type: 'user/message', seq: 3, text: 'H' }, { type: 'step/end', seq: 4 }, { type: 'turn/end', seq: 5 },
+    { type: 'compaction/replacement', version: 1, seq: 6, replacementId: 'input-unit', text: 'S',
+      coverage: [{ item: { kind: 'input', at: { seq: 3, part: 'message' } }, sources: [{ seq: 3, part: 'message' }] }],
+      insertBefore: { kind: 'input', at: { seq: 3, part: 'message' } } },
+  ]
+  const raw = JSON.stringify(parent)
+  const seed = remapConversationSeed({ source: parent, retained: parent.slice(1), sourceFormat: 7 })
+  expect(seed[5]).toMatchObject({ seq: 5, coverage: [{ item: { kind: 'input', at: { seq: 2, part: 'message' } }, sources: [{ seq: 2, part: 'message' }] }], insertBefore: { kind: 'input', at: { seq: 2, part: 'message' } } })
+  expect(deriveMessages({ formatVersion: 7, events: seed }).map(message => message.content)).toEqual(['S'])
+  for (const missing of [1, 2, 3, 4, 5]) expect(() => remapConversationSeed({ source: parent, retained: parent.filter(event => event.seq !== missing), sourceFormat: 7 })).toThrow(SessionForkUnavailableError)
+  expect(JSON.stringify(parent)).toBe(raw)
+})
+
 it('compiles a complete replacement prefix containing an absent legacy reset list', () => {
   const parent: SessionEvent[] = [
     { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },

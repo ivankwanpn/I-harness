@@ -1,8 +1,9 @@
-import type { ConversationCall, ConversationItem, ConversationProvenance, ConversationSourceRef } from "./types.ts"
+import type { ConversationCall, ConversationItem, ConversationProvenance, ConversationSourceRef, ConversationUnit } from "./types.ts"
 import type { LLMMessage } from "../projection/types.ts"
 import type { LegacyStep } from "./legacy.ts"
 import { copyConversationMessage } from "./render.ts"
 import type { ConversationSources } from "./sources.ts"
+import { exchangeCompletion } from './unit-state.ts'
 
 /** Mutable builders are local to one projection, never returned to a caller. */
 export interface ItemBuilder {
@@ -16,6 +17,7 @@ export interface ItemBuilder {
   step?: LegacyStep
   stepSource?: ConversationSourceRef
   establishment: ConversationSourceRef
+  unitInfo?: ConversationUnit
 }
 
 export function itemBuilder(kind: ConversationItem["kind"], source: ConversationSourceRef, provenance: ConversationProvenance, step?: LegacyStep, stepSource?: ConversationSourceRef): ItemBuilder {
@@ -34,17 +36,11 @@ export function addItemSource(item: Pick<ItemBuilder, 'sources'>, source: Conver
   if (!item.sources.some(existing => existing.id === source.id)) item.sources.push(source)
 }
 
-/** A looked-up result reference is evidence, not proof this bundle consumed it. */
-export function awaitingItemResults(item: Pick<ItemBuilder, 'calls' | 'receivedResults'>): boolean {
-  return item.calls.some(call => call.result !== undefined && !item.receivedResults.has(call.result.id))
-}
-
 export function finishItem(item: ItemBuilder): ConversationItem {
-  const state = item.step?.failed || item.step?.suppressed && item.step.ended ? "unresolved"
-    : item.step && !item.step.ended ? "open"
-    : item.calls.some(call => call.result === undefined) || awaitingItemResults(item) ? "unresolved" : "closed"
+  const state = exchangeCompletion(item)
   return Object.freeze({
     id: item.id, kind: item.kind, sources: Object.freeze(item.sources), provenance: item.provenance,
+    ...(item.unitInfo ? { unit: item.unitInfo } : {}),
     ...(item.kind !== 'legacy-fragment' && item.establishment.addressable && [...item.sources, ...item.provenance.evidence].every(source => source.addressable)
       ? { ref: Object.freeze({ kind: item.kind, at: Object.freeze({ seq: item.establishment.seq!, part: item.establishment.part }) }) } : {}),
     messages: Object.freeze(item.messages.map(copyConversationMessage)),
