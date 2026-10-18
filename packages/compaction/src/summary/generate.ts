@@ -1,7 +1,7 @@
 import { modelFailureFacts, type LLMMessage, type LLMRequest, type ModelClient } from '@i-harness/llm-seam'
 import type { ReductionGroup, SummarySelection } from '@i-harness/context-engine'
 import { prepareSummary, type SummaryLimits } from '../prepared-summary.ts'
-import { SummaryBlockedError, SummaryCheckpointError } from '../summary-errors.ts'
+import { SummaryBlockedError, SummaryCheckpointError, SummaryNativeSourceError } from '../summary-errors.ts'
 import { readSummaryStream } from './stream.ts'
 import { inspectCheckpoint } from './checkpoint.ts'
 import { buildSummaryPrompt } from './prompt.ts'
@@ -40,7 +40,7 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
       try { prepared = await prepareSummary(model, request, maxTokens, { ...limits, expectedImages: selected.images }, check) }
       catch (error) {
         const failure = modelFailureFacts(error)
-        if (!portable && failure?.reason === 'native-replay' && (error as { code?: string }).code === 'INVALID_ARGUMENT') { portable = true; round--; continue }
+        if (!portable && (error instanceof SummaryNativeSourceError || failure?.reason === 'native-replay' && (error as { code?: string }).code === 'INVALID_ARGUMENT')) { portable = true; round--; continue }
         throw error
       }
       if (prepared.room !== undefined && prepared.room < prepared.requiredRoom) { partition(pending, groups); completed = true; break }

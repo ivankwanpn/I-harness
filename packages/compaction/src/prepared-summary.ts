@@ -1,5 +1,5 @@
-import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
-import { SummaryBlockedError } from "./summary-errors.ts"
+import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, readPreparedValidation, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
+import { SummaryBlockedError, SummaryNativeSourceError } from "./summary-errors.ts"
 
 export interface SummaryLimits {
   expectedImages?: number
@@ -50,6 +50,7 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
   const textOutput = readPreparedTextOutput(candidate)
   if (textOutput.status !== 'allowed') throw new SummaryBlockedError(textOutput.status === 'blocked' ? 'output-incompatible' : 'output-unknown')
   validate(input)
+  if (readPreparedValidation(candidate).native === 'unverified' && request.messages.some(message => message.role === 'assistant' && (message.providerContinuation !== undefined || !!message.thinkingBlocks?.length))) throw new SummaryNativeSourceError('Selected final native source fidelity is unverified')
   const inputTokens = price(input), room = roomFor(inputTokens)
   const finalRequired = requiredOutput(finalOutput)
   const reserve = finalOutput.capSupport === "supported" ? finalOutput.effectiveCap ?? cap : cap

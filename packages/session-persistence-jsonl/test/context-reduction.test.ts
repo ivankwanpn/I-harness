@@ -77,6 +77,26 @@ it('two captures from one action have distinct physical frames and the second se
   expect(deriveMessages(f.document.view).map(message=>message.content)).toEqual(['H','S1','S2'])
  }finally{action.finish();await f.coordinator.close()}
 })
+it('the first guarded admission stays before subsequently queued semantic feedback', async () => {
+  const f = await fixture(), action = f.document.beginAction(), source = snapshot(f.document.view)
+  const groups = reductionGroups(source).filter(group => group.items.some(item => item.messages.some(message => message.content === 'E1')))
+  const frames: string[][] = [], actual = f.backend.appendOwnedBatch!
+  f.backend.appendOwnedBatch = async (...args) => {
+    frames.push(JSON.parse(new TextDecoder().decode(args[3].bytes).trim()).events?.map((event: SessionEvent) => event.type) ?? [])
+    return actual(...args)
+  }
+  try {
+    const capture = action.captureContextReduction!({ kind: 'context-reduction', events: [replacementProposal({ id: 'first', groups }, 'S', 'first')] },
+      () => snapshot(f.document.view).coordinates.semanticRevision === source.coordinates.semanticRevision)
+    const rewrite = capture.admit()
+    const later = action.facts.agent.feedback({ type: 'user/message', text: 'later observed suffix', source: { kind: 'plugin', plugin: 'fixture' } })
+    expect(await rewrite).toMatchObject({ kind: 'committed' })
+    expect(await later).toMatchObject({ kind: 'committed' })
+    expect(f.document.view.events.slice(-2).map(event => event.type)).toEqual(['compaction/replacement', 'user/message'])
+    expect(deriveMessages(f.document.view).map(message => message.content)).toEqual(['H', 'S', 'tail', 'later observed suffix'])
+    expect(frames).toHaveLength(2)
+  } finally { action.finish(); await f.coordinator.close() }
+})
 it('Stop after issue installs the known receipt while preventing all later optional work',async()=>{
  const f=await fixture(),action=f.document.beginAction(),source=snapshot(f.document.view),groups=reductionGroups(source).filter(group=>group.items.some(item=>item.messages.some(message=>message.content==='E1')))
  const actual=f.backend.appendOwnedBatch!;let writes=0
