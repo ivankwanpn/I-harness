@@ -25,7 +25,8 @@ import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, typ
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { prepareInputExecution } from './lifecycle/input-preparation.ts'
 import { runManualGeneration } from './lifecycle/manual-generation.ts'
-import { createTitleGenerationContext } from './lifecycle/title-generation.ts'
+import { completeSubmission } from './service/submission-completion.ts'
+import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
@@ -798,103 +799,56 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         return
       }
       let preparedInput: Awaited<ReturnType<typeof prepareInputExecution>> | undefined
-      const assemblyReady = opts.coordinator ? prepareInputExecution({
-        ownerSessionId: sessionId,
-        acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
-        assemble: () => getOrCreate(sessionId),
-        input: { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
-          ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) },
-        alreadyAdmitted: !!options?.admittedInputId, signal: controller.signal,
-        modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
-        localTestEnabled: opts.modelPolicy === 'test-mock',
-        prepare: options?.prepareInput ?? opts.transformPrompt,
-      }).then(prepared => { preparedInput = prepared; return prepared.assembly }) : getOrCreate(sessionId)
-      assemblyReady.then(async (assembly) => {
-        if (controller.signal.aborted || closed) {
-          await preparedInput?.close()
-          settle()
-          return
-        }
+      void completeSubmission(async () => {
+        const assembly = opts.coordinator ? await prepareInputExecution({
+          ownerSessionId: sessionId,
+          acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
+          assemble: () => getOrCreate(sessionId),
+          input: { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
+            ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) },
+          alreadyAdmitted: !!options?.admittedInputId, signal: controller.signal,
+          modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+          localTestEnabled: opts.modelPolicy === 'test-mock',
+          prepare: options?.prepareInput ?? opts.transformPrompt,
+        }).then(prepared => { preparedInput = prepared; return prepared.assembly }) : await getOrCreate(sessionId)
+        if (controller.signal.aborted || closed) return
         const lane = lanes.get(sessionId)!
+        await extensionRefreshes.get(sessionId)?.catch(() => undefined)
+        const prepared = !preparedInput && !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
+        if (controller.signal.aborted || closed) return
+        const text = context ? prepared + '\n\n' + context : prepared
         let execution: Promise<void>
-        try {
-          await extensionRefreshes.get(sessionId)?.catch(() => undefined)
-          const prepared = !preparedInput && !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
-          if (controller.signal.aborted || closed) { settle(); return }
-          // M41b: the submit signal now rides INTO the lane — the agent's
-          // run() gets it and aborts at step boundaries/yields (in-flight
-          // cancel reaches the engine, not just the queue gate). Task 11:
-          // the row id is RETAINED through the lane (public id == lane input
-          // id) so the projection merges service-front + lane rows by id.
-          const text = context ? `${prepared}\n\n${context}` : prepared
-          if (preparedInput) {
-            execution = lane.runAdmitted(id, controller.signal, { generation: preparedInput.generation, preparation: preparedInput.preparation })
-          } else if (options?.admittedInputId) {
-            const pending = assembly.inbox.pending().find((input) => input.inputId === id)
-            if (!pending) { settle(); return }
-            if (pending.text !== text) throw new Error("Admitted input does not match submitted text")
-            execution = lane.runAdmitted(id, controller.signal)
-          } else {
-            await assembly.inbox.admit({ inputId: id, text, delivery: "queue", intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "session.prompt" }, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }, controller.signal)
-            execution = lane.runAdmitted(id, controller.signal)
-          }
-          record.state = "queued"
-        } catch (error) {
-          try { await preparedInput?.close() } catch (saving) { error = new AggregateError([error, saving], 'Input execution settlement requires recovery', { cause: error }) }
-          // A synchronous lane failure still settles this turn.
-          if (!closed) telemetry?.emit({
-            type: "session/error",
-            ts: Date.now(),
-            data: { sessionId, ...failureDiagnostics(error) },
-          })
-          settleError(error)
-          return
+        if (preparedInput) {
+          execution = lane.runAdmitted(id, controller.signal, { generation: preparedInput.generation, preparation: preparedInput.preparation })
+        } else if (options?.admittedInputId) {
+          const pending = assembly.inbox.pending().find(input => input.inputId === id)
+          if (!pending) return
+          if (pending.text !== text) throw new Error('Admitted input does not match submitted text')
+          execution = lane.runAdmitted(id, controller.signal)
+        } else {
+          await assembly.inbox.admit({ inputId: id, text, delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' }, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }, controller.signal)
+          execution = lane.runAdmitted(id, controller.signal)
         }
-        // Lane drain: rejects on the first turn failure (A-plan semantics) —
-        // the rejection becomes this submit's rejection (host error frame).
-        execution.then(
-          async () => {
-            if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
-              record.postTurn = true
-              let action: ManagedAction<ProducerFactOutcome> | undefined
-              let titleGeneration: ReturnType<typeof createTitleGenerationContext> | undefined
-              try {
-                if (assembly.factOwner.view !== assembly.session) throw Object.assign(new Error('Post-turn action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
-                action = assembly.factOwner.beginAction(controller.signal)
-                titleGeneration = createTitleGenerationContext(assembly.factOwner, sessionId, action, { localTestEnabled: opts.modelPolicy === 'test-mock', selectedClient: assembly.selectedModel })
-                const state = await bindingFor(sessionId)
-                action.assertOpen()
-                await opts.afterSuccessfulSubmit(sessionId, assembly, state.status === "ready"
-                  ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
-                  : {}, { view: assembly.session, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata }, openGeneration: titleGeneration.open })
-              } catch (error) {
-                d.warn(`[i-harness] post-turn host callback failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
-              } finally { delete record.postTurn; try { await titleGeneration?.drain() } finally { action?.finish() } }
-            }
-            try { await preparedInput?.close(); settle() }
-            catch (error) { settleError(error) }
-          },
-          async (error: unknown) => {
-            try { await preparedInput?.close() } catch (saving) { error = new AggregateError([error, saving], 'Input execution settlement requires recovery', { cause: error }) }
-            if (!signal.aborted && !closed) {
-              telemetry?.emit({
-                type: "session/error",
-                ts: Date.now(),
-                data: { sessionId, ...failureDiagnostics(error) },
-              })
-            }
-            settleError(error)
-          },
-        )
-      }, (error: unknown) => {
-        // Assembly build failure (e.g. loadMeta unknown session) → reject.
-        telemetry?.emit({
-          type: "session/error",
-          ts: Date.now(),
-          data: { sessionId, ...failureDiagnostics(error) },
-        })
-        settleError(error)
+        record.state = 'queued'
+        // Keep the entire lane/post-turn/drain flow inside caller settlement.
+        await execution
+        if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
+          record.postTurn = true
+          try {
+            await runPostSubmit({
+              sessionId, assembly, signal: controller.signal, localTestEnabled: opts.modelPolicy === 'test-mock',
+              binding: () => bindingFor(sessionId), callback: (...args) => opts.afterSuccessfulSubmit!(...args),
+              warn: error => d.warn('[i-harness] post-turn host callback failed for ' + sessionId + ': ' + (error instanceof Error ? error.message : String(error))),
+            })
+          } finally { delete record.postTurn }
+        }
+      }, () => preparedInput?.close(), {
+        resolve: settle, reject: settleError,
+        report(error) {
+          if (!signal.aborted && !closed) telemetry?.emit({ type: 'session/error', ts: Date.now(), data: { sessionId, ...failureDiagnostics(error) } })
+        },
       })
+
     }
     void prev.then(startTurn, startTurn)
     return turn
