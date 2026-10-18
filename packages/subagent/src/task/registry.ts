@@ -61,6 +61,16 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     }
   }
 
+  /** Restored retrieval is advertised only for this composition's actual owner.
+   * A retained ref without a reader is an unsupported owner, not a disk promise. */
+  function restoredRetention(task: TaskRecord, owned: boolean): void {
+    if (task.bodyKind === "legacy-text" && !task.result) { task.retention = "durable"; delete task.retentionError; return }
+    if (task.result?.kind === "pending") { task.retention = "pending"; delete task.retentionError; return }
+    if (task.result?.kind === "retained" && task.result.envelope.retention.kind === "artifact" && owned) { task.retention = "durable"; delete task.retentionError; return }
+    task.retention = "failed"
+    task.retentionError = task.result?.kind === "retained" ? "Retained task body reader unavailable" : "Retained task body incomplete"
+  }
+
   async function retainResult(taskId: string): Promise<void> {
     const task = records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
@@ -240,11 +250,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         if (doc.formatVersion === 1) t.bodyKind = "legacy-text"
         else unqualifyRestoredTask(t)
         records.set(t.id, t)
-        if (opts.reportPolicy && t.outcome !== undefined) {
-          if (t.bodyKind === "legacy-text" && !t.result || t.result?.kind === "retained" && t.result.envelope.retention.kind === "artifact") { t.retention = "durable"; delete t.retentionError }
-          else if (t.result?.kind === "pending") t.retention = "pending"
-          else t.retention = "failed"
-        }
+        if (opts.reportPolicy && t.outcome !== undefined) restoredRetention(t, Boolean(resultOwner))
         const anon = t.callEventSeq === undefined && t.toolCallId === undefined
         if (anon) restoredAnon += 1
         byIdentity.set(
