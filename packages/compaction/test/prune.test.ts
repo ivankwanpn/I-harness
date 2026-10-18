@@ -3,15 +3,17 @@ import { createSession,deriveMessages } from '@i-harness/core-session'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { closedExchange,spyModel,autoConfig,autoCap } from './fixtures/history.ts'
 import { prepareTextFixture } from './fixtures/checkpoint.ts'
+import type { TelemetryEvent } from '@i-harness/telemetry'
 const config={...autoConfig,prune:{thresholdChars:1000,headChars:100,tailChars:100}}
 function source(assistantChars=0){const session=createSession();closedExchange(session,'old',assistantChars,true);const result=session.events.find(event=>event.type==='tool/result')!;if(result.type==='tool/result')result.output='HEAD '+ 'raw-selected-output '.repeat(1000)+' EXACT-END';closedExchange(session,'tail',20);return session}
 it('publishes prune-only only after actual main target readiness and strict progress',async()=>{
-  const session=source(),before=session.events.slice(),f=spyModel()
-  const result=await createCompactionHarness({model:f.model,config,maxOutputTokens:autoCap}).maybeCompact(session)
+  const session=source(),before=session.events.slice(),f=spyModel(),events:TelemetryEvent[]=[]
+  const result=await createCompactionHarness({model:f.model,config,maxOutputTokens:autoCap,telemetry:{emit(event){events.push(event)},close(){}}}).maybeCompact(session)
   expect(result).toMatchObject({compacted:true,pruned:true,outcome:'ready',publication:'nondurable',shadowedSeqs:[]})
   expect(f.requests).toEqual([]);expect(session.events.slice(0,before.length)).toEqual(before)
   expect(session.events.at(-1)?.type).toBe('compaction/prune')
   expect(JSON.stringify(deriveMessages(session))).toContain('pruned')
+  expect(events.filter(event=>event.type==='compaction/attempt')).toMatchObject([{data:{outcome:'prune-only',outcomeState:'ready',publication:'nondurable',pruned:1,attempts:0}}])
 })
 it('when prune alone remains over-target a failed summary publishes neither proposal',async()=>{
   const session=source(8000),before=JSON.stringify(session),requests:unknown[]=[]
