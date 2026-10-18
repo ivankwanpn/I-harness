@@ -22,11 +22,11 @@ it('portable source keeps text, tool names/arguments/results and images without 
 })
 it('portable opaque-only native continuation is a typed block', async () => {
   const { portableSource } = await import('../src/summary/source.ts'), { summarySource } = await import('./fixtures/summary.ts')
-  expect(() => portableSource(summarySource([{ role: 'assistant', content: '', thinkingBlocks: [{ type: 'redacted_thinking', data: 'OPAQUE' }] }]).groups)).toThrow(expect.objectContaining({ kind: 'opaque' }))
+  expect(() => portableSource(summarySource([{ role: 'assistant', content: '', thinkingBlocks: [{ type: 'redacted_thinking', data: 'OPAQUE' }] }]).groups)).toThrow(expect.objectContaining({ kind: 'source-unrepresentable' }))
 })
 it('inherited native opaque-only source also blocks without claiming semantic coverage', async () => {
   const { selectedSource } = await import('../src/summary/source.ts'), { summarySource } = await import('./fixtures/summary.ts')
-  expect(() => selectedSource(summarySource([{ role: 'assistant', content: '', thinkingBlocks: [{ type: 'redacted_thinking', data: 'OPAQUE' }] }]).groups, false)).toThrow(expect.objectContaining({ kind: 'opaque' }))
+  expect(() => selectedSource(summarySource([{ role: 'assistant', content: '', thinkingBlocks: [{ type: 'redacted_thinking', data: 'OPAQUE' }] }]).groups, false)).toThrow(expect.objectContaining({ kind: 'source-unrepresentable' }))
 })
 it('keeps ordinary reasoning indices after a redacted block and refuses incomplete native order',async()=>{
  const {portableSource}=await import('../src/summary/source.ts'),{summarySource}=await import('./fixtures/summary.ts')

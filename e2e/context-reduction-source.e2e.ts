@@ -42,7 +42,7 @@ it.each(corpusRoutes)('actual %s alternate summary receives portable complete ob
 })
 it.each(corpusRoutes)('actual %s opaque-only selected source blocks before stream/auth/SDK issuance',async route=>{
  const wire=transport(route),model=makeClient(route,wire),source=summarySource([{role:'assistant',content:'',thinkingBlocks:[{type:'redacted_thinking',data:'OPAQUE_ONLY'}]}])
- await expect(generateSelectedSummary(model,source,{maxTokens:1024,minSummaryChars:500,inherited:true},{contextWindow:100000})).rejects.toMatchObject({kind:'opaque'})
+ await expect(generateSelectedSummary(model,source,{maxTokens:1024,minSummaryChars:500,inherited:true},{contextWindow:100000})).rejects.toMatchObject({kind:'source-unrepresentable'})
  expect(wire.captures).toEqual([]);expect(wire.authCalls()).toBe(0)
 })
 it.each(['anthropic','gemini','bedrock'] as const)('actual %s unverified final native source permits one complete local portable construction',async route=>{

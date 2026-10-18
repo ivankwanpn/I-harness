@@ -35,7 +35,7 @@ export function portableSource(groups: readonly ReductionGroup[]): LLMMessage[] 
       } else if (typeof message.content === 'string') text(message.content)
       else for (const part of message.content) { if (part.type === 'text') text(part.text); else { semantic = true; content.push(part) } }
     }
-    if (!semantic) throw new SummaryBlockedError('opaque')
+    if (!semantic) throw new SummaryBlockedError('source-unrepresentable')
     return { role: 'user' as const, content }
   }))
 }
