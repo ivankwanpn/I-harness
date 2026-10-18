@@ -13,6 +13,7 @@ export interface RuntimeDiagnosticEntry {
   requestMetrics?: import("@i-harness/usage-stats").RequestMetrics
   compaction?: import("@i-harness/desktop-gateway/src/context-diagnostics.ts").CompactionDiagnostic
   contextBudget?: { estimatedInputTokens: number; outputReserve: number; contextWindow?: number; effectiveOutputCap?: number; safetyMargin: number; coverage: string; estimateSource: string; capSupport: string; admission: string; recoveryRequired: boolean; fullByProvider: boolean }
+  contextAdmission?: import('../../../core-session/src/events/admission.ts').RequestBudgetSnapshotV2
   close?: { generation: number; reason: "scope-changed" | "subprocess-exited" | "manager-closed" }
   id: string
   timestamp: number

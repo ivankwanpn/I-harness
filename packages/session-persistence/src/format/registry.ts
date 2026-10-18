@@ -19,6 +19,7 @@ upgrades.set(4, events => events)
 upgrades.set(5, events => events)
 upgrades.set(6, events => events)
 upgrades.set(7, events => events)
+upgrades.set(8, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }
@@ -151,3 +152,4 @@ registerEventType('compaction/replacement')
 registerEventType('context/action')
 registerEventType('context/attempt')
 registerEventType('agent/input/preparation')
+registerEventType("context/soft-reduction")

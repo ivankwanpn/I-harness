@@ -22,7 +22,7 @@ export async function runPostSubmit(options: {
     const state = await options.binding()
     action.assertOpen()
     await options.callback(options.sessionId, assembly, state.status === 'ready'
-      ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
+      ? { budgetBinding: state.binding.budgetBinding, ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
       : {}, { view: assembly.session, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata }, openGeneration: title.open })
   } catch (error) {
     failed = true; failure = error

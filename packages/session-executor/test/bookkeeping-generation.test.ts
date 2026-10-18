@@ -45,7 +45,7 @@ it('actual durable attempt bookkeeping preserves the captured C3 candidate and t
     expect(samples).toHaveLength(1)
     expect(events.filter(event => event.type === 'context/usage' && event.version === 2 && event.op === 'retire')).toEqual([])
     expect(events.filter(event => event.type === 'model/exchange-accepted').map(event => event.version)).toEqual([2, 2])
-    expect(events.filter(event => event.type === 'context/budget').at(-1)).toMatchObject({ snapshot: { estimateSource: 'provider-anchor-plus-projection' } })
+    expect(events.filter(event => event.type === 'context/budget').at(-1)).toMatchObject({ version: 2, snapshot: { estimate: { kind: 'estimated', source: 'provider-anchor-plus-projection' } } })
     expect(events.filter(event => event.type === 'context/attempt' && event.op === 'reserve')).toHaveLength(3)
     const accepted = events[samples[0]!.checkpoint.accepted.acceptedSeq]
     expect(accepted).toMatchObject({ type: 'model/exchange-accepted', version: 2, request: samples[0]!.checkpoint.request })

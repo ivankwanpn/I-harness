@@ -54,10 +54,20 @@ it('writes exact accepted v2 lineage and prices only actual replay suffix on the
   const f = fixture(); await f.agent.run('first'); await f.agent.followup('second')
   const samples = f.session.events.filter(e => e.type === 'context/usage' && e.version === 2 && e.op === 'sample')
   expect(samples).toHaveLength(2)
-  expect(f.session.events.filter(e => e.type === 'context/budget').some((e: any) => e.snapshot.estimateSource === 'provider-anchor-plus-projection')).toBe(true)
+  expect(f.session.events.filter(e => e.type === 'context/budget' && e.version === 2).some((e: any) => e.snapshot.estimate.source === 'provider-anchor-plus-projection')).toBe(true)
   const sample: any = samples[0], accepted: any = f.session.events[sample.checkpoint.accepted.acceptedSeq]
   expect(accepted.version).toBe(2); expect(accepted.request).toEqual(sample.checkpoint.request)
   expect(accepted.request.coldCompatible).toBe(false)
+})
+it('a threshold-only policy update changes the decision without retiring an input-compatible B2 sample', async () => {
+  const f=fixture();await f.agent.run('first')
+  f.agent.updateContext!({budget:{contextWindow:20000},compact:{contextWindow:20000,auto:false,thresholdRatio:.6}})
+  expect(f.session.events.filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='retire')).toEqual([])
+  await f.agent.followup('second')
+  const calibrated=f.session.events.filter(event=>event.type==='context/budget'&&event.version===2&&event.snapshot.estimate.kind==='estimated'&&event.snapshot.estimate.source==='provider-anchor-plus-projection')
+  expect(calibrated.length).toBeGreaterThan(0)
+  expect(calibrated.at(-1)).toMatchObject({snapshot:{pressure:{inputBudget:18000,trigger:10800,target:9450}}})
+  expect(f.session.events.filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='retire')).toEqual([])
 })
 it('hands E to F once and retains safely observed F for the following step', async () => {
   const f = fixture(); await f.agent.run('establish E'); f.set('F'); await f.agent.followup('change'); await f.agent.followup('stable')

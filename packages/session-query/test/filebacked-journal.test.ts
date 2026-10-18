@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, writeFile, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest } from '@i-harness/core-session'
+import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createFileBackedSessionQuery, closeSessionQueries } from '../src/index.ts'
 import { parseLinePrefix } from '../src/file-backed/inspection.ts'
 
@@ -40,6 +40,24 @@ it.each([1, 2, 3, 4, 5])('refuses replacement records in the actual legacy forma
 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 const metadata = () => ({ version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }) as const
+it('reads closed format9 observations and own soft state through the actual file-backed search without writes', async () => {
+  const root=await mkdtemp(join(tmpdir(),'ih-r2e-query-')),path=join(root,'s.jsonl'),journal=metadata(),d='a'.repeat(64)
+  const facts:import('@i-harness/core-session').SessionEvent[]=[{type:'user/message',seq:0,text:'FORMAT9_RAW_REQUEST'},
+    {type:'context/budget',version:2,seq:1,snapshot:{version:2,ownerSessionId:'s',modelId:'fixture',protocol:'custom',bindingFingerprint:d,bindingRevision:0,projectionRevision:0,neutralFingerprint:d,identityCoverage:'partial',
+      purpose:'main',estimate:{kind:'unknown',reason:'unconfigured'},disposition:'compatibility',dimensions:[{dimension:'context',state:'unchecked'}],pressure:{kind:'unavailable',reason:'unconfigured'},
+      components:{kind:'estimated',source:'projected-heuristic',user:8,assistant:0,tool:0,system:0,schema:0,reasoning:0},output:{capSupport:'unknown',minimumCap:1},recoveryRequired:false,fullByProvider:false,freshness:'current',
+      requestContext:{version:1,semanticRevision:d,protectionRevision:d,branchId:d,contextEpoch:d,surfaceRevision:d}}},
+    {type:'context/soft-reduction',version:1,op:'start',seq:2,ownerSessionId:'s',sequenceId:'own',workKey:d,sourceKey:d,protectionKey:d,policyKey:d,acceptedExchanges:0,humanTurns:0},
+    {type:'context/soft-reduction',version:1,op:'terminal',seq:3,ownerSessionId:'s',sequenceId:'own',startSeq:2,workKey:d,sourceKey:d,outcome:'failed',publication:'none',consumedBeforeKey:d}]
+  const frame=encodeFactBatch('query9',journal.legacyPrefixDigest,facts),raw=Buffer.concat([Buffer.from(JSON.stringify({formatVersion:9,sessionId:'s',createdAt:'literal',journal})+'\n'),frame.bytes])
+  await writeFile(path,raw);const query=createFileBackedSessionQuery({storeRoot:root})
+  try{
+    expect(parseLinePrefix(raw).events).toEqual(facts)
+    expect(await query.search('FORMAT9_RAW_REQUEST')).toEqual([expect.objectContaining({seq:0,eventType:'user/message'})])
+    expect(await readFile(path)).toEqual(raw)
+    expect(()=>parseLinePrefix(Buffer.from(raw.toString().replace('"formatVersion":9','"formatVersion":8')))).toThrow()
+  }finally{closeSessionQueries()}
+})
 
 it('indexes only complete verified format6 groups and fingerprints the exact observed byte prefix without repairing a torn tail', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-query-frames-')), path = join(root, 's.jsonl')
@@ -96,7 +114,7 @@ it.each(['metadata', 'prefix', 'future'] as const)('refuses changed %s evidence 
     const prior = await stat(path)
     const changed = mode === 'metadata'
       ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, journal: { ...journal, legacyPrefixDigest: '0'.repeat(64) } }) + '\n'), frame.bytes])
-      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: 9 }) + '\n'), frame.bytes])
+      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: CURRENT_FORMAT_VERSION + 1 }) + '\n'), frame.bytes])
         : Buffer.from(original.toString('utf8').replace('ORIGINAL_MARKER', 'CORRUPT__MARKER'))
     await writeFile(path, changed)
     // Exercise a changed observed revision explicitly; NTFS can report the

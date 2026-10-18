@@ -59,6 +59,6 @@ export function describeSelection(settings: SettingsStoreSurface, provider: (id:
     ...(contextWindow !== undefined ? { contextWindow } : {}), ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}), ...(reasoningEffort ? { reasoningEffort } : {}),
     identityCoverage: partial ? "partial" : "complete",
     ...(partial ? {} : { bindingConfigFingerprint: createHash("sha256").update(JSON.stringify(canonical(content))).digest("hex") }) }
-  const budgetBinding: ModelBudgetBinding = { version: 1, metadata, limits, generation, capability, ...(reasoningEffort ? { reasoningEffort } : {}) }
+  const budgetBinding: ModelBudgetBinding = { version: 1, metadata, limits, generation, capability, capacityDomain: { kind: 'unknown', reason: 'coupling-unverified' }, ...(reasoningEffort ? { reasoningEffort } : {}) }
   return { selection, view, profile, metadata, budgetBinding }
 }

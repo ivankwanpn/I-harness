@@ -1,4 +1,4 @@
-import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts } from '@i-harness/core-session'
+import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, validSoftTerminalDraft, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts } from '@i-harness/core-session'
 import { retainSettlementCapture } from './settlement-fact.ts'
 import { createSourceFacts } from './source-facts.ts'
 
@@ -45,6 +45,11 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     return pending
   }
   return {
+    softReduction: { capture(event) {
+      assertHeld()
+      return validSoftTerminalDraft(event) && event.publication === 'none' ? records.capture({ kind: 'soft-reduction', event })
+        : records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, retained))
+    } },
     inputPreparation: { capture(event) {
       assertHeld()
       return validInputPreparationEvent(event) && (event.op === 'completed' || event.op === 'failed')

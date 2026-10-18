@@ -1,5 +1,5 @@
 import type { ContextBindingMetadata } from "@i-harness/core-session"
-import type { ModelLimits, GenerationPolicy } from "@i-harness/token-meter"
+import type { ModelLimits, GenerationPolicy, CapacityDomain, Sourced } from "@i-harness/token-meter"
 import type { ReasoningEffort } from "./index.ts"
 
 export type RouteKind = "openai-responses" | "openai-responses-subscription" | "openai-compatible" | "anthropic-messages" | "gemini" | "bedrock"
@@ -16,6 +16,7 @@ export interface ModelBudgetBinding {
   readonly limits: ModelLimits
   readonly generation: GenerationPolicy
   readonly capability: RouteBudgetCapability
+  readonly capacityDomain?: Sourced<CapacityDomain>
   readonly reasoningEffort?: ReasoningEffort
 }
 

@@ -35,7 +35,7 @@ it("supplies the inherited binding's metadata and effort on initial and refreshe
   selected = createAnthropicClient({ apiKey: "controlled", model: "claude-3-7-other" })
   binding = { identity: {}, contextWindow: 20000, maxOutputTokens: 2048, reasoningEffort: "low", contextMetadata: { version: 1, modelId: "claude-3-7-other", protocol: "anthropic-messages", providerId: "second", contextWindow: 20000, maxOutputTokens: 2048, identityCoverage: "partial" } }
   expect((await agent.compact!()).compacted).toBe(true)
-  expect(bodies[1]).toMatchObject({ model: "claude-3-7-other", max_tokens: 2048, thinking: { type: "enabled", budget_tokens: 2047 } })
+  expect(bodies[1]).toMatchObject({ model: "claude-3-7-other", max_tokens: 4096, thinking: { type: "enabled", budget_tokens: 2048 } })
 })
 
 it("uses the distinct summary's own metadata, limits and effort through the real factory", async () => {
@@ -66,7 +66,7 @@ it("recognizes an explicitly reused main client after session attribution wrappi
 
 it("rebuilds an inherited summary retargeted during actual subscription auth without replaying hooks or claims", async () => {
   const ctx = createContext(), session = createSession(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
-  for (let i = 0; i < 10; i++) append(session, { type: "user/message", text: "old work ".repeat(50) })
+  for (let i = 0; i < 10; i++) append(session, { type: "user/message", text: "old work ".repeat(100) })
   let hooks = 0, claims = 0, oldTransports = 0, summaries = 0
   ctx.on("agent/pre-step", () => { hooks++ })
   vi.mocked(systemFetch).mockImplementation(async (_url, _init, prepare) => {

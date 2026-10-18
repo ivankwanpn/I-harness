@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, utimes, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,6 +7,26 @@ import type { DesktopEvent } from "../src/shared/bridge.ts"
 import { RpcError, SdkRunError } from "@i-harness/sdk"
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+import { createOwnedBudget } from '../../core-agent/src/agent/budget.ts'
+import { captureRequestCandidate } from '../../core-agent/src/agent/request-snapshot.ts'
+import { createSession } from '../../core-session/src/index.ts'
+
+it('copies the actual closed v2 decision without a legacy numeric view, payloads or observation transport',async()=>{
+ const fetch=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('network denied before construction'))
+ try{
+  const session=createSession(),client=createOpenAICompatibleClient({apiKey:'synthetic',model:'fixture'}),capture=()=>captureRequestCandidate(session,'s',{model:client},{systemPrompt:'sentinel-private',tools:[],contextWindow:10000,maxOutputTokens:1000},0)
+  const owner=createOwnedBudget(session,'s',capture,'diagnostic-fixture',()=>({kind:'unclassified'})),prepared=await client.prepare!({systemPrompt:'sentinel-private',tools:[],messages:[{role:'user',content:'private prompt'}],maxOutputTokens:1000})
+  owner.assess(prepared,capture(),10000,1000)
+  const read=owner.read();if(read.kind!=='ready'||!read.observation)throw Error('v2 observation required')
+  const service=createRuntimeDiagnostics(await root())
+  service.observe(event('context/budget',{version:2,seq:1,snapshot:read.observation}))
+  service.observe(event('context/budget',{version:2,seq:2,snapshot:{...read.observation,requestBody:'sentinel-private'}}))
+  const entries=(await service.list()).entries
+  expect(entries).toHaveLength(1);expect(entries[0]?.contextAdmission).toEqual(read.observation)
+  expect(entries[0]?.contextBudget).toBeUndefined();expect(JSON.stringify(entries)).not.toMatch(/sentinel-private|private prompt|synthetic/)
+  expect(fetch).not.toHaveBeenCalled();await service.flush()
+ }finally{fetch.mockRestore()}
+})
 
 it('persists, rereads, copies and exports the bounded final report through actual SDK diagnostic consumers', async () => {
   const dir = await root(), output = join(dir, 'validation.json'); let copied = ''

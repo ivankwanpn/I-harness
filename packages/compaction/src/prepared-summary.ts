@@ -1,7 +1,9 @@
 import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, readPreparedValidation, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import { SummaryBlockedError, SummaryNativeSourceError } from "./summary-errors.ts"
+import { assessPreparedCapacity } from '@i-harness/context-engine'
 
 export interface SummaryLimits {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   generation?: import('@i-harness/llm-seam').GenerationControl
   bindGeneration?: (prepared: import('@i-harness/llm-seam').PreparedModelRequest) => Promise<void>
   expectedImages?: number
@@ -21,8 +23,7 @@ export interface SummaryLimits {
   onUsage?: (usage: LLMUsage) => void
 }
 
-/** Temporary owner of the existing summary formulas; R2E retires this policy.
- * Select one derivative, then measure and check only that candidate. */
+/** Summary fidelity stays local; capacity and one exact derivative share the main owner. */
 export async function prepareSummary(model: ModelClient, request: LLMRequest, maxTokens: number, limits: SummaryLimits, check: () => void) {
   const prepared = await prepareModelRequest(model, request)
   assertPreparedValidation(prepared)
@@ -33,34 +34,27 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
     if (limits.metadata && input.coverage !== "neutral-only" && (input.modelId !== limits.metadata.modelId || input.protocol !== limits.metadata.protocol)) throw new SummaryBlockedError("binding")
     if (input.coverage === "incomplete") throw new SummaryBlockedError("opaque")
   }
-  const price = (input: typeof prepared.measurement.input) => Object.values(input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
   const preferred = limits.maxOutputTokens ?? 4096
   const explicit = limits.outputCapExplicit ?? limits.maxOutputTokens !== undefined
   const requiredOutput = (output: typeof prepared.measurement.output) => output.minimumCap > preferred && output.reasoningBudget !== undefined ? Math.max(output.minimumCap, output.reasoningBudget + maxTokens) : output.minimumCap
-  const roomFor = (tokens: number) => limits.contextWindow === undefined ? undefined : limits.contextWindow - tokens - Math.ceil(limits.contextWindow * .05)
   validate(prepared.measurement.input)
   const output = prepared.measurement.output, required = requiredOutput(output)
-  let ceiling = explicit ? preferred : Math.max(preferred, required)
-  if (limits.modelMaxOutputTokens !== undefined) ceiling = Math.min(ceiling, limits.modelMaxOutputTokens)
-  if (ceiling < required) throw new SummaryBlockedError("output-floor", { output: ceiling, floor: required })
-  const provisionalRoom = roomFor(price(prepared.measurement.input))
-  const initialRequiredRoom = output.capSupport === "unsupported" ? ceiling : required
-  const cap = output.capSupport === "unsupported" || provisionalRoom === undefined || provisionalRoom < initialRequiredRoom ? ceiling : Math.min(ceiling, provisionalRoom)
-  const candidate = output.capSupport === "unsupported" || provisionalRoom !== undefined && provisionalRoom < initialRequiredRoom ? prepared : prepared.withOutputCap(cap)
+  const ceiling = explicit ? preferred : Math.max(preferred, required)
+  const assessed = assessPreparedCapacity(prepared, { purpose: 'summary', binding: limits.budgetBinding, contextWindow: limits.contextWindow,
+    outputCeiling: limits.modelMaxOutputTokens, outputPreference: ceiling, preferOutputPolicy: true, minimumOutput: requiredOutput })
+  const candidate = assessed.prepared
   const { input, output: finalOutput } = candidate.measurement
   assertPreparedValidation(candidate)
   const textOutput = readPreparedTextOutput(candidate)
   if (textOutput.status !== 'allowed') throw new SummaryBlockedError(textOutput.status === 'blocked' ? 'output-incompatible' : 'output-unknown')
   validate(input)
   if (readPreparedValidation(candidate).native === 'unverified' && request.messages.some(message => message.role === 'assistant' && (message.providerContinuation !== undefined || !!message.thinkingBlocks?.length))) throw new SummaryNativeSourceError('Selected final native source fidelity is unverified')
-  const inputTokens = price(input), room = roomFor(inputTokens)
-  const finalRequired = requiredOutput(finalOutput)
-  const reserve = finalOutput.capSupport === "supported" ? finalOutput.effectiveCap ?? cap : cap
-  const requiredRoom = Math.max(finalRequired, reserve)
-  if (ceiling < finalRequired || reserve < finalRequired) throw new SummaryBlockedError("output-floor", { output: reserve, floor: finalRequired })
+  const inputTokens = assessed.priced.tokens
+  const reserve = assessed.capacityInput.output.effectiveCap ?? assessed.capacityInput.output.explicitUnsupportedAllowance ?? 0
+  if (assessed.decision.disposition === 'blocked') throw new SummaryBlockedError(assessed.decision.reason === 'output-floor' ? 'output-floor' : 'opaque')
   await limits.bindGeneration?.(candidate)
   check()
-  return { candidate, inputTokens, room, requiredRoom,
+  return { candidate, inputTokens, decision: assessed.decision,
     facts: { inputTokens, contextWindow: limits.contextWindow, outputReserve: reserve,
       ...(finalOutput.capSupport === "supported" && finalOutput.effectiveCap !== undefined ? { effectiveCap: finalOutput.effectiveCap } : {}), capSupport: finalOutput.capSupport, minimumCap: finalOutput.minimumCap,
       reasoningBudget: finalOutput.reasoningBudget, defaultFloorAdjusted: !explicit && ceiling > preferred, coverage: input.coverage, estimateSource: "projected-heuristic" as const, uncertainties: input.uncertainties } }

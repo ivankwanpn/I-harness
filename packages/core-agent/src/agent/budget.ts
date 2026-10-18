@@ -1,7 +1,7 @@
 import { deriveContextRecovery, type BudgetRead, type SessionView as Session, type ExchangeAcceptedEventV2, type CalibrationRetirementReason, type FactPorts, type ProducerFactOutcome, type SettlementFacts, type SessionEvent } from "@i-harness/core-session"
 import { agentFacts, committedFactSeqs } from './facts.ts'
 import { createAcceptedCalibration, type PreparedRequestMeasurement } from "@i-harness/token-meter"
-import { assessLegacyPreparedRequest, readContextCoordinates } from "@i-harness/context-engine"
+import { assessLegacyPreparedRequest, admissionObservation, readContextCoordinates } from "@i-harness/context-engine"
 import { sameRequestCandidate, requestContextIdentity, type RequestEvidence } from "./request-snapshot.ts"
 import { freezePreparedFacts, type PreparedModelRequest } from "@i-harness/llm-seam"
 
@@ -14,24 +14,28 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
   const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) { calibrationRevision++; retirements.push(event) } }
   const drainRetirements = async () => { while (retirements.length) { committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage(retirements[0]!)); retirements.shift() } }
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
+  let latestDecision: import('@i-harness/context-engine').CapacityAssessment | undefined
   let bindingRevision = 0
   let captured: RequestEvidence | undefined
   let invalidated: string | undefined
   let calibrationRevision = 0
   const historical = (reason: string): BudgetRead => latest.kind === "ready"
-    ? { kind: "ready", snapshot: { ...latest.snapshot, admission: "unavailable", reason } } : latest
+    ? { ...latest, snapshot: { ...latest.snapshot, admission: "unavailable", reason }, ...(latest.observation ? { observation: { ...latest.observation, freshness: 'stale' as const } } : {}) } : latest
   return {
     ownerSessionId,
+    decision() { return latestDecision },
     assessmentRevision() {
       let history = ''
       for (const event of session.events) if (event.type === 'context/usage' || event.type === 'context/recovery') history = `${history}:${event.seq}`
       return `${bindingRevision}:${calibrationRevision}:${history}`
     },
-    probe(prepared: PreparedModelRequest, evidence: RequestEvidence, prospectiveRewrite: boolean, reserveRatio = .9) {
+    probe(prepared: PreparedModelRequest, evidence: RequestEvidence, prospectiveRewrite: boolean, reserveRatio = .9, pressurePolicy?: import('@i-harness/context-engine').ReductionPolicy) {
       return assessLegacyPreparedRequest(prepared, {
         ownerSessionId, binding: evidence.metadata, bindingRevision, projectionRevision: evidence.projectionRevision,
         neutralFingerprint: evidence.neutralFingerprint, requestContext: requestContextIdentity(evidence),
         contextWindow: evidence.snapshot.surface.contextWindow, configuredCap: evidence.snapshot.surface.maxOutputTokens, reserveRatio,
+        budgetBinding: evidence.snapshot.surface.budgetBinding,
+        triggerRatio: pressurePolicy?.thresholdRatio, targetRatio: pressurePolicy?.targetRatio,
       }, {
         estimate: input => calibration.probe(input, { ...compatibility(evidence), ...(prospectiveRewrite ? { prospectiveRewrite: true as const } : {}) }),
         recoveryRequired: input => { const recovery = deriveContextRecovery(session, ownerSessionId, { ...input, providerId: evidence.metadata?.providerId ?? input.providerId }); return !!recovery && recovery.state !== 'resolved' },
@@ -39,11 +43,11 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
     },
     invalidateCalibration() { retire("context-rewritten") },
     retire,
-    invalidate() { retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
+    invalidate(retireSample = true) { if (retireSample) retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
     read(reason?: string): BudgetRead {
       if (latest.kind !== "ready") return latest
       let unavailable = reason ?? invalidated
-      if (!unavailable && captured && latest.snapshot.admission !== "unavailable") {
+      if (!unavailable && captured && (latest.observation?.freshness === 'current' || latest.snapshot.admission !== "unavailable")) {
         try { if (!sameRequestCandidate(captured, freshness())) unavailable = "Model context or request surface/binding changed since the prepared budget" }
         catch { unavailable = "Current context capture is unavailable" }
       }
@@ -53,21 +57,23 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       const recovery = deriveContextRecovery(session, ownerSessionId, latest.snapshot)
       const recoveryRequired = recovery !== undefined && recovery.state !== "resolved"
       const read = unavailable ? historical(unavailable) : latest
-      if (read.kind === "ready" && recoveryRequired) return { kind: "ready", snapshot: { ...read.snapshot, recoveryRequired: true, fullByProvider: true,
+      if (read.kind === "ready" && recoveryRequired) return { ...read, ...(read.observation ? { observation: { ...read.observation, recoveryRequired: true, fullByProvider: true } } : {}), snapshot: { ...read.snapshot, recoveryRequired: true, fullByProvider: true,
         admission: read.snapshot.admission === "unavailable" ? "unavailable" : "compact", reason: "Provider context recovery remains required" } }
-      if (read.kind === "ready" && recovery?.state === "resolved" && read.snapshot.recoveryRequired) return { kind: "ready", snapshot: { ...read.snapshot, recoveryRequired: false, fullByProvider: false } }
+      if (read.kind === "ready" && recovery?.state === "resolved" && read.snapshot.recoveryRequired) return { ...read, ...(read.observation ? { observation: { ...read.observation, recoveryRequired: false, fullByProvider: false } } : {}), snapshot: { ...read.snapshot, recoveryRequired: false, fullByProvider: false } }
       return read
     },
     pressure() {
-      const read = this.read()
-      return read.kind === "ready" && read.snapshot.admission !== "unavailable" ? read.snapshot.admissionInputTokens + read.snapshot.outputReserve + read.snapshot.safetyMargin : undefined
+      return latestDecision?.pressure
     },
-    assess(prepared: PreparedModelRequest, evidence: RequestEvidence, window: number | undefined, configuredCap?: number, reserveRatio = .9, recoveryAuthorized = false, selectOutputCap = true) {
+    assess(prepared: PreparedModelRequest, evidence: RequestEvidence, window: number | undefined, configuredCap?: number, reserveRatio = .9, recoveryAuthorized = false, selectOutputCap = true, pressurePolicy?: import('@i-harness/context-engine').ReductionPolicy, purpose: import('@i-harness/context-engine').AdmissionPurpose = recoveryAuthorized ? 'recovery' : 'main') {
       const expected = compatibility(evidence)
       const result = assessLegacyPreparedRequest(prepared, {
         ownerSessionId, binding: evidence.metadata, bindingRevision, projectionRevision: evidence.projectionRevision,
         neutralFingerprint: evidence.neutralFingerprint, requestContext: requestContextIdentity(evidence),
         contextWindow: window, configuredCap, reserveRatio, recoveryAuthorized, selectOutputCap,
+        budgetBinding: evidence.snapshot.surface.budgetBinding,
+        purpose,
+        triggerRatio: pressurePolicy?.thresholdRatio, targetRatio: pressurePolicy?.targetRatio,
       }, {
         estimate: input => calibration.probe(input, expected),
         recoveryRequired: input => {
@@ -75,12 +81,13 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
           return recovery !== undefined && recovery.state !== "resolved"
         },
       })
-      latest = { kind: "ready", snapshot: result.snapshot }
+      latest = { kind: "ready", snapshot: result.snapshot, observation: freezePreparedFacts(admissionObservation(result, purpose)) }
+      latestDecision = result.decision
       captured = evidence
       invalidated = undefined
       return result
     },
-    async checkpoint() { await drainRetirements(); if (latest.kind === "ready") committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 1, snapshot: latest.snapshot })) },
+    async checkpoint() { await drainRetirements(); if (latest.kind === "ready" && latest.observation) committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 2, snapshot: latest.observation })) },
     async record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined) {
       await drainRetirements()
       if (accepted && session.events[accepted.seq!] === accepted) {
@@ -92,8 +99,9 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       let postResponseContextRevision: string | undefined
       try { const observation = readContextCoordinates(session, { ownerSessionId }); if (observation.kind === "available") postResponseContextRevision = observation.observationRevision } catch { /* Observation cannot revoke real usage. */ }
       if (latest.kind === "ready") {
-        latest = { kind: "ready", snapshot: freezePreparedFacts({ ...latest.snapshot, ...(postResponseContextRevision ? { postResponseContextRevision } : {}), admission: "unavailable", reason: "Accepted output awaits the next protocol projection" }) }
-        committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 1, snapshot: latest.snapshot }))
+        latest = { ...latest, snapshot: freezePreparedFacts({ ...latest.snapshot, ...(postResponseContextRevision ? { postResponseContextRevision } : {}), admission: "unavailable", reason: "Accepted output awaits the next protocol projection" }),
+          ...(latest.observation ? { observation: freezePreparedFacts({ ...latest.observation, freshness: 'awaiting-projection' as const, ...(postResponseContextRevision ? { postResponseContextRevision } : {}) }) } : {}) }
+        if (latest.observation) committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 2, snapshot: latest.observation }))
       }
     },
   }

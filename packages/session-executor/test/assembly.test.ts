@@ -350,7 +350,7 @@ describe("createSessionAssembly", () => {
 
   it("reads live automatic compaction without rebuilding the existing Agent", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "work ".repeat(400) })
+    append(s, { type: "user/message", text: "work ".repeat(1500) })
     let enabled = false
     const assembly = await createSessionAssembly({
       workspace: process.cwd(), session: s,
@@ -359,7 +359,7 @@ describe("createSessionAssembly", () => {
         { role: "assistant", text: checkpointOfLength(600) },
         { role: "assistant", text: "second done" },
       ]),
-      maxOutputTokens:13000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 }, autoCompactionEnabled: () => enabled,
+      maxOutputTokens:5000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 }, autoCompactionEnabled: () => enabled,
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
@@ -377,7 +377,7 @@ describe("createSessionAssembly", () => {
     // window the engine received. Only a turn proves the engine is wired AND that
     // its window is real.
     const s = createSession()
-    append(s, { type: "user/message", text: "work ".repeat(400) }) // ~2000 chars ≈ 500 tokens
+    append(s, { type: "user/message", text: "work ".repeat(1500) }) // literal larger history crosses the new effective-input-budget trigger
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       session: s,
@@ -387,7 +387,7 @@ describe("createSessionAssembly", () => {
       ]),
       // No `contextWindow` here — the window arrives ONLY in the config, which is
       // exactly how the CLI now supplies it.
-      maxOutputTokens:13000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 },
+      maxOutputTokens:5000, compact: { contextWindow: 20000, thresholdRatio: .8, auto: true, minTurnsBeforeRecompact:0 },
     })
     try {
       const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })

@@ -107,7 +107,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lastByte = Buffer.alloc(1)
         if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
         const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
-        const data = [6, 7, 8].includes(header.formatVersion)
+        const data = [6, 7, 8, 9].includes(header.formatVersion)
           ? (() => {
             const raw = readFile(path)
             return raw.then(bytes => {
@@ -143,8 +143,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
-      const events = [6, 7, 8].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
-      if (![6, 7, 8].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
+      const events = [6, 7, 8, 9].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
+      if (![6, 7, 8, 9].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
       return { version: header.formatVersion, events, meta: header }
     },
 
@@ -165,7 +165,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const headerLine = lines[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
-      if ([6, 7, 8].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9].includes(header.formatVersion)) {
         const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header)
         const closers = missingClosers(decoded.events).map((event, position) => ({ ...event, seq: decoded.events.length + position }))
         if (decoded.torn || closers.length) {
@@ -207,7 +207,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
       if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
-      if ([6, 7, 8].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
         await replaceRawSessionFile(path, Buffer.concat([Buffer.from(serializeHeader({ ...header, journal }) + '\n'), Buffer.from(frame)]))
@@ -218,7 +218,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       return upgradeFactJournal(path, expected)
     },
@@ -233,7 +233,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: ([6, 7, 8].includes(parseHeader(lines[0]!).formatVersion)
+          blank: ([6, 7, 8, 9].includes(parseHeader(lines[0]!).formatVersion)
             ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion, parseHeader(lines[0]!)).events
             : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }

@@ -538,7 +538,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       }
 
       const firstBytes = readFileSync(sessionPath, 'utf8')
-      expect(JSON.parse(firstBytes.split('\n')[0]!).formatVersion).toBe(8)
+      expect(JSON.parse(firstBytes.split('\n')[0]!).formatVersion).toBe(9)
       const rawAfterFirst = fromJSONL(firstBytes).events
       expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
       // M71 T2 — DELIBERATE CONTRACT CHANGE (was TOOL_ABORTED_BEFORE_DISPATCH):

@@ -3,6 +3,7 @@ import { modelFailureFacts, safeModelFailureFacts } from "@i-harness/sdk"
 import { validateRequestMetrics } from "@i-harness/usage-stats"
 import { safeCompactionDiagnostic } from "@i-harness/desktop-gateway/src/context-diagnostics.ts"
 import { validBudgetSnapshot } from "../../../core-session/src/events/context.ts"
+import { validAdmissionObservation } from '../../../core-session/src/events/admission.ts'
 import { mkdir, lstat, open, rename, unlink, appendFile, writeFile, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { createRedactor } from "../../../diagnostics/src/redactor.ts"
@@ -107,6 +108,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const close = record(value.close) && integer(value.close.generation, 0, Number.MAX_SAFE_INTEGER) && typeof value.close.reason === "string" && ["scope-changed", "subprocess-exited", "manager-closed"].includes(value.close.reason)
       ? { generation: value.close.generation, reason: value.close.reason as NonNullable<RuntimeDiagnosticEntry["close"]>["reason"] } : undefined
     const contextBudget = safeContextBudget(value.contextBudget)
+    const contextAdmission = validAdmissionObservation(value.contextAdmission) ? structuredClone(value.contextAdmission) : undefined
     const code = typeof value.code === "string" && codes.has(value.code) ? value.code : undefined
     const waitingFor = kind.startsWith("model/") && ["first-response", "progress"].includes(String(value.waitingFor)) ? value.waitingFor as ModelActivityInfo["waitingFor"] : undefined
     const outcome = kind === "model/settled" && ["completed", "failed", "cancelled"].includes(String(value.outcome)) ? value.outcome as ModelActivityInfo["outcome"] : undefined
@@ -130,6 +132,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
       ...(modelFailure ? { modelFailure } : {}),
       ...(requestMetrics ? { requestMetrics } : {}), ...(compaction ? { compaction } : {}), ...(close ? { close } : {}),
+      ...(contextAdmission ? { contextAdmission } : {}),
       ...(contextBudget ? { contextBudget: { estimatedInputTokens: contextBudget.estimatedInputTokens, outputReserve: contextBudget.outputReserve, contextWindow: contextBudget.contextWindow,
         effectiveOutputCap: contextBudget.effectiveOutputCap, safetyMargin: contextBudget.safetyMargin, coverage: contextBudget.coverage, estimateSource: contextBudget.estimateSource,
         capSupport: contextBudget.capSupport, admission: contextBudget.admission, recoveryRequired: contextBudget.recoveryRequired, fullByProvider: contextBudget.fullByProvider } } : {}),
@@ -265,6 +268,9 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       const state = scope(event.workspaceId, sessionId)
       if (event.method === "session/event" && record(event.params.event)) {
         const item = event.params.event
+        if (item.type === 'context/budget' && item.version === 2 && validAdmissionObservation(item.snapshot) && item.snapshot.ownerSessionId === sessionId) {
+          add({ kind: 'context/budget', workspaceId: event.workspaceId, sessionId, contextAdmission: item.snapshot }, JSON.stringify([event.workspaceId, sessionId, 'budget', item.seq]))
+        }
         if (item.type === "context/budget" && item.version === 1 && validBudgetSnapshot(item.snapshot) && item.snapshot.ownerSessionId === sessionId) {
           add({ kind: "context/budget", workspaceId: event.workspaceId, sessionId, contextBudget: item.snapshot }, JSON.stringify([event.workspaceId, sessionId, "budget", item.seq]))
         } else if (item.type === "turn/start") {

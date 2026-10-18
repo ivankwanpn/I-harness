@@ -6,8 +6,8 @@ function backend(): PersistenceBackend {
   return {
     id: "jsonl", capabilities: { seekableRead: false, rawArtifacts: true },
     async create() {}, async append() {}, async list() { return [] },
-    async read() { return { version: 8, events: [] } },
-    async repair() { return { version: 8, events: [] } },
+    async read() { return { version: 9, events: [] } },
+    async repair() { return { version: 9, events: [] } },
     async putDocument() {}, async getDocument() { return undefined },
     async profile() { throw new Error("unused") }, async updateMeta() { throw new Error("unused") },
   }

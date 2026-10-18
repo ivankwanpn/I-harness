@@ -56,10 +56,11 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   const captureCandidate = () => {
     const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.(), executionIdentity: inherited?.executionIdentity ?? deps.executionIdentity?.() ?? deps.model.executionIdentity }
     const binding = metadata()
+    if (currentCompact) resolveCompactSpec(currentCompact, binding?.providerId, binding?.modelId)
     return captureRequestCandidate(deps.session, requestSessionId, selected, {
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), reasoningEffort: reasoningEffort(),
-      maxOutputTokens: inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
+      maxOutputTokens: deps.sharedBudget ? Math.min((inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens) ?? 2048, 2048) : inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
       contextWindow: inherited ? inherited.contextWindow : binding ? binding.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow,
       binding, budgetBinding: budgetBinding(),
     }, projectionRevision())
@@ -103,12 +104,16 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     get compactEnabled() { return compactEnabled },
     get budgetCfg() { return budgetCfg },
     get outputCap() { return outputCap },
+    get pressurePolicy() { const binding = metadata(); const policy = currentCompact && resolveCompactSpec(currentCompact, binding?.providerId, binding?.modelId); return policy ? { thresholdRatio: policy.thresholdRatio, targetRatio: policy.targetRatio, cooldown: policy.cooldown } : undefined },
     update(config: Parameters<NonNullable<Agent["updateContext"]>>[0]) {
       validateBudget(config.budget)
-      contextMeter.invalidate()
-      ownedBudget.invalidate()
       if (config.maxOutputTokens !== undefined && (!Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens < 1)) throw new Error("invalid output cap")
       const next = buildCompactor(config.compact)
+      const selectedMetadata = 'contextMetadata' in config ? config.contextMetadata : metadata()
+      if (config.compact) resolveCompactSpec(config.compact, selectedMetadata?.providerId, selectedMetadata?.modelId)
+      // The final B2 probe, not a threshold/config edit, owns input-compatible
+      // sample retirement. Freshness changes immediately in either case.
+      ownedBudget.invalidate(false)
       if ("contextMetadata" in config) {
         hasMetadataOverride = true
         metadataOverride = snapshotModelData(config.contextMetadata)

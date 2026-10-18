@@ -64,7 +64,7 @@ it("captures real host turns, titles and compaction with provenance, surviving a
     const entries = (await createRuntimeDiagnostics(join(root, "runtime-diagnostics")).list()).entries
     expect(entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "context/request", sessionId, projectId: "usage-project", requestMetrics: expect.objectContaining({ coverage: "complete" }) }),
-      expect.objectContaining({ kind: "context/budget", sessionId, contextBudget: expect.objectContaining({ contextWindow: 100000, estimateSource: "projected-heuristic" }) }),
+      expect.objectContaining({ kind: "context/budget", sessionId, contextAdmission: expect.objectContaining({ version: 2, estimate: expect.objectContaining({ kind:'estimated',source: "projected-heuristic" }), dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',limit:100000})]) }) }),
       expect.objectContaining({ kind: "context/compaction", sessionId, compaction: expect.objectContaining({ operation: "summary", contextWindow: 100000 }) }),
     ]))
     expect(JSON.stringify(entries)).not.toMatch(/private prompt|fake-key|useful facts/)

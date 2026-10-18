@@ -1,8 +1,8 @@
 import type { SessionView as Session, MetadataFactSource } from "@i-harness/core-session"
 import { committedFactSeqs, metadataFactsFor, deriveSessionTitle, isNondurableSession } from "@i-harness/core-session"
-import { clampOutputCap, prepareModelRequest, generationError } from "@i-harness/llm-seam"
+import { prepareModelRequest, generationError } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { estimateContent } from "@i-harness/token-meter"
+import { assessPreparedCapacity } from '@i-harness/context-engine'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { resolveTitleAction, type TitleAction } from './execution.ts'
 
@@ -49,6 +49,7 @@ function eligibleUserTexts(session: Session): { seq: number; text: string }[] {
 }
 
 export async function suggestTitle(deps: {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   action?: TitleAction
   signal?: AbortSignal
   session: Session
@@ -86,13 +87,8 @@ export async function suggestTitle(deps: {
         messages,
         tools: [],
         systemPrompt: SYSTEM_TITLE_PROMPT,
-        // M73: the request's own budget, clamped the way the session's own
-        // requests are (`clampOutputCap`, priced with the same public meter).
-        // Normally a no-op — the input is sliced to 4 000 chars and the answer is
-        // a short line — and kept anyway, because a cap that reaches the wire
-        // unclamped is the hazard, not the tokens the clamp saves.
         ...(requestedCap !== undefined
-          ? { maxOutputTokens: clampOutputCap(requestedCap, deps.contextWindow, estimateContent(messages)) }
+          ? { maxOutputTokens: requestedCap }
           : {}),
         signal: AbortSignal.any([action.signal, controller.signal, ...(generation ? [generation.signal] : [])]),
         validateBeforeTransport: action.assertOpen,
@@ -102,7 +98,10 @@ export async function suggestTitle(deps: {
         let refused = false
         action.signal.throwIfAborted()
         action.assertOpen()
-        const prepared = await prepareModelRequest(deps.model, request)
+        const initial = await prepareModelRequest(deps.model, request)
+        const assessed = assessPreparedCapacity(initial, { purpose: 'title', binding: deps.budgetBinding, contextWindow: deps.contextWindow, outputPreference: requestedCap })
+        if (assessed.decision.disposition === 'blocked' || assessed.decision.disposition === 'reduce') throw new Error('Title input cannot fit the selected capacity')
+        const prepared = assessed.prepared
         await generation?.bind(prepared)
         for await (const ev of prepared.stream({ generation: generation?.control })) {
           if (ev.type === "text/chunk") out += ev.text
@@ -154,6 +153,7 @@ export async function applyTitle(session: Session, title: string, source: "fallb
 // deterministic fallback; a coordinator failure never rejects the caller
 // (putDocument reports internally).
 export async function maybeAutoTitle(deps: {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   action?: TitleAction
   signal?: AbortSignal
   metadata?: MetadataFactSource
@@ -186,6 +186,7 @@ export async function maybeAutoTitle(deps: {
     const inputs = eligibleUserTexts(deps.session)
     if (inputs.length === 0) return
     const { title, source } = await suggestTitle({
+      budgetBinding: deps.budgetBinding,
       action,
       session: deps.session,
       model: deps.model,

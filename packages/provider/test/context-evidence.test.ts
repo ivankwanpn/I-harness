@@ -21,7 +21,9 @@ it.each([
 ])("retains each window tier independently from generation ($origin)", ({ profile, want, origin }) => {
   const resolved = resolveEffectiveModelContextEvidence({ profile, modelId: "gemini-2.5-pro" })
   expect(resolved?.limits.contextTokens).toMatchObject({ value: want, origin })
-  expect(resolved?.generation).toMatchObject({ origin: "legacy-catalog-default", outputCap: { value: 65_536 } })
+  expect(resolved?.generation).toEqual({ origin: "legacy-catalog-default" })
+  expect(resolved?.maxOutputTokens).toBeUndefined()
+  expect(resolved?.limits.outputTokens?.value).toBe(65_536)
 })
 
 it("preserves ceiling-only evidence with absent window/output scalars and accepts unknown models", () => {

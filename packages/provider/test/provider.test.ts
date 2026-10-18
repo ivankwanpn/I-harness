@@ -242,7 +242,8 @@ describe("M32 model catalog", () => {
     const profile: ProviderProfile = { name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" }
     const r = resolveEffectiveModelContextEvidence({ profile, modelId: "deepseek-v4-flash" })
     expect(r?.contextWindow).toBe(1_048_576)
-    expect(r?.maxOutputTokens).toBe(384_000)
+    expect(r?.maxOutputTokens).toBeUndefined()
+    expect(r?.limits.outputTokens?.value).toBe(384_000)
   })
 
   it("resolveEffectiveModelContextEvidence: user row overrides the card per field", () => {
@@ -255,14 +256,15 @@ describe("M32 model catalog", () => {
     expect(r?.maxOutputTokens).toBe(4_096)
   })
 
-  it("resolveEffectiveModelContextEvidence: modelContexts win over the card for contextWindow; the card still fills maxOutputTokens", () => {
+  it("resolveEffectiveModelContextEvidence: modelContexts select the window and catalog output remains an independent ceiling", () => {
     const profile: ProviderProfile = {
       name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible",
       contextWindow: 96_000, modelContexts: { "deepseek-v4-flash": { contextWindow: 64_000 } },
     }
     const r = resolveEffectiveModelContextEvidence({ profile, modelId: "deepseek-v4-flash" })
     expect(r?.contextWindow).toBe(64_000)
-    expect(r?.maxOutputTokens).toBe(384_000)
+    expect(r?.maxOutputTokens).toBeUndefined()
+    expect(r?.limits.outputTokens?.value).toBe(384_000)
   })
 
   it("resolveEffectiveModelContextEvidence: no card + no window anywhere → undefined; a user maxTokens survives (M72 Ⅱ R5)", () => {

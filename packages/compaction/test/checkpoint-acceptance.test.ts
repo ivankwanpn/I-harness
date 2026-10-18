@@ -46,7 +46,7 @@ it('refuses a length-valid sectionless checkpoint after two quality rounds', asy
 function preparedClient(initialBlocked: boolean, selectedBlocked: boolean, textOutput?: PreparedTextOutput) {
   let sends = 0, selections = 0
   const model: ModelClient = { async *stream() { throw Error('must prepare') }, async prepare(request) {
-    return createPreparedPayload({ request, body: { blocked: initialBlocked, cap: 4096 },
+    return createPreparedPayload({ request, body: { blocked: initialBlocked, cap: 8192 },
       textOutput: b => textOutput ?? (b.blocked ? { status: 'blocked', reason: 'structured-output' } : { status: 'allowed', reason: 'ordinary-text' }),
       describe(b) { const c = new ProjectionCounter('projected-pricing-v2'); c.structured('otherInput', b); return { input: c.finish({ protocol: 'fixture', modelId: 'm' }, b, {}), packet: { sizeKind: 'http-json-body', inlineBinaryBytes: 0, cacheMetadataBytes: 0, signatureBytes: 0 } } },
       output: b => ({ capSupport: 'supported', effectiveCap: b.cap, minimumCap: 1, source: 'request' }),

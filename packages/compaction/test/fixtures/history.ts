@@ -20,4 +20,4 @@ export function spyModel(text = checkpointOfLength(600)) {
   return { model, requests }
 }
 export const autoConfig = { contextWindow: 20000, thresholdRatio: .8, minTurnsBeforeRecompact: 0, prune: false as const }
-export const autoCap = 13000
+export const autoCap = 15500

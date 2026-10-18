@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createJsonlBackend } from '../src/index.ts'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { captureContextSnapshot, reductionGroups, reductionSourceCurrent, replacementProposal } from '../../context-engine/src/index.ts'
-import { deriveMessages, subscribe, type SessionEvent, type SessionView } from '@i-harness/core-session'
+import { deriveMessages, subscribe, createConversationValidationIndex, type SoftReductionStart, type SoftReductionTerminalDraft, type SessionEvent, type SessionView } from '@i-harness/core-session'
 
 const seed: SessionEvent[] = [
   { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
@@ -24,6 +24,28 @@ async function fixture() {
   const document = await coordinator.openManagedDocument(id)
   return { directory, backend, coordinator, id, document }
 }
+it.each(['committed','absent'] as const)('soft terminal shares the original unknown publication receipt after Stop (%s)',async outcome=>{
+ const f=await fixture(),action=f.document.beginAction(),d='a'.repeat(64),e='b'.repeat(64)
+ const start:SoftReductionStart={type:'context/soft-reduction',version:1,op:'start',ownerSessionId:f.id,sequenceId:'soft-one',workKey:d,sourceKey:d,protectionKey:d,policyKey:d,acceptedExchanges:0,humanTurns:0}
+ const opened=await action.captureSoftReduction(start,()=>true).admit();if(opened.kind!=='committed')throw Error('start required')
+ const terminal:SoftReductionTerminalDraft={type:'context/soft-reduction',version:1,op:'terminal',ownerSessionId:f.id,sequenceId:'soft-one',startSeq:{kind:'prior',seq:opened.seqs[0]!,expectedType:'context/soft-reduction'},workKey:d,sourceKey:d,outcome:'target-ready',publication:'committed',consumedBeforeKey:d,consumedAfterKey:e}
+ const state=(view:SessionView)=>createConversationValidationIndex(view.events,{formatVersion:view.formatVersion,header:view.header}).softReduction(f.id)
+ const actual=f.backend.appendOwnedBatch!;let writes=0
+ f.backend.appendOwnedBatch=async(...args)=>{writes++;if(outcome==='committed')await actual(...args);action.stop();return{kind:'unknown',key:args[3].key}}
+ try{
+  const capture=action.captureContextReduction!({kind:'context-reduction',events:[{type:'compaction/prune',version:1,pruned:[]}],softTerminal:terminal},()=>true)
+  expect(await capture.admit()).toMatchObject({kind:'unknown'});expect(state(f.document.view)).toMatchObject({pending:true,failures:0})
+  expect(state(f.document.view).consumed.has(e)).toBe(false)
+  expect(await capture.reconcile()).toMatchObject({kind:outcome})
+  if(outcome==='committed'){
+   expect(state(f.document.view)).toMatchObject({pending:false,failures:0});expect(state(f.document.view).consumed.has(e)).toBe(true)
+   expect(f.document.view.events.slice(-2).map(event=>event.type)).toEqual(['compaction/prune','context/soft-reduction'])
+  }else expect(state(f.document.view)).toMatchObject({pending:true,failures:0})
+  const cold=await f.backend.read(f.id)
+  expect(createConversationValidationIndex(cold.events,{formatVersion:cold.version,header:cold.meta}).softReduction(f.id).pending).toBe(outcome==='absent')
+  expect(writes).toBe(1);expect('retryAbsent' in capture).toBe(false)
+ }finally{action.finish();await f.coordinator.close()}
+})
 it.each(['metadata','legacy-rewrite','wrong-event','extra-seq','missing-field','bad-reset','bad-prune','kind-getter','events-getter','proxy','null'] as const)('dedicated durable capture rejects %s before allocation, installation or observer notification',async kind=>{
   const f=await fixture(),action=f.document.beginAction(),before=await readFile(join(f.directory,`${f.id}.jsonl`),'utf8'),beforeEvents=f.document.view.events.slice(),seen:unknown[]=[]
   let getters=0,guards=0,writes=0

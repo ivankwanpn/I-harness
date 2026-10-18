@@ -31,6 +31,10 @@ export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistr
     execute: async () => {
       if (opts.budgetRead) {
         const state = contextStateFromBudget(opts.budgetRead())
+        if (state.observation) {
+          if (state.kind === 'unavailable') return state
+          return { ...state, window: state.contextWindow, used: state.estimatedTokens, remaining: Math.max(0, state.contextWindow - state.estimatedTokens), percentage: Math.round(state.estimatedTokens / state.contextWindow * 100) }
+        }
         const snapshot = state.snapshot
         const facts = snapshot ? { window: snapshot.contextWindow, source: snapshot.estimateSource, confidence: snapshot.confidence, coverage: snapshot.coverage,
           outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport, effectiveOutputCap: snapshot.effectiveOutputCap,

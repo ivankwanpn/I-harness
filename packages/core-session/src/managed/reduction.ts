@@ -1,5 +1,6 @@
 import { isStrictFactData } from './capture.ts'
 import type { ContextReductionDraft } from './groups.ts'
+import { validSoftTerminalDraft } from '../events/soft-reduction.ts'
 
 const recordFields = (value: unknown, fields: readonly string[]): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
   && Reflect.ownKeys(value).length === fields.length && fields.every(key => Object.hasOwn(value, key) && Object.getOwnPropertyDescriptor(value, key)?.enumerable)
@@ -11,9 +12,10 @@ const reference = (value: unknown): boolean => recordFields(value, ['kind','at']
 
 /** A closed optional capability may carry rewrite data only. */
 export function validContextReductionDraft(value: unknown): value is ContextReductionDraft {
-  if (!value || typeof value !== 'object' || !isStrictFactData(value) || !recordFields(value, ['kind','events'])) return false
+  if (!value || typeof value !== 'object' || !isStrictFactData(value) || !recordFields(value, ['kind','events', ...(Object.hasOwn(value, 'softTerminal') ? ['softTerminal'] : [])])) return false
   const draft = value as ContextReductionDraft
   if (draft.kind !== 'context-reduction' || !Array.isArray(draft.events) || !draft.events.length) return false
+  if (Object.hasOwn(draft, 'softTerminal') && (!validSoftTerminalDraft(draft.softTerminal) || draft.softTerminal.publication !== 'committed')) return false
   const fields = {
     'compaction/replacement': ['type','version','replacementId','coverage','insertBefore','text'],
     'compaction/prune': ['type','version','pruned'], 'compaction/reset': ['type','removedSeqs'],

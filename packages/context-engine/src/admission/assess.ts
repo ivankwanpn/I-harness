@@ -1,6 +1,7 @@
-import { compareBudgetTotal } from '@i-harness/token-meter'
 import { assertPreparedValidation, preparedBindingError, freezePreparedFacts, type PreparedModelRequest } from '@i-harness/llm-seam'
 import type { LegacyPreparedAssessment, LegacyPreparedAssessmentInput, PreparedAssessmentReaders } from '../contracts/assessment.ts'
+import { assessPreparedCapacity } from './prepared.ts'
+import { safetyFromReserve, safetyMarginFor } from './pressure.ts'
 
 function validate(prepared: PreparedModelRequest, binding: LegacyPreparedAssessmentInput['binding']): void {
   assertPreparedValidation(prepared)
@@ -19,33 +20,22 @@ export function assessLegacyPreparedRequest(
 ): LegacyPreparedAssessment {
   const { binding, contextWindow: window, configuredCap, reserveRatio = .9 } = policy
   validate(prepared, binding)
-  const { input: inputA, output: outputA } = prepared.measurement
-  const estimateA = readers.estimate(inputA)
-  const safetyMargin = window === undefined ? 0 : Math.ceil(window * (1 - reserveRatio))
-  const availableA = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimateA.tokens)
-  const ceilingA = outputA.effectiveCap ?? outputA.configuredCap ?? configuredCap
-  // Unsupported caps keep their actual reserve. Only supported derivatives and
-  // the existing unknown-cap neutral-only compatibility path may select B.
-  const mayDerive = policy.selectOutputCap !== false
-    && (outputA.capSupport === 'supported' || outputA.capSupport === 'unknown' && inputA.coverage === 'neutral-only')
-  const candidate = mayDerive && ceilingA !== undefined && availableA !== undefined && availableA >= outputA.minimumCap
-    ? prepared.withOutputCap(Math.min(ceilingA, availableA)) : prepared
-
+  const assessed = assessPreparedCapacity(prepared, { purpose: policy.purpose ?? 'main', binding: policy.budgetBinding,
+    contextWindow: window, outputPreference: configuredCap, safetyRatio: safetyFromReserve(reserveRatio),
+    triggerRatio: policy.triggerRatio, targetRatio: policy.targetRatio, selectOutputCap: policy.selectOutputCap }, readers.estimate)
+  const candidate = assessed.prepared, decision = assessed.decision
   validate(candidate, binding)
   const { input, output } = candidate.measurement
-  const estimate = readers.estimate(input)
-  const available = window === undefined ? undefined : Math.max(0, window - safetyMargin - estimate.tokens)
-  const ceiling = output.effectiveCap ?? output.configuredCap ?? configuredCap
+  const estimate = assessed.priced
+  const pressure = decision.pressure
+  const safetyMargin = window === undefined ? 0 : safetyMarginFor(window, safetyFromReserve(reserveRatio))
   const recoveryRequired = readers.recoveryRequired(input)
   const cap = output.effectiveCap
-  const outputReserve = ceiling === undefined ? 0 : output.capSupport === 'supported' ? cap ?? ceiling
-    : input.coverage === 'neutral-only' ? output.configuredCap ?? ceiling : ceiling
+  const outputReserve = assessed.capacityInput.output.effectiveCap ?? assessed.capacityInput.output.explicitUnsupportedAllowance ?? 0
   const incomplete = input.coverage === 'incomplete'
   const unknownComponents = incomplete || input.uncertainties.some(reason => reason !== 'route-output-floor-unverified')
-  const unavailable = incomplete || window === undefined
-  const capacityFits = !unavailable
-    && compareBudgetTotal(estimate.tokens + outputReserve, window!, reserveRatio).state === 'ok'
-    && (output.capSupport !== 'supported' || available! >= output.minimumCap)
+  const unavailable = incomplete || pressure.kind === 'unavailable'
+  const capacityFits = pressure.kind === 'known' && pressure.hardFits && decision.disposition !== 'blocked' && decision.disposition !== 'reduce'
   const fits = capacityFits && (!recoveryRequired || policy.recoveryAuthorized === true)
   const roleTokens = { user: 0, assistant: 0, tool: 0 }
   for (const unit of input.units) if (unit.role) roleTokens[unit.role] += unit.heuristicTokens
@@ -63,12 +53,12 @@ export function assessLegacyPreparedRequest(
     roleTokens, systemTokens: input.components.system.heuristicTokens, schemaTokens: input.components.toolSchemas.heuristicTokens,
     reasoningTokens: input.components.replayedReasoning.heuristicTokens,
     outputReserve, ...(output.capSupport === 'supported' && cap !== undefined ? { effectiveOutputCap: cap } : {}), capSupport: output.capSupport, safetyMargin,
-    ...(available !== undefined ? { remainingInputBudget: Math.max(0, available - outputReserve) } : {}),
-    admission: unavailable ? 'unavailable' as const : fits ? 'fit' as const : 'compact' as const,
+    ...(pressure.kind === 'known' ? { remainingInputBudget: Math.max(0, pressure.inputBudget - pressure.input) } : {}),
+    admission: unavailable || decision.disposition === 'compatibility' ? 'unavailable' as const : fits ? 'fit' as const : 'compact' as const,
     recoveryRequired, fullByProvider: recoveryRequired,
     ...(unavailable ? { reason: incomplete ? 'Prepared input includes unpriced fixed provider references' : 'This model has no configured context window' }
       : recoveryRequired ? { reason: 'Provider context recovery remains required' } : {}),
   })
   return { prepared: candidate, snapshot, capacityFit: unavailable ? 'unavailable' : capacityFits ? 'yes' : 'no',
-    disposition: estimate.disposition, calibrated: estimate.calibrated }
+    disposition: estimate.disposition, calibrated: estimate.calibrated, decision, estimate: assessed.estimate }
 }

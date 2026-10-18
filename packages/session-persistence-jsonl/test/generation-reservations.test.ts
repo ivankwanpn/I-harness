@@ -108,9 +108,9 @@ it('upgrades the actual format7 predecessor through its existing writable owner 
   const next = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     const document = await next.openManagedDocument(id)
-    expect(document.view.formatVersion).toBe(8)
+    expect(document.view.formatVersion).toBe(9)
     expect(document.view.events).toEqual([])
-    expect((await backend.read(id)).version).toBe(8)
+    expect((await backend.read(id)).version).toBe(9)
   } finally { await next.close().catch(() => {}) }
 })
 it.each([20, 9])('the existing journal owns the literal physical trace with total cap %s', async cap => {

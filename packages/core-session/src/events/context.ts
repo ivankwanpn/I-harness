@@ -1,5 +1,7 @@
-import { validContextUsageV2, type ContextUsageEventV2 } from "./attribution.ts"
+import { validContextUsageV2, scalarFields, type ContextUsageEventV2 } from "./attribution.ts"
 import { isGenerationEventType, validGenerationEvent } from './generation.ts'
+import { validSoftReductionEvent, type SoftReductionEvent } from './soft-reduction.ts'
+import { validAdmissionObservation, type RequestBudgetSnapshotV2 } from './admission.ts'
 /** Owned scalar facts only. Protocol payloads and prefix unit vectors are ephemeral. */
 export interface ContextBindingMetadata {
   version: 1; providerId?: string; modelId: string; protocol: string
@@ -28,7 +30,7 @@ export interface RequestBudgetSnapshot {
   requestContext?: { version: 1; semanticRevision: string; protectionRevision: string; branchId: string; contextEpoch: string; surfaceRevision: string }
   postResponseContextRevision?: string
 }
-export type BudgetRead = { kind: "ready"; snapshot: RequestBudgetSnapshot } | { kind: "unavailable"; reason: string }
+export type BudgetRead = { kind: "ready"; snapshot: RequestBudgetSnapshot; observation?: RequestBudgetSnapshotV2 } | { kind: "unavailable"; reason: string }
 export interface ContextRecoveryFacts {
   version: 1; ownerSessionId: string; recoveryId: string; logicalStepSeq: number
   bindingFingerprint: string; rejectedInputFingerprint: string
@@ -40,8 +42,9 @@ export interface ContextRecoveryFacts {
   inputCost?: number; inputBytes?: number; retryConsumed?: boolean
   retryInputFingerprint?: string
 }
-export type ContextEvent = ContextUsageEventV2
+export type ContextEvent = ContextUsageEventV2 | SoftReductionEvent
   | { type: "context/budget"; version: 1; snapshot: RequestBudgetSnapshot; seq?: number }
+  | { type: 'context/budget'; version: 2; snapshot: RequestBudgetSnapshotV2; seq?: number }
   | { type: "context/usage"; version: 1; checkpoint: ContextUsageCheckpoint; seq?: number }
   | ({ type: "context/recovery"; seq?: number } & ContextRecoveryFacts)
 
@@ -71,8 +74,11 @@ export function validBudgetSnapshot(value: unknown): value is RequestBudgetSnaps
   { providerId: string, bindingConfigFingerprint: digest, contextWindow: integer, effectiveOutputCap: integer, remainingInputBudget: integer, reason: string,
     requestContext: v => fields(v, { version: one, semanticRevision: digest, protectionRevision: digest, branchId: digest, contextEpoch: digest, surfaceRevision: digest }), postResponseContextRevision: digest })
 }
-export function isContextEventType(type: string): boolean { return isGenerationEventType(type) || ["context/budget", "context/usage", "context/recovery"].includes(type) }
+export function isContextEventType(type: string): boolean { return isGenerationEventType(type) || ["context/budget", "context/usage", "context/recovery", 'context/soft-reduction'].includes(type) }
 export function validContextEvent(value: unknown): value is ContextEvent {
+  if (value && typeof value === 'object' && Object.getOwnPropertyDescriptor(value, 'type')?.value === 'context/budget' && Object.getOwnPropertyDescriptor(value, 'version')?.value === 2)
+    return scalarFields(value, { type: v => v === 'context/budget', version: v => v === 2, snapshot: validAdmissionObservation }, { seq: v => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 })
+  if (value && typeof value === 'object' && Object.getOwnPropertyDescriptor(value, 'type')?.value === 'context/soft-reduction') return validSoftReductionEvent(value)
   if (value && typeof value === 'object' && isGenerationEventType(Object.getOwnPropertyDescriptor(value, 'type')?.value)) return validGenerationEvent(value)
   if (!object(value) || new TextEncoder().encode(JSON.stringify(value)).byteLength > 4096) return false
   if (value.type === "context/usage" && value.version === 2) return validContextUsageV2(value)

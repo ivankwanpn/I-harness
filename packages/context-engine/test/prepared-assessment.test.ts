@@ -1,13 +1,15 @@
 import { expect, it, vi } from 'vitest'
-import { compareBudgetTotal, ProjectionCounter, createAcceptedCalibration, type ProjectedInputFacts } from '@i-harness/token-meter'
+import { ProjectionCounter, createAcceptedCalibration, type ProjectedInputFacts } from '@i-harness/token-meter'
 import { prepareModelRequest, type PreparedModelRequest } from '@i-harness/llm-seam'
-import { assessLegacyPreparedRequest, type LegacyPreparedAssessmentInput, type PreparedAssessmentReaders } from '../src/index.ts'
+import { assessLegacyPreparedRequest, assessPreparedCapacity, type LegacyPreparedAssessmentInput, type PreparedAssessmentReaders } from '../src/index.ts'
 
 const d = 'a'.repeat(64)
 const policy: LegacyPreparedAssessmentInput = {
   ownerSessionId: 'owner', bindingRevision: 2, projectionRevision: 3, neutralFingerprint: d,
   requestContext: { version: 1, semanticRevision: d, protectionRevision: d, branchId: d, contextEpoch: d, surfaceRevision: d },
   contextWindow: 10000, reserveRatio: .9,
+  budgetBinding: { version: 1, metadata: { version: 1, modelId: 'm', protocol: 'openai-compatible', identityCoverage: 'partial' }, limits: {}, generation: { origin: 'unspecified' },
+    capability: { version: 1, route: 'openai-compatible', evidenceId: 'fixture', outputParameter: 'optional', packetKind: 'http-json-body' }, capacityDomain: { kind: 'known', value: 'shared-context', sourceId: 'fixture-domain' } },
 }
 function facts(label = 'final', coverage: ProjectedInputFacts['coverage'] = 'complete') {
   const c = new ProjectionCounter('projected-pricing-v2')
@@ -28,12 +30,17 @@ function prepared(input = facts(), output: Partial<PreparedModelRequest['measure
 }
 const readers = (recovery = false): PreparedAssessmentReaders => ({ estimate: () => ({ tokens: 7399, calibrated: false }), recoveryRequired: () => recovery })
 
-it('compares the literal inclusive scalar boundary', () => {
-  expect(compareBudgetTotal(9000, 10000, .9)).toEqual({ state: 'ok', tokens: 9000, budget: 9000 })
-  expect(compareBudgetTotal(9001, 10000, .9)).toEqual({ state: 'overflow', tokens: 9001, budget: 9000 })
-  expect(() => compareBudgetTotal(1, 10000, 0)).toThrow(/reserveRatio/)
-  expect(() => compareBudgetTotal(-1, 10000)).toThrow(/tokens/)
+it.each([1000, 1010])('selects one literal8000 derivative and reprices actual B=%s', finalInput => {
+  const a = prepared(facts('A'), { effectiveCap: 128000, minimumCap: 1025 }), b = prepared(facts('B'), { effectiveCap: 8000, minimumCap: 1025 })
+  a.withOutputCap = vi.fn(() => b)
+  const result = assessPreparedCapacity(a, { purpose: 'main', contextWindow: 10000, outputCeiling: 8192,
+    binding: { version: 1, metadata: { version: 1, modelId: 'm', protocol: 'openai-compatible', identityCoverage: 'partial' }, limits: {}, generation: { origin: 'unspecified' }, capability: { version: 1, route: 'openai-compatible', evidenceId: 'fixture', outputParameter: 'required', packetKind: 'http-json-body' }, capacityDomain: { kind: 'known', value: 'shared-context', sourceId: 'fixture-domain' } } }, input => ({ tokens: input === a.measurement.input ? 1000 : finalInput, calibrated: false }))
+  expect(a.withOutputCap).toHaveBeenCalledExactlyOnceWith(8000)
+  expect(result.prepared).toBe(b)
+  expect(result.decision.pressure).toMatchObject({ inputBudget: 1000, input: finalInput, hardFits: finalInput === 1000 })
+  expect(result.decision.disposition).toBe(finalInput === 1000 ? 'admit' : 'reduce')
 })
+
 it.each([false, true])('separates capacity from unresolved recovery (authorized=%s)', authorized => {
   const result = assessLegacyPreparedRequest(prepared(), { ...policy, recoveryAuthorized: authorized }, readers(true))
   expect(result.capacityFit).toBe('yes')
@@ -83,7 +90,7 @@ it('selects only one derivative and uses B input, output, identity, disposition 
     snapshot: { estimatedInputTokens: 7399, outputReserve: 600, estimateSource: 'provider-anchor-plus-projection' } })
 })
 it('rejects invalid B before pricing or recovery and checks B binding', () => {
-  const a = prepared(), estimate = vi.fn(() => ({ tokens: 7399, calibrated: false })), recoveryRequired = vi.fn(() => false)
+  const a = prepared(facts(), {effectiveCap: 128000}), estimate = vi.fn(() => ({ tokens: 7399, calibrated: false })), recoveryRequired = vi.fn(() => false)
   a.withOutputCap = () => prepared(facts('B'), {}, true)
   expect(() => assessLegacyPreparedRequest(a, policy, { estimate, recoveryRequired })).toThrow()
   expect(estimate).toHaveBeenCalledTimes(1); expect(recoveryRequired).not.toHaveBeenCalled()
@@ -105,7 +112,7 @@ it('labels the existing unknown-cap neutral-only compatibility and derives once'
   const derive = vi.fn(original.withOutputCap), a = { ...original, withOutputCap: derive }
   const result = assessLegacyPreparedRequest(a, policy, readers())
   expect(derive.mock.calls).toEqual([[1601]])
-  expect(result).toMatchObject({ capacityFit: 'yes', snapshot: { admission: 'fit', coverage: 'neutral-only', estimateSource: 'neutral-only', outputReserve: 1601 } })
+  expect(result).toMatchObject({ capacityFit: 'yes', decision: { disposition: 'compatibility' }, snapshot: { admission: 'unavailable', coverage: 'neutral-only', estimateSource: 'neutral-only', outputReserve: 1601 } })
   expect(result.prepared.validation).toMatchObject({ route: 'custom', status: 'partial', coverage: 'neutral-only' })
   expect(result.snapshot).not.toHaveProperty('effectiveOutputCap')
 })
@@ -122,8 +129,17 @@ it('does not retire a real accepted anchor on provisional A shape miss when fina
     snapshot: { semanticRevision: d, protectionRevision: d, branchId: d, contextEpoch: d, surfaceRevision: d }, projectionRevision: 3 }
   expect(calibration.recordAccepted(input, request, { type: 'model/exchange-accepted', version: 2, seq: 3, exchangeId: 'exchange', actionId: 'action', attemptId: 'attempt', stepStartSeq: 1, assistantSeq: 2, callSeqs: [], request }, { inputTokens: 7399, inputTokenSemantics: 'includes-cache' }).kind).toBe('sample')
   const compatibility = { ownerSessionId: 'owner', observationLifetimeId: 'live', executionEpochId: 'E', branchId: d, contextEpoch: d, projectionRevision: 3 }
-  const a = prepared(facts('A')), b = prepared(input); a.withOutputCap = () => b
+  const a = prepared(facts('A'), {effectiveCap: 128000}), b = prepared(input); a.withOutputCap = () => b
   const result = assessLegacyPreparedRequest(a, policy, { estimate: value => calibration.probe(value, compatibility), recoveryRequired: () => false })
   expect(result.calibrated).toBe(true); expect(result.disposition).toBeUndefined()
   expect(calibration.probe(input, compatibility)).toEqual({ tokens: 7399, calibrated: true })
+})
+
+it('retains validated A when its actual cap already equals the selected cap, without rebuilding a payload', () => {
+  const a = prepared(), derive = vi.fn(() => { throw Error('An unchanged cap must not encode a derivative') })
+  a.withOutputCap = derive
+  const price = vi.fn(() => ({ tokens: 1000, calibrated: false }))
+  const result = assessPreparedCapacity(a, { purpose: 'main', contextWindow: 10000 }, price)
+  expect(result.prepared).toBe(a); expect(result.decision.pressure).toMatchObject({ input: 1000, inputBudget: 8400 })
+  expect(derive).not.toHaveBeenCalled(); expect(price).toHaveBeenCalledTimes(1)
 })

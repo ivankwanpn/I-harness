@@ -2,6 +2,7 @@
  * fallback: a visual Responses model does not imply Chat audio support. */
 import { createHash, randomUUID } from 'node:crypto'
 import { isGenerationControl, isGenerationError, generationError, type GenerationReservation, type MediaGenerationAction } from '@i-harness/llm-seam'
+import { assessCapacity } from '@i-harness/context-engine'
 export interface VideoAudioInput {
   generation?: MediaGenerationAction
   wav: Uint8Array
@@ -13,7 +14,7 @@ export interface VideoAudioInput {
 export type VideoAudioResult = { status: "analyzed"; analysis: string; provider: string; model: string }
   | { status: "unconfigured" | "unsupported" | "failed"; reason: string }
 
-export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string> }): Promise<VideoAudioResult> {
+export async function requestVideoAudio(input: VideoAudioInput, route: { provider: string; model: string; baseURL: string; apiKey: string; headers?: Record<string, string>; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding }): Promise<VideoAudioResult> {
   input.signal?.throwIfAborted()
   if (input.wav.byteLength < 44 || input.wav.byteLength > 24 * 1024 * 1024 || !Number.isFinite(input.startSeconds) || input.startSeconds < 0 || !Number.isFinite(input.durationSeconds) || input.durationSeconds <= 0 || input.durationSeconds > 60) {
     return { status: "failed", reason: "Invalid or oversized audio segment." }
@@ -34,6 +35,10 @@ export async function requestVideoAudio(input: VideoAudioInput, route: { provide
           { type: "input_audio", input_audio: { data: Buffer.from(input.wav).toString("base64"), format: "wav" } },
         ] },
       ] })
+    const admission = assessCapacity({ purpose: 'media', estimate: { kind: 'unknown', reason: 'token-cost-unavailable' }, limits: route.budgetBinding?.limits ?? {},
+      capacityDomain: route.budgetBinding?.capacityDomain ?? { kind: 'unknown', reason: 'coupling-unverified' }, output: { capSupport: 'unknown', parameter: 'optional', minimumCap: 1 },
+      packet: { kind: 'audio-json-body', bytes: Buffer.byteLength(body) }, policy: { safetyRatio: .1, triggerRatio: .8, targetRatio: .7, strictCapacity: false } })
+    if (admission.disposition !== 'compatibility' && admission.disposition !== 'admit') return { status: 'failed', reason: 'Audio request failed local admission.' }
     if (input.generation) {
       if (!isGenerationControl(input.generation.control)) throw generationError('GENERATION_UNSUPPORTED')
       await input.generation.bindAudio()

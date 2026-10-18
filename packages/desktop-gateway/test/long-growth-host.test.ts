@@ -104,12 +104,15 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
     expect(events.some(e => e.type === "compaction/replacement")).toBe(true)
     const active = deriveMessages({ ...createSession(), events })
     expect(active.filter(m => typeof m.content === "string" && m.content.includes("Checkpoint: preserve"))).toHaveLength(1)
-    const budget = events.filter(e => e.type === "context/budget").map(e => e.snapshot)
-    const crossing = budget.find(s => s.admissionInputTokens + s.outputReserve + s.safetyMargin >= .8 * s.contextWindow!)!
-    expect(crossing).toBeDefined()
-    expect(crossing.admissionInputTokens).toBeLessThan(.8 * crossing.contextWindow!)
-    expect(crossing.outputReserve).toBe(20000)
-    expect(crossing.estimateSource).toBe("provider-anchor-plus-projection")
+    const budget = events.filter(e => e.type === "context/budget" && e.version === 2).map(e => e.snapshot)
+    const crossing = budget.find(snapshot=>snapshot.pressure.kind==='known'&&snapshot.pressure.softNeeded)!
+    if(crossing?.pressure.kind!=='known'||crossing.output.effectiveCap===undefined)throw Error('actual prepared pressure crossing required')
+    const selectedBudget=contextWindow-Math.ceil(.1*contextWindow)-crossing.output.effectiveCap
+    expect(crossing.pressure).toMatchObject({inputBudget:selectedBudget,trigger:Math.floor(.8*selectedBudget),target:Math.floor(.7*selectedBudget)})
+    expect(crossing.pressure.input).toBeGreaterThanOrEqual(crossing.pressure.trigger)
+    expect(crossing.pressure.input).toBeLessThan(.8*contextWindow)
+    expect(crossing.estimate).toMatchObject({kind:'estimated',source:'provider-anchor-plus-projection'})
+    expect(requests.filter(request=>request.kind==='main').every(request=>request.cap!==undefined&&request.cap>0&&request.cap<=20000)).toBe(true)
     const beforeSamples=events.slice(0,rewriteIndex).filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='sample')
     const afterSamples=events.slice(rewriteIndex+1).filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='sample')
     expect(beforeSamples.length).toBeGreaterThan(0);expect(afterSamples.length).toBeGreaterThan(0)
@@ -118,12 +121,12 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
     expect(firstAfter.checkpoint.request.ownerSessionId).toBe(sessionId)
     expect(firstAfter.checkpoint.request.snapshot.contextEpoch).not.toBe(lastBefore.checkpoint.request.snapshot.contextEpoch)
     expect(events.slice(rewriteIndex+1)).toContainEqual(expect.objectContaining({type:'context/usage',version:2,op:'retire',anchorId:lastBefore.checkpoint.anchorId,reason:'context-rewritten'}))
-    expect(budget.some(snapshot=>snapshot.projectionRevision>0&&snapshot.estimateSource==='provider-anchor-plus-projection')).toBe(true)
+    expect(budget.some(snapshot=>snapshot.projectionRevision>0&&snapshot.estimate.kind==='estimated'&&snapshot.estimate.source==='provider-anchor-plus-projection')).toBe(true)
     // Oversized candidates are assessed but never sent: hard admission may
     // bypass the ordinary hysteresis before rebuilding a smaller main request.
     const oversized=requests.filter(r=>r.kind==='main'&&r.input+r.cap!+Math.ceil(contextWindow*.1)>contextWindow)
       .map(({input,cap})=>({input,cap,total:input+cap!+Math.ceil(contextWindow*.1),window:contextWindow,
-        admitted:budget.filter(snapshot=>snapshot.effectiveOutputCap===cap).map(snapshot=>({input:snapshot.admissionInputTokens,estimated:snapshot.estimatedInputTokens,reserve:snapshot.outputReserve,margin:snapshot.safetyMargin,source:snapshot.estimateSource,admission:snapshot.admission}))}))
+        admitted:budget.filter(snapshot=>snapshot.output.effectiveCap===cap).map(snapshot=>({estimate:snapshot.estimate,output:snapshot.output,pressure:snapshot.pressure,disposition:snapshot.disposition}))}))
     expect(oversized).toEqual([])
     expect(requests.every(r => r.kind !== "main" || r.body.messages.some((m: any) => m.role === "system") && r.body.tools.length > 0)).toBe(true)
     await host.close(); host = undefined

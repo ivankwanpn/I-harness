@@ -126,7 +126,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
-  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }, action: PostTurnAction) => Promise<void>
+  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding }, action: PostTurnAction) => Promise<void>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
     options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral" | "hookContext">

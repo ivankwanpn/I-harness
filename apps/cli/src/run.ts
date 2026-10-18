@@ -460,6 +460,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // which every consumer keeps ABSENT).
   let contextWindow: number | undefined
   let maxOutputTokens: number | undefined
+  let budgetBinding: import("@i-harness/llm-seam").ModelBudgetBinding | undefined
   crashSession = activeId
   // M3: the abort path. `sdk` and `acp` already had one (`teardown()` wired to
   // SIGINT/SIGTERM); `run` did not, so an interrupt mid-turn skipped the
@@ -565,6 +566,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       if (state.status !== "ready") throw new Error(state.reason)
       providerBinding = state.binding
     }
+    budgetBinding = providerBinding?.budgetBinding
     contextWindow = providerBinding?.contextWindow
     // M72 Ⅱ: the same binding's resolved output cap. Handed on verbatim —
     // undefined stays undefined, because "no cap resolved" is a fact the
@@ -986,6 +988,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     try {
       await maybeAutoTitle({
         session, model: assembly.model,
+        budgetBinding,
         action: { view: session, signal: titleAction.signal, assertOpen: titleAction.assertOpen, facts: { metadata: titleAction.facts.metadata }, openGeneration: titleGeneration.open },
         // M73 (fix wave, I3): the title request is built by session-title and runs
         // on the session's model, so it gets the session model's resolved pair —

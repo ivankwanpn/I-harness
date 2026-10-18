@@ -42,7 +42,7 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
         if (!portable && (error instanceof SummaryNativeSourceError || failure?.reason === 'native-replay' && (error as { code?: string }).code === 'INVALID_ARGUMENT')) { portable = true; round--; continue }
         throw error
       }
-      if (prepared.room !== undefined && prepared.room < prepared.requiredRoom) { partition(pending, groups); completed = true; break }
+      if (prepared.decision.disposition === 'reduce') { partition(pending, groups); completed = true; break }
       if (source.attempts.count >= maximum) throw new SummaryBlockedError('call-limit', { limit: maximum })
       if (limits.beforeTransport) try { await limits.beforeTransport() } catch (error) { throw new SummaryCheckpointError(error) }
       check(); limits.onMeasurement?.(prepared.facts); source.attempts.count++

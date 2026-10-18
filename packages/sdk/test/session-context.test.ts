@@ -46,9 +46,9 @@ it("reports estimated active context against the resolved model window", async (
     expect(hello).toMatchObject({ result: { capabilities: { "session-context": ["1"] } } })
     await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "context", prompt: "hello" })))
     const state = decodeFrame((await server.handleLine(encodeFrame(makeRequest(3, "session/context", { sessionId: "context" }))))!)
-    expect(state).toMatchObject({ result: { kind: "unavailable", reason: "Accepted output awaits the next protocol projection", snapshot: { contextWindow: 100000, admission: "unavailable", coverage: "neutral-only" } } })
-    const result = (state as { result: { snapshot: { estimatedInputTokens: number; roleTokens: { user: number } } } }).result
-    expect(result.snapshot.estimatedInputTokens).toBeGreaterThan(0)
-    expect(result.snapshot.roleTokens.user).toBeGreaterThan(0)
+    expect(state).toMatchObject({ result: { kind: "unavailable", observation: { version: 2, freshness: 'awaiting-projection', disposition: 'compatibility', estimate: { kind: 'estimated', source: 'neutral-only' } } } })
+    const result = (state as { result: { observation: { estimate: { value: number }; components: { user: number } } } }).result
+    expect(result.observation.estimate.value).toBeGreaterThan(0)
+    expect(result.observation.components.user).toBeGreaterThan(0)
   } finally { await server.close(); await service.close() }
 })

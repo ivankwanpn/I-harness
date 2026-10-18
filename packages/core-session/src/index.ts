@@ -36,7 +36,7 @@ export { createSession, append } from "./events/append.ts"
 export type { ContextBindingMetadata, ContextUsageCheckpoint, RequestBudgetSnapshot, BudgetRead, ContextRecoveryFacts, ContextEvent } from "./events/context.ts"
 export { validContextEvent, isContextEventType } from "./events/context.ts"
 export { deriveContextBudget, deriveContextRecovery } from "./projection/context.ts"
-export { contextStateFromBudget, readSessionContextState, type SessionContextState } from "./context-state.ts"
+export { contextStateFromBudget, contextStateFromObservation, readSessionContextState, type SessionContextState } from "./context-state.ts"
 export { subscribe, publishTransient } from "./events/subscription.ts"
 
 export { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES_PER_MESSAGE, validateImages } from "./images.ts"
@@ -87,3 +87,9 @@ export { committedFactSeqs } from './managed/outcome.ts'
 
 export { projectConversationCandidate } from "./conversation/candidate.ts"
 export type { ContextReductionDraft } from './managed/groups.ts'
+export type { SoftReductionEvent, SoftReductionStart, SoftReductionTerminal, SoftReductionTerminalDraft } from './events/soft-reduction.ts'
+export { validSoftReductionEvent, validSoftTerminalDraft } from './events/soft-reduction.ts'
+export { createSoftReductionIndex } from './conversation/soft-reduction.ts'
+export type { SoftReductionState } from './conversation/soft-reduction.ts'
+export type { RequestBudgetSnapshotV2, AdmissionPurpose, AdmissionEstimate, AdmissionDimension, AdmissionDimensionResult, AdmissionPressure, AdmissionDisposition, AdmissionReason, AdmissionUnknownReason } from './events/admission.ts'
+export { validAdmissionObservation } from './events/admission.ts'

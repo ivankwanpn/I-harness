@@ -56,8 +56,8 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
   it("engine applies selected model threshold and whole-exchange retention", async () => {
     const { closedExchange } = await import('./fixtures/history.ts')
     const s = createSession(); for (let i=0;i<20;i++) closedExchange(s, 'E'+i,400)
-    const config: CompactionConfig = { contextWindow: 20000, thresholdRatio: .9, modelPolicies: { 'deepseek/selected': { thresholdRatio: .8, retainTokens: 400 } } }
-    const engine = createCompactionHarness({ model: mockModel(checkpointOfLength(600)), config, maxOutputTokens:13000,
+    const config: CompactionConfig = { contextWindow: 20000, thresholdRatio: .95, modelPolicies: { 'deepseek/selected': { thresholdRatio: .8, retainTokens: 400 } } }
+    const engine = createCompactionHarness({ model: mockModel(checkpointOfLength(600)), config, maxOutputTokens:15500,
       contextMetadata: {version:1,providerId:'deepseek',modelId:'selected',protocol:'fixture',contextWindow:20000,identityCoverage:'partial'} })
     expect((await engine.maybeCompact(s)).shadowedSeqs).toEqual(Array.from({length:16},(_,i)=>[i*3,i*3+1]).flat())
   })

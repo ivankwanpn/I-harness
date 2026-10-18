@@ -27,6 +27,7 @@ export function createCompactionHarness(input: {
       contextMetadata: input.contextMetadata, budgetBinding: input.budgetBinding, maxOutputTokens: input.maxOutputTokens, reasoningEffort: input.reasoningEffort,
       telemetry: input.telemetry, flush: input.flush, signal: options?.signal ?? input.signal,
       captureContextReduction: action?.captureContextReduction?.bind(action), assertFactOpen: action?.assertOpen,
+      captureSoftReduction: action?.captureSoftReduction.bind(action),
       facts: action?.facts, registerFactSource: action ? drain => action.registerSettlementSource(drain) : undefined,
     }, 'compaction-harness')
     try {

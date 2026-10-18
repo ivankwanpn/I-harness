@@ -723,7 +723,7 @@ describe("model resolution", () => {
     })
     await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
       status: "ready",
-      binding: { contextWindow: 1_048_576, maxOutputTokens: 384_000 },
+      binding: { contextWindow: 1_048_576, maxOutputTokens: 128_000, budgetBinding: { limits: { outputTokens: { value: 384_000 } }, generation: { origin: 'adapter-default' } } },
     })
     // `maxOutputTokens` is asserted above because M72 Ⅱ changed the answer this
     // comment used to carry. Measured 2026-09-19: the card parses the cap,

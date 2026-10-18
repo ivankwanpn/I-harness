@@ -44,6 +44,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     deps.facts = action.facts
     deps.assertFactOpen = action.assertOpen
     deps.captureContextReduction = action.captureContextReduction?.bind(action)
+    deps.captureSoftReduction = action.captureSoftReduction.bind(action)
     deps.captureInputPromotion = action.captureInputPromotion.bind(action)
     const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
     let running: Promise<T>

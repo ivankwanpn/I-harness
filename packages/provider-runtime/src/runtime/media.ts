@@ -6,6 +6,7 @@ import { canonicalLlm } from "../configuration/store.ts"
 import { authRef, authValue } from "./auth.ts"
 import type { ProviderRuntime } from "../types.ts"
 import { isGenerationError } from '@i-harness/llm-seam'
+import { describeSelection } from '../selection/metadata.ts'
 
 export function createMediaRuntime(
   options: Pick<CreateProviderRuntimeOptions, "settings">,
@@ -40,7 +41,8 @@ export function createMediaRuntime(
         const key = authValue(await auth.resolve(ref, { providerId: selection.provider, purpose: "inference", signal: input.signal }))
         input.signal?.throwIfAborted()
         if (!key) return { status: "unconfigured", reason: "Configure an API key for the selected video audio provider." }
-        return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers })
+        const described = describeSelection(options.settings, provider, { sessionSelection: { provider: selection.provider, model: selection.model } })
+        return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers, budgetBinding: described?.budgetBinding })
       } catch (error) {
         if (isGenerationError(error)) throw error
         input.signal?.throwIfAborted()

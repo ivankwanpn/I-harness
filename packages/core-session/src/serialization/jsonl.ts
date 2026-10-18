@@ -8,7 +8,7 @@ import type { JournalMetadata } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
 
 export function toJSONL(session: import('../managed/types.ts').SessionView): string {
-  if ([6, 7, 8].includes(session.formatVersion)) {
+  if ([6, 7, 8, 9].includes(session.formatVersion)) {
     validateConversationHistory(session.events, session.formatVersion, session.header)
     const journal: JournalMetadata = { version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }
     const { journal: _sourceJournal, formatVersion: _sourceFormat, ...metadata } = session.header as (SessionHeader & { formatVersion?: number }) ?? {}
@@ -36,8 +36,8 @@ export function fromJSONL(text: string): Session {
   if (typeof header.formatVersion !== 'number' || ![1, 2, 3, 4, 5, 6, 7, CURRENT_FORMAT_VERSION].includes(header.formatVersion)) {
     throw new Error(`session format version ${header.formatVersion} not supported`)
   }
-  if ([6, 7, 8].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
-  const events = [6, 7, 8].includes(header.formatVersion)
+  if ([6, 7, 8, 9].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
+  const events = [6, 7, 8, 9].includes(header.formatVersion)
     ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events
     : lines.slice(1).filter(line => line.trim()).map((l) => JSON.parse(l) as SessionEvent)
   validateConversationHistory(events, header.formatVersion, header)

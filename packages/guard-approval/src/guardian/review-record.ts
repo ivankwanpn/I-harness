@@ -38,6 +38,7 @@ export interface GuardianIsolatedConfig {
   onReview?: (record: GuardianReviewRecord) => void | Promise<void>
 }
 export interface GuardianIsolatedBinding {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
   client: ModelClient
   identity: GuardianReviewerIdentity
   contextWindow?: number

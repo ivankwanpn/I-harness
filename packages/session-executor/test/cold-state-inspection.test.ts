@@ -49,9 +49,9 @@ it.each([
     const counts = { prepare: prepare.mock.calls.length, transport: transport.mock.calls.length, authenticate: authenticate.mock.calls.length, resolve: resolve.mock.calls.length }
     const expected = await live.contextState(id)
     expect(expected.kind).toBe("unavailable")
-    expect(Boolean(expected.snapshot?.fullByProvider)).toBe(required)
-    expect(Boolean(expected.snapshot?.recoveryRequired)).toBe(required)
-    if (!required) expect(expected).toMatchObject({ reason: "Accepted output awaits the next protocol projection" })
+    expect(Boolean(expected.observation?.fullByProvider)).toBe(required)
+    expect(Boolean(expected.observation?.recoveryRequired)).toBe(required)
+    if (!required) expect(expected).toMatchObject({ observation: { freshness: 'awaiting-projection' } })
     expect(assembly.session.events.filter(event => event.type === "context/usage")).toHaveLength(1)
     await live.close()
     const file = join(store, `${id}.jsonl`), before = await readFile(file, "utf8")
@@ -82,20 +82,20 @@ it.each(["matching", "different", "missing", "legacy"] as const)("retains cold s
   const metadata = { version: 1 as const, modelId: "m", protocol: "neutral", contextWindow: 100000, identityCoverage: "complete" as const, bindingConfigFingerprint: "a".repeat(64) }
   await createAgent(ctx, { session, sessionId: "owner", tools, model: { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }, systemPrompt: "s", contextMetadata: metadata }).run("anchor")
   const saved = session.events.find(event => event.type === "context/budget")!
-  if (saved.type !== "context/budget") throw Error("saved facts required")
+  if (saved.type !== "context/budget" || saved.version !== 2) throw Error("saved v2 facts required")
   // The cold view is the measured request itself, before output/turn closure.
   session.events = session.events.slice(0, saved.seq! + 1)
   if (binding === "legacy") {
-    const legacy = { ...saved.snapshot }; delete legacy.requestContext
-    session.events[session.events.length - 1] = { ...saved, snapshot: legacy }
+    // An unsupported/stale successor never becomes a fabricated current v1 view.
+    session.events[session.events.length - 1] = { ...saved, snapshot: { ...saved.snapshot, freshness: 'stale' } }
   }
   const resolve = vi.fn(async () => { throw Error("read must not resolve/authenticate") })
   const service = createSessionService({ workspace: process.cwd(), session, modelBindingFor: resolve,
     modelMetadataFor: async () => binding === "missing" ? undefined : binding === "different" ? { ...metadata, bindingConfigFingerprint: "b".repeat(64) } : metadata })
   try {
     const state = await service.contextState("owner")
-    expect(state).toMatchObject({ kind: "unavailable", snapshot: { admission: "unavailable", neutralFingerprint: saved.snapshot.neutralFingerprint, admissionInputTokens: saved.snapshot.admissionInputTokens } })
-    expect(state.snapshot?.requestContext).toEqual(binding === "legacy" ? undefined : saved.snapshot.requestContext)
+    expect(state).toMatchObject({ kind: "unavailable", observation: { version: 2, freshness: 'stale', neutralFingerprint: saved.snapshot.neutralFingerprint, estimate: saved.snapshot.estimate } })
+    expect(state.observation?.requestContext).toEqual(saved.snapshot.requestContext)
     expect(service.hasAssembly("owner")).toBe(false); expect(resolve).not.toHaveBeenCalled()
   } finally { await service.close() }
 })
@@ -116,9 +116,9 @@ it("prefers the live owner published while cold metadata inspection is held", as
     turn = service.submit("metadata-race", "live prompt", new AbortController().signal)
     await streaming.promise
     const owner = (await service.assemblyFor("metadata-race")).agent.contextBudget!()
-    expect(owner.kind === "ready" && owner.snapshot.admission).toBe("fit")
+    expect(owner).toMatchObject({kind:'ready',observation:{disposition:'compatibility',freshness:'current'}})
     releaseMetadata.resolve()
-    expect(await reading).toMatchObject({ kind: "ready", estimatedTokens: owner.kind === "ready" ? owner.snapshot.admissionInputTokens : undefined })
+    expect(await reading).toMatchObject({ kind: "unavailable", observation: owner.kind === "ready" ? owner.observation : undefined })
     expect(inspect).toHaveBeenCalledTimes(1)
   } finally {
     releaseMetadata.resolve(); releaseModel.resolve()
@@ -158,7 +158,7 @@ it("keeps a cold Context inspection immutable when a live writer starts during i
     expect(await f.contents()).toBe(before)
     const owner = (await f.service.assemblyFor(f.id)).agent.contextBudget!()
     expect(owner.kind).toBe("ready")
-    expect(context).toMatchObject({ kind: "ready", estimatedTokens: owner.kind === "ready" ? owner.snapshot.admissionInputTokens : undefined })
+    expect(context).toMatchObject({ kind: "unavailable", observation: owner.kind === "ready" ? owner.observation : undefined })
     const assembly = await f.service.assemblyFor(f.id)
     assembly.inbox.admit({ inputId: "owned-steer", text: "Owned steering", delivery: "steer", intent: "user" })
     await f.finishTurn()

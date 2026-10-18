@@ -12,6 +12,7 @@ import type { SessionView } from './types.ts'
 import { captureMemoryReduction } from './memory-reduction.ts'
 import { validGenerationEvent } from '../events/generation.ts'
 import { validInputPreparationEvent } from '../events/input-preparation.ts'
+import { captureMemorySoftStart } from './memory-soft-reduction.ts'
 import { validContextEvent } from '../events/context.ts'
 import { installMemoryGroup } from './memory-group.ts'
 
@@ -60,6 +61,9 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         return { kind: 'memory-committed', durability: 'nondurable', seqs: [seq] }
       }
       return {
+        captureSoftReduction(event, checkCurrent) {
+          return captureMemorySoftStart(session, event, assertOpen, checkCurrent)
+        },
         captureInputPromotion(draft, checkCurrent) {
           if (!validInputPromotionDraft(draft)) return rejectedMemoryCapture()
           return captureMemoryFact(session, draft, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })

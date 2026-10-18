@@ -28,7 +28,7 @@ it("reports and sends the selected summary measurement", async () => {
   const output = { capSupport: "supported" as const, minimumCap: 1, effectiveCap: 10, source: "request" as const }
   // The retained ceiling must fit the complete literal; the independent wire cap stays 10.
   const candidate: PreparedModelRequest = { textOutput: { status: 'allowed', reason: 'ordinary-text' }, measurement: { ...base.measurement, input: finalInput, output }, withOutputCap() { throw Error("only one selection") }, async *stream() { sends++; yield { type: "text/chunk", text: checkpointOfLength(500) }; yield { type: "end" } } }
-  const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input, output }, withOutputCap() { selections++; return candidate } }
+  const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input, output: {...output,effectiveCap:20} }, withOutputCap() { selections++; return candidate } }
   await expect(summarizeFixture({ async *stream() { throw Error("unprepared") }, async prepare() { return initial } }, "literal", 125, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 1000, onMeasurement: facts => reports.push(facts) })).resolves.toEqual({ text: checkpointOfLength(500), attempts: 1 })
   expect(sends).toBe(1); expect(selections).toBe(1)
   // The neutral fixture also retains four system and five schema tokens.

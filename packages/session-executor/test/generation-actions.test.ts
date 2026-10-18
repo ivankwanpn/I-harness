@@ -112,7 +112,7 @@ it('promotes the exact raw human input and records command expansion once as a d
     expect(childSeed.filter(event => event.type === 'user/message' && event.seedInputContext)).toHaveLength(2)
     expect(() => remapConversationSeed({ source: forked.view.events, retained: forked.view.events.filter(event => event.type === 'user/message' && event.seedInputContext), sourceFormat: 8, sourceHeader: forked.view.header })).toThrow(/raw source/)
     const detached = fromJSONL(await readFile(join(root, `${id}.jsonl`), 'utf8'))
-    const compiled = remapConversationSeed({ source: detached.events, retained: detached.events, sourceFormat: 8, sourceHeader: detached.header })
+    const compiled = remapConversationSeed({ source: detached.events, retained: detached.events, sourceFormat: detached.formatVersion, sourceHeader: detached.header })
     const declared = await coordinator.create({ parentSession: id, seedLength: compiled.length })
     const imported = await openExecutorDocument({ coordinator, sessionId: declared.id, detachedSession: detached })
     expect(imported.session.events).toEqual(compiled)

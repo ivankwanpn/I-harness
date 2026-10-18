@@ -5,6 +5,12 @@ import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-sea
 import { fallbackTitle, normalizeTitle, suggestTitle, applyTitle, maybeAutoTitle } from "../src/index.ts"
 
 describe("session-title", () => {
+  it('counts title system instructions before the capacity decision and falls back with zero model work', async () => {
+    const session = createSession(); append(session, { type: 'user/message', text: 'x'.repeat(400) })
+    let calls = 0
+    const result = await suggestTitle({ session, contextWindow: 120, maxOutputTokens: 10, model: { async *stream() { calls++; yield { type: 'text/chunk', text: 'should not run' }; yield { type: 'end' } } } })
+    expect(result.source).toBe('fallback'); expect(calls).toBe(0)
+  })
   it("fallbackTitle takes the first words of the user's message", () => {
     expect(fallbackTitle("  Implement the queue   for pending inputs,   please.  ")).toBe("Implement the queue for pending inputs, please.")
     expect(fallbackTitle("one two three four five six seven eight nine ten", 4)).toBe("one two three four...")

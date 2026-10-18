@@ -35,9 +35,9 @@ function fact(label: string, value: number) {
   expect(within(term.parentElement!).getByRole("definition").textContent).toBe(new Intl.NumberFormat("en-US").format(value))
 }
 
-it("renders actual projected components, reserve, coverage, and cap support", async () => {
-  const { state, snapshot } = await projection()
-  const request = await show(state)
+it("keeps historical v1 projected component facts readable without restoring a healthy gauge", async () => {
+  const { snapshot } = await projection()
+  const request = await show(contextStateFromBudget({kind:'ready',snapshot:{...snapshot,admission:'unavailable',reason:'Historical v1 facts'}}))
   fact("系統提示", snapshot.systemTokens)
   fact("工具定義", snapshot.schemaTokens)
   expect(snapshot.reasoningTokens).toBeGreaterThan(0)
@@ -46,15 +46,19 @@ it("renders actual projected components, reserve, coverage, and cap support", as
   fact("輸出預留", snapshot.outputReserve)
   fact("上次估算輸入", snapshot.estimatedInputTokens)
   fact("安全餘量", snapshot.safetyMargin)
-  fact("剩餘輸入預算", snapshot.remainingInputBudget!)
+  expect(screen.queryByText('剩餘輸入預算')).toBeNull()
+  expect(screen.queryByRole('progressbar')).toBeNull()
   expect(request).toHaveBeenCalledTimes(1)
 })
 
-it("shows input uncertainty from the actual projection without exposing signatures", async () => {
+it("keeps actual v2 uncertainty unavailable without exposing signatures or reading v1 numeric fields", async () => {
   const { state } = await projection()
+  expect(state).toMatchObject({kind:'unavailable',observation:{version:2,estimate:{kind:'unknown',reason:'token-cost-unavailable'},components:{kind:'estimated',source:'projected-heuristic'}}})
   await show(state)
-  expect(screen.getByText(/部分內容成本不確定 · 已包含完整輸入/)).toBeTruthy()
-  expect(document.body.textContent).not.toMatch(/iVBOR|fixture-signature|controlled replayed plan/)
+  expect(screen.getByRole('button',{name:'上下文容量'}).textContent).toBe('—')
+  expect(screen.queryByRole('progressbar')).toBeNull()
+  expect(document.body.textContent).not.toMatch(/NaN|Infinity|iVBOR|fixture-signature|controlled replayed plan/)
+  expect(JSON.stringify(state)).not.toContain('estimatedInputTokens')
 })
 
 it.each(["accepted", "provider"])("keeps %s facts without a healthy gauge", async kind => {

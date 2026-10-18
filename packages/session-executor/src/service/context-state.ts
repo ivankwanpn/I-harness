@@ -1,5 +1,5 @@
 import { readContextCoordinates } from "@i-harness/context-engine"
-import { contextStateFromBudget, deriveContextBudget, deriveContextRecovery, type ContextBindingMetadata, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
+import { contextStateFromBudget, contextStateFromObservation, deriveContextBudget, deriveContextRecovery, type ContextBindingMetadata, type SessionView as Session, type SessionContextState } from "@i-harness/core-session"
 
 interface ContextStateReaders<Meta> {
   assertOpen(): void
@@ -28,6 +28,10 @@ export function createContextStateReader<Meta>(readers: ContextStateReaders<Meta
     if (live) return live
     const saved = session && deriveContextBudget(session, sessionId)
     if (!saved) return { kind: "unavailable", reason: "No saved prepared budget is available" }
+    if (saved.version === 2) {
+      const recovery = deriveContextRecovery(session, sessionId, metadata ?? saved)
+      return contextStateFromObservation({ ...saved, freshness: saved.freshness === 'current' ? 'stale' : saved.freshness, ...(recovery && recovery.state !== 'resolved' ? { recoveryRequired: true, fullByProvider: true } : {}) })
+    }
     const coordinates = readContextCoordinates(session, { ownerSessionId: sessionId })
     const identity = saved.requestContext
     const sameCoordinates = coordinates.kind === "available" && identity !== undefined

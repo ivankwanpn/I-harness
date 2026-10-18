@@ -97,8 +97,8 @@ export async function assembleChild(
     // is read by core-agent at each step, including for this existing child.
     // M74 (final review) / M75: when the child's surface exceeds the window,
     // the summarizer's single request — the whole inherited surface plus the
-    // directive, prompt and schemas, with `clampOutputCap` returning the raw cap
-    // exactly when the input already fills the window — is one a strict
+    // directive, prompt and schemas, retaining the actual required output floor
+    // when no legal derivative fits — is one a strict
     // provider rejects. M75 answers that with CHAINED PIECES: whenever the
     // request cannot fit and the region can be sliced (the gate wants all four
     // — a region, a request shape, a resolved cap, a window — and a child

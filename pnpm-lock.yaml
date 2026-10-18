@@ -718,6 +718,9 @@ importers:
 
   packages/guard-approval:
     dependencies:
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-agent':
         specifier: workspace:*
         version: link:../core-agent
@@ -1074,6 +1077,9 @@ importers:
 
   packages/provider-runtime:
     dependencies:
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/coding-plans':
         specifier: workspace:*
         version: link:../coding-plans
@@ -1410,6 +1416,9 @@ importers:
 
   packages/session-title:
     dependencies:
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session

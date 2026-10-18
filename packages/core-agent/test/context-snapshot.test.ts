@@ -73,7 +73,8 @@ it("samples one request surface and preserves measured identity/binding after ac
   expect(last.snapshot.neutralFingerprint).toBe(initial.snapshot.neutralFingerprint)
   expect(last.snapshot.bindingConfigFingerprint).toBe("a".repeat(64))
   expect(session.events.find(event => event.type === "context/usage")).toMatchObject({ version: 2, checkpoint: { request: { executionEpochId: "fixture-E", snapshot: { surfaceRevision: initial.snapshot.requestContext!.surfaceRevision } } } })
-  expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", admissionInputTokens: initial.snapshot.admissionInputTokens, requestContext: initial.snapshot.requestContext } })
+  if (initial.version !== 2 || initial.snapshot.estimate.kind !== 'estimated') throw Error('current estimate required')
+  expect(agent.contextBudget!()).toMatchObject({ kind: "ready", observation: { version: 2, estimate: { value: initial.snapshot.estimate.value }, freshness: 'awaiting-projection', requestContext: initial.snapshot.requestContext } })
   expect(requests).toHaveLength(1)
 })
 
@@ -155,12 +156,12 @@ it("does not restore a historical read to fit when a changed surface is restored
   try {
     await entered.promise
     const initial = agent.contextBudget!()
-    expect(initial).toMatchObject({ kind: "ready", snapshot: { admission: "fit" } })
+    expect(initial).toMatchObject({ kind: "ready", observation: { disposition: 'compatibility', freshness: 'current' } })
     prompt = "changed"
-    expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+    expect(agent.contextBudget!()).toMatchObject({ kind: "ready", observation: { freshness: 'stale' } })
     prompt = "original"
     const restored = agent.contextBudget!()
-    expect(restored).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+    expect(restored).toMatchObject({ kind: "ready", observation: { freshness: 'stale' } })
     expect(restored.kind === "ready" && restored.snapshot.requestContext).toEqual(initial.kind === "ready" && initial.snapshot.requestContext)
     expect(preparations).toBe(1); expect(transports).toBe(0)
     release.resolve(); await running

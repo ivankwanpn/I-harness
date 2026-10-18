@@ -21,7 +21,7 @@ function fixture(global: boolean, policies: Record<string, { auto: boolean }>, h
   })
   const metadata = () => ({ version: 1 as const, providerId: "fixture", modelId: target, protocol: "openai-compatible", contextWindow: 20000, identityCoverage: "partial" as const })
   let identity = {}
-  const binding = (): ModelContextBindingDescriptor => ({ identity, contextWindow: 20000, maxOutputTokens:13000, contextMetadata: metadata() })
+  const binding = (): ModelContextBindingDescriptor => ({ identity, contextWindow: 20000, maxOutputTokens:15750, contextMetadata: metadata() })
   const model = { prepare: (request: Parameters<NonNullable<ReturnType<typeof createOpenAICompatibleClient>["prepare"]>>[0]) => createOpenAICompatibleClient({ apiKey: "controlled", model: target }).prepare!(request),
     stream: (request: Parameters<ReturnType<typeof createOpenAICompatibleClient>["stream"]>[0]) => createOpenAICompatibleClient({ apiKey: "controlled", model: target }).stream(request) }
   const compact = { contextWindow: 20000, thresholdRatio: .8, auto: global, modelPolicies: policies, minTurnsBeforeRecompact: 0 }

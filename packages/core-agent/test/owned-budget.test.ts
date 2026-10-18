@@ -35,7 +35,7 @@ it('keeps accepted calibration, execution observation and installed facts throug
   expect(installed.calibrated).toBe(true)
   const before = context.ownedBudget.read(), events = JSON.stringify(session.events)
   const invalid: PreparedModelRequest = { ...final, validation: { version: 1, route: 'anthropic-messages', contract: 'anthropic-v1', status: 'invalid', coverage: 'final-protocol', native: 'absent', issues: [{ rule: 'output-range', site: 'generation' }], gaps: [], omittedIssueCount: 0 } }
-  const provisional: PreparedModelRequest = { ...final, measurement: { ...final.measurement, input: { ...final.measurement.input, modelId: 'hypothetical' } }, withOutputCap: () => invalid }
+  const provisional: PreparedModelRequest = { ...final, measurement: { ...final.measurement, output:{...final.measurement.output,effectiveCap:128000}, input: { ...final.measurement.input, modelId: 'hypothetical' } }, withOutputCap: () => invalid }
   const hypothetical = { ...current, executionIdentity: { ...fixtureExecutionIdentity, bindingLifetimeId: 'another-lifetime' } }
   expect(() => context.ownedBudget.assess(provisional, hypothetical, 20000)).toThrow()
   expect(context.ownedBudget.read()).toEqual(before)
@@ -65,7 +65,7 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
     })())
   } })
   const deps: AgentDeps & AgentConfig = { session, tools, model: client(), systemPrompt: () => prompt, reasoningEffort: "high",
-    budgetBinding: { version: 1, metadata: { version: 1, modelId: "m", protocol: "anthropic-messages", identityCoverage: "partial" }, limits: { contextTokens: { value: 200000, origin: "profile", sourceId: "profile-v1" } }, generation: { origin: "unspecified" }, capability: { version: 1, route: "anthropic-messages", evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required", packetKind: "http-json-body" } },
+    budgetBinding: { version: 1, metadata: { version: 1, modelId: "m", protocol: "anthropic-messages", identityCoverage: "partial" }, limits: { contextTokens: { value: 200000, origin: "profile", sourceId: "profile-v1" } }, generation: { origin: "unspecified" }, capability: { version: 1, route: "anthropic-messages", evidenceId: "adapter-budget-v1:anthropic-messages", outputParameter: "required", packetKind: "http-json-body" }, capacityDomain: { kind: 'known', value: 'shared-context', sourceId: 'fixture-shared-capacity' } },
     modelBindingIdentity: () => identity, budget: { contextWindow: 200000 }, maxOutputTokens: 2048,
     stepInputs: { claimAtStepBoundary() { claims++ } } }
   let effort = deps.reasoningEffort, cap = deps.maxOutputTokens, currentClient = deps.model
@@ -78,8 +78,8 @@ it.each(["prompt", "schema", "effort", "max-output", "concrete-binding", "client
   try {
     await entered.promise
     const before = agent.contextBudget!()
-    expect(before.kind === "ready" && before.snapshot.admission).toBe("fit")
-    expect((await tools.execute({ name: "get_context_remaining", args: {} })).output).toMatchObject({ kind: "ready", percentage: expect.any(Number) })
+    expect(before).toMatchObject({ kind: 'ready', observation: { disposition: 'compatibility', freshness: 'current', pressure: { kind: 'known', hardFits: true } } })
+    expect((await tools.execute({ name: "get_context_remaining", args: {} })).output).toMatchObject({ kind: "unavailable", observation: { disposition: 'compatibility' } })
     if (mutation === "prompt") prompt = "changed system"
     if (mutation === "schema") tools.register({ name: "new_catalogue_tool", description: "changed catalogue", inputSchema: { type: "object" }, isReadOnly: true, async execute() { return "ok" } })
     if (mutation === "effort") deps.reasoningEffort = "off"
@@ -159,7 +159,8 @@ it("rebuilds descriptor evidence changed during held preparation and keeps local
   expect(preparations).toBe(2); expect(transports).toBe(1); expect(hooks).toBe(1); expect(claims).toBe(1)
   expect(caps).toEqual([1024]); expect(budgetBinding.generation.outputCap.value).toBe(8000)
   const events = session.events.filter(event => event.type.startsWith("context/"))
-  expect(JSON.stringify(events)).not.toMatch(/budgetBinding|profile-revised-v1|adapter-budget-v1/)
+  expect(JSON.stringify(events)).not.toMatch(/budgetBinding|adapter-budget-v1/)
+  expect(events.find(event=>event.type==='context/budget'&&event.version===2)).toMatchObject({snapshot:{dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',state:'unchecked',limit:200000,sourceId:'profile-revised-v1'})])}})
   for (const event of events) expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(4096)
 })
 

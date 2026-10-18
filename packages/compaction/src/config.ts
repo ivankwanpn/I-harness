@@ -1,5 +1,6 @@
 import type { ModelClient, ReasoningEffort } from "@i-harness/llm-seam"
 import type { ContextBindingMetadata } from "@i-harness/core-session"
+import { resolvePressureRatios } from '@i-harness/context-engine'
 
 // M33 §3: model-free prune pass options. `false` (explicit) turns the whole
 // pass off; the defaults are the recommended carving (aligned with the
@@ -19,6 +20,9 @@ export interface PruneConfig {
 // an absent field keeps the global value.
 export interface ModelCompactionPolicy {
   thresholdRatio?: number
+  targetRatio?: number
+  minTurnsBeforeRecompact?: number
+  minExchangesBeforeRecompact?: number
   retainTokens?: number
   maxTokens?: number
   summaryMaxOutputTokens?: number
@@ -33,6 +37,8 @@ export interface ModelCompactionPolicy {
 export interface CompactionConfig {
   contextWindow: number
   thresholdRatio?: number
+  targetRatio?: number
+  minExchangesBeforeRecompact?: number
   retainTokens?: number
   maxTokens?: number
   /** Independent summary wire ceiling; maxTokens remains retained text size. */
@@ -99,6 +105,8 @@ export interface ResolvedPruneConfig {
 export interface ResolvedCompactionConfig {
   contextWindow: number
   thresholdRatio: number
+  targetRatio: number
+  cooldown: { mode: 'accepted-exchanges' | 'human-turns'; minimum: number }
   retainTokens: number
   maxTokens: number
   summaryMaxOutputTokens: number
@@ -125,6 +133,7 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   if (!(thresholdRatio > 0 && thresholdRatio <= 1)) {
     throw new Error(`compaction: thresholdRatio must be in (0, 1] (got ${thresholdRatio})`)
   }
+  const { targetRatio } = resolvePressureRatios(thresholdRatio, config.targetRatio)
   const retainTokens = config.retainTokens ?? 0
   if (!Number.isInteger(retainTokens) || retainTokens < 0) {
     throw new Error(`compaction: retainTokens must be a non-negative integer (got ${retainTokens})`)
@@ -146,6 +155,9 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   if (!Number.isInteger(overheadTokens) || overheadTokens < 0) {
     throw new Error(`compaction: overheadTokens must be a non-negative integer (got ${overheadTokens})`)
   }
+  if (config.minTurnsBeforeRecompact !== undefined && config.minExchangesBeforeRecompact !== undefined) throw new Error('compaction: conflicting cooldown controls')
+  const minExchangesBeforeRecompact = config.minExchangesBeforeRecompact ?? 3
+  if (!Number.isSafeInteger(minExchangesBeforeRecompact) || minExchangesBeforeRecompact < 0) throw new Error('compaction: exchange cooldown must be a non-negative safe integer')
   const minTurnsBeforeRecompact = config.minTurnsBeforeRecompact ?? 3
   if (!Number.isInteger(minTurnsBeforeRecompact) || minTurnsBeforeRecompact < 0) {
     throw new Error(`compaction: minTurnsBeforeRecompact must be a non-negative integer (got ${minTurnsBeforeRecompact})`)
@@ -162,6 +174,8 @@ export function resolveConfig(config: CompactionConfig): ResolvedCompactionConfi
   return {
     contextWindow: config.contextWindow,
     thresholdRatio,
+    targetRatio,
+    cooldown: config.minTurnsBeforeRecompact !== undefined ? { mode: 'human-turns', minimum: minTurnsBeforeRecompact } : { mode: 'accepted-exchanges', minimum: minExchangesBeforeRecompact },
     retainTokens,
     maxTokens,
     summaryMaxOutputTokens,
@@ -210,9 +224,13 @@ export function resolveCompactSpec(
     ? config.modelPolicies?.[`${provider}/${modelId}`]
     : undefined
   if (policy === undefined) return resolveConfig(config)
+  if (policy.minTurnsBeforeRecompact !== undefined && policy.minExchangesBeforeRecompact !== undefined) throw new Error('compaction: conflicting model cooldown controls')
   return resolveConfig({
     ...config,
     thresholdRatio: policy.thresholdRatio ?? config.thresholdRatio,
+    targetRatio: policy.targetRatio ?? config.targetRatio,
+    minTurnsBeforeRecompact: policy.minExchangesBeforeRecompact !== undefined ? undefined : policy.minTurnsBeforeRecompact ?? config.minTurnsBeforeRecompact,
+    minExchangesBeforeRecompact: policy.minTurnsBeforeRecompact !== undefined ? undefined : policy.minExchangesBeforeRecompact ?? config.minExchangesBeforeRecompact,
     retainTokens: policy.retainTokens ?? config.retainTokens,
     maxTokens: policy.maxTokens ?? config.maxTokens,
     summaryMaxOutputTokens: policy.summaryMaxOutputTokens ?? config.summaryMaxOutputTokens,

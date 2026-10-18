@@ -1,6 +1,7 @@
 import type { CalibrationRetirementReason, ContextBindingMetadata, RequestBudgetSnapshot } from '@i-harness/core-session'
 import type { ProjectedInputFacts } from '@i-harness/token-meter'
-import type { PreparedModelRequest } from '@i-harness/llm-seam'
+import type { ModelBudgetBinding, PreparedModelRequest } from '@i-harness/llm-seam'
+import type { AdmissionPurpose, CapacityAssessment, Estimate } from './policy.ts'
 
 export interface ProjectionEstimate {
   readonly tokens: number
@@ -19,6 +20,10 @@ export interface LegacyPreparedAssessmentInput {
   readonly reserveRatio?: number
   readonly recoveryAuthorized?: boolean
   readonly selectOutputCap?: boolean
+  readonly budgetBinding?: ModelBudgetBinding
+  readonly purpose?: AdmissionPurpose
+  readonly triggerRatio?: number
+  readonly targetRatio?: number
 }
 export interface PreparedAssessmentReaders {
   /** Synchronous, read-only observations over this captured assessment. */
@@ -31,4 +36,6 @@ export interface LegacyPreparedAssessment {
   readonly capacityFit: 'yes' | 'no' | 'unavailable'
   readonly calibrated: boolean
   readonly disposition?: CalibrationRetirementReason
+  readonly decision: CapacityAssessment
+  readonly estimate: Estimate
 }

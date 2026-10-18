@@ -82,7 +82,7 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
     if (published.kind === 'recovery-required') return { ...block(result, 'publication-recovery-required'), publication: 'recovery-required' }
     if (published.kind === 'not-issued') return block(result, 'publication-not-issued')
     result = applied(result, run.groups, rewrites, published.kind); tried.add(run.id); accepted = undefined
-    if (candidate.target === 'ready') return { ...result, outcome: 'ready' }
+    return { ...result, outcome: candidate.target === 'ready' ? 'ready' : 'reduced-over-target' }
   }
 }
 

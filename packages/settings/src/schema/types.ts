@@ -61,8 +61,9 @@ export interface SettingsModel {
    * override in the unified resolution chain — and since M72 Ⅱ the FIRST
    * source of the request's output cap (spec §1.1), so NOT display-only: the
    * resolved value travels down the chain into the request, where core-agent
-   * clamps it against the context window (`clampOutputCap` in llm-seam,
-   * applied at `packages/core-agent/src/index.ts`) before it is sent. */
+   * assesses the final request through ContextEngine and selects at most one
+   * fully validated output-cap derivative before it is sent. Catalog output
+   * ceilings without stored intent do not populate this request field. */
   maxTokens?: number
   /** The WIRE PROTOCOL for this model, overriding the route's. One endpoint can
    * serve different models on different protocols (the gateway case), and the

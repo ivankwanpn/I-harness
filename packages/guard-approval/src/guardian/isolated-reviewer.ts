@@ -1,7 +1,8 @@
 import type { GuardianRequest } from "@i-harness/core-tools"
 import { isNondurableSession, type SessionView as Session } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
-import { clampOutputCap, prepareModelRequest, generationError, type AuxiliaryGenerationAction, type LLMMessage } from "@i-harness/llm-seam"
+import { prepareModelRequest, generationError, type AuxiliaryGenerationAction, type LLMMessage } from "@i-harness/llm-seam"
+import { assessPreparedCapacity } from '@i-harness/context-engine'
 import { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./verdict.ts"
 import { BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, renderGuardianMessage, renderRecentContext, type GuardianReviewDeps, type GuardianReviewVerdict } from "./reviewer.ts"
 import { createIsolatedReviewerPool, type IsolatedReviewerPool, type ReviewerContextLease } from "./reviewer-pool.ts"
@@ -47,6 +48,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       let model = deps.model ?? deps.parentModel
       let contextWindow = deps.model === undefined ? deps.contextWindow : undefined
       let maxOutputTokens = deps.model === undefined ? deps.maxOutputTokens : undefined
+      let budgetBinding = deps.model === undefined ? deps.budgetBinding : undefined
       let reasoningEffort: import("@i-harness/llm-seam").ReasoningEffort | undefined
       const selection = deps.model === undefined ? deps.roleSelectionFor?.("reviewer") : undefined
       if (selection) {
@@ -59,6 +61,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
         model = binding.client
         contextWindow = binding.contextWindow
         maxOutputTokens = binding.maxOutputTokens
+        budgetBinding = binding.budgetBinding
         reasoningEffort = binding.reasoningEffort
         identity = binding.identity
       } else if (selection) {
@@ -67,6 +70,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
         model = resolved.binding.client
         contextWindow = resolved.binding.contextWindow
         maxOutputTokens = resolved.binding.maxOutputTokens
+        budgetBinding = resolved.binding.budgetBinding
         reasoningEffort = resolved.binding.reasoningEffort
       }
       controller.signal.throwIfAborted()
@@ -88,18 +92,18 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
         lease = poolFor(deps.isolated).acquire(key)
       }
       const history = lease?.messages ?? []
-      const estimate = () => Math.ceil((systemPrompt.length + prompt.length + history.reduce((sum, message) => sum + message.content.length, 0)) / 4) + (history.length + 1) * 16
-      while (history.length && contextWindow !== undefined && contextWindow < estimate() + 256) history.splice(0, 2)
-      const inputEstimate = estimate()
-      if (contextWindow !== undefined && contextWindow <= inputEstimate) throw new Error("Reviewer context window is too small for the approval request")
       onModel?.(identity, history.length > 0)
       let text = ""
       let ended = false
-      const prepared = await prepareModelRequest(model, {
+      const prepare = async () => assessPreparedCapacity(await prepareModelRequest(model, {
         systemPrompt, messages: [...history, { role: "user", content: prompt }] as LLMMessage[], tools: [],
-        maxOutputTokens: clampOutputCap(Math.min(maxOutputTokens ?? 2048, 2048), contextWindow, inputEstimate),
+        maxOutputTokens: Math.min(maxOutputTokens ?? 2048, 2048),
         ...(reasoningEffort !== undefined ? { reasoningEffort } : {}), signal: controller.signal,
-      })
+      }), { purpose: 'approval', binding: budgetBinding, contextWindow, outputPreference: Math.min(maxOutputTokens ?? 2048, 2048) })
+      let assessed = await prepare()
+      while (assessed.decision.disposition === 'reduce' && history.length) { history.splice(0, 2); assessed = await prepare() }
+      if (assessed.decision.disposition === 'reduce' || assessed.decision.disposition === 'blocked') throw new Error('Reviewer context window is too small for the approval request')
+      const prepared = assessed.prepared
       await generation?.bind(prepared)
       for await (const event of prepared.stream(generation ? { generation: generation.control } : undefined)) {
         controller.signal.throwIfAborted()

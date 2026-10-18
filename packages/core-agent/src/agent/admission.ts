@@ -24,8 +24,9 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const initial = await prepareModelRequest(captured.model, request)
       abort?.throwIfAborted()
       if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
-      const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.ownedBudget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized, selectOutputCap)
+      const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.ownedBudget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized, selectOutputCap, context.pressurePolicy, deps.sharedBudget ? 'approval' : authorized ? 'recovery' : 'main')
       const assessed = assess()
+      if (assessed.decision.disposition === 'blocked') throw new Error(assessed.snapshot.coverage === 'incomplete' ? assessed.snapshot.reason : `Prepared request admission blocked: ${assessed.decision.reason}`)
       await deps.generationAction?.bind(assessed.prepared)
       await deps.sharedBudget?.bind(assessed.prepared)
       const recoveryAdmission = await recovery.admit(assessed.prepared.measurement, state, abort)
@@ -34,11 +35,12 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const finalAssessment = recoveryAdmission === "authorized"
         ? assess(true, assessed.prepared, false) : assessed
       const { prepared, snapshot } = finalAssessment
+      const needsReduction = finalAssessment.decision.disposition === 'reduce' || snapshot.recoveryRequired && recoveryAdmission !== 'authorized'
       if (current() && finalAssessment.disposition) context.ownedBudget.retire(finalAssessment.disposition)
       deps.telemetry?.emit({ type: "provider/context", ts: Date.now(), data: {
         systemBytes: prepared.measurement.input.components.system.textUtf8Bytes,
         schemaBytes: prepared.measurement.input.components.toolSchemas.structuredBytes,
-        estimatedInputTokens: snapshot.admissionInputTokens, estimateSource: snapshot.estimateSource, coverage: snapshot.coverage,
+        ...(finalAssessment.estimate.kind === 'estimated' ? { estimatedInputTokens: finalAssessment.estimate.value, estimateSource: finalAssessment.estimate.source } : { tokenEstimateUnavailable: finalAssessment.estimate.reason }), coverage: snapshot.coverage,
         reasoningTokens: snapshot.reasoningTokens, outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport,
       } })
       if (snapshot.coverage === "incomplete") throw new Error(snapshot.reason)
@@ -50,7 +52,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         checkpointed = true
       }
       const automatic = deps.autoCompactionEnabled?.() ?? context.compactEnabled
-      if (context.compactor && recoveryAdmission !== "authorized" && (snapshot.admission === "compact" || automatic)) {
+      if (context.compactor && recoveryAdmission !== "authorized" && (needsReduction || automatic)) {
         // This pass may invoke a summary model. Its preceding budget fact must
         // have passed the same durable barrier as a main transport.
         await checkpoint()
@@ -58,7 +60,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         state.compacted = true
         let result
         try {
-          result = snapshot.admission === "compact" ? await context.compactor.compact(deps.session, undefined, { signal: abort, attempts })
+          result = needsReduction ? await context.compactor.compact(deps.session, undefined, { signal: abort, attempts })
             : automatic ? await context.compactor.maybeCompact(deps.session, { signal: abort, attempts }) : undefined
         } catch (error) {
           if ((error as { code?: string })?.code !== "CONTEXT_INPUT_STALE") throw error
@@ -71,7 +73,7 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         if (result?.compacted) continue
         if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       }
-      if (snapshot.admission === "compact") throw new Error(`prompt_too_long: prepared context cannot fit the owned window (${snapshot.admissionInputTokens} input tokens; ${snapshot.outputReserve} output reserve)`)
+      if (needsReduction) throw new Error(`prompt_too_long: prepared context cannot fit the owned window (${snapshot.admissionInputTokens} input tokens; ${snapshot.outputReserve} output reserve)`)
       // Legacy custom clients with no host window remain source-compatible and
       // explicitly neutral-only/unavailable. No window is invented.
       if (!checkpointed) await checkpoint()

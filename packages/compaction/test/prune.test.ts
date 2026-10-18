@@ -1,4 +1,6 @@
-import { expect,it } from 'vitest'
+import { expect,it,vi,afterEach } from 'vitest'
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+afterEach(()=>vi.unstubAllGlobals())
 import { createSession,deriveMessages } from '@i-harness/core-session'
 import { createCompactionHarness } from './fixtures/engine.ts'
 import { closedExchange,spyModel,autoConfig,autoCap } from './fixtures/history.ts'
@@ -6,12 +8,20 @@ import { prepareTextFixture } from './fixtures/checkpoint.ts'
 import type { TelemetryEvent } from '@i-harness/telemetry'
 const config={...autoConfig,prune:{thresholdChars:1000,headChars:100,tailChars:100}}
 function source(assistantChars=0){const session=createSession();closedExchange(session,'old',assistantChars,true);const result=session.events.find(event=>event.type==='tool/result')!;if(result.type==='tool/result')result.output='HEAD '+ 'raw-selected-output '.repeat(1000)+' EXACT-END';closedExchange(session,'tail',20);return session}
+it('a token target cannot certify ready when the final candidate still exceeds its independent HTTP body limit',async()=>{
+ let sends=0;vi.stubGlobal('fetch',()=>{sends++;throw Error('network denied')})
+ const session=source(),before=session.events.slice(),model=createOpenAICompatibleClient({apiKey:'synthetic',model:'fixture',baseUrl:'https://body.fixture.invalid'})
+ const result=await createCompactionHarness({model,config:{...config,contextWindow:100000},maxOutputTokens:1000,requestShape:()=>({systemPrompt:'fixed policy '.repeat(200),tools:[]}),
+  budgetBinding:{version:1,metadata:{version:1,modelId:'fixture',protocol:'openai-compatible',identityCoverage:'partial'},limits:{bodyBytes:{value:100,origin:'explicit-route',sourceId:'fixture-body-limit'}},generation:{origin:'configured'},capability:{version:1,route:'openai-compatible',evidenceId:'fixture',outputParameter:'optional',packetKind:'http-json-body'}}}).compact(session)
+ expect(result.compacted).toBe(false);expect(result.outcome).toBe('blocked');expect(result.publication).toBe('none')
+ expect(session.events).toEqual(before);expect(sends).toBe(0)
+})
 it('publishes prune-only only after actual main target readiness and strict progress',async()=>{
   const session=source(),before=session.events.slice(),f=spyModel(),events:TelemetryEvent[]=[]
   const result=await createCompactionHarness({model:f.model,config,maxOutputTokens:autoCap,telemetry:{emit(event){events.push(event)},close(){}}}).maybeCompact(session)
   expect(result).toMatchObject({compacted:true,pruned:true,outcome:'ready',publication:'nondurable',shadowedSeqs:[]})
   expect(f.requests).toEqual([]);expect(session.events.slice(0,before.length)).toEqual(before)
-  expect(session.events.at(-1)?.type).toBe('compaction/prune')
+  expect(session.events.at(-1)).toMatchObject({type:'context/soft-reduction',op:'terminal',outcome:'target-ready'})
   expect(JSON.stringify(deriveMessages(session))).toContain('pruned')
   expect(events.filter(event=>event.type==='compaction/attempt')).toMatchObject([{data:{outcome:'prune-only',outcomeState:'ready',publication:'nondurable',pruned:1,attempts:0}}])
 })

@@ -25,7 +25,7 @@ it("enforces the next step budget using completed cache-inclusive usage instead 
   expect(requests).toHaveLength(1)
 })
 
-it("clears a previous usage anchor when the model binding context is updated", async () => {
+it("an identical policy update preserves a real usage anchor and cannot bypass its overflow", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let calls = 0
   const model: ModelClient = { async *stream() {
@@ -36,8 +36,8 @@ it("clears a previous usage anchor when the model binding context is updated", a
   const agent = createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
   await agent.run("first")
   agent.updateContext!({ budget: { contextWindow: 1000, resetWindow: false } })
-  await agent.followup!("new model")
-  expect(calls).toBe(2)
+  await expect(agent.followup!("new model")).rejects.toThrow(/prompt_too_long/)
+  expect(calls).toBe(1)
 })
 
 it("reports component bytes and a measured cache ratio separately from raw provider counters", async () => {

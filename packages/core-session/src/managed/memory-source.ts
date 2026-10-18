@@ -5,6 +5,7 @@ import { validSettlementEvent, type SettlementEventKind } from './settlement-eve
 import { captureMemoryFact, rejectedMemoryCapture } from './memory-capture.ts'
 import { validGenerationEvent } from '../events/generation.ts'
 import { validInputPreparationEvent } from '../events/input-preparation.ts'
+import { validSoftTerminalDraft } from '../events/soft-reduction.ts'
 
 /** Required standalone outcomes share the closed constructors and local source
  * lifetime, while remaining explicitly nondurable. */
@@ -30,6 +31,10 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
     return validSettlementEvent(kind, event) ? captureMemoryFact(session, draft, assertHeld) : rejectedMemoryCapture()
   }
   return {
+    softReduction: { capture(event) {
+      assertHeld()
+      return validSoftTerminalDraft(event) && event.publication === 'none' ? captureMemoryFact(session, { kind: 'soft-reduction', event }, assertHeld) : rejectedMemoryCapture()
+    } },
     inputPreparation: { capture(event) {
       assertHeld()
       return validInputPreparationEvent(event) && (event.op === 'completed' || event.op === 'failed')

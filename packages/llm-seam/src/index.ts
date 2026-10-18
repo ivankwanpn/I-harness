@@ -395,19 +395,6 @@ export class SSEParseError extends Error {
 }
 
 /**
- * M72 Ⅱ: the margin `clampOutputCap` keeps between the input we estimate and
- * the window. Sampled from Pi's `clampMaxTokensToContext` (`context − estimated
- * input − 4096`): the request-level clamp exists so that sending a model's full
- * output ceiling cannot turn a request that would have run into a 400 —
- * Anthropic treats `input + max_tokens > context` as a validation error.
- *
- * NOT exported on purpose: this file is its only consumer, and the reachability
- * instrument reads a single-file export as an unconsumed one (one new row = a
- * red gate). The number is documented here and asserted by this package's tests.
- */
-const OUTPUT_CAP_SAFETY_MARGIN = 4096
-
-/**
  * M72 Ⅱ: what Anthropic gets when the chain resolves NOTHING. Its Messages API
  * lists `max_tokens` as required — today every such request is a 400 — so this
  * is the one adapter that must always send a number. The value is Anthropic's
@@ -423,36 +410,6 @@ const OUTPUT_CAP_SAFETY_MARGIN = 4096
  */
 export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
 
-/**
- * M72 Ⅱ: `min(value, room left in the window)`. Pure so every caller clamps the
- * same way; the host supplies the estimate because only the host knows how it
- * prices a message (this package deliberately owns no tokenizer).
- *
- * Three arms. No window known ⇒ the value is returned untouched. The estimated
- * input alone fills the window ⇒ ALSO untouched: the request cannot run at that
- * size whichever cap it carries, and clamping to 1 token would turn a context
- * overflow into a silent truncation. A non-finite estimate ⇒ ALSO untouched:
- * `NaN` would make every comparison false and `Math.min(value, NaN)` is `NaN`,
- * so a positive test on the room is what keeps a degenerate estimate from
- * turning into a `max_tokens: NaN` on the wire. Otherwise the value is clamped
- * into the hard room, preferring `hardRoom − margin` and falling back to the
- * hard room itself when the margin does not fit — the margin is insurance
- * against our estimate being low, never a licence to exceed the provider's rule.
- */
-export function clampOutputCap(value: number, contextWindow: number | undefined, estimatedInputTokens: number): number {
-  if (contextWindow === undefined) return value
-  // The provider's OWN rule is `input + max_tokens <= context` — the safety
-  // margin is insurance against our estimate being low, NOT a licence to exceed
-  // that rule. So the hard room is computed first and always honoured; the
-  // margin only decides how much of it we are willing to promise.
-  // A POSITIVE test (`hardRoom >= 1`), not `hardRoom < 1`: a non-finite
-  // estimate makes the room NaN, and `NaN < 1` is false — the negated form
-  // would let NaN fall through to `Math.min(value, NaN)`.
-  const hardRoom = contextWindow - estimatedInputTokens
-  if (!(hardRoom >= 1)) return value
-  const room = hardRoom - OUTPUT_CAP_SAFETY_MARGIN
-  return Math.min(value, room >= 1 ? room : hardRoom)
-}
 
 export type { PreparedModelRequest, PreparedStreamControl } from "./prepared/types.ts"
 export type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness/token-meter"

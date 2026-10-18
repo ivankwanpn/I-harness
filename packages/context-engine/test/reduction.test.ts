@@ -33,9 +33,6 @@ it('protects only active inputs and newest complete exchange in a fifty-step act
   expect(text).toHaveLength(49)
   expect(text).not.toContain('H'); expect(text).not.toContain('steer'); expect(text).not.toContain('older-44')
 })
-it.each([[6399, 'ready'], [6400, 'over-target'], [7399, 'over-target']] as const)('uses strict final-request boundary at I=%i', (input, expected) => {
-  expect(engine.reductionTarget({ capacityFit: 'yes', inputTokens: input, outputReserve: 600, contextWindow: 10000 }, {})).toBe(expected)
-})
 function assessment(input: number, target: ReductionAssessment['target'] = 'over-target'): ReductionAssessment {
   return { kind: 'assessed', capacityFit: 'yes', target, inputTokens: input, inputBytes: input, inputFingerprint: String(input), shape: 'same', currentView: 'view', fixedInput: false, proof: {} }
 }
@@ -50,7 +47,7 @@ it('skips an unhelpful oldest span and commits only the useful later proposal', 
   expect(await engine.reduceContext(ports, { retainTokens: 0 }, { attempts })).toMatchObject({ compacted: true, outcome: 'ready', publication: 'nondurable', summary: 'useful' })
   expect(observed).toEqual([['E1', 'E2'], ['E3', 'E4']]); expect(published).toHaveLength(1); expect(attempts.count).toBe(2)
 })
-it('retains committed progress when the next source is blocked and never certifies unknown publication', async () => {
+it('returns committed over-target progress without a second checkpoint and never certifies unknown publication', async () => {
   for (const publication of ['nondurable', 'recovery-required'] as const) {
     const { capture } = fixture(); let summaries = 0
     const ports: ContextReductionPorts = { capture, current: () => true,
@@ -59,7 +56,8 @@ it('retains committed progress when the next source is blocked and never certifi
       publish: async () => ({ kind: publication }),
     }
     expect(await engine.reduceContext(ports, {})).toMatchObject(publication === 'nondurable'
-      ? { compacted: true, outcome: 'blocked', publication: 'nondurable', blockedReason: 'call-limit' }
+      ? { compacted: true, outcome: 'reduced-over-target', publication: 'nondurable' }
       : { compacted: false, outcome: 'blocked', publication: 'recovery-required', blockedReason: 'publication-recovery-required' })
+    expect(summaries).toBe(1)
   }
 })

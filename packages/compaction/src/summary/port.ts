@@ -17,11 +17,12 @@ export const createSummaryPort: SummaryFactory = input => async source => {
   const binding = inherited ? input.budgetBinding : config.summaryBudgetBinding
   const metadata = inherited ? input.contextMetadata ?? binding?.metadata : config.summaryMetadata ?? binding?.metadata
   const limits: SummaryLimits = {
+    budgetBinding: binding,
     generation: input.generation,
     bindGeneration: input.bindGeneration,
     maxOutputTokens: config.summaryMaxOutputTokens, outputCapExplicit: config.summaryOutputCapExplicit,
     contextWindow: inherited ? metadata?.contextWindow ?? binding?.limits.contextTokens?.value ?? config.contextWindow : config.summaryLimits?.contextWindow ?? metadata?.contextWindow ?? binding?.limits.contextTokens?.value,
-    modelMaxOutputTokens: inherited ? metadata?.maxOutputTokens ?? input.maxOutputTokens ?? binding?.generation.outputCap?.value : config.summaryLimits?.maxOutputTokens ?? metadata?.maxOutputTokens ?? binding?.generation.outputCap?.value,
+    modelMaxOutputTokens: inherited ? binding?.limits.outputTokens?.value : config.summaryLimits?.maxOutputTokens ?? binding?.limits.outputTokens?.value,
     reasoningEffort: inherited ? input.reasoningEffort : config.summaryReasoningEffort, metadata,
     signal: source.signal, beforeTransport: input.flush,
     onUsage: (usage: import('@i-harness/llm-seam').LLMUsage) => input.telemetry?.emit({ type: 'compaction/usage', ts: Date.now(), data: { ...usage } }),

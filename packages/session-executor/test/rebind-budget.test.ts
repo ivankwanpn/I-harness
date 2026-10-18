@@ -32,14 +32,14 @@ it("switches the live output cap, compaction window and context tool together", 
     expect(await service.assemblyFor("s")).toBe(assembly)
     await service.submit("s", "continue", new AbortController().signal)
     expect(assembly.session.events.some(e => e.type === "compaction/replacement")).toBe(true)
-    expect(requests.every(r => r.maxOutputTokens !== undefined && r.maxOutputTokens <= 777)).toBe(true)
+    expect(requests.every(r => r.maxOutputTokens !== undefined && r.maxOutputTokens <= (String(r.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? 4096 : 777))).toBe(true)
     const summaryRequests = requests.filter(request => String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine"))
     // The oldest tiny run is tried once without progress; the later complete
     // groups then partition into two useful checkpoints under the same bound.
     expect(summaryRequests).toHaveLength(3)
     expect(summaryRequests[0]!.messages.slice(0, -1).map(message => message.content)).toEqual(["first"])
     expect(summaryRequests.flatMap(request => request.messages).reduce((sum, message) => sum + (typeof message.content === "string" && /^x+$/.test(message.content) ? message.content.length : 0), 0)).toBe(170000)
-    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ window: 50000 }) }))
+    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ kind:'unavailable', observation:expect.objectContaining({pressure:expect.objectContaining({inputBudget:44223}),dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',limit:50000})])}) }) }))
   } finally { await service.close() }
 })
 

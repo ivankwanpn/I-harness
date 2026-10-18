@@ -1,5 +1,6 @@
 import type { SessionView as Session } from "../managed/types.ts"
 import { validContextEvent, type ContextRecoveryFacts, type RequestBudgetSnapshot } from "../events/context.ts"
+import type { RequestBudgetSnapshotV2 } from '../events/admission.ts'
 
 export function deriveContextRecovery(session: Session, ownerSessionId: string, binding?: { providerId?: string; modelId: string; protocol: string }): ContextRecoveryFacts | undefined {
   let current: ContextRecoveryFacts | undefined
@@ -34,8 +35,8 @@ export function deriveContextRecovery(session: Session, ownerSessionId: string, 
   }
   return current
 }
-export function deriveContextBudget(session: Session, ownerSessionId: string): RequestBudgetSnapshot | undefined {
-  let current: RequestBudgetSnapshot | undefined
+export function deriveContextBudget(session: Session, ownerSessionId: string): RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined {
+  let current: RequestBudgetSnapshot | RequestBudgetSnapshotV2 | undefined
   for (const event of session.events) if (event.type === "context/budget" && event.snapshot.ownerSessionId === ownerSessionId && validContextEvent(event)) current = event.snapshot
   return current
 }

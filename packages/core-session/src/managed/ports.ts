@@ -48,6 +48,7 @@ export interface FactPorts<Outcome = FactOutcome> {
   delivery: DeliveryFacts<Outcome>; metadata: MetadataFacts<Outcome>; compaction: LegacyCompactionFacts<Outcome>
 }
 export interface SettlementFacts<Outcome = FactOutcome> {
+  softReduction: { capture(event: import('../events/soft-reduction.ts').SoftReductionTerminalDraft): CapturedSettlementFact<Outcome> }
   inputPreparation: { capture(event: Extract<InputPreparationEvent, { op: 'completed' | 'failed' }>): CapturedSettlementFact<Outcome> }
   generation: { capture(event: Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>): CapturedSettlementFact<Outcome> }
   assertHeld(): void
@@ -80,6 +81,7 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
+  captureSoftReduction(event: import('../events/soft-reduction.ts').SoftReductionStart, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   /** Frozen diagnostics from the real writer; these scalars grant no authority. */
   readonly owner?: Readonly<import('./types.ts').OwnerToken>
   captureInputPromotion(draft: import('./groups.ts').InputPromotionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>

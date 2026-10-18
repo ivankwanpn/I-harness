@@ -8,7 +8,7 @@ it('auto publishes one positional replacement and truthfully certifies the full 
   const session = history(20, 400), model = spyModel()
   const result = await createCompactionHarness({ model: model.model, config: autoConfig, maxOutputTokens: autoCap }).maybeCompact(session)
   expect(result).toMatchObject({ compacted: true, outcome: 'ready', publication: 'nondurable', summary: checkpointOfLength(600) })
-  expect(session.events.at(-1)?.type).toBe('compaction/replacement')
+  expect(session.events.at(-1)).toMatchObject({ type: 'context/soft-reduction', op: 'terminal', outcome: 'target-ready', publication: 'committed' })
   expect(session.events.filter(event => event.type.startsWith('compaction/'))).toHaveLength(1)
   expect(deriveMessages(session).map(message => message.content)).toEqual([checkpointOfLength(600)])
   expect(model.requests).toHaveLength(1)

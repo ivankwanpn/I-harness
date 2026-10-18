@@ -52,7 +52,7 @@ it('publishes an atomic source-order frame only after a scoped receipt and reope
     expect(result.seqs).toEqual([0])
     expect(document.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
     const lines = (await readFile(join(root, `${id}.jsonl`), 'utf8')).trimEnd().split('\n')
-    expect(JSON.parse(lines[0]!).formatVersion).toBe(8)
+    expect(JSON.parse(lines[0]!).formatVersion).toBe(9)
     expect(JSON.parse(lines[1]!)).toMatchObject({ recordKind: 'session/fact-batch', version: 1, firstSeq: 0, count: 1 })
     expect((await coordinator.snapshot!(id)).session.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
   } finally { await coordinator.close() }

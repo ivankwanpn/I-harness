@@ -313,7 +313,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         const state = await runtime.resolveModel(chosen ? { sessionSelection: chosen } : {})
         if (state.status !== "ready") throw new Error(state.reason)
         const after = await fingerprint()
-        return { client: usageCapture.bind(state.binding.client, sessionId), contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens,
+        return { client: usageCapture.bind(state.binding.client, sessionId), contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens, budgetBinding: state.binding.budgetBinding,
           reasoningEffort: selection ? state.binding.reasoningEffort : undefined,
           identity: { provider: state.binding.providerId, model: state.binding.modelId, protocol: state.binding.protocol,
             ...(selection?.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}), ...(before === after ? { configurationKey: after } : {}) } }

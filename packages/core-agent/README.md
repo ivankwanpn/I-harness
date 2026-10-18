@@ -18,6 +18,22 @@ and recovery probes, and issues rewrites only through the narrow guarded
 scope. Ordinary agents without configured compaction retain their existing
 preparation path. See the compaction package README for the internal API migration.
 
+Every purpose uses ContextEngine's final prepared-candidate assessment. Main and
+recovery retain their own B2 calibration; summary, approval, title and media do
+not borrow that sample. `contextBudget()` retains a conservative legacy view
+alongside the closed v2 `observation`; new durable budget facts use version 2 in
+session format 9. Inspectors decode the scalar observation without preparing a
+request. Unknown capacity, token cost and protocol coverage remain explicit
+compatibility facts and do not expose a fabricated percentage or zero total.
+
+Automatic reduction records an own-session sequence start before summary work.
+Its terminal and consumed before/after representation keys publish in the same
+guarded group as the rewrite. The original source reconciles uncertain writes
+and required cancellation after Stop; it cannot issue another summary request.
+Default cooldown counts three accepted closed exchanges. Explicit
+`minTurnsBeforeRecompact` retains human-turn counting; the two modes conflict
+within a configuration layer. `targetRatio` must be lower than `thresholdRatio`.
+
 ## Agent ownership and lifetime
 
 | Module | Responsibility and state lifetime |
@@ -37,8 +53,9 @@ The agent resolves `requestSessionId` once at construction. Each turn receives
 its own turn ID, while `steps`, call IDs, reasoning and prefix history continue
 across followups. Startup getter order remains session ID, limits, budget
 validation, compactor/output preference initialization, then the persisted call
-ID seed. `updateContext` retains its busy guard, validation, meter invalidation
-and replacement order. Manual compaction participates in the same operation
+ID seed. `updateContext` retains its busy guard and validates selected policy
+before replacement. It invalidates admission freshness; B2 probes retain a
+compatible sample across policy-only changes. Manual compaction participates in the same operation
 accounting and remains independent of the automatic-compaction preference.
 
 At each step the turn controller checks cancellation and the cumulative limit,

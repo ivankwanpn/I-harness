@@ -52,9 +52,9 @@ it.each([true, false])("inherited followups capture their own descriptor; declar
   try {
     const mainRun = assembly.agent.run("main request")
     await mainEntered.promise
-    expect(assembly.agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "fit", modelId: "a" } })
+    expect(assembly.agent.contextBudget!()).toMatchObject({ kind: "ready", observation: { disposition: 'compatibility', freshness: 'current', modelId: "a" } })
     ;(parentA.limits.contextTokens as { sourceId: string }).sourceId = "main-revision-v2"
-    expect(assembly.agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+    expect(assembly.agent.contextBudget!()).toMatchObject({ kind: "ready", observation: { freshness: 'stale' } })
     mainRelease.resolve(); await mainRun
     for (const [task_name, agent_type] of [["inherited", "general"], ["declared", "independent"]]) {
       await assembly.tools.execute({ name: "spawn_agent", args: { task_name, agent_type, message: "first", background: true } })
@@ -69,18 +69,18 @@ it.each([true, false])("inherited followups capture their own descriptor; declar
     for (const session of sessions) {
       const owned = assembly.liveChildSession!(session.id)!
       const snapshot = deriveContextBudget(owned, session.id)!
-      expect(snapshot).toMatchObject({ ownerSessionId: session.id, modelId: session.path.endsWith("inherited") ? "b" : "c", contextWindow: session.path.endsWith("inherited") ? 50000 : 60000 })
+      expect(snapshot).toMatchObject({ version: 2, ownerSessionId: session.id, modelId: session.path.endsWith("inherited") ? "b" : "c", dimensions: expect.arrayContaining([expect.objectContaining({dimension:'context',limit:session.path.endsWith("inherited") ? 50000 : 60000})]) })
       expect(snapshot.ownerSessionId).not.toBe("parent")
     }
     // Descriptor-only mutation invalidates reads through actual child captures.
     ;(parentB.limits.contextTokens as { sourceId: string }).sourceId = "parent-revision-v2"
     for (const child of sessions) {
       const read = assembly.liveChildBudget!(child.id)
-      expect(read).toMatchObject({ kind: "ready", snapshot: { admission: child.path.endsWith("inherited") ? "unavailable" : "fit" } })
+      expect(read).toMatchObject({ kind: "ready", observation: { freshness: child.path.endsWith("inherited") ? "stale" : "current" } })
     }
     if (declaredEvidence) {
       ;(childC.limits.contextTokens as { sourceId: string }).sourceId = "child-revision-v2"
-      expect(assembly.liveChildBudget!(sessions.find(row => row.path.endsWith("declared"))!.id)).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable" } })
+      expect(assembly.liveChildBudget!(sessions.find(row => row.path.endsWith("declared"))!.id)).toMatchObject({ kind: "ready", observation: { freshness: 'stale' } })
     }
     expect(calls.filter(model => model === "a")).toHaveLength(2)
     expect(calls.filter(model => model === "b")).toHaveLength(1)

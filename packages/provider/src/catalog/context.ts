@@ -29,7 +29,7 @@ interface EffectiveContextInput {
 interface EffectiveModelContext {
   contextWindow?: number
   maxContextWindow?: number
-  /** Legacy selected generation cap (stored row > catalog). */
+  /** Configured generation intent; catalog output ceilings remain in limits. */
   maxOutputTokens?: number
 }
 
@@ -61,10 +61,10 @@ export function resolveEffectiveModelContextEvidence(input: EffectiveContextInpu
     : numeric(profile.maxContextWindow, "profile", "profile-v1")
   const outputTokens = numeric(card?.maxOutputTokens, "catalog", catalogSource)
   const configured = numeric(userModel?.maxTokens, "configured-model-row", "settings-model-row-v1")
-  const outputCap = configured ?? outputTokens
+  const outputCap = configured
   const limits: ModelLimits = { ...(contextTokens ? { contextTokens } : {}), ...(contextCeilingTokens ? { contextCeilingTokens } : {}), ...(outputTokens ? { outputTokens } : {}) }
-  if (!contextTokens && !contextCeilingTokens && !outputCap) return undefined
+  if (!contextTokens && !contextCeilingTokens && !outputCap && !outputTokens) return undefined
   return { contextWindow: contextTokens?.value, maxContextWindow: contextCeilingTokens?.value,
-    ...(card || configured ? { maxOutputTokens: outputCap?.value } : {}), limits,
+    ...(configured ? { maxOutputTokens: configured.value } : {}), limits,
     generation: { origin: configured ? "configured" : outputTokens ? "legacy-catalog-default" : "unspecified", ...(outputCap ? { outputCap } : {}) } }
 }

@@ -1,9 +1,9 @@
-import { isStrictFactData, validContextEvent, validContextReductionDraft, validGenerationEvent, validInputPreparationEvent, validInputPromotionDraft, type CapturedActionFact, type FactOutcome, type ManagedAction } from '@i-harness/core-session'
+import { isStrictFactData, validContextEvent, validContextReductionDraft, validGenerationEvent, validInputPreparationEvent, validInputPromotionDraft, validSoftReductionEvent, type CapturedActionFact, type FactOutcome, type ManagedAction } from '@i-harness/core-session'
 import { captureSettlementFact, retainSettlementCapture } from './settlement-fact.ts'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => ({
     admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe,
   })
@@ -17,6 +17,9 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
+    captureSoftReduction(event, checkCurrent) {
+      return validSoftReductionEvent(event) && event.op === 'start' && !Object.hasOwn(event, 'seq') ? actionHandle(captureSettlementFact({ kind: 'soft-reduction', event }, guarded(checkCurrent), true)) : invalidReduction()
+    },
     captureInputPromotion(draft, checkCurrent) {
       return validInputPromotionDraft(draft) ? actionHandle(captureSettlementFact(draft, guarded(checkCurrent), true)) : invalidReduction()
     },

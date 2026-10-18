@@ -6,6 +6,7 @@ import type { projectHistory } from './history/replacements.ts'
 import { createHistoryIndex } from './history/index.ts'
 import { createGenerationIndex, type GenerationHistoryScope } from './generation.ts'
 import { createInputPreparationIndex } from './input-preparation.ts'
+import { createSoftReductionIndex } from './soft-reduction.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
 
@@ -19,6 +20,7 @@ export interface ConversationValidationIndex {
   stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void; history(): ReturnType<typeof projectHistory> }
   history(throughSeq?: number): ReturnType<typeof projectHistory>
   replacementDependencies(): ReadonlyMap<number, ReadonlySet<number>>
+  softReduction(ownerSessionId: string): import('./soft-reduction.ts').SoftReductionState
 }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
@@ -41,6 +43,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength })
   const generation = createGenerationIndex(scope)
   const preparations = createInputPreparationIndex(scope)
+  const soft = createSoftReductionIndex(scope)
   let count = 0, revision = 0
   let fence: number | undefined, activeStep: number | undefined
   const verify = (seq: number, target: Address, readCurrent = read) => {
@@ -57,10 +60,12 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
     get semanticsStartSeq() { return fence },
     history: history.history,
     replacementDependencies: history.dependencies,
+    softReduction: soft.read,
     stage(suffix, options) {
       const readCurrent = options?.readCurrentEvent ?? read
       const stagedHistory = history.stage(readCurrent)
       const stagedGeneration = generation.stage()
+      const stagedSoft = soft.stage()
       const stagedPreparations = preparations.stage(seq => seq >= count ? suffix[seq - count] : readCurrent?.(seq) ?? events[seq], stagedGeneration.action)
       const newAcceptances = new Map<number, AcceptanceFact>()
       const newCompletions = new Map<number, string>()
@@ -79,6 +84,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       for (const [offset, event] of suffix.entries()) {
         validateConversationEventShape(event, formatVersion)
         stagedGeneration.advance(event)
+        stagedSoft.advance(event)
         stagedPreparations.advance(event)
         stagedHistory.advance(event)
         if ((event.type === "conversation/semantics" || event.type === "model/exchange-accepted") && !conversationSeq(event.seq)) fail("unaddressable explicit record")
@@ -196,6 +202,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         for (const [key, value] of newCalls) callsById.set(key, value)
         stagedHistory.commit()
         stagedGeneration.commit()
+        stagedSoft.commit()
         stagedPreparations.commit()
         for (const id of newExchanges) exchanges.add(id)
         for (const id of newAttempts) attempts.add(id)

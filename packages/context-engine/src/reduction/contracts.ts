@@ -5,6 +5,8 @@ import type { ContextSnapshot } from '../contracts/snapshot.ts'
 export interface ReductionPolicy {
   retainTokens?: number
   thresholdRatio?: number
+  targetRatio?: number
+  cooldown?: { mode: 'accepted-exchanges' | 'human-turns'; minimum: number }
   reserveRatio?: number
   prune?: { enabled: boolean; thresholdChars: number; headChars: number; tailChars: number }
 }
@@ -51,6 +53,7 @@ export interface ReductionAssessment {
   readonly target: 'ready' | 'over-target' | 'unavailable'
   readonly inputTokens: number
   readonly inputBytes: number
+  readonly inputByteKind?: 'http-json-body' | 'sdk-command-estimate' | 'neutral-envelope-estimate'
   readonly inputFingerprint: string
   readonly shape: string
   readonly currentView: string

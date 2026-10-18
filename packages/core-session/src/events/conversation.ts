@@ -4,6 +4,8 @@ import { isGenerationEventType, validGenerationEvent } from './generation.ts'
 import { validInputPreparationEvent, validInputPreparationLink } from './input-preparation.ts'
 import { scalarFields } from './attribution.ts'
 import { isStrictFactData } from '../managed/capture.ts'
+import { validSoftReductionEvent } from './soft-reduction.ts'
+import { validAdmissionObservation } from './admission.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 
 export interface InputProvenance {
@@ -37,6 +39,14 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
+  if (event.type === 'context/budget' && event.version === 2) {
+    if (formatVersion < 9 || !validAdmissionObservation(event.snapshot)) conversationFormatError('invalid admission observation or format')
+    return
+  }
+  if (event.type === 'context/soft-reduction') {
+    if (formatVersion < 9 || !validSoftReductionEvent(event)) conversationFormatError('invalid soft sequence or format')
+    return
+  }
   if (event.type === 'user/message' && event.seedInputContext !== undefined && (formatVersion < 8 || !isStrictFactData(event.seedInputContext)
     || !scalarFields(event.seedInputContext, { rawMessageSeq: conversationSeq }) || event.inputPreparation || !event.internal
     || event.provenance?.kind !== 'inherited' || event.provenance.authority !== 'observation' || event.provenance.producer !== 'host.input-preparation'

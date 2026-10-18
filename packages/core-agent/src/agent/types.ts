@@ -48,6 +48,7 @@ export interface AgentDeps {
   generationAction?: import('./generation.ts').AgentGenerationAction
   summaryFactory?: import('@i-harness/compaction').SummaryFactory
   captureContextReduction?: NonNullable<import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureContextReduction']>
+  captureSoftReduction?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureSoftReduction']
   captureInputPromotion?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureInputPromotion']
   factOwner?: FactOwner
   facts?: FactPorts<ProducerFactOutcome>

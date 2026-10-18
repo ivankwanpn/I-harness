@@ -3,6 +3,7 @@ import type { DeepReadonly, SeqRef, SessionView } from './types.ts'
 import { captureLegacyFact, isStrictFactData } from './capture.ts'
 import { isContextEventType } from '../events/context.ts'
 import { validContextReductionDraft } from './reduction.ts'
+import { validSoftReductionEvent, validSoftTerminalDraft, type SoftReductionStart, type SoftReductionTerminalDraft } from '../events/soft-reduction.ts'
 import { validGenerationEvent, type GenerationEvent, type GenerationActionEvent } from '../events/generation.ts'
 import { inputObservationText, validInputPreparationEvent, type InputPreparationEvent, type PreparedInputResult } from '../events/input-preparation.ts'
 
@@ -21,9 +22,10 @@ export type UsageDraft = Exclude<Event<'context/usage'>, UsageSample> | (Omit<Us
 })
 export type LifecycleFact = Event<'turn/start' | 'turn/end' | 'step/start' | 'step/end' | 'step/failed' | 'conversation/semantics' | 'assistant/chunk' | 'reasoning' | 'model/retry'>
 export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'>
-export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[] }
+export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[]; softTerminal?: SoftReductionTerminalDraft }
 export type FactGroupDraft =
   | ContextReductionDraft
+  | { kind: 'soft-reduction'; event: SoftReductionStart | SoftReductionTerminalDraft }
   | { kind: 'input-admission'; admitted: Event<'agent/input/admitted'> }
   | { kind: 'input-cancellation'; cancelled: Event<'agent/input/cancelled'> }
   | { kind: 'input-start'; promoted?: Event<'agent/input/promoted'>; turn: Event<'turn/start'>; message: Event<'user/message'>; preparation?: PreparedInputResult }
@@ -61,6 +63,7 @@ export type CapturedFactGroup = DeepReadonly<FactGroupDraft> & { readonly [captu
 const owned = new WeakSet<object>()
 const family: Record<string, readonly SessionEvent['type'][]> = {
   generation: ['context/action', 'context/attempt'],
+  'soft-reduction': ['context/soft-reduction'],
   'generation-recovery': ['context/recovery', 'context/action'],
   'input-preparation': ['agent/input/preparation'],
   tool: ['tool/call', 'tool/dispatch', 'tool/result'], code: ['code/cell', 'code/call', 'code/dispatch', 'code/result', 'code/output', 'code/store'],
@@ -70,7 +73,7 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
   delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
   usage: ['context/usage'], 'legacy-compaction': ['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/reset', 'compaction/prune', 'rewind/point'],
   'team-transaction': ['team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
-  'context-reduction': ['compaction/replacement', 'compaction/prune', 'compaction/reset'],
+  'context-reduction': ['compaction/replacement', 'compaction/prune', 'compaction/reset', 'context/soft-reduction'],
 }
 function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
   switch (group.kind) {
@@ -97,7 +100,7 @@ function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
     case 'plugin-feedback': return [group.message]
     case 'plan-proposal': return [group.mode, group.message]
     case 'legacy-compaction': return group.events
-    case 'context-reduction': return group.events
+    case 'context-reduction': return [...group.events, ...(group.softTerminal ? [group.softTerminal] : [])]
     case 'team-transaction': return group.events
     case 'seed-import': return group.events
     case 'scheduled-input': return [...group.dispatches, group.admitted]
@@ -114,6 +117,8 @@ export function captureFactGroup(draft: FactGroupDraft):
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+    if (draft.kind === 'soft-reduction' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2
+      || !(draft.event.op === 'start' ? validSoftReductionEvent(draft.event) : validSoftTerminalDraft(draft.event) && draft.event.publication === 'none'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'generation' && (!isStrictFactData(draft) || !draft.events.length || !draft.events.every(validGenerationEvent))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if ((draft.kind === 'input-start' || draft.kind === 'steer-claim') && draft.preparation !== undefined && !validInputPromotionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     for (const value of groupEvents(draft)) {
@@ -176,6 +181,9 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
     }
     if (resolved.type === 'context/action' && resolved.op === 'accepted' && group.kind === 'exchange-acceptance') {
       resolved = { ...resolved, acceptedSeq: reference((event as unknown as { acceptedSeq: SeqRef<'model/exchange-accepted'> }).acceptedSeq, 'model/exchange-accepted', position) }
+    }
+    if (resolved.type === 'context/soft-reduction' && resolved.op === 'terminal') {
+      resolved = { ...resolved, startSeq: reference((event as unknown as SoftReductionTerminalDraft).startSeq, 'context/soft-reduction', position) }
     }
     if (resolved.type === 'context/action' && resolved.op === 'phase' && group.kind === 'generation-recovery') {
       resolved = { ...resolved, recoverySeq: reference((event as unknown as { recoverySeq: SeqRef<'context/recovery'> }).recoverySeq, 'context/recovery', position) }

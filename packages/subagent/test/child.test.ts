@@ -1534,8 +1534,9 @@ describe("the child's request carries the resolved budget", () => {
     expect(f.jobs.read(jobId).output).toBe("child done")
 
     const childSession = f.table.get(path)!.session
-    const firstBudget = childSession.events.find(event => event.type === "context/budget")
-    expect(firstBudget?.snapshot.admissionInputTokens).toBeGreaterThan(3000)
+    const firstBudget = childSession.events.find(event => event.type === "context/budget" && event.version === 2)
+    if(firstBudget?.snapshot.estimate.kind!=='estimated')throw Error('actual child estimate required')
+    expect(firstBudget.snapshot.estimate.value).toBeGreaterThan(3000)
     // THE claim: a summary exists — the outcome the case above cannot reach on
     // its fixture …
     const marker = childSession.events.find((e) => e.type === "compaction/replacement")
