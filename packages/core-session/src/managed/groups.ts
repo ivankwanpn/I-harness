@@ -16,7 +16,9 @@ export type UsageDraft = Exclude<Event<'context/usage'>, UsageSample> | (Omit<Us
 })
 export type LifecycleFact = Event<'turn/start' | 'turn/end' | 'step/start' | 'step/end' | 'step/failed' | 'conversation/semantics' | 'assistant/chunk' | 'reasoning' | 'model/retry'>
 export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'>
+export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[] }
 export type FactGroupDraft =
+  | ContextReductionDraft
   | { kind: 'input-admission'; admitted: Event<'agent/input/admitted'> }
   | { kind: 'input-cancellation'; cancelled: Event<'agent/input/cancelled'> }
   | { kind: 'input-start'; promoted?: Event<'agent/input/promoted'>; turn: Event<'turn/start'>; message: Event<'user/message'> }
@@ -49,6 +51,7 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
   delivery: ['subagent/start', 'subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
   usage: ['context/usage'], 'legacy-compaction': ['compaction/start', 'compaction/end', 'compaction/summary', 'compaction/reset', 'compaction/prune', 'rewind/point'],
   'team-transaction': ['team/member', 'team/task', 'team/message/queued', 'team/message/delivered'],
+  'context-reduction': ['compaction/replacement', 'compaction/prune', 'compaction/reset'],
 }
 function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
   switch (group.kind) {
@@ -61,6 +64,7 @@ function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
     case 'plugin-feedback': return [group.message]
     case 'plan-proposal': return [group.mode, group.message]
     case 'legacy-compaction': return group.events
+    case 'context-reduction': return group.events
     case 'team-transaction': return group.events
     case 'seed-import': return group.events
     case 'scheduled-input': return [...group.dispatches, group.admitted]
@@ -74,6 +78,7 @@ export function captureFactGroup(draft: FactGroupDraft):
   // Producer wrappers and the DTO structural slots are data. Legacy conversion
   // is limited to ordinary args/output; native/context proof stays strict.
   try {
+    if (draft.kind === 'context-reduction' && (!isStrictFactData(draft) || draft.events.some(event => Object.hasOwn(event, 'seq')))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     for (const value of groupEvents(draft)) {

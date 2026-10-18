@@ -77,3 +77,4 @@ export { createNondurableFactOwner, isNondurableSession, metadataFactsFor, feedb
 export { committedFactSeqs } from './managed/outcome.ts'
 
 export { projectConversationCandidate } from "./conversation/candidate.ts"
+export type { ContextReductionDraft } from './managed/groups.ts'

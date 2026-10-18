@@ -3,7 +3,7 @@ import { captureSettlementFact, retainSettlementCapture } from './settlement-fac
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureContextReduction'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => ({
     admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe,
   })
@@ -13,6 +13,7 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
+    captureContextReduction(draft, checkCurrent) { return actionHandle(captureSettlementFact(draft, guarded(checkCurrent))) },
     captureCodeStore(event) {
       operations.assertHeld()
       return strictType(event, 'code/store') ? actionHandle(captureSettlementFact({ kind: 'code', event }, operations)) : invalid()

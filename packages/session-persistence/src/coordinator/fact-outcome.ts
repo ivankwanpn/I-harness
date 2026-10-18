@@ -35,7 +35,7 @@ export function ownBackendOutcome(value: unknown, key: BatchKey, owner: OwnerTok
     }
     if (kind === 'not-issued') {
       const envelope = fields(value, ['kind', 'code'])
-      const codes: readonly FactCode[] = ['FACT_CLOSED', 'FACT_CANCELLED', 'FACT_INVALID_GROUP', 'FACT_CAPTURE_FAILED', 'FACT_OWNER_UNSUPPORTED', 'FACT_RECOVERY_REQUIRED']
+      const codes: readonly FactCode[] = ['FACT_CLOSED', 'FACT_CANCELLED', 'FACT_INVALID_GROUP', 'FACT_CAPTURE_FAILED', 'FACT_OWNER_UNSUPPORTED', 'FACT_RECOVERY_REQUIRED', 'FACT_PRECONDITION_STALE']
       return !issued && envelope && codes.includes(envelope.code as FactCode) ? Object.freeze({ kind, code: envelope.code as FactCode }) : unknown()
     }
     if (kind === 'unknown' || kind === 'absent' || kind === 'conflict') {

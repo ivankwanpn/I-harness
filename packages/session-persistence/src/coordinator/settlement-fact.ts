@@ -23,7 +23,7 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
     operations.assertHeld()
     if (capture.kind !== 'captured') return capture
     latest = operations.status(capture.group) ?? latest
-    if (latest && latest.kind !== 'not-issued') return latest
+    if (latest && (latest.kind !== 'not-issued' || latest.code === 'FACT_PRECONDITION_STALE')) return latest
     latest = await operations.admit(capture.group)
     return latest
   }

@@ -1,5 +1,5 @@
 import type { SessionEvent } from '../events/types.ts'
-import type { SessionView, SessionEventView } from '../managed/types.ts'
+import type { SessionView, SessionEventView, DeepReadonly } from '../managed/types.ts'
 import { captureLegacyFact, isStrictFactData, freezeJsonData } from '../managed/capture.ts'
 import { eventArchive, extendedEventArchive } from './archive.ts'
 import type { ConversationPayloadCapture } from './payload.ts'
@@ -9,7 +9,7 @@ import { createConversationValidationIndex } from './validation.ts'
 
 type RewriteEvent = Extract<SessionEvent, { type: 'compaction/replacement' | 'compaction/prune' | 'compaction/reset' }>
 type WithoutSeq<T> = T extends unknown ? Omit<T, 'seq'> & { readonly seq?: never } : never
-type ConversationRewriteDraft = WithoutSeq<RewriteEvent>
+type ConversationRewriteDraft = DeepReadonly<WithoutSeq<RewriteEvent>>
 interface ConversationCandidate {
   readonly kind: 'candidate'
   readonly candidateId: string

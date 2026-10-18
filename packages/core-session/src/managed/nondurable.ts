@@ -9,6 +9,7 @@ import { createMemorySettlementSource } from './memory-source.ts'
 import { captureMemoryFact, rejectedMemoryCapture } from './memory-capture.ts'
 import type { FactOwner, NondurableFactOutcome, MetadataFacts, ProducerFactOutcome, AgentFacts, MetadataFactSource, FeedbackFactSource } from './ports.ts'
 import type { SessionView } from './types.ts'
+import { projectConversationCandidate } from '../conversation/candidate.ts'
 
 /** Explicit standalone memory adapter. It has no receipt and makes no durable
  * recovery promise. A managed/frozen Session can never silently enter it. */
@@ -57,6 +58,27 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
       }
       return {
         facts, signal, assertOpen, stop() { stopped = true; cancel.abort() }, finish() { stopped = true },
+        captureContextReduction(draft, checkCurrent) {
+          const captured = captureFactGroup(draft)
+          let latest: NondurableFactOutcome | undefined
+          const commit = async (): Promise<NondurableFactOutcome> => {
+            if (latest) return latest
+            try {
+              assertOpen()
+              if (captured.kind !== 'captured') return latest = captured
+              if (captured.group.kind !== 'context-reduction') return latest = { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+              projectConversationCandidate(session, captured.group.events, { candidateId: 'nondurable-reduction' })
+              if (!checkCurrent()) return latest = { kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' }
+              const events = resolveFactGroup(captured.group, session, session.events.length)
+              for (const event of events) append(session, event)
+              return latest = { kind: 'memory-committed', durability: 'nondurable', seqs: events.map(event => event.seq!) }
+            } catch (error) {
+              const code = (error as { code?: string }).code
+              return latest = { kind: 'not-issued', code: code === 'FACT_CANCELLED' ? code : 'FACT_RECOVERY_REQUIRED' }
+            }
+          }
+          return { admit: commit, reconcile: commit, observe: async () => latest ?? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' } }
+        },
         captureCodeStore(event) {
           let strict = false
           try { strict = isStrictFactData(event) && event.type === 'code/store' } catch { /* Exact store DTO only. */ }

@@ -78,6 +78,7 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
 export interface ManagedAction<Outcome = FactOutcome> {
   readonly signal: AbortSignal
   readonly facts: FactPorts<Outcome>
+  captureContextReduction?(draft: import('./groups.ts').ContextReductionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureCodeStore(event: Event<'code/store'>): CapturedActionFact<Outcome>
   captureTeamTransaction(events: readonly TeamFact[]): CapturedActionFact<Outcome>
   captureSubagentStart(event: Event<'subagent/start'>): CapturedActionFact<Outcome>

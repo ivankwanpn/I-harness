@@ -16,6 +16,13 @@ function acceptance(input = facts(), sendId = 'send1', seq = 3) {
   return { request, accepted }
 }
 const usage = { inputTokens: 100, inputTokenSemantics: 'includes-cache' as const, outputTokens: 9000 }
+it('prices a prospective suffix rewrite heuristically without retiring the matched anchor', () => {
+  const source = meter.createAcceptedCalibration('owner', 'live'), input = facts(), a = acceptance(input)
+  source.recordAccepted(input, a.request, a.accepted, usage)
+  const prospective = source.probe(facts([7]), { ...compatibility, prospectiveRewrite: true })
+  expect(prospective).toMatchObject({ calibrated: false, disposition: 'context-rewritten' })
+  expect(source.probe(facts([7]), compatibility)).toEqual({ tokens: 107, calibrated: true })
+})
 it('keeps B calibration through a pure A miss and prices suffix 7+3 as literal 110', () => {
   const source = meter.createAcceptedCalibration('owner', 'live'), input = facts(), a = acceptance(input)
   expect(source.recordAccepted(input, a.request, a.accepted, usage).kind).toBe('sample')

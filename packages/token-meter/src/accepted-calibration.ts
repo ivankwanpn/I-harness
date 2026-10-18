@@ -5,6 +5,7 @@ import { normalizeInputUsage, type InputUsage } from './calibration-usage.ts'
 export interface CalibrationCompatibility {
   ownerSessionId: string; observationLifetimeId: string; executionEpochId?: string
   branchId: string; contextEpoch: string; projectionRevision: number
+  prospectiveRewrite?: true
 }
 const total = (input: ProjectedInputFacts) => Object.values(input.components).reduce((sum, c) => sum + c.heuristicTokens, 0)
 export function semanticPrefix(input: ProjectedInputFacts, count = input.units.length): string {
@@ -21,6 +22,7 @@ export function createAcceptedCalibration(ownerSessionId: string, observationLif
     const r = anchor.request, id = input.semanticIdentity
     if (c.ownerSessionId !== r.ownerSessionId || c.observationLifetimeId !== r.observationLifetimeId) return 'owner-changed'
     if (c.executionEpochId !== r.executionEpochId) return 'execution-identity-changed'
+    if (c.prospectiveRewrite) return 'context-rewritten'
     if (c.branchId !== r.snapshot.branchId) return 'branch-changed'
     if (c.contextEpoch !== r.snapshot.contextEpoch || c.projectionRevision !== r.projectionRevision) return 'context-rewritten'
     if (!id || id.bindingId !== anchor.bindingId) return 'binding-changed'

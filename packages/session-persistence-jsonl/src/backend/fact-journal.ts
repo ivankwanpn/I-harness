@@ -91,7 +91,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
         outcome = { kind: 'committed', receipt: receipt(owner, batch, decoded.prefixDigest) }
       } catch (error) {
         const code = (error as { code?: string }).code
-        if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED'
+        if (!issued) outcome = error instanceof JournalPrefixConflict ? { kind: 'conflict', key: batch.key } : code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_OWNER_UNSUPPORTED' || code === 'FACT_RECOVERY_REQUIRED' || code === 'FACT_PRECONDITION_STALE'
           ? { kind: 'not-issued', code } : { kind: 'absent', key: batch.key }
         else {
           outcome = { kind: 'unknown', key: batch.key }

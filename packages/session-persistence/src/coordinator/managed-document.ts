@@ -163,7 +163,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         entry.ticket.release();
                         entry.resolve({ kind: 'not-issued', code: (error as {
                                 code?: 'FACT_CLOSED' | 'FACT_CANCELLED';
-                            }).code ?? 'FACT_INVALID_GROUP' });
+                            }).code ?? 'FACT_RECOVERY_REQUIRED' });
                     }
                 }
                 if (!entries.length)
@@ -184,7 +184,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     }), prefix, batch);
                     completed = finish(current, outcome);
                 }
-                catch {
+                catch (error) {
                     if (current?.issued) {
                         completed = finish(current, { kind: 'unknown', key: current.batch.key });
                     }
@@ -192,7 +192,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         pending = undefined;
                         for (const entry of entries) {
                             entry.ticket.release();
-                            entry.resolve({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' });
+                            const code = (error as { code?: string }).code;
+                            entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' ? code : 'FACT_INVALID_GROUP' });
                         }
                     }
                 }
@@ -295,6 +296,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         return admit(group, authorization, true);
                     },
                     reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group), quarantineCapture: failSource,
+                }, checkCurrent => {
+                    const guarded: Authorization = { action, required: false, source: {}, assertSource() {
+                        if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' });
+                    } };
+                    return { assertHeld: held.assertHeld, admit: group => {
+                        sourceDispositions.delete(group);
+                        return admit(group, guarded, true);
+                    }, reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group), quarantineCapture: failSource };
                 }),
                 assertOpen: () => assertAuthorized(authorization), stop() {
                     action.stopped = true;

@@ -15,7 +15,7 @@ export interface BatchKey {
 }
 export interface FactReceipt { readonly owner: OwnerToken; readonly key: BatchKey; readonly lastSeq: number; readonly prefixDigest: string }
 export type FactCode = 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_INVALID_GROUP' | 'FACT_CAPTURE_FAILED'
-  | 'FACT_OWNER_UNSUPPORTED' | 'FACT_RECOVERY_REQUIRED'
+  | 'FACT_OWNER_UNSUPPORTED' | 'FACT_RECOVERY_REQUIRED' | 'FACT_PRECONDITION_STALE'
 export type FactOutcome =
   | { kind: 'committed'; receipt: FactReceipt; seqs: readonly number[] }
   | { kind: 'absent' | 'unknown' | 'conflict'; key: BatchKey }
