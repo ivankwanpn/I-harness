@@ -3,12 +3,13 @@
 // status tracking race-free: no merge logic, last write wins. The list lives in
 // the session log as `todo/write` events (core-session), so projection
 // (deriveTodoList) is a pure function and persistence mirrors it for free.
-import type { Session, TodoItem } from "@i-harness/core-session"
-import { append } from "@i-harness/core-session"
+import type { SessionView as Session, TodoItem, MetadataFactSource } from "@i-harness/core-session"
+import { committedFactSeqs, metadataFactsFor } from "@i-harness/core-session"
 import type { Tool } from "@i-harness/core-tools"
 
 export interface TodoToolDeps {
   session: Session
+  metadata?: MetadataFactSource
   allowParallelInProgress?: boolean
 }
 
@@ -51,9 +52,9 @@ export function createTodoTool(deps: TodoToolDeps): Tool<{ todos: TodoItem[] }, 
     },
     isReadOnly: false,
     isConcurrencySafe: true,
-    execute: async ({ todos }) => {
+    execute: async ({ todos }, exec) => {
       validateTodoItems(todos, deps.allowParallelInProgress ?? false)
-      append(deps.session, { type: "todo/write", version: 1, items: todos })
+      committedFactSeqs(await metadataFactsFor(deps.session, deps.metadata, exec.abortSignal).admit({ type: "todo/write", version: 1, items: todos }))
       const counts = {
         pending: todos.filter((t) => t.status === "pending").length,
         inProgress: todos.filter((t) => t.status === "in_progress").length,
@@ -64,10 +65,10 @@ export function createTodoTool(deps: TodoToolDeps): Tool<{ todos: TodoItem[] }, 
   }
 }
 
-export function deriveTodoList(session: Session): TodoItem[] | null {
-  let last: TodoItem[] | null = null
+export function deriveTodoList(session: Session): readonly TodoItem[] | null {
+  let last: readonly TodoItem[] | null = null
   for (const ev of session.events) {
-    if (ev.type === "todo/write") last = (ev as { items: TodoItem[] }).items
+    if (ev.type === "todo/write") last = ev.items
   }
   return last
 }

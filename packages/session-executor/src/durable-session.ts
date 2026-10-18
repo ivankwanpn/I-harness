@@ -1,5 +1,6 @@
-import { createSession, type Session } from "@i-harness/core-session"
+import { type SessionView as Session } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { openExecutorDocument } from './lifecycle/managed-document.ts'
 
 // Different adapters in one host share an in-flight owned load. Retaining only
 // the promise avoids stale completed caches across an explicit close/reopen.
@@ -18,15 +19,7 @@ export function createDurableSessionLoader(
     if (existing) return existing
     const entries = loads
     const pending = (async () => {
-      const restored = (await coordinator.loadOwned(sessionId)).session
-      const live = createSession((event) => {
-        coordinator.enqueue(sessionId, [event])
-        if (event.type === "turn/end") void coordinator.flush(sessionId).catch(() => {})
-      })
-      live.events.push(...restored.events)
-      live.formatVersion = restored.formatVersion
-      live.header = restored.header
-      return live
+      return (await openExecutorDocument({ coordinator, sessionId })).session
     })().finally(() => { if (entries.get(sessionId) === pending) entries.delete(sessionId) })
     entries.set(sessionId, pending)
     return pending

@@ -33,7 +33,7 @@ describe("live provider reasoning", () => {
     try {
       await vi.advanceTimersByTimeAsync(0)
       expect(seen.filter((event) => event.type === "reasoning/chunk")).toEqual([
-        expect.objectContaining({ text: "inspect ", blockId: "0", offset: 0, atSeq: 3 }),
+        expect.objectContaining({ text: "inspect ", blockId: "0", offset: 0, atSeq: 4 }),
       ])
       expect(session.events.filter((event) => event.type === "reasoning")).toEqual([])
       await vi.advanceTimersByTimeAsync(50)

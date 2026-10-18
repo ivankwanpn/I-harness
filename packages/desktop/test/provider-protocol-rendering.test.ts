@@ -230,6 +230,10 @@ it.each(protocols)("%s preserves live reasoning, canonical replay, Work Process 
     expect(user).not.toHaveProperty("input")
     expect(machine).toMatchObject({ input: { inputId: "background-1", intent: "system", synthetic: presentation } })
     const live = projectTimeline(timelineEvents(f.window))
+    // Budget/checkpoint records remain durable and available to ContextUsage,
+    // but are not readable activities in either live or historical Work Process.
+    expect(f.session.events.some(event => event.type === "context/budget")).toBe(true)
+    expect(live.filter(row => row.kind === "other" && ["context/budget", "context/usage"].includes(row.label))).toEqual([])
     expect(live.find((row) => row.id === firstId)).toMatchObject({ detail: FIRST })
     expect(live.filter((row) => row.id === firstId)).toHaveLength(1)
     expect(live.find((row) => row.id === `message:${user.seq}`)).toMatchObject({ kind: "message", role: "user", text: HUMAN })

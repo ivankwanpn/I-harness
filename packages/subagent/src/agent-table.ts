@@ -1,14 +1,20 @@
-import { createSession } from "@i-harness/core-session"
+import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 
 export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
 export interface ChildAgentEntry {
   path: string
   status: ChildStatus
-  session: ReturnType<typeof createSession>
+  session: SessionView
+  /** Process-local capability for this exact child view, never serialized. */
+  factOwner?: FactOwner
+  /** Exact live model source, installed only by real child composition. */
+  executionModel?: () => import('@i-harness/llm-seam').ModelClient
   controller: AbortController
   finalText?: string
   error?: string
+  retention?: "memory" | "pending" | "durable" | "failed"
+  retentionError?: string
   mailbox: string[]
   jobId?: string
   unmount?: () => void

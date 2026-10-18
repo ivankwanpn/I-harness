@@ -17,6 +17,19 @@ function deferred<T>() {
 }
 const turn = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 
+it("allocates the execution ID before reading a throwing admission validator getter", async () => {
+  const s = exec.createExecutionSupervisor()
+  const failed = fixture("getter-failed")
+  const cause = { opaque: "validator getter" }
+  Object.defineProperty(failed.input, "validateAuthority", { get() { throw cause } })
+  await expect(s.launch(failed.input)).rejects.toBe(cause)
+  expect(failed.events).toEqual([])
+  const next = fixture("getter-next")
+  try {
+    expect((await s.launch(next.input)).id).toBe("execution-2")
+  } finally { next.finish(); await s.dispose() }
+})
+
 it("distinguishes strict pending admission from exposed active reconciliation", async () => {
   const s = exec.createExecutionSupervisor()
   const pending = fixture("pending"); pending.holdPreparation()

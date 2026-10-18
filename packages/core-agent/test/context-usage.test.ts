@@ -1,9 +1,11 @@
+import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
+import { classifiedFixtureClient } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { createAgent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
 import type { TelemetryEvent } from "@i-harness/telemetry"
 
 it("enforces the next step budget using completed cache-inclusive usage instead of a short-text guess", async () => {
@@ -18,12 +20,12 @@ it("enforces the next step budget using completed cache-inclusive usage instead 
     } else yield { type: "text/chunk", text: "done" }
     yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false }, maxTurns: 2 })
+  const agent = createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false }, maxTurns: 2 })
   await expect(agent.run("檢查")).rejects.toThrow(/prompt_too_long/)
   expect(requests).toHaveLength(1)
 })
 
-it("clears a previous usage anchor when the model binding context is updated", async () => {
+it("an identical policy update preserves a real usage anchor and cannot bypass its overflow", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let calls = 0
   const model: ModelClient = { async *stream() {
@@ -31,11 +33,11 @@ it("clears a previous usage anchor when the model binding context is updated", a
     if (calls === 1) yield { type: "usage", usage: { inputTokens: 899, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
+  const agent = createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
   await agent.run("first")
   agent.updateContext!({ budget: { contextWindow: 1000, resetWindow: false } })
-  await agent.followup!("new model")
-  expect(calls).toBe(2)
+  await expect(agent.followup!("new model")).rejects.toThrow(/prompt_too_long/)
+  expect(calls).toBe(1)
 })
 
 it("reports component bytes and a measured cache ratio separately from raw provider counters", async () => {
@@ -44,8 +46,8 @@ it("reports component bytes and a measured cache ratio separately from raw provi
     yield { type: "usage", usage: { inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80, inputTokenSemantics: "excludes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  await createAgent(ctx, { session, tools, model, systemPrompt: "中文", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
-  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "estimate" })
+  await createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "中文", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
+  expect(events.find(event => event.type as string === "provider/context")?.data).toMatchObject({ systemBytes: 6, schemaBytes: 2, estimateSource: "projected-heuristic" })
   expect(events.find(event => event.type as string === "provider/cache")?.data).toEqual({ cacheReadReported: true, totalInputTokens: 1000, cacheReadTokens: 900, cacheReadRatio: .9 })
   expect(events.find(event => event.type === "provider/usage")?.data).toMatchObject({ inputTokens: 20, cacheReadTokens: 900, cacheCreationTokens: 80 })
 })
@@ -56,7 +58,7 @@ it("leaves cache measurements absent when the provider only reports ordinary inp
     yield { type: "usage", usage: { inputTokens: 100, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  await createAgent(ctx, { session, tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
+  await createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} } }).run("inspect")
   expect(events.find(event => event.type as string === "provider/cache")?.data).toEqual({ cacheReadReported: false, totalInputTokens: 100 })
 })
 
@@ -68,7 +70,7 @@ it("invalidates the usage anchor after an append-only reset even if the input pr
     if (calls === 1) yield { type: "usage", usage: { inputTokens: 899, inputTokenSemantics: "includes-cache" } } as never
     yield { type: "text/chunk", text: "done" }; yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
+  const agent = createAgentWithSummary(ctx, { session, tools, model: classifiedFixtureClient(model), systemPrompt: "p", budget: { contextWindow: 1000, resetWindow: false } })
   await agent.run("first")
   append(session, { type: "compaction/reset", removedSeqs: [] })
   await agent.followup("continue")
@@ -77,24 +79,25 @@ it("invalidates the usage anchor after an append-only reset even if the input pr
 
 it("starts auto compaction from calibrated usage and returns to a fresh estimate after summary", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), requests: LLMRequest[] = [], events: TelemetryEvent[] = []
-  const model: ModelClient = { async *stream(request) {
+  append(session, { type: 'user/message', text: 'older completed evidence '.repeat(400) })
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
     requests.push(request)
     if (requests.length === 1) {
-      yield { type: "usage", usage: { inputTokens: 850, inputTokenSemantics: "includes-cache" } } as never
+      yield { type: "usage", usage: { inputTokens: 18000, inputTokenSemantics: "includes-cache" } } as never
       yield { type: "text/chunk", text: "done" }
     } else if (requests.length === 2) {
       yield { type: "usage", usage: { inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" } }
-      yield { type: "text/chunk", text: "Summary retains the current objective and the completed work." }
+      yield { type: "text/chunk", text: completeCheckpoint() }
     }
     else yield { type: "text/chunk", text: "continued" }
     yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, sessionId: "child-session", tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 1000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
+  const agent = createAgentWithSummary(ctx, { session, sessionId: "child-session", tools, model: classifiedFixtureClient(model), systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 20000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
   await agent.run("first")
   await agent.followup("continue")
-  expect(session.events.some(event => event.type === "compaction/summary")).toBe(true)
+  expect(session.events.some(event => event.type === "compaction/replacement")).toBe(true)
   expect(requests).toHaveLength(3)
   expect(requests.map(request => request.sessionId)).toEqual(["child-session", "child-session", "child-session"])
-  expect(events.filter(event => event.type === "compaction/usage").map(event => event.data)).toEqual([{ inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" }])
+  expect(events.filter(event => event.type === "compaction/usage").map(event => event.data)).toEqual([{ sessionId: "child-session", inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" }])
   expect(events.filter(event => event.type === "provider/usage")).toHaveLength(1)
 })

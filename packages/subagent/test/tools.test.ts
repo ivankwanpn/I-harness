@@ -1,3 +1,4 @@
+
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
@@ -380,7 +381,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ resumed: true })
     expect(agents.get("child-1")).toBe(fakeAgent) // unchanged — NOT rebuilt
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("pending", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok")
   }, 10_000)
@@ -421,6 +422,7 @@ describe("subagent control tools", () => {
     const entry = table.get("root/helper")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect(out).toEqual({ resumed: true })
+    await entry.followupChain
     const rebuilt = agents.get("child-abc")
     expect(rebuilt).toBeDefined()
     expect(entry.session).toBe(loadedSession) // rebuilt on the persisted session, not a fresh one
@@ -562,7 +564,7 @@ describe("subagent control tools", () => {
     expect(out).toEqual({ delivered: true })
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "subagent/inbox", message: "again" }))
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("ok2")
     expect(jobs.read(jobId).status).toBe("completed")
@@ -607,9 +609,11 @@ describe("subagent control tools", () => {
 
     // Hold the retry in flight: list_agents must stop reporting the old turn's
     // error as soon as a new turn begins, not only after it succeeds.
+    const retryEntered = Promise.withResolvers<void>()
     let finishRetry!: (result: { finalText: string; turns: number; reasoning: string[] }) => void
-    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve }))
+    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; retryEntered.resolve() }))
     await follow.execute({ target: "root/helper", message: "retry" }, {})
+    await retryEntered.promise
     try {
       const listed = await all.find((tool) => tool.name === "list_agents")!.execute({}, {}) as { agents: { status: string; error?: string }[] }
       expect(listed.agents[0]?.status).toBe("running")
@@ -1343,7 +1347,7 @@ describe("W11 elapsed on a running subagent", () => {
     const calledAt = Date.now()
     await follow.execute({ target: "root/helper", message: "again" }, {})
     await entry.followupChain
-    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal), { provenance: { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.followup" } })
     expect(entry.status).toBe("waiting")
     expect(entry.startedAt!).toBeGreaterThanOrEqual(calledAt)
     expect(Date.now() - entry.startedAt!).toBeLessThan(500) // a fresh clock, not the 500ms-old one

@@ -15,7 +15,7 @@ const OPTS = { description: "d", prompt: "do x", context: "fresh" as const }
 function makeRoster(overrides?: Partial<RosterDeps>) {
   const events: TeamEvent[] = []
   const state = createFoldState()
-  const lead = { append: (e: TeamEvent) => events.push(e), flush: async () => {} }
+  const lead = { commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }
   const roster = createRoster({
     teamId: "lead-1",
     state,
@@ -113,7 +113,7 @@ describe("reconcileProvisioning", () => {
   function seedProvisioning(opts?: { sessionId?: string; deps?: Partial<RosterDeps> }) {
     const { roster, state, events } = makeRoster(opts?.deps)
     const tx = createTeamTransact(
-      { append: (e: TeamEvent) => events.push(e), flush: async () => {} },
+      { commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } },
       state,
     )
     return new Promise<{ roster: ReturnType<typeof createRoster>; state: typeof state; events: TeamEvent[]; memberId: string }>((resolve) => {
@@ -155,7 +155,7 @@ describe("reconcileProvisioning", () => {
     // Simulate a concurrent creator settling the member (provisioning -> active)
     // DURING the durability probe: the probe races the settle then reports durable.
     let settled = false
-    const settleTx = createTeamTransact({ append: (e: TeamEvent) => events.push(e), flush: async () => {} }, state)
+    const settleTx = createTeamTransact({ commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }, state)
     const probe = async (id: string) => {
       if (!settled) {
         await settleTx.transact(() => ({
@@ -166,7 +166,7 @@ describe("reconcileProvisioning", () => {
       }
       return true // the child IS durable, but the member was settled in the meantime
     }
-    const { roster: r } = makeRoster({ state, transact: createTeamTransact({ append: (e: TeamEvent) => events.push(e), flush: async () => {} }, state), childSessionIsDurable: probe })
+    const { roster: r } = makeRoster({ state, transact: createTeamTransact({ commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }, state), childSessionIsDurable: probe })
     // reconcile filtered "helper" as pending before the probe, so the probe's
     // settle lands FIRST; reconcile's transact fn then sees phase !==
     // "provisioning" -> PROVISIONING_CONFLICT fires internally and is swallowed.
@@ -205,13 +205,13 @@ describe("reconcileProvisioning", () => {
   it("reconciles a mix: durable → active, not durable → failed", async () => {
     const { roster, state, events } = await seedProvisioning({ deps: { childSessionIsDurable: async () => false } })
     // add a second provisioning member that IS durable
-    await createTeamTransact({ append: (e: TeamEvent) => events.push(e), flush: async () => {} }, state).transact(() => ({
+    await createTeamTransact({ commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }, state).transact(() => ({
       events: [{ type: "team/member", version: 1, teamId: "lead-1", member: { id: "child-helper2", name: "helper2", description: "d", provider: "spawn", context: "fresh", phase: "provisioning" } }],
       result: undefined,
     }))
     const { roster: r2 } = makeRoster({
       state,
-      transact: createTeamTransact({ append: (e: TeamEvent) => events.push(e), flush: async () => {} }, state),
+      transact: createTeamTransact({ commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }, state),
       childSessionIsDurable: async (id) => id === "child-helper2",
       childSessionHoldsPrompt: async () => true,
     })

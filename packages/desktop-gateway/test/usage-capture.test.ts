@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { buildModelClient } from "@i-harness/provider"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { UsageRecord } from "../../usage-stats/src/types.ts"
 import { createUsageCapture } from "../src/usage-capture.ts"
@@ -14,6 +15,37 @@ function fixture() {
 async function consume(client: ModelClient, input = request) { for await (const _event of client.stream(input)) { /* consume */ } }
 
 describe("usage capture", () => {
+  it("attributes prepared derivatives to the profile that built the actual client",async()=>{
+    const f=fixture(),mutableProfile={...profile,defaultModel:"model-a"}
+    const client=f.capture.buildClient(buildModelClient)(mutableProfile)
+    const prepared=await client.prepare!(request)
+    mutableProfile.name="changed"
+    mutableProfile.defaultModel="different"
+    vi.stubGlobal("fetch",async()=>new Response('data: {"type":"response.completed","response":{}}\n\n'))
+    try {for await(const _event of prepared.withOutputCap(4096).stream()){}}
+    finally{vi.unstubAllGlobals()}
+    expect(f.records).toMatchObject([{providerId:"route-a",modelId:"model-a",billing:"api"}])
+    expect(f.records[0]).toMatchObject({ requestMetrics: { version: 1, capSupport: "supported", effectiveOutputCap: 4096, sizeKind: "http-json-body", bodyBytes: expect.any(Number) } })
+  })
+  it("prepared bind/cap keeps usage attribution and performs no work until stream", async () => {
+    const records:UsageRecord[]=[]
+    let attributions=0,sends=0
+    const capture=createUsageCapture({workspace:"fixture",projectFor:async()=>{attributions++;return "project"},record:async record=>{records.push(record)}})
+    vi.stubGlobal("fetch",async()=>{
+      sends++
+      return new Response('data: {"type":"response.completed","response":{"usage":{"input_tokens":12,"output_tokens":3}}}\n\n',{status:200})
+    })
+    try {
+      const bound=capture.bind(capture.buildClient(buildModelClient)(profile,"model-a"),"parent")
+      expect(bound.prepare).toBeTypeOf("function")
+      const prepared=await bound.prepare!({...request,sessionId:"child"})
+      const capped=prepared.withOutputCap(4096)
+      expect([sends,attributions,records.length]).toEqual([0,0,0])
+      for await(const _event of capped.stream()){}
+      expect([sends,attributions,records.length]).toEqual([1,1,1])
+      expect(records).toMatchObject([{sessionId:"child",projectId:"project",modelId:"model-a",inputTokens:12,outputTokens:3,status:"completed"}])
+    }finally{vi.unstubAllGlobals()}
+  })
   it("records one request with last-known counters and no request, response, credentials or error content", async () => {
     const f = fixture()
     const client = f.capture.buildClient(() => ({ async *stream() {
@@ -25,7 +57,7 @@ describe("usage capture", () => {
       yield { type: "end" }
     } }))(profile, "model-a")
     await consume(f.capture.bind(client, "session-a"))
-    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" }])
+    expect(f.records).toEqual([{ id: expect.any(String), workspace: "D:/workspace", sessionId: "session-a", providerId: "route-a", modelId: "model-a", billing: "api", status: "completed", startedAt: 1000, durationMs: 60, requestMetrics: expect.objectContaining({coverage: "neutral-only", systemTokens: expect.any(Number)}), firstTokenMs: 20, inputTokens: 100, outputTokens: 20, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" }])
     expect(JSON.stringify(f.records)).not.toMatch(/private|secret/)
   })
 

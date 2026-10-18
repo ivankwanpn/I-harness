@@ -1,6 +1,6 @@
 import { resolve as resolvePath } from "node:path"
 import { workspaceRoots as projectRoots, type SandboxExecutionPolicy, type SandboxMode } from "@i-harness/sandbox"
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session } from "@i-harness/core-session"
 import { SANDBOX_MODES, effectiveSandboxMode } from "./session-mode.ts"
 
 export { SANDBOX_MODES, effectiveSandboxMode }

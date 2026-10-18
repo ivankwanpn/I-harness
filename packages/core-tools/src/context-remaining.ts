@@ -1,15 +1,15 @@
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session, BudgetRead } from "@i-harness/core-session"
+import { contextStateFromBudget } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { activeTokens } from "@i-harness/token-meter"
 import type { ToolRegistry } from "./index.ts"
 
 // M27-R-A8 (codex get_context_remaining parity): the model can ask how much
-// context it has left. `used` follows the M15 single projection rule — only
-// deriveMessages(session) is ever seen by a model, so tokens are counted on
-// that exact output (activeTokens). Registering is FAIL-CLOSED: without a
-// contextWindow the tool is not in the catalog at all.
+// context it has left. Shipping assemblies supply their actual budget owner.
+// Direct legacy embedders retain a marked neutral-only history estimate.
 
 export interface ContextRemainingOptions {
+  budgetRead?: () => BudgetRead
   /** Model context window (tokens; M15 provider-record knowledge). Absent →
    * NOT registered (fail-closed). */
   contextWindow?: number
@@ -20,7 +20,7 @@ export interface ContextRemainingOptions {
 
 export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistry, opts: ContextRemainingOptions = {}): void {
   const window = opts.contextWindow
-  if (window === undefined || window <= 0) return // fail-closed: no window knowledge → 不註冊
+  if (!opts.budgetRead && (window === undefined || window <= 0)) return
   const session = opts.session
   tools.register({
     name: "get_context_remaining",
@@ -29,13 +29,28 @@ export function registerContextRemaining(_ctx: PluginContext, tools: ToolRegistr
     // Pure read (session pricing) — auto-allow under the approval policy.
     isReadOnly: true,
     execute: async () => {
+      if (opts.budgetRead) {
+        const state = contextStateFromBudget(opts.budgetRead())
+        if (state.observation) {
+          if (state.kind === 'unavailable') return state
+          return { ...state, window: state.contextWindow, used: state.estimatedTokens, remaining: Math.max(0, state.contextWindow - state.estimatedTokens), percentage: Math.round(state.estimatedTokens / state.contextWindow * 100) }
+        }
+        const snapshot = state.snapshot
+        const facts = snapshot ? { window: snapshot.contextWindow, source: snapshot.estimateSource, confidence: snapshot.confidence, coverage: snapshot.coverage,
+          outputReserve: snapshot.outputReserve, capSupport: snapshot.capSupport, effectiveOutputCap: snapshot.effectiveOutputCap,
+          recoveryRequired: snapshot.recoveryRequired, fullByProvider: snapshot.fullByProvider } : {}
+        if (state.kind === "unavailable") return { ...state, ...facts }
+        return { ...state, ...facts, window: state.contextWindow, used: state.estimatedTokens, remaining: snapshot?.remainingInputBudget,
+          percentage: Math.round(state.estimatedTokens / state.contextWindow * 100) }
+      }
       const used = session === undefined ? 0 : activeTokens(session)
-      const remaining = Math.max(0, window - used)
+      const remaining = Math.max(0, window! - used)
       return {
+        source: "neutral-only", confidence: "estimated", coverage: "neutral-only",
         window,
         used,
         remaining,
-        percentage: Math.round((used / window) * 100),
+        percentage: Math.round((used / window!) * 100),
       }
     },
   })

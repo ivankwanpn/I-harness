@@ -56,7 +56,7 @@ export type ProviderAuthRef =
 
 export type ResolvedProviderAuth =
   | { kind: "api-key"; value: string }
-  | { kind: "bearer"; accessToken: string; expiresAt?: number }
+  | { kind: "bearer"; accessToken: string; expiresAt?: number; authEpoch?: string }
   | { kind: "ambient" }
 
 export interface ProviderAuthResolver {

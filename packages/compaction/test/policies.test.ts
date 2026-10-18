@@ -1,15 +1,17 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
-import { createCompactionEngine, resolveCompactSpec, type CompactionConfig } from "../src/index.ts"
-import { activeTokens } from "@i-harness/token-meter"
+import { createCompactionHarness } from './fixtures/engine.ts'
+import { resolveCompactSpec, type CompactionConfig } from '../src/index.ts'
+
 
 // M34 ⑦a: per-model compaction policies — `modelPolicies["provider/model"]`
 // overlays the global chain (threshold/retention/max/summarizer/auto) at
 // engine build time (dsh shape + grok per-model threshold). A missing
 // provider/modelId or an unlisted model = the global defaults (forward compat).
 function mockModel(text: string): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       yield { type: "text/chunk", text }
       yield { type: "end" }
@@ -51,23 +53,13 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
     expect(resolveCompactSpec(config, undefined, "deepseek-v4-flash").thresholdRatio).toBe(0.8)
   })
 
-  it("engine: the policy profile triggers at 50% and its retention keeps a visible tail", async () => {
-    const s = pressureSession()
-    expect(activeTokens(s)).toBeGreaterThanOrEqual(700) // sanity: the fixture is ≥ 500 tokens
-    expect(activeTokens(s)).toBeLessThan(800) // but below the global 0.8 × 1000 threshold
-    const config: CompactionConfig = {
-      ...BASE,
-      modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.5, retainTokens: 400 } },
-    }
-    const engine = createCompactionEngine({
-      model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config, // ≥ 500 chars (M34 ⑦c floor)
-      provider: "deepseek", modelId: "deepseek-v4-pro",
-    })
-    const result = await engine.maybeCompact(s)
-    expect(result.compacted).toBe(true)
-    // retention override 400 tokens → the last 4 events (~400 tokens) stay
-    // visible and only the first 3 are shadowed.
-    expect(result.shadowedSeqs).toEqual([0, 1, 2])
+  it("engine applies selected model threshold and whole-exchange retention", async () => {
+    const { closedExchange } = await import('./fixtures/history.ts')
+    const s = createSession(); for (let i=0;i<20;i++) closedExchange(s, 'E'+i,400)
+    const config: CompactionConfig = { contextWindow: 20000, thresholdRatio: .95, modelPolicies: { 'deepseek/selected': { thresholdRatio: .8, retainTokens: 400 } } }
+    const engine = createCompactionHarness({ model: mockModel(checkpointOfLength(600)), config, maxOutputTokens:15500,
+      contextMetadata: {version:1,providerId:'deepseek',modelId:'selected',protocol:'fixture',contextWindow:20000,identityCoverage:'partial'} })
+    expect((await engine.maybeCompact(s)).shadowedSeqs).toEqual(Array.from({length:16},(_,i)=>[i*3,i*3+1]).flat())
   })
 
   it("engine: an unlisted model id is NOT under the policy — no fire below 80%", async () => {
@@ -76,7 +68,7 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
       ...BASE,
       modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.5 } },
     }
-    const engine = createCompactionEngine({
+    const engine = createCompactionHarness({
       model: mockModel("x"), config,
       provider: "deepseek", modelId: "deepseek-v4-flash",
     })

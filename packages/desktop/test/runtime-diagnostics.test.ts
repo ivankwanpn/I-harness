@@ -1,10 +1,48 @@
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, utimes, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import { RpcError, SdkRunError } from "@i-harness/sdk"
+import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+import { createOwnedBudget } from '../../core-agent/src/agent/budget.ts'
+import { captureRequestCandidate } from '../../core-agent/src/agent/request-snapshot.ts'
+import { createSession } from '../../core-session/src/index.ts'
+
+it('copies the actual closed v2 decision without a legacy numeric view, payloads or observation transport',async()=>{
+ const fetch=vi.spyOn(globalThis,'fetch').mockRejectedValue(Error('network denied before construction'))
+ try{
+  const session=createSession(),client=createOpenAICompatibleClient({apiKey:'synthetic',model:'fixture'}),capture=()=>captureRequestCandidate(session,'s',{model:client},{systemPrompt:'sentinel-private',tools:[],contextWindow:10000,maxOutputTokens:1000},0)
+  const owner=createOwnedBudget(session,'s',capture,'diagnostic-fixture',()=>({kind:'unclassified'})),prepared=await client.prepare!({systemPrompt:'sentinel-private',tools:[],messages:[{role:'user',content:'private prompt'}],maxOutputTokens:1000})
+  owner.assess(prepared,capture(),10000,1000)
+  const read=owner.read();if(read.kind!=='ready'||!read.observation)throw Error('v2 observation required')
+  const service=createRuntimeDiagnostics(await root())
+  service.observe(event('context/budget',{version:2,seq:1,snapshot:read.observation}))
+  service.observe(event('context/budget',{version:2,seq:2,snapshot:{...read.observation,requestBody:'sentinel-private'}}))
+  const entries=(await service.list()).entries
+  expect(entries).toHaveLength(1);expect(entries[0]?.contextAdmission).toEqual(read.observation)
+  expect(entries[0]?.contextBudget).toBeUndefined();expect(JSON.stringify(entries)).not.toMatch(/sentinel-private|private prompt|synthetic/)
+  expect(fetch).not.toHaveBeenCalled();await service.flush()
+ }finally{fetch.mockRestore()}
+})
+
+it('persists, rereads, copies and exports the bounded final report through actual SDK diagnostic consumers', async () => {
+  const dir = await root(), output = join(dir, 'validation.json'); let copied = ''
+  const local = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).prepare!({ systemPrompt: 'sentinel-private', messages: [], tools: [] }).catch(error => error)
+  const failure = modelFailureFacts(local), service = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+  service.observe({ kind: 'sdk/notification', workspaceId: 'ws', method: 'session/status', params: { sessionId: 's', status: 'failed', error: 'prompt is too long: sentinel-private', modelFailure: failure } })
+  service.recordRequestFailure('ws', 'other', new SdkRunError('sentinel-private', -32603, { modelFailure: failure }, []))
+  await service.flush()
+  const restored = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+  const rows = (await restored.list()).entries
+  expect(rows).toHaveLength(2)
+  for (const row of rows) expect(row).toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'schema', validation: failure?.validation } })
+  await restored.copy(rows[0]!.id); await restored.export()
+  expect(copied).toContain('validation'); expect(await readFile(output, 'utf8')).toContain('validation')
+  expect(copied + await readFile(output, 'utf8') + JSON.stringify(rows)).not.toContain('sentinel-private')
+})
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -14,6 +52,37 @@ const status = (state: string, error?: string, sessionId = "s"): DesktopEvent =>
 const retry = { requestId: "req-1", phase: "waiting", attempt: 1, maxRetries: 5, delayMs: 500, code: "http_503", httpStatus: 503, providerId: "local", modelId: "model" }
 
 describe("native runtime diagnostics", () => {
+  it("journals only scalar request/compaction/close facts from the existing notification owners", async () => {
+    const service = createRuntimeDiagnostics(await root())
+    service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "desktop/context/diagnostic", params: { sessionId: "s", compaction: {
+      operation: "summary", inputTokens: 500, contextWindow: 10000, minimumCap: 1025, defaultFloorAdjusted: true,
+      providerId: "controlled", modelId: "fixture", body: "private prompt sk-secret", uncertainties: ["private"] } } } as DesktopEvent)
+    service.observe({ kind: "sdk/disconnected", workspaceId: "ws", message: "private upstream", close: { generation: 2, reason: "scope-changed" } } as DesktopEvent)
+    const rows = (await service.list()).entries
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "context/compaction", sessionId: "s", compaction: { operation: "summary", inputTokens: 500, contextWindow: 10000, minimumCap: 1025, defaultFloorAdjusted: true, providerId: "controlled", modelId: "fixture" } }),
+      expect.objectContaining({ kind: "gateway/disconnected", close: { generation: 2, reason: "scope-changed" } }),
+    ]))
+    expect(JSON.stringify(rows)).not.toMatch(/private|sk-secret|body|uncertainties/)
+  })
+  it("retains safe model facts from status and SDK rejection through disk, copy and export", async () => {
+    const dir = await root(), output = join(dir, "safe.json")
+    let copied = ""
+    const service = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+    const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "prompt is too long: 210000 tokens > 200000 maximum private prompt", input_tokens: 210000, context_limit: 200000, param: "messages" } }), { status: 400, headers: { "request-id": "req-desktop-123" } }))
+    const safe = modelFailureFacts(upstream)
+    service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: upstream.message, modelFailure: { ...safe, message: "private prompt sk-private-key", parameter: "private prompt" } } })
+    service.beginRequest("ws", "other")
+    service.recordRequestFailure("ws", "other", new SdkRunError(upstream.message, -32603, { modelFailure: safe }, []))
+    await service.flush()
+    const restored = createRuntimeDiagnostics(dir, { copy: text => { copied = text }, pickExport: async () => output })
+    const rows = (await restored.list()).entries
+    expect(rows).toHaveLength(2)
+    expect(rows.every(row => row.message === "Model input exceeds the context window. (HTTP 400)")).toBe(true)
+    for (const row of rows) expect(row).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", httpStatus: 400, modelFailure: { reason: "context-limit", inputTokens: 210000, contextLimit: 200000, requestId: "req-desktop-123", message: "Model input exceeds the context window." } })
+    await restored.copy(rows[0]!.id); await restored.export()
+    expect(copied + await readFile(output, "utf8") + await readFile(join(dir, "runtime-diagnostics.0.jsonl"), "utf8")).not.toMatch(/private prompt|sk-private-key/)
+  })
   it.each(["failed", "cancelled", "completed"])("does not attribute delayed %s status to a busy replacement retry", async terminal => {
     const service = createRuntimeDiagnostics(await root())
     const phases: string[] = []

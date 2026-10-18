@@ -1,5 +1,6 @@
 /** Public data-only contract. No prompts, response content or credentials. */
 export interface UsageRecord {
+  requestMetrics?: import("./request-metrics.js").RequestMetrics
   id: string
   startedAt: number
   durationMs: number

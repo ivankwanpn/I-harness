@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "head": "1b605d0e7e7f88cdc4de5a5ae3c6103eea61f590",
+  "at": "2026-10-15T14:22:14.953Z",
+  "scope": "Documentation and read-only census verification; not product test or release qualification.",
+  "original": {
+    "total": 43,
+    "reviewed": 27,
+    "pending": 16,
+    "pendingGroups": 13
+  },
+  "planned": {
+    "fullGroups": 6,
+    "fullFiles": 9,
+    "partialGroups": 5,
+    "partialFiles": 5,
+    "independentGroups": 2,
+    "independentFiles": 2,
+    "newCandidates": 2,
+    "reusedReviewedFiles": 17
+  },
+  "checkedLinks": 74,
+  "unchangedProductSourceHashes": 25,
+  "trackedChangesDocumentationOnly": true,
+  "files": [
+    {
+      "file": "docs/refactoring/2026-10-15-context-decomposition-overlap.md",
+      "sha256": "095107b696347d200ab40e881b297cbef0ff3b8294a6ff44d999169f535d3caa"
+    },
+    {
+      "file": "docs/refactoring/v0.1.13-decomposition-map.md",
+      "sha256": "8ea14d831258daa01ed4848891fb6b506319172e42aefb83b6dd9cbe99dc477e"
+    },
+    {
+      "file": "docs/superpowers/specs/2026-10-15-context-engine-framework.md",
+      "sha256": "dde1e6c6d18551fd6d5ee6c30e29464bfd5600e0affa1f360c469e0a4186c83a"
+    },
+    {
+      "file": "docs/superpowers/specs/2026-10-15-context-engine-redesign.md",
+      "sha256": "f6ec8084d0d198e37a3237b3ee42f5b2c60fc91e5416db365033157895e76305"
+    },
+    {
+      "file": "docs/superpowers/specs/2026-10-13-v0.1.13-product-decomposition-design.md",
+      "sha256": "7563ccd888e9a0ce29953519511b5453be8527b1675113de05e8b2179d14ef7f"
+    },
+    {
+      "file": "docs/superpowers/plans/2026-10-13-v0.1.13-product-decomposition.md",
+      "sha256": "0aa7cfdf637227e021051388ad78f86314f7cc07d5090e52cd0e591fb46e22e4"
+    },
+    {
+      "file": "docs/research/2026-10-15-context-architecture-reassessment.md",
+      "sha256": "b3dc99924b9ddae5071e30c3aa0bc0612ff260d77382ae2b8659fc9c09409400"
+    },
+    {
+      "file": "docs/research/context-redesign-2026-10-15/README.md",
+      "sha256": "809a3bc6fabfb7bfede26fad0e31d138bd2af34354982bae06e473316323d8c3"
+    },
+    {
+      "file": "docs/refactoring/context-overlap-2026-10-15/README.md",
+      "sha256": "43b4e0e90d0f34334d90013785493bd04492459e2aa86ac373fd8280ecbcb282"
+    },
+    {
+      "file": "docs/refactoring/context-overlap-2026-10-15/census.json",
+      "sha256": "9ff8773b78f4a62695b5490fdb9cf59f5cc9563ba92475483b68dd5213379f93"
+    },
+    {
+      "file": "docs/refactoring/context-overlap-2026-10-15/census.mjs",
+      "sha256": "1ede2a33454ef588066e48cb9ecf12c7f065ca94ab2e9294d53c89b85300bd60"
+    },
+    {
+      "file": "docs/refactoring/context-overlap-2026-10-15/framework-review.md",
+      "sha256": "692620f07009e99056ab6b78d4e5ab46b00328782ef660eb03677debc9453b9e"
+    }
+  ]
+}

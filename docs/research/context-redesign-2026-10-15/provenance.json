@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "createdAt": "2026-10-15T13:08:29.365Z",
+  "ihHead": "81bca938a750b73bce6bebc02219ae2665b7e47e",
+  "branch": "codex/v0.1.13-development",
+  "node": "v24.15.0",
+  "scope": "Read-only source audit and synthetic offline controls; no live provider samples, product implementation or whole-repository qualification.",
+  "probeCommand": "pnpm exec tsx docs/research/context-redesign-2026-10-15/probes.ts",
+  "probeExit": 0,
+  "checkedLinks": 75,
+  "sourceFiles": [
+    {
+      "path": "packages/core-session/src/projection/messages.ts",
+      "bytes": 18170,
+      "sha256": "18b2567c85d2f56d568eaac266dbcd54f2c32bba5cff457251828dc18feb303b"
+    },
+    {
+      "path": "packages/core-session/src/projection/types.ts",
+      "bytes": 2117,
+      "sha256": "f9164ad4c14faca525ce5f0d65508fd69a4a3dd062dfe823ceb44725f52f6b4a"
+    },
+    {
+      "path": "packages/core-agent/src/agent/admission.ts",
+      "bytes": 5747,
+      "sha256": "9394a8c42842deb755a715570a4dde5695586da4efff137b2ecb7872f0ff5dbb"
+    },
+    {
+      "path": "packages/core-agent/src/agent/budget.ts",
+      "bytes": 8966,
+      "sha256": "d41964b7d2cb117ff89a2d72b74d7f1188155a9040f66bfe4037bc420b8cd1b6"
+    },
+    {
+      "path": "packages/core-agent/src/agent/context.ts",
+      "bytes": 9879,
+      "sha256": "36218bfdac33bcf2f3676c9612b7a1aafab2f91a43386b8151287b22552c08a1"
+    },
+    {
+      "path": "packages/core-agent/src/agent/recovery.ts",
+      "bytes": 8700,
+      "sha256": "dcbbd4f3232ff8a42af1ca06822878bbf35168bc9a4cdb2d5605458e75fc6624"
+    },
+    {
+      "path": "packages/compaction/src/engine/commit.ts",
+      "bytes": 5786,
+      "sha256": "6395121739c1725ee582ff91bf6ac9a4bf2219dcb7308747f228f07690b66912"
+    },
+    {
+      "path": "packages/compaction/src/engine/admission.ts",
+      "bytes": 7889,
+      "sha256": "7232182bc112c2fecd735aea0e38a62a2bad252196e6aa8facef967aa87af4f9"
+    },
+    {
+      "path": "packages/compaction/src/summarizer.ts",
+      "bytes": 21807,
+      "sha256": "8794961aabdcbf626af4d39582773f94c7647826e45ea735993f402768ea82f7"
+    },
+    {
+      "path": "packages/compaction/src/config.ts",
+      "bytes": 11273,
+      "sha256": "707f159dc161dbe0513741616925d27af9fe915eb7f38479149f9b04459e3726"
+    },
+    {
+      "path": "packages/compaction/src/region.ts",
+      "bytes": 9174,
+      "sha256": "4f08b47b36680e272416e404c9785198936977383f37f7e6d58442f8c2e42e68"
+    },
+    {
+      "path": "packages/token-meter/src/checkpoint.ts",
+      "bytes": 3543,
+      "sha256": "e0c3361bf040a2e633fb1697abf10885ba30e3e5a7972e4df45fa1a8d09393ff"
+    },
+    {
+      "path": "packages/token-meter/src/projection/measure.ts",
+      "bytes": 4232,
+      "sha256": "8302b5210e8837eef250e4641a2082b74f6838b0fa37462e26c020957816fad0"
+    },
+    {
+      "path": "packages/token-meter/src/projection/pricing.ts",
+      "bytes": 556,
+      "sha256": "326384b3c4208de4f6f21e93307d4646fc390f7f99c56eb5fbcfe65cb5c1fa4f"
+    },
+    {
+      "path": "packages/token-meter/src/estimate.ts",
+      "bytes": 2084,
+      "sha256": "dee45f8f2a707be80e3702c0d410f2e39806cf9e86843752e6c193a528bf0961"
+    },
+    {
+      "path": "packages/llm-anthropic/src/request/body.ts",
+      "bytes": 6200,
+      "sha256": "32a4e44e36ee6a1dfe6d3e5bfb376e865ab5344f07564606216d36b93ab9553e"
+    },
+    {
+      "path": "packages/llm-anthropic/src/context.ts",
+      "bytes": 5092,
+      "sha256": "4c67d8ad39136aa2670d2dc0d409c98935bece8944f135c9f7c8fb1d6cc1051c"
+    },
+    {
+      "path": "packages/llm-seam/src/prepared/payload.ts",
+      "bytes": 2191,
+      "sha256": "8091117b217b6bcfe00b6c0ef607719fa36b9218b325b664c88e125dcc7033e8"
+    },
+    {
+      "path": "packages/subagent/src/fork.ts",
+      "bytes": 3851,
+      "sha256": "e8fe1b8971f419738f27ea89bb2636b6d3a041d7c738cafae51203973f73421f"
+    },
+    {
+      "path": "packages/subagent/src/child.ts",
+      "bytes": 4416,
+      "sha256": "3c44b74b0dfe71f8adf6a212bf43f4e22b9a769a1fdda7d28888cfee482a8df4"
+    },
+    {
+      "path": "packages/subagent/src/report-policy.ts",
+      "bytes": 9327,
+      "sha256": "852ca66019d3537c76dd0723103ca2f163888850d0fb24cb560df942e55f2109"
+    },
+    {
+      "path": "packages/output-retention/src/spill-guard.ts",
+      "bytes": 18653,
+      "sha256": "1d9e353fb61636047aafbc0a8967a884724a2dc5b6bbf850c07861da361f0f63"
+    },
+    {
+      "path": "packages/session-persistence-jsonl/src/index.ts",
+      "bytes": 19076,
+      "sha256": "36b192fe5a6743942393c8b5ae8fba6c8264517f133b8ee0a2a4d605301b4088"
+    },
+    {
+      "path": "packages/desktop/package.json",
+      "bytes": 1856,
+      "sha256": "d16a4b3bd765b3f5229f9688dfc5412d84f4319498307bce0601f3bc6481c867"
+    },
+    {
+      "path": "packages/desktop-gateway/package.json",
+      "bytes": 2307,
+      "sha256": "b570323c7425982ce9e9dedfc6b6e0215e08e525a8a9ab35ee25db08c1692f4f"
+    }
+  ],
+  "referenceFiles": [
+    {
+      "path": "D:/ih_reference_project/codex-rust-v0.162.1/codex-rs/Cargo.toml",
+      "bytes": 21055,
+      "sha256": "c31fb138f0167e885a0dd349534b615a265f4190e7264a112070e7ea57188b05"
+    },
+    {
+      "path": "D:/ih_reference_project/codex-rust-v0.162.1/codex-rs/core/src/context_manager/history.rs",
+      "bytes": 58587,
+      "sha256": "1d1b7ab7c4d300afaa041e12cf5a62543c63e412f511d3573810fd200e5c76f2"
+    },
+    {
+      "path": "D:/ih_reference_project/deepseek-harness-dsh-v0.2.1-alpha.3/package.json",
+      "bytes": 18920,
+      "sha256": "78f202076d911fa46ef15e8edb6f5f68e231e5306bbb39cef9ee6238010b8c8e"
+    },
+    {
+      "path": "D:/ih_reference_project/deepseek-harness-dsh-v0.2.1-alpha.3/packages/llm/llm/src/message.ts",
+      "bytes": 11275,
+      "sha256": "5826fb32bc3d6e2221a7a39cc8b4fecc57282540a332417bb9f2ac3522b5c7da"
+    },
+    {
+      "path": "D:/ih_reference_project/deepseek-harness-dsh-v0.2.1-alpha.3/packages/llm/llm-pi-ai/src/replay.ts",
+      "bytes": 12307,
+      "sha256": "5f5e2aee49771ea9849a0852d45c8b65110a4f52f3127f10cd85f0d66783dc92"
+    },
+    {
+      "path": "D:/ih_reference_project/ZCode-main/package.json",
+      "bytes": 4172,
+      "sha256": "fd17e8cdcefd36cf92a83b8e45468c4756a947bd77db4e529d11cf2a62d947ed"
+    },
+    {
+      "path": "D:/ih_reference_project/ZCode-main/apps/zcode-cli/package.json",
+      "bytes": 1968,
+      "sha256": "6c48017b05d8a7215c5bf7dea12f50edd1487bf5b8b22e11c21703d32e8f7742"
+    },
+    {
+      "path": "D:/ih_reference_project/ZCode-main/apps/zcode-cli/packages/contracts/src/model/index.ts",
+      "bytes": 33076,
+      "sha256": "66bade3a80b9901e2fc83749316eaa840568edb4f165ad07bcc71084b5dd49d1"
+    },
+    {
+      "path": "D:/ih_reference_project/pi-1.2.0/packages/ai/package.json",
+      "bytes": 2721,
+      "sha256": "3838d036bbb844ea6d4d08ef199423a0335022e34b5d5c8833257f64e4cae625"
+    },
+    {
+      "path": "D:/ih_reference_project/pi-1.2.0/packages/coding-agent/package.json",
+      "bytes": 3767,
+      "sha256": "d4231a02b6a2ccb357a8e9e420fab9c217490137ade958d4a45a12e169daad0c"
+    },
+    {
+      "path": "D:/ih_reference_project/pi-1.2.0/packages/ai/src/types.ts",
+      "bytes": 31744,
+      "sha256": "19f632e0918cca442d3dfa3572ebabe79453dea0b1f54eadd3287a9c6b515674"
+    },
+    {
+      "path": "D:/ih_reference_project/pi-1.2.0/packages/ai/src/api/transform-messages.ts",
+      "bytes": 7666,
+      "sha256": "6d82d11a49213a4193e0d074f36d7af76e8a911b003104c0aa2c22569b2fe669"
+    },
+    {
+      "path": "D:/ih_reference_project/opencode-1.19.0/packages/opencode/package.json",
+      "bytes": 5268,
+      "sha256": "dd03234cf489d0bdf1c5e8760140af44bb0a5249dc745a192dd8d343d7f876f7"
+    },
+    {
+      "path": "D:/ih_reference_project/opencode-1.19.0/packages/llm/src/schema/messages.ts",
+      "bytes": 11939,
+      "sha256": "1b4c2a89ca2b4786292c261c2e06f54685f462ef334bc55fc08a0059e7d5de7c"
+    }
+  ],
+  "evidenceFiles": [
+    {
+      "path": "README.md",
+      "bytes": 3535,
+      "sha256": "13dbe776a82e19c1ff03e599eb8b2d3876c40b82132c9b7fa3d5d06656e6a8fa"
+    },
+    {
+      "path": "codex-audit.md",
+      "bytes": 37931,
+      "sha256": "b39cb91234c255f2b08487d81a150d0772291cf3f60da42474d49a898df6d86a"
+    },
+    {
+      "path": "dsh-zcode-audit.md",
+      "bytes": 39861,
+      "sha256": "600960cb06db52cd3c23efc4afaa7bf0d261a2d765e84b1da235df381a924655"
+    },
+    {
+      "path": "pi-opencode-audit.md",
+      "bytes": 39967,
+      "sha256": "b1c9b2c5875618d09df3a1eac81291a747bc229a20a7d65d9932bb7c4c2adf88"
+    },
+    {
+      "path": "unified-format-dsh-zcode.md",
+      "bytes": 18296,
+      "sha256": "12a5e94f9a34df7a2406bfa737353e4c4f4f3cc8fa615151382c08063e0474d5"
+    },
+    {
+      "path": "unified-format-pi-opencode.md",
+      "bytes": 17569,
+      "sha256": "3bca505eba0d04d9ba9e9d890a435586840322e2a8c0e3259b0fa71459c1dfef"
+    },
+    {
+      "path": "ih-independent-audit.md",
+      "bytes": 24206,
+      "sha256": "16e70faa3fcecce427c98680320f96d420b23c1b0626325ad60feb64f158fa9d"
+    },
+    {
+      "path": "design-review.md",
+      "bytes": 12843,
+      "sha256": "e793ec2d1b5ac731c7f4e700c33e3a37ef9b682c19167b082e957780a3d9aa41"
+    },
+    {
+      "path": "probes.ts",
+      "bytes": 12643,
+      "sha256": "c3602dd619194277d7abe4ab5b2567194dfa24b8c9701b0e80d871f2ec77cb7c"
+    },
+    {
+      "path": "probe-results.json",
+      "bytes": 4709,
+      "sha256": "df6b400f4f4caaf7d9ce6d0fad2c9deac8313c75d3d17538023fa067e1e7aa14"
+    }
+  ],
+  "proposalFiles": [
+    {
+      "path": "docs/research/2026-10-15-context-architecture-reassessment.md",
+      "bytes": 18599,
+      "sha256": "82f6917d7fd9e969180a96941200c732e1e4d54068807d2a22f9ffe1c6fcc8fe"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-10-15-context-engine-redesign.md",
+      "bytes": 20507,
+      "sha256": "5f6490576702c94809221c7a9ccd70439edf801b9a8b8bf091400f00a53799b4"
+    }
+  ]
+}

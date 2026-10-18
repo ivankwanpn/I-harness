@@ -166,6 +166,32 @@ describe("suppressSqliteExperimentalWarning", () => {
 })
 
 describe("real process emission (integration)", () => {
+  for (const entry of ["index.ts", "file-backed.ts"]) {
+    it(`installs the filter through the actual ${entry} entry before native SQLite can warn`, async () => {
+      const { spawnSync } = await import("node:child_process")
+      const entryUrl = new URL(`../src/${entry}`, import.meta.url).href
+      const script = [
+        "const { mkdtempSync, rmSync } = await import('node:fs')",
+        "const { tmpdir } = await import('node:os')",
+        "const { join } = await import('node:path')",
+        "const storeRoot = mkdtempSync(join(tmpdir(), 'ih-q-warning-entry-'))",
+        "try {",
+        `const entry = await import(${JSON.stringify(entryUrl)})`,
+        "const query = entry.createFileBackedSessionQuery({ storeRoot })",
+        "await query.search('empty')",
+        "process.emitWarning('SQLite is an experimental feature (entry regression)', 'ExperimentalWarning')",
+        "process.emitWarning('S10 unrelated warning remains visible', 'ExperimentalWarning')",
+        "if (entry.closeSessionQueries) entry.closeSessionQueries(); else entry.closeFileBackedConnections()",
+        "await new Promise(resolve => setTimeout(resolve, 30))",
+        "} finally { rmSync(storeRoot, { recursive: true, force: true }) }",
+      ].join("\n")
+      const result = spawnSync(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { encoding: "utf8" })
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stderr).not.toContain("SQLite is an experimental feature")
+      expect(result.stderr).toContain("S10 unrelated warning remains visible")
+    })
+  }
+
   it("the shape of node:sqlite's warning matches the filter", () => {
     const w = emitSqliteExperimentalWarning()
     expect(isSqliteExperimentalWarning(w)).toBe(true)

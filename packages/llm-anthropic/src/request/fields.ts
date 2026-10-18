@@ -1,0 +1,1 @@
+export const known = new Set(['model', 'system', 'messages', 'tools', 'stream', 'max_tokens', 'thinking', 'output_config', 'tool_choice', 'temperature', 'top_p', 'top_k', 'stop_sequences', 'metadata', 'service_tier', 'cache_control'])

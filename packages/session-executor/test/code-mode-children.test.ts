@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -7,10 +7,14 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
+import { controlledModel } from "./controlled-model.ts"
+import { inspect } from 'node:util'
+
+afterEach(() => vi.unstubAllGlobals())
 
 it("ordinary and Team children keep role-local Code Mode through followup and resident reconstruction", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-children-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
   const parallelLimits: Array<number | undefined> = []
@@ -18,13 +22,13 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     parallelLimits.push(mountOptions.maxParallel)
     return registerCodeMode(ctx, tools, mountOptions)
   }
-  const child: ModelClient = { async *stream(request) {
+  const child = controlledModel(async function* (request) {
     requests.push(request)
     const last = request.messages.at(-1)
     if (last?.role === "user") yield { type: "tool_call", call: { name: "code_exec", args: { code: 'text(ALL_TOOLS.map(t=>t.name)); text(await tools.list_dir({path:"."})); store("turn",(load("turn")??0)+1); text(load("turn"));' } } }
     else yield { type: "text/chunk", text: "child complete" }
     yield { type: "end" }
-  } }
+  })
   const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } } }
   const options = {
     workspace: root, model: parent, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "only" as const },
@@ -36,6 +40,7 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     resolveRoleModel: async () => ({ status: "ready" as const, binding: { client: child, contextWindow: 100_000, maxOutputTokens: 123 } }),
   }
   let service = createSessionService(options)
+  let primaryFailure: unknown, failed = false
   try {
     let assembly = await service.assemblyFor("parent")
     const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "parent" })
@@ -74,5 +79,17 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
       const numbers = events.filter(e => e.type === "code/output").map(e => (e as { content: { text?: string } }).content.text).filter(text => /^\d+$/.test(text ?? ""))
       expect(numbers).toEqual(["1", "2", "3"])
     }
-  } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+  } catch (error) {
+    failed = true
+    primaryFailure = error
+    console.error('Code Mode child primary failure', inspect(error, { depth: 12 }))
+    throw error
+  } finally {
+    try { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    catch (cleanup) {
+      console.error('Code Mode child cleanup failure', inspect(cleanup, { depth: 12 }))
+      if (failed) throw new AggregateError([primaryFailure, cleanup], 'Code Mode child assertion and cleanup failed', { cause: primaryFailure })
+      throw cleanup
+    }
+  }
 }, 15_000)

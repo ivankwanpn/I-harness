@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "壓縮後的完整請求仍超過目標。": "The complete request is still above the target after compaction.",
+  "壓縮未完成。": "Compaction did not complete.",
   "引用內容合計過長，請移除部分引用或附件；草稿仍保留。": "The combined reference content is too long. Remove some references or attachments; your draft is retained.",
   "等待模型回應…": "Waiting for the model to respond…", "等待模型繼續輸出…": "Waiting for more model output…", "請求已進行 {seconds} 秒。": "Request elapsed: {seconds}s.",
   "模型等待期限": "Model wait deadlines", "首次回應期限（秒）": "First response deadline (seconds)", "進度期限（秒）": "Progress deadline (seconds)", "儲存等待設定": "Save wait settings",
@@ -399,6 +401,24 @@ const english = {
   "壓縮目前會話上下文": "Compact this conversation's context", "目前無法壓縮上下文": "Cannot compact context right now",
   "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…", "無法取得上下文容量。": "Context capacity is unavailable.",
   "訊息來源": "Message sources", "使用者訊息": "User messages", "助手訊息": "Assistant messages", "工具訊息": "Tool messages",
+  "已準備的上下文": "Prepared context facts", "上次估算輸入": "Last estimated input",
+  "輸出預留": "Output reserve", "輸出上限": "Output cap", "安全餘量": "Safety margin", "剩餘輸入預算": "Remaining input budget",
+  "此路由未套用傳送給供應商的輸出上限。": "No wire output cap was applied.",
+  "供應商拒絕了上下文；請先壓縮或更換模型，再重試。": "Provider rejected the context. Compact or change the model before retrying.",
+  "需要先壓縮上下文才能繼續請求。": "Context compaction is required before admission.",
+  "根據已準備的供應商輸入估算，包含系統提示與工具定義；與帳單和快取計數分開。": "Estimated from the prepared provider input, including system instructions and tool definitions; separate from billing and cache counts.",
+  "刷新狀態": "Refresh status", "系統提示": "System instructions", "工具定義": "Tool definitions", "重用推理": "Reused reasoning",
+  "已準備輸入的估算": "Estimate of prepared input", "供應商用量加上新增輸入": "Provider usage plus new input", "通用格式估算": "Generic input estimate",
+  "估算值": "Estimated", "部分依用量校準": "Partly calibrated from usage", "部分內容成本不確定": "Some input costs are uncertain",
+  "已包含完整輸入": "All input included", "僅包含通用格式": "Generic input only", "輸入估算不完整": "Input estimate is incomplete",
+  "已套用": "Applied", "此路由不支援": "Unsupported by this route", "是否套用尚不確定": "Application is unknown",
+  "模型已回覆；下一次請求準備完成後會重新估算容量。": "The model has replied. Capacity will be estimated again when the next request is prepared.",
+  "尚未準備模型請求，暫無上下文估算。": "No model request has been prepared yet. A context estimate is not available.",
+  "供應商拒絕了目前上下文，需先壓縮或更換模型。": "The provider rejected this context. Compact it or change the model to continue.",
+  "上下文內容已變更；下一次請求準備完成後會更新估算。": "The context has changed. Its estimate will update when the next request is prepared.",
+  "模型設定已變更，等待下一次請求的容量估算。": "Model settings have changed. Capacity will be estimated for the next request.",
+  "此模型沒有可用的上下文容量資料。": "Context capacity information is unavailable for this model.",
+  "部分供應商端內容無法估算，暫時不能確認可用容量。": "Some provider-side content cannot be estimated, so available capacity cannot be confirmed yet.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

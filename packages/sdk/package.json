@@ -5,10 +5,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./context": "./src/context.ts",
     "./server": "./src/server.ts"
   },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
+    "@i-harness/context-engine": "workspace:*",
+    "@i-harness/llm-seam": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/diagnostics": "workspace:*",
     "@i-harness/session-executor": "workspace:*",

@@ -4,6 +4,7 @@ import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, re
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { validateReleaseVersion } from "./release-version.mjs"
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(packageRoot, "..", "..")
@@ -72,7 +73,8 @@ export function validatePayload(input) {
     readSync(executable, header, 0, 2, 0)
     if (header.toString("ascii") !== "MZ") throw new Error("Desktop executable is not a Windows executable")
   } finally { closeSync(executable) }
-  if (app.version !== sourceManifest.version || !/^\d+\.\d+\.\d+$/.test(app.version)) throw new Error(`payload version ${app.version} differs from Desktop source version ${sourceManifest.version}, or is unsupported`)
+  if (app.version !== sourceManifest.version) throw new Error(`payload version ${app.version} differs from Desktop source version ${sourceManifest.version}`)
+  const releaseVersion = validateReleaseVersion(app.version)
   const electronVersion = readFileSync(join(appDir, "version"), "utf8").trim()
   if (electronVersion !== sourceManifest.devDependencies.electron) throw new Error(`Electron version ${electronVersion} differs from ${sourceManifest.devDependencies.electron}`)
   const gateway = manifestAt(appDir, "resources/gateway/cli/package.json")
@@ -82,7 +84,7 @@ export function validatePayload(input) {
     const dependency = manifestAt(appDir, `resources/gateway/node_modules/${name}/package.json`)
     if (dependency.name !== name) throw new Error(`gateway dependency manifest mismatch: ${name}`)
   }
-  return { appDir, appName, version: app.version, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0) }
+  return { appDir, appName, ...releaseVersion, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0) }
 }
 
 export function validateTestRoot(input) {
@@ -99,21 +101,21 @@ export function validateTestRoot(input) {
 
 function nsisString(value) { return value.replaceAll("$", () => "$$").replaceAll('"', '$\\"').replaceAll("/", "\\") }
 function hashFile(path) { return createHash("sha256").update(readFileSync(path)).digest("hex") }
-function compilerPath(explicit) {
+function compilerPath(explicit, run) {
   const candidates = explicit ? [absolutePath(explicit, "NSIS compiler")] : [
     ...(process.env.IH_NSIS_MAKENSIS ? [absolutePath(process.env.IH_NSIS_MAKENSIS, "NSIS compiler")] : []),
     join(repoRoot, "build", "tools", "makensis", "makensis.exe"),
     join(repoRoot, "build", "tools", "nsis-3.11", "nsis-3.11", "makensis.exe"),
-    ...(spawnSync("where.exe", ["makensis.exe"], { encoding: "utf8", windowsHide: true }).stdout?.trim().split(/\r?\n/).filter(Boolean) ?? []),
+    ...(run("where.exe", ["makensis.exe"], { encoding: "utf8", windowsHide: true }).stdout?.trim().split(/\r?\n/).filter(Boolean) ?? []),
   ]
   const compiler = candidates.find(path => existsSync(path) && lstatSync(path).isFile())
   if (!compiler) throw new Error("NSIS 3 compiler not found; pass --nsis <absolute makensis.exe> from the official NSIS archive")
-  const result = spawnSync(compiler, ["/VERSION"], { encoding: "utf8", windowsHide: true })
+  const result = run(compiler, ["/VERSION"], { encoding: "utf8", windowsHide: true })
   if (result.status !== 0 || !/^v?3\.\d+/.test(result.stdout.trim())) throw new Error("NSIS 3 compiler version check failed")
   return { path: compiler, version: result.stdout.trim(), sha256: hashFile(compiler) }
 }
 
-export function buildInstaller(options) {
+export function buildInstaller(options, run = spawnSync) {
   const payload = validatePayload(options.appDir ?? join(packageRoot, "release", defaultAppName))
   const appName = payload.appName
   const isolated = options.testRoot ? validateTestRoot(options.testRoot) : null
@@ -128,7 +130,7 @@ export function buildInstaller(options) {
   const identity = createHash("sha256").update(`I-harness.Desktop.Installer.v1\0${hashFile(join(packageRoot, "installer", "desktop.nsi"))}\0${payload.version}\0`)
   for (const file of payload.files) identity.update(`${file.path.replaceAll("\\", "/")}\0${hashFile(join(payload.appDir, file.path))}\n`)
   const payloadId = identity.digest("hex")
-  const compiler = compilerPath(options.nsis)
+  const compiler = compilerPath(options.nsis, run)
   const staging = join(repoRoot, "build", "desktop-installer", randomUUID())
   mkdirSync(staging, { recursive: true })
   writeFileSync(join(staging, ".build-owner"), "I-harness Desktop installer build v1\n")
@@ -145,17 +147,17 @@ export function buildInstaller(options) {
   writeFileSync(directoryInclude, payload.directories.map(path => `!insertmacro CheckPayloadDirectory "${nsisString(path)}"`).join("\n") + "\n")
   writeFileSync(conflictInclude, payload.files.map(file => `!insertmacro RefuseExistingFile "${nsisString(file.path)}"`).join("\n") + "\n")
   const definitions = {
-    APP_NAME: appName, APP_VERSION: payload.version, PAYLOAD_ID: payloadId, OUTPUT_FILE: output, PAYLOAD_INSTALL: installInclude,
+    APP_NAME: appName, APP_VERSION: payload.version, WINDOWS_VERSION: payload.windowsVersion, PAYLOAD_ID: payloadId, OUTPUT_FILE: output, PAYLOAD_INSTALL: installInclude,
     PAYLOAD_REMOVE: removeInclude, PAYLOAD_DIRECTORIES: directoryInclude, PAYLOAD_CONFLICTS: conflictInclude,
     ESTIMATED_SIZE: Math.ceil(payload.payloadBytes / 1024),
     ...(isolated ? { TEST_ROOT: isolated.testRoot, TEST_TOKEN: isolated.token, TEST_HOOKS: join(packageRoot, "test", "installer-fixture-hooks.nsh") } : {}),
   }
   const args = ["/NOCONFIG", "/WX", "/V3", "/INPUTCHARSET", "UTF8", ...Object.entries(definitions).map(([key, value]) => `/D${key}=${key === "TEST_ROOT" ? nsisString(String(value)) : value}`), join(packageRoot, "installer", "desktop.nsi")]
-  const result = spawnSync(compiler.path, args, { encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
+  const result = run(compiler.path, args, { encoding: "utf8", windowsHide: true, maxBuffer: 16 * 1024 * 1024 })
   writeFileSync(join(staging, "compile.log"), `${result.stdout ?? ""}${result.stderr ?? ""}`)
   if (result.error || result.status !== 0 || !existsSync(output)) throw new Error(`NSIS compile failed (${result.status}): ${result.error?.message ?? result.stderr ?? result.stdout}\nLog: ${join(staging, "compile.log")}`)
   const metadata = {
-    schemaVersion: 1, product: appName, version: payload.version, electronVersion: payload.electronVersion,
+    schemaVersion: 1, product: appName, version: payload.version, windowsVersion: payload.windowsVersion, electronVersion: payload.electronVersion,
     appDir: payload.appDir, output, bytes: statSync(output).size, sha256: hashFile(output),
     payloadFiles: payload.fileCount, payloadBytes: payload.payloadBytes,
     payloadId,

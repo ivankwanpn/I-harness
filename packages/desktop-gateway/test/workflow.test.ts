@@ -1,10 +1,10 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import { append } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { forkSession } from "@i-harness/session-persistence"
@@ -12,7 +12,7 @@ import { createDesktopWorkflow, createDesktopGoalTools } from "../src/workflow.t
 
 it("persists Goal/Plan controls and job history, rejecting stale Goal edits", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-workflow-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const workflow = createDesktopWorkflow(coordinator, service)
@@ -27,7 +27,7 @@ it("persists Goal/Plan controls and job history, rejecting stale Goal edits", as
     expect((await workflow.mutate("s", { action: "plan", enabled: true, proposal: "Inspect first" })).plan.active).toBe(true)
     const assembly = await service.assemblyFor("s")
     expect(assembly.session.events).toContainEqual(expect.objectContaining({ type: "user/message", text: "Inspect first" }))
-    append(assembly.session, { type: "job/status", version: 1, job: { jobId: "job-1", kind: "shell", label: "test", status: "completed", outputAvailable: false } })
+    await (await coordinator.openManagedDocument('s')).delivery.record({ type: "job/status", version: 1, job: { jobId: "job-1", kind: "shell", label: "test", status: "completed", outputAvailable: false } })
     await coordinator.flush("s")
     await service.closeSession("s")
     const restored = await workflow.read("s")
@@ -38,11 +38,11 @@ it("persists Goal/Plan controls and job history, rejecting stale Goal edits", as
 })
 it.each(["refused", "empty"] as const)("pauses an autonomous Goal after a provider %s result", async (kind) => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-terminal-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   let calls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
-    model: { async *stream() { calls++; yield { type: "end", ...(kind === "refused" ? { refused: true as const } : {}) } } } })
+    model: controlledModel(request => ({ async *stream() { calls++; yield { type: "end", ...(kind === "refused" ? { refused: true as const } : {}) } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const workflow = createDesktopWorkflow(coordinator, service)
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
@@ -53,11 +53,11 @@ it.each(["refused", "empty"] as const)("pauses an autonomous Goal after a provid
 })
 it("contains background recovery persistence failures and reports them to the UI", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-disk-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   const put = coordinator.putDocument.bind(coordinator)
   vi.spyOn(coordinator, "putDocument").mockImplementation(async (key, value) => { if (key.startsWith("desktop-goal-")) throw new Error("disk unavailable"); await put(key, value) })
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: { async *stream() { throw new Error("provider unavailable") } } })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: controlledModel(request => ({ async *stream() { throw new Error("provider unavailable") } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const errors: string[] = []
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, running, error) => { if (!running && error) errors.push(error) } })
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -69,7 +69,7 @@ it("contains background recovery persistence failures and reports them to the UI
 })
 it("forks a team conversation into an independent team while the source stays mounted", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-team-fork-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "source" })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true })
@@ -77,10 +77,10 @@ it("forks a team conversation into an independent team while the source stays mo
     const source = await service.assemblyFor("source")
     expect(source.tools.get("send_message")).toBeDefined()
     expect(source.tools.get("team_send_message")).toBeDefined()
-    append(source.session, { type: "user/message", text: "source team work" })
-    append(source.session, { type: "turn/start" })
+    const action=source.factOwner.beginAction()
+    await action.facts.inputs.start(undefined,{type:'user/message',text:'source team work'})
     await workflow.mutate("source", { action: "team", tool: "team_task_create", args: { subject: "Source task", description: "keep in source" } })
-    append(source.session, { type: "turn/end" })
+    await action.facts.agent.lifecycle({type:'turn/end'});action.finish()
     await coordinator.flush("source")
     const fork = await forkSession(coordinator, "source")
     expect((await workflow.read(fork.sessionId)).team.tasks).toEqual([])
@@ -91,20 +91,20 @@ it("forks a team conversation into an independent team while the source stays mo
 })
 it("restarts a paused Goal while the old aborted provider request is still settling", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-goal-resume-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   let release!: () => void
   const old = new Promise<void>((done) => { release = done })
   let calls = 0
   const states: boolean[] = []
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
-    additionalTools: createDesktopGoalTools((id) => service.liveSession(id), () => {}),
-    model: { async *stream(request) {
+    additionalTools: createDesktopGoalTools((id) => service.liveSession(id), () => {},id=>service.liveAssembly(id)?.metadataFacts),
+    model: controlledModel(request => ({ async *stream(request) {
       if (++calls === 1) { await old; request.signal?.throwIfAborted() }
       else if (calls === 2) { const goal = foldGoal(service.liveSession("s")!.events)!; yield { type: "tool_call", call: { name: "goal_complete", args: { id: goal.id, revision: goal.revision } } } }
       else yield { type: "text/chunk", text: "Verified done" }
       yield { type: "end" }
-    } } })
+    } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, value) => states.push(value) })
   try {
     const first = await workflow.mutate("s", { action: "goal", operation: "create", request: { objective: "Verify done" }, start: true })

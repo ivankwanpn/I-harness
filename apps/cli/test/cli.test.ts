@@ -1,3 +1,5 @@
+import { controlledModel } from '../../../packages/session-executor/test/controlled-model.ts'
+import { prepareTextFixture, checkpointOfLength } from '../../../packages/compaction/test/fixtures/checkpoint.ts'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -24,6 +26,8 @@ import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
 import type { ExecService } from "@i-harness/exec"
 
+const nativeFetch = globalThis.fetch
+let fixtureOrigin: string
 let canonicalConfigDir: string
 let closeFixtureModel: (() => Promise<void>) | undefined
 const previousConfigDir = process.env.IH_CONFIG_DIR
@@ -44,6 +48,7 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const address = server.address()
   if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
+  fixtureOrigin = `http://127.0.0.1:${address.port}`
   closeFixtureModel = () => new Promise<void>((resolve, reject) => {
     server.close((error) => error === undefined ? resolve() : reject(error))
     server.closeAllConnections()
@@ -67,6 +72,13 @@ beforeAll(async () => {
   }), "utf8")
   process.env.IH_CONFIG_DIR = canonicalConfigDir
 })
+
+beforeEach(() => vi.stubGlobal('fetch', (url: string | URL | Request, init?: RequestInit) => {
+  const target = new URL(typeof url === 'string' ? url : url instanceof URL ? url.href : url.url)
+  if (target.origin !== fixtureOrigin) throw new Error('Unexpected CLI fixture network destination')
+  return nativeFetch(url, init)
+}))
+afterEach(() => vi.unstubAllGlobals())
 
 afterAll(async () => {
   if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR
@@ -199,7 +211,7 @@ describe("headless CLI (M2)", () => {
         { role: "assistant", text: "报告：已修改" },
       ],
     })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.error).toBe(0)
     expect(result.finalText).toContain("报告")
     expect(readFileSync(join(dir, "data.txt"), "utf-8")).toBe("hello")
   })
@@ -303,13 +315,13 @@ describe("headless CLI (M2)", () => {
         { role: "assistant", text: "done" },
       ],
     })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.error).toBe(0)
   })
   describe("headless CLI M10b session-query tools (M29: file-backed, jsonl store)", () => {
     it("session_search finds previously written session content", async () => {
       // M29: the store root is the workspace — the query surface is the
       // file-backed index over the jsonl store (reconcile-on-search).
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [{ type: "user/message", text: "the purple unicorn fixed the parser" }])
       const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
@@ -325,9 +337,10 @@ describe("headless CLI (M2)", () => {
             { role: "assistant", text: "ok" },
           ],
         })
-        expect(result.exitCode).toBe(0)
+        expect(result.exitCode, result.error).toBe(0)
         const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; eventType: string; snippet: string }[] } } | undefined
         expect(resultEvent).toBeDefined()
+        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('hits')
         const hits = resultEvent!.output.hits
         // M70 CHANGED THIS EXPECTATION, deliberately and in the strict
         // direction. The search is a durable reader (reconcile-on-search over
@@ -353,7 +366,7 @@ describe("headless CLI (M2)", () => {
     })
 
     it("lineage shows the parent/child structure", async () => {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "parent" })
       await coordinator.create({ sessionId: "child", parentSession: "parent", delegationDepth: 1, origin: "subagent" })
       const sessionQuery = createFileBackedSessionQuery({ storeRoot: dir })
@@ -369,9 +382,10 @@ describe("headless CLI (M2)", () => {
             { role: "assistant", text: "ok" },
           ],
         })
-        expect(result.exitCode).toBe(0)
+        expect(result.exitCode, result.error).toBe(0)
         const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { nodes: { sessionId: string; parentSession?: string }[] } } | undefined
         expect(resultEvent).toBeDefined()
+        expect(resultEvent!.output, JSON.stringify(resultEvent!.output)).toHaveProperty('nodes')
         const nodes = resultEvent!.output.nodes
         expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
         expect(nodes[0]!.parentSession).toBe("parent")
@@ -389,7 +403,7 @@ describe("headless CLI (M2)", () => {
           { role: "assistant", text: "ok" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.error).toBeUndefined()
       expect(result.finalText).toBe("ok")
       expect(result.session!.events.filter(event => event.type === "tool/result")).toMatchObject([
@@ -403,23 +417,25 @@ describe("headless CLI (M2)", () => {
 
   describe("headless CLI M11 compaction", () => {
     it("auto-compacts a long session and completes normally", async () => {
-      // Production-representative shape: maxTokens (20) << threshold (50), so
-      // the summary alone can never re-cross the threshold — no hot loop.
-      const compact: CompactionConfig = { contextWindow: 100, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 20 }
+      // The declared window contains the actual shipped system and schemas.
+      // The retained checkpoint clears the 500-character quality floor and
+      // stays far below the pressure threshold after replacement.
+      const compact: CompactionConfig = { contextWindow: 100_000, thresholdRatio: 0.5, retainTokens: 0, maxTokens: 256 }
       // Inline structural model: every stream() call (agent turn OR the shared
       // summarizer call) yields the same long text, so the e2e is deterministic
       // (a script-based createMockClient would be consumed by the summarizer).
-      const model: ModelClient = {
-        async *stream() {
-          yield { type: "text/chunk", text: "compacted work summary line ".repeat(20) }
+      const model: ModelClient = { prepare: prepareTextFixture,
+        async *stream(request) {
+          yield { type: "text/chunk", text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600,'compacted work summary line') : 'compacted work summary line' }
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("z".repeat(300), { // ~75 tokens ≥ 50 threshold at step 1
+      const seed=createSession();append(seed,{type:"user/message",text:"z".repeat(200000)});append(seed,{type:"assistant/message",text:"older completed exchange"});
+      const result = await runHeadless("continue", { session:seed,
         workspace: dir, approveAll: true, compact, model,
       })
-      expect(result.exitCode).toBe(0)
-      const summary = result.session!.events.find((e) => e.type === "compaction/summary")
+      expect(result.exitCode, result.error).toBe(0)
+      const summary = result.session!.events.find((e) => e.type === "compaction/replacement")
       expect(summary).toBeDefined()
       // the summary is model-visible in the final derived surface
       const msgs = deriveMessages(result.session!)
@@ -433,7 +449,7 @@ describe("headless CLI (M2)", () => {
       // summary's shadowedSeqs [0] then hides the old user/message so the
       // resume surface leads with the summary. Without the KNOWN_EVENT_TYPES
       // registration this load path hard-fails (SessionFormatUnsupportedError).
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       await coordinator.create({ sessionId: "main" })
       await coordinator.append("main", [
         { type: "user/message", text: "old work", seq: 0 },
@@ -449,7 +465,7 @@ describe("headless CLI (M2)", () => {
           resumeSessionId: "main",
           mockScript: [{ role: "assistant", text: "continuing" }],
         })
-        expect(result.exitCode).toBe(0)
+        expect(result.exitCode, result.error).toBe(0)
         // C1 regression: the resume load path must tolerate compaction events
         // (they are registered KNOWN_EVENT_TYPES), and the projection leads
         // with the restored summary.
@@ -461,7 +477,7 @@ describe("headless CLI (M2)", () => {
 
     it("no compact config → no compaction events, behavior unchanged", async () => {
       const result = await runHeadless("plain", { workspace: dir, approveAll: true, mockScript: [{ role: "assistant", text: "ok" }] })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.session!.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
     })
   })
@@ -603,7 +619,7 @@ describe("headless CLI M24b skills + workflow mount", () => {
           { role: "assistant", text: "skill applied" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       // The tool RESULTS are observable on the session log — the search found
       // the sample skill and skill_get returned its usable body.
       const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
@@ -642,7 +658,7 @@ describe("headless CLI M24b skills + workflow mount", () => {
           { role: "assistant", text: "workflow finished" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const results = result.session!.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
       // workflow_run returned the single-job id for the run.
       const run = results.find((e) => e.name === "workflow_run")
@@ -652,7 +668,7 @@ describe("headless CLI M24b skills + workflow mount", () => {
       const outJson = JSON.stringify(out?.output)
       expect(outJson).toContain("wf hello from step")
       expect(outJson).toContain("[step 1/1 greet] ok")
-      expect(outJson).toContain("[status: completed]")
+      expect((out!.output as { status: string }).status).toBe("completed")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -680,7 +696,7 @@ describe("headless CLI subagent + fs-search mount (M3-C finish)", () => {
           { role: "assistant", text: "ok" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -698,7 +714,7 @@ describe("headless CLI subagent + fs-search mount (M3-C finish)", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -709,7 +725,7 @@ describe("headless CLI persistence (M4)", () => {
   it("runHeadless with a coordinator persists the session to a JSONL file", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       const result = await runHeadless("hello", {
         workspace: dir,
@@ -717,7 +733,7 @@ describe("headless CLI persistence (M4)", () => {
         sessionId: id,
         coordinator,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(existsSync(join(dir, `${id}.jsonl`))).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -727,7 +743,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume restores the persisted history into the model request", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" },
@@ -737,13 +753,13 @@ describe("headless CLI persistence (M4)", () => {
       ])
 
       const seen: LLMRequest[] = []
-      const recordingModel: ModelClient = {
+      const recordingModel: ModelClient = controlledModel(request => ({
         async *stream(request: LLMRequest) {
           seen.push(request)
           yield { type: "text/chunk", text: "continued" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
 
       const result = await runHeadless("continue here", {
         workspace: dir,
@@ -752,7 +768,7 @@ describe("headless CLI persistence (M4)", () => {
         coordinator,
         model: recordingModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(seen.length).toBeGreaterThan(0)
       const texts = seen[0]!.messages.map((m) => m.content).filter((c) => c.length > 0)
       expect(texts).toContain("earlier question")
@@ -765,7 +781,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume restores the session header alongside the history (G7)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-g7-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       // Seed the lineage header through the coordinator's create meta (the
       // coordinator rebuilds session.header from it on load — same path the
       // main resume uses).
@@ -782,7 +798,7 @@ describe("headless CLI persistence (M4)", () => {
         coordinator,
         mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       // G7: the resumed run's session adopts the persisted lineage header —
       // without it the subagent max_depth guard would always read depth 0
       // after a resume.
@@ -797,7 +813,7 @@ describe("headless CLI persistence (M4)", () => {
   it("resume with a missing session id resolves cleanly instead of throwing", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m4-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       // no session file was created → coordinator.load rejects; runHeadless must
       // turn that into a clean { exitCode: 1, error } result, not a throw.
       const result = await runHeadless("hello", {
@@ -835,7 +851,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
   it("runHeadless with a jsonl coordinator persists to the store (no sessions.db)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       const result = await runHeadless("hello", {
         workspace: dir,
@@ -843,7 +859,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
         sessionId: id,
         coordinator,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"))
       expect(files).toHaveLength(1)
       // M29: the sqlite persistence artifact no longer exists anywhere
@@ -856,7 +872,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
   it("resume restores the persisted history into the model request", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m5-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" },
@@ -866,13 +882,13 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
       ])
 
       const seen: LLMRequest[] = []
-      const recordingModel: ModelClient = {
+      const recordingModel: ModelClient = controlledModel(request => ({
         async *stream(request: LLMRequest) {
           seen.push(request)
           yield { type: "text/chunk", text: "continued" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
 
       const result = await runHeadless("continue here", {
         workspace: dir,
@@ -881,7 +897,7 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
         coordinator,
         model: recordingModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(seen.length).toBeGreaterThan(0)
       const texts = seen[0]!.messages.map((m) => m.content).filter((c) => c.length > 0)
       expect(texts).toContain("earlier question")
@@ -931,7 +947,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
   it("persists subagent state via the coordinator document API on a run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
     const failures = vi.fn()
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures })
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures, lock: { enabled: true } })
     try {
       const { id } = await coordinator.create()
       // Deterministic spawn driver: a SHARED mock cassette would be consumed by
@@ -939,7 +955,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
       // agent's next stream. A fresh model client yields the spawn tool call
       // first, then plain text for every later stream (child + main agent).
       let calls = 0
-      const spawnModel: ModelClient = {
+      const spawnModel: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
           const n = calls++
           if (n === 0) {
@@ -950,7 +966,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
           yield { type: "text/chunk", text: "done" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("delegate", {
         workspace: dir,
         approveAll: true,
@@ -958,7 +974,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
         coordinator,
         model: spawnModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       // The completed run owns the shutdown barrier: both registry snapshots
       // and the nested task/notification save queue must already be durable.
       const state = await coordinator.getDocument(id) as { jobs: { status: string }[] }
@@ -978,7 +994,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
   it("resume restores a user-overridden role and settled jobs", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       await coordinator.append(id, [
         { type: "turn/start" }, { type: "user/message", text: "first" },
@@ -996,7 +1012,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
       // If restoreState skipped the custom role, spawn_agent throws
       // `unknown role: custom` and no "helper" job ever appears.
       let calls = 0
-      const resumeModel: ModelClient = {
+      const resumeModel: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
           const n = calls++
           if (n === 0) {
@@ -1007,7 +1023,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
           yield { type: "text/chunk", text: "continued" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("continue", {
         workspace: dir,
         approveAll: true,
@@ -1015,7 +1031,7 @@ describe("headless CLI subagent state persistence (M6)", () => {
         coordinator,
         model: resumeModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       // The spawn's terminal save snapshots the full restored state: the
       // restored job (label "old") AND the new spawn (label "helper", only
       // possible if the restored custom role was effective). Poll until both.
@@ -1039,11 +1055,11 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("spawn persists the child session log (child-<uuid> file with events)", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Deterministic driver: first stream yields spawn_agent; later streams (child + main) are text.
       let calls = 0
-      const spawnModel: ModelClient = {
+      const spawnModel: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
           const n = calls++
           if (n === 0) {
@@ -1054,11 +1070,11 @@ describe("headless CLI durable child sessions (M8)", () => {
           yield { type: "text/chunk", text: "done" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("delegate", {
         workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const childIds = (await coordinator.list()).filter((sid) => sid.startsWith("child-"))
       expect(childIds.length).toBe(1)
       const { session } = await coordinator.load(childIds[0]!)
@@ -1072,10 +1088,10 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("resume keeps the child sessionId link in the restored registry snapshot", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       let calls = 0
-      const spawnModel: ModelClient = {
+      const spawnModel: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
           const n = calls++
           if (n === 0) {
@@ -1086,7 +1102,7 @@ describe("headless CLI durable child sessions (M8)", () => {
           yield { type: "text/chunk", text: "done" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: spawnModel })
       expect(first.exitCode).toBe(0)
       const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
@@ -1095,7 +1111,7 @@ describe("headless CLI durable child sessions (M8)", () => {
       // only works if the resume-load loop installed the live mirror session),
       // later streams are text.
       let resumeCalls = 0
-      const resumeModel: ModelClient = {
+      const resumeModel: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
           const n = resumeCalls++
           if (n === 0) {
@@ -1106,9 +1122,9 @@ describe("headless CLI durable child sessions (M8)", () => {
           yield { type: "text/chunk", text: "continued" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: resumeModel })
-      expect(second.exitCode).toBe(0)
+      expect(second.exitCode, second.error).toBe(0)
       // The restored child's mirror session received the durable inbox event.
       const reloaded = await coordinator.load(childId!)
       expect(reloaded.session.events.some((e) => e.type === "subagent/inbox" && e.message === "ping")).toBe(true)
@@ -1124,14 +1140,14 @@ describe("headless CLI durable child sessions (M8)", () => {
   it("fresh run: the main agent spawns a child then sends it a message; the inbox event lands in the child log", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m8-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
-      // Deterministic driver. The spawned child shares the model client, so the
-      // first stream AFTER spawn (n=1) is the CHILD's own stream (M3-C race) —
-      // it must be text, not a tool call. The main agent's send_message is n=2.
+      // Parent and child share the client but have distinct durable owners.
+      // Their scheduling order is not part of the messaging contract.
       let calls = 0
-      const model: ModelClient = {
+      const model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper" } } }
@@ -1139,11 +1155,6 @@ describe("headless CLI durable child sessions (M8)", () => {
             return
           }
           if (n === 1) {
-            yield { type: "text/chunk", text: "child done" }
-            yield { type: "end" }
-            return
-          }
-          if (n === 2) {
             yield { type: "tool_call", call: { name: "send_message", args: { target: "root/helper", message: "ping" } } }
             yield { type: "end" }
             return
@@ -1151,9 +1162,9 @@ describe("headless CLI durable child sessions (M8)", () => {
           yield { type: "text/chunk", text: "done" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
       expect(childId).toBeDefined()
       const { session } = await coordinator.load(childId!)
@@ -1169,20 +1180,20 @@ describe("headless CLI multi-turn subagents (M9)", () => {
   it("followup_task drives a second turn on the child's durable session", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
-      // Deterministic driver: n=0 spawn_agent (fork none), n=2 followup_task,
-      // every other stream (child turns + main) is text.
+      // Route by owner; a background child's first request may race the parent.
       let calls = 0
-      const model: ModelClient = {
+      const model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
             yield { type: "end" }
             return
           }
-          if (n === 2) {
+          if (n === 1) {
             yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
             yield { type: "end" }
             return
@@ -1190,9 +1201,9 @@ describe("headless CLI multi-turn subagents (M9)", () => {
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const result = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
       expect(childId).toBeDefined()
       const { session } = await coordinator.load(childId!)
@@ -1208,19 +1219,20 @@ describe("headless CLI multi-turn subagents (M9)", () => {
   it("resume_agent cold-resumes a child and continues the conversation", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m9-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
       // Run 1: spawn (fork none) + followup → child log has 2 turns.
       let calls = 0
-      const run1Model: ModelClient = {
+      const run1Model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = calls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "do it", task_name: "helper", fork_turns: "none" } } }
             yield { type: "end" }
             return
           }
-          if (n === 2) {
+          if (n === 1) {
             yield { type: "tool_call", call: { name: "followup_task", args: { target: "root/helper", message: "again" } } }
             yield { type: "end" }
             return
@@ -1228,15 +1240,16 @@ describe("headless CLI multi-turn subagents (M9)", () => {
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const first = await runHeadless("delegate", { workspace: dir, approveAll: true, sessionId: id, coordinator, model: run1Model })
       expect(first.exitCode).toBe(0)
       const childId = (await coordinator.list()).find((sid) => sid.startsWith("child-"))
       expect(childId).toBeDefined()
       // Run 2: resume → resume_agent then followup_task → child log gains a 3rd turn.
       let resumeCalls = 0
-      const run2Model: ModelClient = {
+      const run2Model: ModelClient = controlledModel(request => ({
         async *stream(_request: LLMRequest) {
+          if (_request.sessionId !== id) { yield { type: "text/chunk", text: "child done" }; yield { type: "end" }; return }
           const n = resumeCalls++
           if (n === 0) {
             yield { type: "tool_call", call: { name: "resume_agent", args: { target: "root/helper" } } }
@@ -1251,9 +1264,9 @@ describe("headless CLI multi-turn subagents (M9)", () => {
           yield { type: "text/chunk", text: "ok" }
           yield { type: "end" }
         },
-      }
+      } as import('@i-harness/llm-seam').ModelClient).stream(request))
       const second = await runHeadless("continue", { workspace: dir, approveAll: true, resumeSessionId: id, coordinator, model: run2Model })
-      expect(second.exitCode).toBe(0)
+      expect(second.exitCode, second.error).toBe(0)
       // The followup "third" turn is driven in the background (serialization
       // chain is NOT awaited by runHeadless), so wait for the third user
       // message durably before asserting the exact conversation.
@@ -1296,7 +1309,7 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
       const elapsed = performance.now() - start
       // the guard must cut the 30s command short, not hang the headless run
       expect(elapsed).toBeLessThan(10_000)
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("done")
       // the session's tool/result carries the substituted output with the
       // TOOL_TIMEOUT marker at the TOP level of `output` (registry wraps the
@@ -1326,7 +1339,7 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const pluginMessages = result.session?.events.filter(
         (e) => e.type === "user/message" && (e as { source?: { kind: string } }).source?.kind === "plugin",
       )
@@ -1371,7 +1384,7 @@ describe("headless CLI W10 foreground promotion", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const toolResults = result.session?.events.filter((e) => e.type === "tool/result") ?? []
       const shellResult = toolResults.find((e) => e.name === shell) as { output: { job_id?: string; promoted?: boolean; ran_foreground_ms?: number; code?: string } } | undefined
       expect(shellResult).toBeDefined()
@@ -1449,7 +1462,7 @@ describe("headless CLI M12 retry + retention", () => {
         { role: "assistant", text: "done" },
       ],
     })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.error).toBe(0)
     const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout?: string; code?: string } } | undefined
     expect(resultEvent).toBeDefined()
     // The command ran at least once (the guard file exists), and the final
@@ -1476,7 +1489,7 @@ describe("headless CLI M12 retry + retention", () => {
         { role: "assistant", text: "ok" },
       ],
     })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.error).toBe(0)
     const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { stdout: string; truncated?: unknown } } | undefined
     expect(resultEvent!.output.stdout.length).toBeLessThanOrEqual(100)
     expect(resultEvent!.output.truncated).toBeDefined()
@@ -1484,7 +1497,7 @@ describe("headless CLI M12 retry + retention", () => {
 
   it("no retry/shellRetention → existing behavior (regression)", async () => {
     const result = await runHeadless("plain", { workspace: dir, approveAll: true, mockScript: [{ role: "assistant", text: "ok" }] })
-    expect(result.exitCode).toBe(0)
+    expect(result.exitCode, result.error).toBe(0)
   })
 })
 
@@ -1506,7 +1519,7 @@ describe("headless CLI M13 parallel tool calls", () => {
           { role: "assistant", text: "read both" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       const reads = result.session!.events.filter((e) => e.type === "tool/result" && e.name === "read")
       expect(reads).toHaveLength(2)
       for (const ev of reads) {
@@ -1555,7 +1568,7 @@ describe("headless CLI M14 multimodal (image-bearing user message)", () => {
         model: recordingModel,
         session,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("a tiny png")
       const firstUser = seen[0]!.messages.find((m) => m.role === "user")
       const parts = Array.isArray(firstUser!.content) ? firstUser!.content : []
@@ -1591,22 +1604,23 @@ describe("M11 runHeadless compaction contract", () => {
     // bypasses the pressure gate — so this has to be an auto path, i.e. a real run.
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-"))
     try {
-      const model: ModelClient = {
-        async *stream() {
-          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+      const model: ModelClient = { prepare: prepareTextFixture,
+        async *stream(request) {
+          yield { type: "text/chunk", text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600) : 'done' }
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("work ".repeat(400), {
+      const seed=createSession();append(seed,{type:"user/message",text:"z".repeat(200000)});append(seed,{type:"assistant/message",text:"older completed exchange"});
+      const result = await runHeadless("continue", { session:seed,
         workspace: dir,
         approveAll: true,
         model,
         // No provider binding here (a model client was supplied), so the window
         // arrives ONLY from the config — the same shape the CLI now produces.
-        compact: { contextWindow: 100, auto: true },
+        compact: { contextWindow: 100_000, thresholdRatio: .5, retainTokens: 0, maxTokens: 256, auto: true },
       })
-      expect(result.exitCode).toBe(0)
-      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(true)
+      expect(result.exitCode, result.error).toBe(0)
+      expect(result.session?.events.some((e) => e.type === "compaction/replacement")).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -1623,13 +1637,13 @@ describe("M11 runHeadless compaction contract", () => {
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("work ".repeat(400), {
+      const result = await runHeadless("work ".repeat(40_000), {
         workspace: dir,
         approveAll: true,
         model,
-        compact: { contextWindow: 100, auto: false },
+        compact: { contextWindow: 100_000, thresholdRatio: .5, retainTokens: 0, maxTokens: 256, auto: false },
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -1662,7 +1676,7 @@ describe("M16 CLI sandbox wiring", () => {
         approveAll: true,
         model: recordingModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("ok")
       expect(seen[0]!.systemPrompt).toContain("read-only")
     } finally {
@@ -1690,7 +1704,7 @@ describe("M16 CLI sandbox wiring", () => {
         approveAll: true,
         model: recordingModel,
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(seen[0]!.systemPrompt).toContain("danger-full-access")
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -1714,7 +1728,7 @@ describe("M16 CLI sandbox wiring", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0) // the tool failed, but the harness run completes
+      expect(result.exitCode, result.error).toBe(0) // the tool failed, but the harness run completes
       const bashResult = result.session?.events.find((e) => e.type === "tool/result" && e.name === "bash")
       const output = (bashResult as { output: { stdout?: string; stderr?: string; error?: string; exitCode?: number } } | undefined)?.output
       // The deny observable: the confined command exited nonzero (the write was
@@ -1753,7 +1767,7 @@ describe("M16 CLI sandbox wiring", () => {
       // The confined command may fail on THIS host (the tool result carries
       // the failure) — the assertion is the harness run completing, i.e. the
       // composition never turned confinement into SandboxUnavailableError.
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.error ?? "").not.toContain("sandbox")
       expect(result.finalText).toBe("done")
       // F5 (m55 final review): run-completion alone tolerated the F1
@@ -1829,7 +1843,7 @@ describe("M17 CLI mcp integration", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("done")
       const echo = result.session!.events.find((e) => e.type === "tool/result" && e.name === "mcp__fake__echo")
       expect(echo).toBeDefined()
@@ -1855,7 +1869,7 @@ describe("M17 CLI mcp integration", () => {
       const second = await runHeadless("two", {
         workspace: dir, approveAll: true, mcp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(second.exitCode).toBe(0)
+      expect(second.exitCode, second.error).toBe(0)
       expect(second.error).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -1979,7 +1993,7 @@ describe("M18 CLI lsp integration", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("done")
       const lsp = result.session!.events.find((e) => e.type === "tool/result" && e.name === "lsp")
       expect(lsp).toBeDefined()
@@ -2006,7 +2020,7 @@ describe("M18 CLI lsp integration", () => {
       const second = await runHeadless("two", {
         workspace: dir, approveAll: true, lsp: [cfg], mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(second.exitCode).toBe(0)
+      expect(second.exitCode, second.error).toBe(0)
       expect(second.error).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -2020,30 +2034,30 @@ describe("M19 CLI team integration", () => {
   // sessions. The mock model (SHARED with the child) calls spawn_teammate; the
   // roster → realSpawnChild bridge → subagent spawnChild creates a REAL child
   // agent that runs its own (mock-model) turn — the happy-path real spawn that
-  // Task 10's lifecycle test only stubbed. The child shares the model client,
-  // so its initial turn consumes the NEXT script step (M3-C race — same as
-  // M8's durable-child test), then the lead produces its final message.
+  // Task 10's lifecycle test only stubbed. Route the shared client by durable
+  // owner so background scheduling does not consume another agent's reply.
   // RED phase: HeadlessOptions.team is unknown → spawn_teammate never mounts
   // → the call fails with "unknown tool" → exitCode 1.
   it("runHeadless mounts team tools and the agent can use spawn_teammate", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m19-"))
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
+      const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
       const { id } = await coordinator.create()
+      let parentRequests = 0
       const result = await runHeadless("use the team", {
         workspace: dir,
         approveAll: true,
         team: {},
         sessionId: id,
         coordinator,
-        mockScript: [
-          { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
-          // step consumed by the spawned child's own (mock-model) turn
-          { role: "assistant", text: "child done" },
-          { role: "assistant", text: "done" },
-        ],
+        model: controlledModel(request => ({ async *stream(request) {
+          if (request.sessionId !== id) yield { type: "text/chunk", text: "child done" }
+          else if (++parentRequests === 1) yield { type: "tool_call", call: { name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } } }
+          else yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        } } as import('@i-harness/llm-seam').ModelClient).stream(request)),
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
       expect(result.finalText).toBe("done")
       const spawn = result.session!.events.find((e) => e.type === "tool/result" && e.name === "spawn_teammate")
       expect(spawn).toBeDefined()
@@ -2077,7 +2091,7 @@ describe("M19 CLI team integration", () => {
       const second = await runHeadless("two", {
         workspace: dir, approveAll: true, team: {}, mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(second.exitCode).toBe(0)
+      expect(second.exitCode, second.error).toBe(0)
       expect(second.error).toBeUndefined()
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -2153,7 +2167,7 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
           { role: "assistant", text: "done" },
         ],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
     } finally {
       spy.mockRestore()
       rmSync(dir, { recursive: true, force: true })
@@ -2185,7 +2199,7 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
         approveAll: true,
         mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
     } finally {
       spy.mockRestore()
       rmSync(dir, { recursive: true, force: true })
@@ -2213,7 +2227,7 @@ describe("M25 --telemetry (JSONL host event stream)", () => {
         mcp: [{ transport: "stdio", serverName: "tele", command: process.execPath, args: [writeFakeMcpServer()] }],
         mockScript: [{ role: "assistant", text: "ok" }],
       })
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode, result.error).toBe(0)
     } finally {
       spy.mockRestore()
       rmSync(dir, { recursive: true, force: true })
@@ -2285,4 +2299,3 @@ describe("headless CLI M29 file-backed session query wiring", () => {
     expect(fileBackedCalls.list.length).toBe(before)
   }, 30_000)
 })
-

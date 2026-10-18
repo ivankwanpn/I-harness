@@ -1,12 +1,14 @@
-import type { Session } from "@i-harness/core-session"
-import { append, deriveSessionTitle } from "@i-harness/core-session"
-import { clampOutputCap } from "@i-harness/llm-seam"
+import type { SessionView as Session, MetadataFactSource } from "@i-harness/core-session"
+import { committedFactSeqs, metadataFactsFor, deriveSessionTitle, isNondurableSession } from "@i-harness/core-session"
+import { prepareModelRequest, generationError } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { estimateContent } from "@i-harness/token-meter"
+import { assessPreparedCapacity } from '@i-harness/context-engine'
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { resolveTitleAction, type TitleAction } from './execution.ts'
 
 export const TITLE_MAX_BYTES = 120
 export const TITLE_MAX_WORDS = 8
+const TITLE_GENERATION_TIMEOUT_MS = 30_000
 
 const SYSTEM_TITLE_PROMPT =
   "You produce ONLY a short session title. Reply with at most 8 words that capture the user's goal " +
@@ -47,6 +49,9 @@ function eligibleUserTexts(session: Session): { seq: number; text: string }[] {
 }
 
 export async function suggestTitle(deps: {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
+  action?: TitleAction
+  signal?: AbortSignal
   session: Session
   model: ModelClient
   maxWords?: number
@@ -62,76 +67,96 @@ export async function suggestTitle(deps: {
   /** A background title must never hold a completed turn indefinitely. */
   timeoutMs?: number
 }): Promise<{ title: string; source: "provider" | "fallback" }> {
-  const inputs = eligibleUserTexts(deps.session)
-  const first = inputs[0]?.text ?? ""
+  const execution = resolveTitleAction(deps.session, deps.action, deps.signal)
+  const action = execution.context
+  let generation: import('@i-harness/llm-seam').AuxiliaryGenerationAction | undefined
   try {
-    const messages: LLMMessage[] = [{ role: "user", content: inputs.map((i) => i.text).join("\n\n").slice(0, 4000) || "(no messages)" }]
-    const requestedCap = deps.titleMaxOutputTokens === undefined
-      ? deps.maxOutputTokens
-      : Math.min(deps.maxOutputTokens ?? deps.titleMaxOutputTokens, deps.titleMaxOutputTokens)
-    const controller = deps.timeoutMs === undefined ? undefined : new AbortController()
-    const request: LLMRequest = {
-      messages,
-      tools: [],
-      systemPrompt: SYSTEM_TITLE_PROMPT,
-      // M73: the request's own budget, clamped the way the session's own
-      // requests are (`clampOutputCap`, priced with the same public meter).
-      // Normally a no-op — the input is sliced to 4 000 chars and the answer is
-      // a short line — and kept anyway, because a cap that reaches the wire
-      // unclamped is the hazard, not the tokens the clamp saves.
-      ...(requestedCap !== undefined
-        ? { maxOutputTokens: clampOutputCap(requestedCap, deps.contextWindow, estimateContent(messages)) }
-        : {}),
-      ...(controller ? { signal: controller.signal } : {}),
-    }
-    const readTitle = async (): Promise<{ out: string; refused: boolean }> => {
-      let out = ""
-      let refused = false
-      for await (const ev of deps.model.stream(request)) {
-        if (ev.type === "text/chunk") out += ev.text
-        if (ev.type === "error") throw ev.error
-        if (ev.type === "end" && ev.refused === true) refused = true
-      }
-      return { out, refused }
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let result: { out: string; refused: boolean }
+    const inputs = eligibleUserTexts(deps.session)
+    const first = inputs[0]?.text ?? ""
     try {
-      result = deps.timeoutMs === undefined
-        ? await readTitle()
-        : await Promise.race([
-            readTitle(),
-            new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(() => {
-                controller?.abort()
-                reject(new Error("title request timed out"))
-              }, Math.max(1, deps.timeoutMs!))
-            }),
-          ])
-    } finally {
-      if (timer !== undefined) clearTimeout(timer)
+      const timeoutMs = deps.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw generationError('GENERATION_UNSUPPORTED')
+      if (action.openGeneration && inputs[0]) generation = await action.openGeneration(inputs[0].seq, timeoutMs)
+      else if (!isNondurableSession(deps.session)) throw generationError('GENERATION_UNSUPPORTED')
+      const messages: LLMMessage[] = [{ role: "user", content: inputs.map((i) => i.text).join("\n\n").slice(0, 4000) || "(no messages)" }]
+      const requestedCap = deps.titleMaxOutputTokens === undefined
+        ? deps.maxOutputTokens
+        : Math.min(deps.maxOutputTokens ?? deps.titleMaxOutputTokens, deps.titleMaxOutputTokens)
+      const controller = new AbortController()
+      const request: LLMRequest = {
+        messages,
+        tools: [],
+        systemPrompt: SYSTEM_TITLE_PROMPT,
+        ...(requestedCap !== undefined
+          ? { maxOutputTokens: requestedCap }
+          : {}),
+        signal: AbortSignal.any([action.signal, controller.signal, ...(generation ? [generation.signal] : [])]),
+        validateBeforeTransport: action.assertOpen,
+      }
+      const readTitle = async (): Promise<{ out: string; refused: boolean }> => {
+        let out = ""
+        let refused = false
+        action.signal.throwIfAborted()
+        action.assertOpen()
+        const initial = await prepareModelRequest(deps.model, request)
+        const assessed = assessPreparedCapacity(initial, { purpose: 'title', binding: deps.budgetBinding, contextWindow: deps.contextWindow, outputPreference: requestedCap })
+        if (assessed.decision.disposition === 'blocked' || assessed.decision.disposition === 'reduce') throw new Error('Title input cannot fit the selected capacity')
+        const prepared = assessed.prepared
+        await generation?.bind(prepared)
+        for await (const ev of prepared.stream({ generation: generation?.control })) {
+          if (ev.type === "text/chunk") out += ev.text
+          if (ev.type === "error") throw ev.error
+          if (ev.type === "end" && ev.refused === true) refused = true
+        }
+        return { out, refused }
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let result: { out: string; refused: boolean }
+      try {
+        result = generation
+          ? await readTitle()
+          : await Promise.race([
+              readTitle(),
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(() => {
+                  controller.abort()
+                  reject(new Error("title request timed out"))
+                }, timeoutMs)
+              }),
+            ])
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
+      const { out, refused } = result
+      const title = normalizeTitle(out)
+      // M77: absent stays absent — without the bit this message is byte-identical
+      // to pre-M77. NOTE: the throw is swallowed by this function's own catch two
+      // lines down, so the text is a message for a reader of the source (and for
+      // whatever catches it if that ever changes), not for an operator today.
+      if (title.length === 0) throw new Error(refused ? "provider refused to produce a title" : "empty provider title")
+      await generation?.close('completed')
+      return { title, source: "provider" }
+    } catch {
+      await generation?.close(action.signal.aborted ? 'stopped' : 'failed')
+      action.assertOpen()
+      action.signal.throwIfAborted()
+      return { title: fallbackTitle(first, deps.maxWords), source: "fallback" }
     }
-    const { out, refused } = result
-    const title = normalizeTitle(out)
-    // M77: absent stays absent — without the bit this message is byte-identical
-    // to pre-M77. NOTE: the throw is swallowed by this function's own catch two
-    // lines down, so the text is a message for a reader of the source (and for
-    // whatever catches it if that ever changes), not for an operator today.
-    if (title.length === 0) throw new Error(refused ? "provider refused to produce a title" : "empty provider title")
-    return { title, source: "provider" }
-  } catch {
-    return { title: fallbackTitle(first, deps.maxWords), source: "fallback" }
-  }
+  } finally { execution.finish() }
 }
 
-export function applyTitle(session: Session, title: string, source: "fallback" | "provider" | "user", messageSeqs?: number[]): void {
-  append(session, { type: "session/title", title: normalizeTitle(title), messageSeqs: messageSeqs ?? [], source })
+export async function applyTitle(session: Session, title: string, source: "fallback" | "provider" | "user", messageSeqs?: number[], metadata?: MetadataFactSource): Promise<void> {
+  committedFactSeqs(await metadataFactsFor(session, metadata).admit({ type: "session/title", title: normalizeTitle(title), messageSeqs: messageSeqs ?? [], source }))
 }
 
 // First-prompt mode (roadmap). Fail-soft: a provider failure degrades to the
 // deterministic fallback; a coordinator failure never rejects the caller
 // (putDocument reports internally).
 export async function maybeAutoTitle(deps: {
+  budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding
+  action?: TitleAction
+  signal?: AbortSignal
+  metadata?: MetadataFactSource
   session: Session
   model: ModelClient
   coordinator?: SessionCoordinator
@@ -144,33 +169,40 @@ export async function maybeAutoTitle(deps: {
   titleMaxOutputTokens?: number
   timeoutMs?: number
 }): Promise<void> {
-  if (deps.coordinator && deps.sessionId) {
-    // best-effort persisted mirror (list-screen fast path). The key is a
-    // namespaced SUBDIRECTORY ("session-title/<id>") so the mirror never
-    // appears as a top-level *.jsonl/*.doc.jsonl beside the session file
-    // (the JSONL doc backend mkdirs the key's parent dir).
-    void deps.coordinator.putDocument(`session-title/${deps.sessionId}`, {
-      formatVersion: 1,
-      title: deriveSessionTitle(deps.session)?.title ?? null,
-    }).catch(() => {})
-  }
-  if (deriveSessionTitle(deps.session) !== null) return
-  const inputs = eligibleUserTexts(deps.session)
-  if (inputs.length === 0) return
-  const { title, source } = await suggestTitle({
-    session: deps.session,
-    model: deps.model,
-    ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
-    ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
-    ...(deps.titleMaxOutputTokens !== undefined ? { titleMaxOutputTokens: deps.titleMaxOutputTokens } : {}),
-    ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
-  })
-  applyTitle(deps.session, title, source, inputs.map((i) => i.seq))
-  if (deps.coordinator && deps.sessionId) {
-    void deps.coordinator.putDocument(`session-title/${deps.sessionId}`, {
-      formatVersion: 1,
-      title,
-      source,
-    }).catch(() => {})
-  }
+  const execution = resolveTitleAction(deps.session, deps.action, deps.signal)
+  const action = execution.context
+  try {
+    if (deps.coordinator && deps.sessionId) {
+      // best-effort persisted mirror (list-screen fast path). The key is a
+      // namespaced SUBDIRECTORY ("session-title/<id>") so the mirror never
+      // appears as a top-level *.jsonl/*.doc.jsonl beside the session file
+      // (the JSONL doc backend mkdirs the key's parent dir).
+      void deps.coordinator.putDocument(`session-title/${deps.sessionId}`, {
+        formatVersion: 1,
+        title: deriveSessionTitle(deps.session)?.title ?? null,
+      }).catch(() => {})
+    }
+    if (deriveSessionTitle(deps.session) !== null) return
+    const inputs = eligibleUserTexts(deps.session)
+    if (inputs.length === 0) return
+    const { title, source } = await suggestTitle({
+      budgetBinding: deps.budgetBinding,
+      action,
+      session: deps.session,
+      model: deps.model,
+      ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+      ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+      ...(deps.titleMaxOutputTokens !== undefined ? { titleMaxOutputTokens: deps.titleMaxOutputTokens } : {}),
+      ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
+    })
+    action.assertOpen()
+    await applyTitle(deps.session, title, source, inputs.map((i) => i.seq), action.facts.metadata)
+    if (deps.coordinator && deps.sessionId) {
+      void deps.coordinator.putDocument(`session-title/${deps.sessionId}`, {
+        formatVersion: 1,
+        title,
+        source,
+      }).catch(() => {})
+    }
+  } finally { execution.finish() }
 }

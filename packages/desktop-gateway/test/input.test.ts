@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -8,6 +9,74 @@ import { createSessionService, createDurableSessionLoader } from "@i-harness/ses
 type ModelClient = NonNullable<Parameters<typeof createSessionService>[0]["model"]>
 type LLMRequest = Parameters<ModelClient["stream"]>[0]
 import { createDesktopInput } from "../src/input.ts"
+import { describeHttpError, type ModelFailureFacts } from "@i-harness/llm-seam"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+
+it('actual Gateway input reports bounded local final-schema refusal without transport, effect or context recovery', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gateway-final-validation-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root)); await coordinator.create({ sessionId: 's' })
+  let sends = 0, effects = 0
+  const model = createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null }, fetch: async () => { sends++; return new Response('') } })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, additionalTools: [{ name: 'effect', description: '', inputSchema: {}, execute: async () => { effects++; return 'done' } }] })
+  const onStatus = vi.fn(), input = createDesktopInput(coordinator, service, { onStatus })
+  try {
+    await input.admit('s', { text: 'sentinel-human-input', delivery: 'queue' }); await input.drain()
+    const failure = onStatus.mock.calls.find(row => row[1] === false && row[2])
+    expect(failure?.[3]).toMatchObject({ code: 'INVALID_ARGUMENT', reason: 'schema', validation: { route: 'openai-compatible', status: 'invalid' } })
+    expect(JSON.stringify(failure)).not.toContain('sentinel-human-input')
+    expect(sends).toBe(0); expect(effects).toBe(0)
+    expect(service.liveSession('s')?.events.some(event => event.type === 'context/recovery' || event.type === 'compaction/summary')).toBe(false)
+    expect(service.liveSession('s')?.events.find(event => event.type === 'user/message')).toMatchObject({ text: 'sentinel-human-input' })
+  } finally { await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it("repeated model 400 failures preserve facts, the same service and parked work; legacy errors retain three status arguments", async () => {
+  const root = await mkdtemp(join(tmpdir(), "desktop-model-failure-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  await coordinator.create({ sessionId: "s" })
+  await coordinator.create({ sessionId: "ordinary" })
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  let calls = 0, effects = 0, aborted = 0, cellId = ""
+  const onStatus = vi.fn()
+  const model: ModelClient = controlledModel(request => ({ async *stream() {
+    calls++
+    if (calls === 1) yield { type: "tool_call", call: { name: "code_exec", args: { code: "text(await tools.held_work({}));", yield_time_ms: 1 } } }
+    else if (calls <= 4) yield { type: "error", error: await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: calls === 4 ? "context_length_exceeded private prompt" : "Invalid schema: private prompt" } }), { status: 400, headers: { "request-id": "req-input-123" } })) }
+    else if (calls === 5) yield { type: "error", error: new Error("unknown failure") }
+    else if (calls === 6) yield { type: "tool_call", call: { name: "code_wait", args: { cell_id: cellId, yield_time_ms: 5000 } } }
+    else yield { type: "text/chunk", text: "accepted again" }
+    yield { type: "end" }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, sandbox: "danger-full-access", approveAll: true, codeMode: { mode: "mixed" }, additionalTools: [{ name: "held_work", description: "Parked independent work", inputSchema: { type: "object", properties: {} }, isReadOnly: true, execute: async (_args: unknown, exec) => { effects++; let done = false; exec.abortSignal?.addEventListener("abort", () => { if (!done) aborted++ }, { once: true }); await held; done = true; return "full original result" } }] })
+  const input = createDesktopInput(coordinator, service, { onStatus })
+  try {
+    const assembly = await service.assemblyFor("s")
+    await input.admit("s", { text: "start", delivery: "queue" }); await input.drain()
+    expect(assembly.session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" } })
+    const parked = assembly.session.events.find(event => event.type === "tool/result" && event.name === "code_exec") as { output: { cell_id: string; status: string } }
+    expect(parked.output.status).toBe("running"); cellId = parked.output.cell_id
+    await vi.waitFor(() => expect(effects).toBe(1), { timeout: 5000 })
+    for (const text of ["ordinary again", "context"]) { await input.admit("s", { text, delivery: "queue" }); await input.drain() }
+    await input.admit("ordinary", { text: "unknown", delivery: "queue" }); await input.drain()
+    const failures = onStatus.mock.calls.filter(row => row[1] === false && row[2])
+    expect(failures).toHaveLength(4)
+    for (const row of failures.slice(0, 3)) expect(row[3] as ModelFailureFacts).toMatchObject({ httpStatus: 400, requestId: "req-input-123" })
+    expect(failures[0]![3]).toMatchObject({ code: "INVALID_ARGUMENT", reason: "schema" })
+    expect(failures[2]![3]).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", reason: "context-limit" })
+    expect(failures[3]).toHaveLength(3)
+    expect(JSON.stringify(failures.slice(0, 3))).not.toContain("private prompt")
+    expect(service.liveAssembly("s")).toBe(assembly)
+    expect(effects).toBe(1); expect(aborted).toBe(0)
+    const beforeBlockedRetry = calls
+    await input.admit("s", { text: "blocked retry", delivery: "queue" }); await input.drain()
+    expect(calls).toBe(beforeBlockedRetry)
+    release()
+    const completed = await assembly.tools.execute({ name: "code_wait", args: { cell_id: cellId, yield_time_ms: 5000 } })
+    expect(JSON.stringify(completed.output)).toContain("full original result")
+    expect(effects).toBe(1); expect(aborted).toBe(0)
+  } finally { release(); await input.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 15_000)
 
 it("Desktop input wakes only its exact live Session's human observer and a later prompt retrieves the same cell", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-input-steer-"))
@@ -17,14 +86,14 @@ it("Desktop input wakes only its exact live Session's human observer and a later
   const held = new Promise<void>(resolve => { release = resolve })
   const requests = new Map<string, LLMRequest[]>(), calls = new Map<string, number>(), cells = new Map<string, string>()
   let finished = 0, activeAborts = 0
-  const model: ModelClient = { async *stream(request) {
+  const model: ModelClient = controlledModel(request => ({ async *stream(request) {
     const id = request.messages.some(message => message.role === "user" && message.content === "start a") ? "a" : "b"
     const seen = requests.get(id) ?? []; seen.push(request); requests.set(id, seen)
     if (seen.length === 1) yield { type: "tool_call", call: { id: `start-${id}`, name: "code_exec", args: { code: `text(await tools.held_read({id:${JSON.stringify(id)}}));`, yield_time_ms: 60_000 } } }
     else if (seen.length === 3) yield { type: "tool_call", call: { name: "code_wait", args: { cell_id: cells.get(id), yield_time_ms: 5000 } } }
     else yield { type: "text/chunk", text: "parent turn ended" }
     yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, sandbox: "danger-full-access", approveAll: true, codeMode: { mode: "mixed" }, additionalTools: [{
     name: "held_read", description: "Held exact-session producer", inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] }, isReadOnly: true,
     execute: async (args: { id: string }, exec) => { calls.set(args.id, (calls.get(args.id) ?? 0) + 1); let done = false; exec.abortSignal?.addEventListener("abort", () => { if (!done) activeAborts++ }, { once: true }); await held; done = true; finished++; return `original ${args.id}` },
@@ -85,7 +154,7 @@ it("admits a second input durably before the first provider response and preserv
   const began = new Promise<void>((done) => { entered = done })
   const hold = new Promise<void>((done) => { release = done })
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { requests.push(request); if (requests.length === 1) { entered(); await hold }; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
+  const model: ModelClient = controlledModel(request => ({ async *stream(request) { requests.push(request); if (requests.length === 1) { entered(); await hold }; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const input = createDesktopInput(coordinator, service)
   try {
@@ -114,7 +183,7 @@ it("recovers cold queued answers once and refuses changed recovery retries", asy
     await expect(input.admit("s", { inputId: "recovery-one", text: "changed answer", delivery: "queue", start: false })).rejects.toThrow("does not match")
     await service.close(); await input.close(); await coordinator.close()
     coordinator = createSessionCoordinator(createJsonlBackend(root))
-    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
+    const model: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
     service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
     input = createDesktopInput(coordinator, service)
     expect(await input.state("s")).toMatchObject({ resumable: true, items: [{ id: "recovery-one", text: "saved answer" }] })

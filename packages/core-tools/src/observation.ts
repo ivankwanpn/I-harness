@@ -1,4 +1,4 @@
-import { Inbox, subscribe } from "@i-harness/core-session"
+import { readInbox, subscribe } from "@i-harness/core-session"
 import type { ToolExec } from "./index.ts"
 
 export interface ObservationChanges { subscribe(listener: () => void): () => void }
@@ -89,7 +89,7 @@ export function userSteerForTool(exec: ToolExec): UserSteerSource | undefined {
   if (!exec.session || exec.resultConsumer === "code") return undefined
   const session = exec.session
   return {
-    pending: () => new Inbox(session).pending().some(input => input.intent === "user" && input.delivery === "steer"),
+    pending: () => readInbox(session).pending().some(input => input.intent === "user" && input.delivery === "steer"),
     subscribe: listener => subscribe(session, event => {
       if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") listener()
     }),

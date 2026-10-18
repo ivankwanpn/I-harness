@@ -13,13 +13,14 @@ export function reportStreamActivity(request: LLMRequest, kind: StreamActivity):
 }
 
 /** A physical-attempt boundary, inside capture and the single retry wrapper. */
-export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
+function createWaitingExecution(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
   const { firstResponseMs, progressMs } = policy
   for (const value of [firstResponseMs, progressMs]) {
     if (!Number.isFinite(value) || value < 0) throw new Error("Model wait deadlines must be non-negative finite milliseconds")
   }
   return { async *stream(request) {
-    const controller = new AbortController(), startedAt = Date.now(), requestId = randomUUID()
+    const controller = new AbortController(), requestId = randomUUID()
+    let startedAt = Date.now(), issued = !request.generation
     let responseAt: number | undefined, lastProgressAt: number | undefined
     let closed = false, quiet = false, settled = false, terminal: Error | undefined
     let terminalResponse: TerminalResponseHint | undefined
@@ -37,7 +38,7 @@ export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy)
     const abort = () => stop(cancellationError())
     const schedule = () => {
       if (timer !== undefined) clearTimeout(timer)
-      if (closed || terminal) return
+      if (closed || terminal || !issued) return
       const since = lastProgressAt ?? responseAt ?? startedAt
       const limit = responseAt === undefined ? firstResponseMs : progressMs
       const deadline = limit === 0 ? Infinity : since + limit
@@ -74,7 +75,11 @@ export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy)
     }
     try {
       if (terminal) throw terminal
-      iterator = client.stream({ ...request, signal: controller.signal, onTerminalResponse(hint) {
+      iterator = client.stream({ ...request, signal: controller.signal, onTransportIssue() {
+        if (closed || terminal) return
+        issued = true; startedAt = Date.now(); responseAt = undefined; lastProgressAt = undefined; quiet = false
+        schedule()
+      }, onTerminalResponse(hint) {
         if (closed || terminal) return
         if (!["AUTH", "QUOTA", "INVALID_ARGUMENT"].includes(hint.code) || !Number.isInteger(hint.httpStatus)
           || hint.httpStatus < 400 || hint.httpStatus >= 500 || hint.httpStatus === 408 || hint.httpStatus === 429) return
@@ -136,4 +141,24 @@ export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy)
     }
     while (queued.length) yield queued.shift()!
   } }
+}
+
+import { preparedModelClient } from "./prepared/wrappers.ts"
+import { withOwnedPreparedRequests } from './prepared/owned-wrappers.ts'
+import { rememberModelSource } from './prepared/client-source.ts'
+export function createWaitingGuard(client: ModelClient, policy: ModelWaitPolicy): ModelClient {
+  const capturedPolicy = { firstResponseMs: policy.firstResponseMs, progressMs: policy.progressMs }
+  for (const value of [capturedPolicy.firstResponseMs, capturedPolicy.progressMs]) {
+    if (!Number.isFinite(value) || value < 0) throw new Error("Model wait deadlines must be non-negative finite milliseconds")
+  }
+  const wrapped = withOwnedPreparedRequests(client, inner => createWaitingExecution(inner, capturedPolicy))
+  const outer = preparedModelClient(async request => {
+    try { return await wrapped.prepare!(request) }
+    catch (error) {
+      if (request.signal?.aborted) throw Object.assign(new Error("Model request aborted"), { name: "AbortError", code: "ABORTED" })
+      throw error
+    }
+  })
+  rememberModelSource(outer, () => wrapped)
+  return outer
 }

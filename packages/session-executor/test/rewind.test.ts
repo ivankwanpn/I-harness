@@ -1,3 +1,4 @@
+import { appendStandalone as append } from "./helpers.ts"
 // M42 G1 integration: assembly-wired rewind — a scripted turn runs a REAL fs
 // write tool, the event chain (user/message → tool call/result → turn/end)
 // drives the recorder, and the durable point lands in the rewind store; then
@@ -8,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readFile, writeFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
-import { append } from "@i-harness/core-session"
+
 import { createMockClient } from "@i-harness/llm-mock"
 import { RewindRecorder } from "@i-harness/rewind"
 import { RewindService } from "@i-harness/rewind"
@@ -86,7 +87,7 @@ describe("assembly rewind wiring", () => {
       expect(result.truncated).toBe(true)
       expect(result.errors).toEqual([])
       expect(await readFile(join(workspace, "greet.txt"), "utf-8")).toBe("hello")
-      const rewindEv = assembly.session.events.find((e) => e.type === "rewind/point") as { targetTurn: number; fileOps: Array<{ path: string; op: string }> }
+      const rewindEv = assembly.session.events.find((e) => e.type === "rewind/point") as { targetTurn: number; fileOps: readonly { path: string; op: string }[] }
       expect(rewindEv).toBeDefined()
       expect(rewindEv.fileOps).toEqual([{ path: "greet.txt", op: "restore" }])
       expect(await store.readPoints()).toEqual([])

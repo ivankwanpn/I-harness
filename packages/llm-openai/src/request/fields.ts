@@ -1,0 +1,2 @@
+export const subscriptionFields = new Set(['model', 'instructions', 'input', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'store', 'stream', 'stream_options', 'include', 'service_tier', 'prompt_cache_key', 'text', 'client_metadata', 'access_programs'])
+export const publicFields = new Set([...subscriptionFields, 'max_output_tokens', 'previous_response_id', 'conversation', 'prompt', 'temperature', 'top_p', 'truncation', 'metadata', 'user', 'safety_identifier', 'prompt_cache_retention', 'prompt_cache_options', 'background', 'max_tool_calls', 'top_logprobs'])

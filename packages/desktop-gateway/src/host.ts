@@ -4,8 +4,10 @@ import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime, type FileProviderRuntimeOptions } from "@i-harness/provider-runtime/file"
 import { buildModelClient } from "@i-harness/provider"
+import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
+import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
 import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
@@ -131,6 +133,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await settings.load()
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageCapture = createUsageCapture({ workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+    onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),
     onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
   const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
     async query(query) {
@@ -182,16 +185,24 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       : { sessionSelection: meta.modelSelection })
     if (state.status !== "ready") return state
     const { client, ...binding } = state.binding
-    return { status: "ready", binding: { ...binding, model: {
-      stream(request) {
+    const mapRequest = (request: LLMRequest): LLMRequest => {
         const compactSignal = compactionSignals.get(sessionId)
         const signal = compactSignal && request.signal
           ? AbortSignal.any([compactSignal, request.signal])
           : compactSignal ?? request.signal
         signal?.throwIfAborted()
-        return client.stream({ ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) })
+        return { ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) }
+    }
+    const model: ModelClient = {
+      get executionIdentity() { return client.executionIdentity },
+      stream: request => client.stream(mapRequest(request)),
+      async prepare(request) {
+        const captured = snapshotModelData(request)
+        const prepared = await prepareModelRequest(client, mapRequest(captured))
+        return withPreparedSignal(prepared, () => compactionSignals.get(sessionId))
       },
-    } } }
+    }
+    return { status: "ready", binding: { ...binding, model } }
   }
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
@@ -233,7 +244,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     },actionSessionId:nativeContext.humanSessionId})
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
-  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
+  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
@@ -249,6 +260,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
   const service: SessionService = createSessionService({
+    telemetry: { close() {}, emit(event) {
+      if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return
+      const compaction = safeCompactionDiagnostic({ ...event.data, operation: event.type === "compaction/attempt" ? "attempt" : "summary" })
+      if (compaction) { try { options.onWrite(makeNotification("desktop/context/diagnostic", { sessionId: event.data.sessionId, compaction })) } catch { /* Observer isolation. */ } }
+    } },
     videoAudioAnalyzer: input => runtime.analyzeVideoAudio?.(input) ?? Promise.resolve({ status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." }),
     sessionOperation: fence,
     projectContextFor: async id => { const getter = await projects.forSession(id); projectContexts.set(id, getter); return getter },
@@ -297,7 +313,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         const state = await runtime.resolveModel(chosen ? { sessionSelection: chosen } : {})
         if (state.status !== "ready") throw new Error(state.reason)
         const after = await fingerprint()
-        return { client: usageCapture.bind(state.binding.client, sessionId), contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens,
+        return { client: usageCapture.bind(state.binding.client, sessionId), contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens, budgetBinding: state.binding.budgetBinding,
           reasoningEffort: selection ? state.binding.reasoningEffort : undefined,
           identity: { provider: state.binding.providerId, model: state.binding.modelId, protocol: state.binding.protocol,
             ...(selection?.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}), ...(before === after ? { configurationKey: after } : {}) } }
@@ -306,12 +322,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     }) },
     modelPolicy: "required",
     modelBindingFor,
-    afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
+    modelMetadataFor: (_sessionId, meta) => runtime.describeModelBindingMetadata?.(meta?.modelSelection ? { sessionSelection: meta.modelSelection } : {}),
+    afterSuccessfulSubmit: async (sessionId, assembly, limits, action) => {
       if (!autoTitle.enabled()) return
       const { meta } = await coordinator.profile(sessionId)
+      action.assertOpen()
       if (meta.title?.trim()) return
       await maybeAutoTitle({
         session: assembly.session,
+        action,
         model: assembly.model,
         coordinator,
         sessionId,
@@ -336,7 +355,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const codeSettings = createCodeModeSettings(settingsPath, service)
   const rawInput = createDesktopInput(coordinator, service, {
     prepare: async (id, text) => expandPluginPrompt(await service.assemblyFor(id), text),
-    onStatus: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })),
+    onStatus: (sessionId, running, error, modelFailure) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}), ...(modelFailure ? { modelFailure } : {}) })),
   })
   const input = { ...rawInput, admit: (id: string, raw: Parameters<typeof rawInput.admit>[1]) => fence.run(id, () => rawInput.admit(id, raw)),
     resume: (id: string) => fence.run(id, () => rawInput.resume(id)), cancel: (id: string, inputId: string) => fence.run(id, () => rawInput.cancel(id, inputId)) }
@@ -415,14 +434,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     memory,
     compact: (sessionId, instructions, signal) => fence.run(sessionId, async () => {
       signal.throwIfAborted()
-      await coordinator.profile(sessionId)
       const state = service.queueState(sessionId)
       if (state.running || state.queued > 0) throw new Error("session is busy")
       compactionSignals.set(sessionId, signal)
       try {
-        const assembly = await service.assemblyFor(sessionId)
-        signal.throwIfAborted()
-        const result = await assembly.compactNow(instructions)
+        const result = await service.compact(sessionId, instructions, signal)
         await coordinator.flush(sessionId)
         return result
       } finally { compactionSignals.delete(sessionId) }

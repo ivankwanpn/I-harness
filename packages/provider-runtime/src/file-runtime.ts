@@ -5,6 +5,9 @@ import { createCodexManagement } from "@i-harness/coding-plans"
 import { acquireSessionLock, type SessionLock } from "@i-harness/fs-lock"
 import { normalizeSettings, SettingsStore } from "@i-harness/settings"
 import { createProviderRuntime, type CreateProviderRuntimeOptions, type ProviderRuntime } from "./index.ts"
+import { defaultProviderRegistry } from "@i-harness/provider"
+import { providerView } from "./directory/profile.ts"
+import { describeSelection } from "./selection/metadata.ts"
 
 export interface FileProviderRuntimeOptions {
   settingsPath: string
@@ -70,6 +73,19 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
   let tail: Promise<unknown> = Promise.resolve()
   const result = {} as ProviderRuntime
   for (const key of Object.keys(runtime) as (keyof ProviderRuntime)[]) {
+    if (key === "describeModelBindingMetadata") {
+      Object.defineProperty(result, key, { enumerable: true, value: async (...args: Parameters<NonNullable<ProviderRuntime["describeModelBindingMetadata"]>>) => {
+        await validateDocument(options.settingsPath)
+        const snapshot = new SettingsStore({ path: options.settingsPath })
+        await snapshot.load()
+        const registry = defaultProviderRegistry()
+        return describeSelection(snapshot, id => {
+          const template = registry.get(id), user = snapshot.get().llm.providers[id]
+          return template || user ? providerView(id, template, user) : undefined
+        }, args[0])?.metadata
+      } })
+      continue
+    }
     const method = runtime[key] as (...args: unknown[]) => Promise<unknown>
     Object.defineProperty(result, key, { enumerable: true, value: (...args: unknown[]) => {
       const job = tail.then(async () => {

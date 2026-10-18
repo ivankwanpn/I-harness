@@ -4,8 +4,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { createSessionAssembly } from "../src/assembly.ts"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { clampOutputCap } from "@i-harness/llm-seam"
-import { estimateContent } from "@i-harness/token-meter"
+import { prepareModelRequest } from "@i-harness/llm-seam"
 import { gcSpillStore } from "@i-harness/output-retention"
 
 it("reports an actual yielded live cell while the agent turn is idle and drops it after completion", async () => {
@@ -71,8 +70,9 @@ it.each(["off", "mixed", "only"] as const)("uses the %s tool surface in actual m
     const names = request.tools.map(tool => tool.name)
     if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
-    const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
-    expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
+    const prepared = await prepareModelRequest(model, request)
+    const actualInput = Object.values(prepared.measurement.input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
+    expect(request.maxOutputTokens).toBe(100_000 - 10_000 - actualInput)
   } finally { await assembly?.dispose(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -85,9 +85,10 @@ it("prices a live Code Mode catalog after host tools change", async () => {
     assembly.tools.register({ name: "late_tool", description: "Late catalog payload ".repeat(400), inputSchema: { type: "object", properties: {} }, isReadOnly: true, execute: async () => "ok" })
     await assembly.agent.run("hello")
     const request = requests[0]!
-    const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
     expect(request.tools[0]!.description).toContain("late_tool")
-    expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
+    const prepared = await prepareModelRequest(model, request)
+    const actualInput = Object.values(prepared.measurement.input.components).reduce((sum, component) => sum + component.heuristicTokens, 0)
+    expect(request.maxOutputTokens).toBe(100_000 - 10_000 - actualInput)
   } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
 })
 

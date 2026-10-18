@@ -11,6 +11,8 @@ import { append, createSession, type Session, type SessionEvent } from "@i-harne
 import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { HarnessClient } from "../src/client.ts"
+import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSdkServer, type SdkServer } from "../src/server.ts"
 import {
   decodeFrame,
@@ -82,8 +84,10 @@ function drive(server: SdkServer): {
 function makeStubService(): SessionService {
   return {
     submit: vi.fn(async () => {}),
+    compact: vi.fn(async () => { throw new Error("unused manual generation capability in sdk ownership test") }),
     refreshExtensions: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
+    receivedInputFor: vi.fn(async () => { throw new Error('unused received-input capability in sdk ownership test') }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
     contextState: vi.fn(async () => ({ kind: "unavailable" as const, reason: "No model configured" })),
     // The server itself never rebinds (the host seam does, Task 4) — present
@@ -94,7 +98,7 @@ function makeStubService(): SessionService {
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
     queue: vi.fn(() => []),
-    cancelQueued: vi.fn(() => ({ cancelled: false })),
+    cancelQueued: vi.fn(async () => ({ cancelled: false })),
     tasks: vi.fn(() => []),
     cancelTask: vi.fn(() => "already-finished" as const),
     onAssembly: () => () => {},
@@ -107,6 +111,46 @@ function makeStubService(): SessionService {
 }
 
 describe("createSdkServer", () => {
+  it('carries final validation from the actual adapter through server status, RPC framing and client sanitization', async () => {
+    const rejected = await createOpenAICompatibleClient({ apiKey: '', model: 'm', options: { messages: null } }).prepare!({ systemPrompt: 'sentinel-private-prompt', messages: [], tools: [] }).catch(error => error)
+    const service = makeStubService(); vi.mocked(service.submit).mockRejectedValue(rejected)
+    const server = createSdkServer(service), input = new PassThrough(), output = new PassThrough(), client = new HarnessClient(output, input)
+    const lines = createInterface({ input }); lines.on('line', line => { void server.handleLine(line).then(reply => { if (reply) output.write(reply + '\n') }) })
+    const notifications: RpcMessage[] = []; server.onNotify(message => { notifications.push(message); output.write(encodeFrame(message) + '\n') })
+    try {
+      await client.initialize()
+      const error = await client.run({ sessionId: 's', prompt: 'original task' }).catch(error => error)
+      expect(error.code).toBe(INTERNAL_ERROR)
+      expect(error.modelFailure).toMatchObject({ code: 'INVALID_ARGUMENT', reason: 'schema', validation: { status: 'invalid', route: 'openai-compatible', issues: [{ rule: 'shape', site: 'messages' }] } })
+      expect(notifications.find(message => 'method' in message && message.method === 'session/status' && (message.params as { status?: string }).status === 'error')).toMatchObject({ params: { modelFailure: error.modelFailure } })
+      expect(JSON.stringify([error.data, notifications])).not.toContain('sentinel-private-prompt')
+    } finally { client.close(); lines.close(); input.destroy(); output.destroy(); await server.close() }
+  })
+  it("preserves safe model failure facts in status and RPC errors without replacing numeric codes", async () => {
+    const service = makeStubService()
+    const upstream = await describeHttpError("anthropic", new Response(JSON.stringify({ error: { type: "invalid_request_error", message: "context_length_exceeded private prompt", param: "messages" } }), { status: 400, headers: { "request-id": "req-sdk-123" } }))
+    vi.mocked(service.submit).mockRejectedValue(upstream)
+    const server = createSdkServer(service)
+    const input = new PassThrough(), output = new PassThrough()
+    const client = new HarnessClient(output, input)
+    const lines = createInterface({ input })
+    lines.on("line", line => { void server.handleLine(line).then(reply => { if (reply) output.write(reply + "\n") }) })
+    server.onNotify(message => { output.write(encodeFrame(message) + "\n") })
+    const notifications: RpcMessage[] = []
+    client.onNotification(message => notifications.push(message))
+    try {
+      await client.initialize()
+      const error = await client.run({ sessionId: "s", prompt: "task" }).catch(error => error)
+      expect(error.code).toBe(INTERNAL_ERROR)
+      expect(error.message).toBe(upstream.message)
+      expect(modelFailureFacts(error)).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", httpStatus: 400, parameter: "messages", requestId: "req-sdk-123" })
+      expect(notifications.find(message => "method" in message && message.method === "session/status" && (message.params as { status?: string }).status === "error")).toMatchObject({ params: { error: upstream.message, modelFailure: modelFailureFacts(upstream) } })
+      expect(JSON.stringify(error.data)).not.toContain("private prompt")
+      vi.mocked(service.submit).mockResolvedValue(undefined)
+      await expect(client.run({ sessionId: "s", prompt: "next" })).resolves.toMatchObject({ sessionId: "s" })
+      expect(service.closeSession).not.toHaveBeenCalled()
+    } finally { client.close(); lines.close(); input.destroy(); output.destroy(); await server.close() }
+  })
   it("does not submit a prompt whose preparation finishes after close starts", async () => {
     const service = makeStubService()
     let release!: () => void

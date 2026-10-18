@@ -6,7 +6,6 @@ import { runHeadless } from "../src/run.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createSession } from "@i-harness/core-session"
 
 describe("CLI input tiers", () => {
   let dir: string
@@ -16,13 +15,14 @@ describe("CLI input tiers", () => {
   afterEach(() => rmSync(dir, { recursive: true, force: true }))
 
   it("drives the initial task through the executor (one submitted input = one serial turn)", async () => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
-    const session = createSession()
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
+    const { id } = await coordinator.create({ sessionId: 'sess-tiers' })
+    const session = (await coordinator.openManagedDocument(id)).view
     const model = createMockClient([
       { role: "assistant", text: "initial answer" },
     ])
     const result = await runHeadless("one", {
-      workspace: dir,
+      workspace: dir, modelPolicy: "test-mock",
       model,
       sessionId: "sess-tiers",
       coordinator,
@@ -30,15 +30,16 @@ describe("CLI input tiers", () => {
     })
     expect(result.exitCode).toBe(0)
     expect(result.finalText).toBe("initial answer")
+    expect(session.events.find(event => event.type === "agent/input/admitted")).toMatchObject({ provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } })
     // one submitted input drives exactly one serial turn on the session
     expect(session.events.filter((e) => e.type === "turn/end")).toHaveLength(1)
   })
 
   it("resumes pending inputs from the log, promoted before the new task", async () => {
-    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
     const { id } = await coordinator.create({ sessionId: "sess-recover" })
     coordinator.enqueue(id, [
-      { type: "agent/input/admitted", version: 1, inputId: "old", text: "stale queued", delivery: "queue", intent: "user" },
+      { type: "agent/input/admitted", version: 1, inputId: "old", text: "stale queued", delivery: "queue", intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } },
     ])
     await coordinator.flush(id)
     const model = createMockClient([
@@ -46,7 +47,7 @@ describe("CLI input tiers", () => {
       { role: "assistant", text: "new done" },
     ])
     const result = await runHeadless("new task", {
-      workspace: dir, model,
+      workspace: dir, modelPolicy: "test-mock", model,
       resumeSessionId: id, coordinator,
     })
     expect(result.exitCode).toBe(0)

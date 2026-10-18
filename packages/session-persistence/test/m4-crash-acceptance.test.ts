@@ -1,10 +1,10 @@
+import { fromJSONL } from "@i-harness/core-session"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { spawn } from "node:child_process"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import type { SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSessionCoordinator } from "../src/index.ts"
 
@@ -124,9 +124,7 @@ describe("M4 acceptance — a process killed mid-tool leaves a RECORDED verdict"
     await verdictAfterCrash("sess-durable") // first recovery writes it back
     // A THIRD reader, straight off the file, with no repair involved.
     const { readFileSync } = await import("node:fs")
-    const raw = readFileSync(join(dir, "sess-durable.jsonl"), "utf8")
-      .trim().split("\n").slice(1)
-      .map((line) => JSON.parse(line) as SessionEvent)
+    const raw = fromJSONL(readFileSync(join(dir, "sess-durable.jsonl"), "utf8")).events
     const codes = raw.filter((e) => e.type === "tool/result")
       .map((e) => (e as { output?: { code?: unknown } }).output?.code)
     expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN"])

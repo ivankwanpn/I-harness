@@ -1,10 +1,15 @@
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach as afterFixture } from "vitest"
+afterFixture(() => vi.unstubAllGlobals())
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createDurableSessionLoader, ModelUnavailableError } from "../src/index.ts"
 import { createSessionService, type SessionService } from "../src/service.ts"
 import type { SessionQueueItem } from "../src/index.ts"
@@ -19,6 +24,30 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it.each(["success", "refusal"] as const)("fences the legacy model builder behind held writable acquisition (%s)", async outcome => {
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const builder = vi.fn(async () => createMockClient([]))
+    const service = createSessionService({ workspace: process.cwd(), modelBuilder: builder, sessionFor: async () => {
+      entered.resolve(); await release.promise
+      if (outcome === "refusal") throw new Error("writable format barrier refused")
+      return createSession()
+    } })
+    const pending = service.assemblyFor("legacy-barrier").then(value => ({ value }), error => ({ error }))
+    try {
+      await entered.promise
+      expect(builder).not.toHaveBeenCalled()
+      release.resolve()
+      const result = await pending
+      if (outcome === "success") {
+        expect(result).toHaveProperty("value.sessionId", "legacy-barrier")
+        expect(builder).toHaveBeenCalledTimes(1)
+      } else {
+        expect(result).toHaveProperty("error.message", "writable format barrier refused")
+        expect(builder).not.toHaveBeenCalled()
+      }
+    } finally { release.resolve(); await pending; await service.close() }
+  })
+
   it("optionally attaches existing assemblies, keeps default future-only, and detaches after unsubscribe", async () => {
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
     try {
@@ -67,7 +96,7 @@ describe("createSessionService", () => {
     } finally { await service.close() }
   })
   it("runs a host completion hook with the live assembly and resolved limits before submit settles", async () => {
-    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async (_sessionId: string, assembly: unknown, limits: unknown) => {
       expect(assembly).toBe(await service.assemblyFor("title-session"))
       expect(limits).toEqual({ contextWindow: 100_000, maxOutputTokens: 512 })
@@ -85,7 +114,7 @@ describe("createSessionService", () => {
   })
 
   it("keeps a successful answer successful when a host completion hook fails", async () => {
-    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const model: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async () => { throw new Error("title service unavailable") })
     const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required",
       modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "p", modelId: "m", label: "p:m" } }),
@@ -102,7 +131,7 @@ describe("createSessionService", () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => { release = resolve })
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
         yield { type: "text/chunk", text: "real" }
@@ -186,7 +215,7 @@ describe("createSessionService", () => {
     // the next test closes on the service's public path.
     const recording = (text: string) => {
       const requests: LLMRequest[] = []
-      const model: ModelClient = {
+      const model: ModelClient = { prepare: prepareTextFixture,
         async *stream(request) {
           requests.push(request)
           yield { type: "text/chunk", text }
@@ -236,7 +265,7 @@ describe("createSessionService", () => {
     // doing (a live rebind must not tear the assembly down).
     const recording = (text: string) => {
       const requests: LLMRequest[] = []
-      const model: ModelClient = {
+      const model: ModelClient = { prepare: prepareTextFixture,
         async *stream(request) {
           requests.push(request)
           yield { type: "text/chunk", text }
@@ -356,7 +385,7 @@ describe("createSessionService", () => {
       const assembly = await service.assemblyFor("s1")
       await expect(assembly.compactNow()).resolves.toEqual({
         compacted: false,
-        shadowedSeqs: [],
+        shadowedSeqs: [],outcome:'unchanged',publication:'none',
       })
       expect(session.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
     } finally {
@@ -366,12 +395,12 @@ describe("createSessionService", () => {
 
   it("normalizes compaction to the ready binding contextWindow", async () => {
     const session = createSession()
-    append(session, { type: "user/message", text: "x".repeat(600) })
+    append(session, { type: "user/message", text: "x".repeat(4000) })
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
-        yield { type: "text/chunk", text: "ok" }
+        yield { type: 'text/chunk', text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600) : 'ok' }
         yield { type: "end" }
       },
     }
@@ -402,7 +431,7 @@ describe("createSessionService", () => {
       expect(compacted.compacted).toBe(true)
       expect(compacted.shadowedSeqs.length).toBeGreaterThan(0)
       expect(requests).toHaveLength(2)
-      expect(session.events.some((event) => event.type === "compaction/end")).toBe(true)
+      expect(session.events.some((event) => event.type === "compaction/replacement")).toBe(true)
     } finally {
       await service.close()
     }
@@ -518,26 +547,19 @@ describe("createSessionService", () => {
     append(restored, { type: "user/message", text: "earlier question" })
     append(restored, { type: "assistant/message", text: "earlier answer" })
     append(restored, { type: "turn/end" })
-    const enqueue = vi.fn()
-    const flush = vi.fn(async () => {})
-    const coordinator = {
-      load: vi.fn(async () => ({ session: restored })),
-      loadOwned: vi.fn(async () => ({ session: restored })),
-      enqueue,
-      flush,
-    } as unknown as SessionCoordinator
+    const root=mkdtempSync(join(tmpdir(),'ih-f1-service-resume-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+    await coordinator.create({sessionId:'durable'});await coordinator.append('durable',restored.events)
     const requests: LLMRequest[] = []
-    const model: ModelClient = {
-      async *stream(request) {
+    const model: ModelClient = controlledModel(async function* (request) {
         requests.push(request)
         yield { type: "text/chunk", text: "continued" }
         yield { type: "end" }
-      },
-    }
+      })
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
       model,
+      coordinator,
       sessionFor: createDurableSessionLoader(coordinator),
     })
 
@@ -550,11 +572,11 @@ describe("createSessionService", () => {
       const live = service.liveSession("durable")!
       expect(live.events.slice(0, restored.events.length)).toEqual(restored.events)
       expect(live.events.map((event) => event.seq)).toEqual(live.events.map((_, index) => index))
-      const mirrored = enqueue.mock.calls.flatMap((call) => call[1] as Array<{ seq?: number }>)
-      expect(mirrored[0]?.seq).toBe(restored.events.length)
-      expect(flush).toHaveBeenCalledWith("durable")
+      const saved=(await backend.read('durable')).events
+      expect(saved).toEqual(live.events)
+      expect(saved[restored.events.length]?.seq).toBe(restored.events.length)
     } finally {
-      await service.close()
+      await service.close();await coordinator.close()
     }
   }, 60_000)
 
@@ -651,7 +673,7 @@ describe("createSessionService", () => {
     // spinning for minutes. The request now carries the turn's signal (the
     // adapters hand it to fetch), so cancel settles immediately.
     let sawSignal = false
-    const parked: ModelClient = {
+    const parked: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         sawSignal = request.signal !== undefined
         await new Promise<void>((_resolve, reject) => {
@@ -774,10 +796,10 @@ describe("createSessionService", () => {
       approveAll: true,
       ...effortSeam,
       loadMeta: async () => ({
-        formatVersion: 1, sessionId: "s1", createdAt: "",
+        formatVersion: 2, sessionId: "s1", createdAt: "",
         modelSelection: { provider: "p", model: "m", reasoningEffort: "high" },
       }),
-      modelBuilder: async () => ({
+      modelBuilder: async () => ({ prepare: prepareTextFixture,
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)
           yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
@@ -793,8 +815,8 @@ describe("createSessionService", () => {
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,
-      loadMeta: async () => ({ formatVersion: 1, sessionId: "s1", createdAt: "" }),
-      modelBuilder: async () => ({
+      loadMeta: async () => ({ formatVersion: 2, sessionId: "s1", createdAt: "" }),
+      modelBuilder: async () => ({ prepare: prepareTextFixture,
         async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
           captured.push((request as { reasoningEffort?: string }).reasoningEffort)
           yield* createMockClient([{ role: "assistant", text: "ok" }]).stream(request)
@@ -829,7 +851,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 /** Real SessionService whose injected model waits on `gate` before yielding
  * end — the running turn blocks until the test releases it. */
 function serviceWithBlockingModel(gate: { promise: Promise<void> }): SessionService {
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream() {
       await gate.promise
       yield { type: "text/chunk", text: "ok" }
@@ -853,7 +875,7 @@ function blockingService(): { service: SessionService; seen: string[]; release()
   const seen: string[] = []
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream(request: LLMRequest) {
       // `seen` records the model tasks that ACTUALLY RAN, keyed by the last
       // authored user prompt — the engine's runtime-context bookkeeping
@@ -922,8 +944,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
       const row = await waitForQueueText(service, "s1", "second")
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: true })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       release()
       await Promise.all([first, second])
       expect(seen).toEqual(["first"])
@@ -942,8 +964,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       const row = await waitForQueueText(service, "s1", "second")
       release()
       await Promise.all([first, second])
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", "never-existed")).toEqual({ cancelled: false })
     } finally {
       release()
       await service.close()
@@ -961,7 +983,7 @@ describe("createSessionService — real session queue projection (Task 11)", () 
     const bindingGate = new Promise<void>((resolve) => { releaseBinding = resolve })
     let releaseModel!: () => void
     const modelGate = new Promise<void>((resolve) => { releaseModel = resolve })
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest) {
         const authored = request.messages
           .filter((m) => m.role === "user")
@@ -998,8 +1020,8 @@ describe("createSessionService — real session queue projection (Task 11)", () 
       // deliberately stale while the lane is running this row.
       releaseBinding()
       await waitFor(() => seen.length === 1)
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
-      expect(service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
+      expect(await service.cancelQueued("s1", row.id)).toEqual({ cancelled: false })
       // the running turn keeps executing to completion (no abort path taken);
       // the second row was never cancelled and runs after it.
       releaseModel()
@@ -1027,7 +1049,7 @@ function serviceWithSubagentFixture(): { service: SessionService; release(): voi
   let spawned = false
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
-  const model: ModelClient = {
+  const model: ModelClient = { prepare: prepareTextFixture,
     async *stream(request: LLMRequest) {
       // The child's requests end with ITS authored task message ("inspect
       // code"); the parent's continuation ends with the spawn tool result.
@@ -1118,7 +1140,7 @@ describe("createSessionService — real task projection (Task 12)", () => {
     mkdirSync(join(ws, "workflow"), { recursive: true })
     writeFileSync(join(ws, "workflow/echo.yml"), "name: echo\ndescription: one echo step\nsteps:\n  - name: say\n    command: echo hi\n")
     let started = false
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(_request: LLMRequest) {
         if (!started) {
           started = true
@@ -1207,7 +1229,7 @@ describe("createSessionService — close lifecycle with a queue in flight (Task 
       const closing = service.closeSession("s1")
       gate.resolve()
       await closing
-      await expect(submit).resolves.toBeUndefined()
+      await expect(submit).rejects.toThrow('agent aborted')
       expect(service.queue("s1")).toEqual([])
       expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
       expect(service.hasAssembly("s1")).toBe(false)

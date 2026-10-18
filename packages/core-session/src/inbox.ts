@@ -1,5 +1,9 @@
-import { append } from "./index.ts"
-import type { ImageInput, Session } from "./index.ts"
+import { readInbox } from "./inbox-view.ts"
+import { copyConversationData } from "./conversation/render.ts"
+import type { InputProvenance } from "./events/conversation.ts"
+import { append } from "./events/append.ts"
+import type { Session } from "./events/types.ts"
+import type { ImageInput } from "./images.ts"
 
 export type InputDelivery = "queue" | "steer"
 export type InputIntent = "user" | "system"
@@ -13,12 +17,17 @@ export interface InputSynthetic { description: string; scope: "turn" | "session"
 
 /** Durable admission provenance for display; the provider still receives user role. */
 export interface UserMessageInput {
+  provenance?: InputProvenance
   inputId: string
   intent: InputIntent
   synthetic?: InputSynthetic
 }
 
 export interface AdmittedInput {
+  /** Explicit new human-ingress opt-in. Absence is literal, including old logs. */
+  preparationPolicy?: 'human-host'
+  supplementalContext?: string
+  provenance?: InputProvenance
   inputId: string
   text: string
   delivery: InputDelivery
@@ -60,6 +69,9 @@ export class Inbox {
       version: 1,
       inputId: input.inputId,
       text: input.text,
+      ...(input.preparationPolicy ? { preparationPolicy: input.preparationPolicy } : {}),
+      ...(input.supplementalContext !== undefined ? { supplementalContext: input.supplementalContext } : {}),
+      ...(input.provenance ? { provenance: input.provenance } : {}),
       delivery: input.delivery,
       intent: input.intent,
       ...(input.synthetic !== undefined ? { synthetic: input.synthetic } : {}),
@@ -89,27 +101,7 @@ export class Inbox {
 
   /** Pending inputs in admission order (all deliveries, both intents). */
   pending(): PendingInput[] {
-    const consumed = new Set<string>()
-    for (const ev of this.session.events) {
-      if (ev.type === "agent/input/promoted" || ev.type === "agent/input/cancelled") {
-        consumed.add((ev as { inputId: string }).inputId)
-      }
-    }
-    const result: PendingInput[] = []
-    for (const ev of this.session.events) {
-      if (ev.type !== "agent/input/admitted") continue
-      if ((ev.seq ?? 0) < this.fromSeq) continue
-      const a = ev as unknown as { inputId: string; text: string; delivery: InputDelivery; intent: InputIntent; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string }
-      if (consumed.has(a.inputId)) continue
-      result.push({
-        inputId: a.inputId, text: a.text, delivery: a.delivery, intent: a.intent,
-        ...(a.synthetic !== undefined ? { synthetic: a.synthetic } : {}),
-        ...(a.images?.length ? { images: a.images } : {}),
-        ...(a.clientToken !== undefined ? { clientToken: a.clientToken } : {}),
-        admittedSeq: ev.seq ?? 0,
-      })
-    }
-    return result
+    return copyConversationData(readInbox(this.session, this.fromSeq).pending())
   }
 
   isPending(inputId: string): boolean {
@@ -128,7 +120,8 @@ export class Inbox {
       append(this.session, {
         type: "user/message",
         text: p.text,
-        input: { inputId: p.inputId, intent: p.intent, ...(p.synthetic !== undefined ? { synthetic: p.synthetic } : {}) },
+        ...(p.provenance ? { provenance: p.provenance } : {}),
+        input: { inputId: p.inputId, intent: p.intent, ...(p.provenance ? { provenance: p.provenance } : {}), ...(p.synthetic !== undefined ? { synthetic: p.synthetic } : {}) },
         ...(p.images?.length ? { imageInputId: p.inputId } : {}),
         ...(p.intent === "system"
           ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } }

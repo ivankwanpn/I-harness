@@ -1,10 +1,9 @@
-import { randomUUID } from "node:crypto"
+import { spawnReviewer } from "./reviewer-spawn.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { deriveSearchText, type Session } from "@i-harness/core-session"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { deriveSearchText, isNondurableSession, type SessionView as Session } from "@i-harness/core-session"
+import { generationError, type ModelClient, type ApprovalGenerationAction } from "@i-harness/llm-seam"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import {
-  spawnChild,
   type AgentTable, type JobRegistry, type RoleRegistry,
   type SpawnOptions, type SubagentRole,
 } from "@i-harness/subagent"
@@ -49,6 +48,12 @@ export interface GuardianReviewDeps {
    * spawn below, which is deliberate and not symmetric with the two fields
    * above. Absent → no key written. */
   contextWindow?: SpawnOptions["contextWindow"]
+  budgetBinding?: SpawnOptions["budgetBinding"]
+  contextMetadata?: SpawnOptions["contextMetadata"]
+  reasoningEffort?: SpawnOptions["reasoningEffort"]
+  inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
+  summaryFactory?: SpawnOptions['summaryFactory']
+  autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
@@ -135,100 +140,63 @@ export interface GuardianReviewVerdict extends GuardianVerdict {
   cause?: "timeout" | "malformed" | "operational"
 }
 
-// R-A9 reviewer runner: spawns the dedicated reviewer subagent via the EXISTING
-// subagent machinery (spawnChild, forkTurns "none" — the reviewer sees only the
-// request + bounded transcript), races a timeout (fail-closed → deny), parses
-// the strict JSON verdict, and reclaims the transient child in a finally.
+/** Parent-owned approval allowance begins before any resolver or child spawn.
+ * The child keeps its own response audit, with no imported parent action. */
 export async function runGuardianReview(deps: GuardianReviewDeps, request: GuardianRequest): Promise<GuardianReviewVerdict> {
-  const role = ensureReviewerRole(deps.subagents.roles)
-  const timeoutMs = deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS
-  // R-B2, extended to this boundary: a CONFIGURED `deps.model` (the host's
-  // `guardian.model`, handed in by the assembly) WINS over `deps.parentModel`,
-  // and that precedence is DELIBERATE — not the silent exception this unit
-  // exists to remove. `deps.parentModel` is the session assembly's stable
-  // model handle (R-B1), so an INHERITED reviewer follows a rebind; a
-  // configured one does not — and this is the SECOND declared exception,
-  // never the only one: its twin is the summarizer's
-  // `config.summarizationModel` (compaction/src/index.ts), same rule, same
-  // cost: after a rebind every guardian review / summary keeps billing the
-  // configured endpoint. Pinned by "a CONFIGURED guardian model wins over the
-  // handle too" in packages/session-executor/test/assembly.test.ts — do NOT
-  // "fix" this into following the handle.
-  const model = deps.model ?? deps.parentModel
-  const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
-  const { path, jobId, sessionId } = await spawnChild({
-    taskName: `review-${randomUUID().slice(0, 8)}`,
-    message,
-    parentPath: "root",
-    parentRegistry: deps.parentRegistry,
-    parentSession: deps.parentSession,
-    parentCtx: deps.parentCtx,
-    // A saved reviewer role may choose a model or prompt, but the approval
-    // reviewer itself must never inherit its declared tool list. Otherwise a
-    // role edit could make an approval check execute a tool before deciding.
-    role: { ...role, ...(deps.policyText !== undefined ? { systemPrompt: deps.policyText } : {}), tools: [] },
-    parentModel: model,
-    resolveModel: deps.resolveModel,
-    // The role's model is decided the SAME way here as through
-    // registerSubagent's chain: the declared selection and the switch ride WITH
-    // the resolver. Omitted when the host passed neither — an unset switch is
-    // OFF, never "enabled by omission".
-    ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
-    ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
-    ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
-    // M73: the session's numbers are the numbers of THE SESSION'S MODEL. When a
-    // guardian model is configured, this child runs on a different endpoint
-    // whose window we do not know here — passing the session's would be a
-    // wrong number, which is worse than an absent one. So: inherited arms get
-    // them, configured ones stay absent (and are recorded as a residual).
-    ...(deps.model === undefined && deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
-    ...(deps.model === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
-    jobs: deps.subagents.jobs,
-    table: deps.subagents.table,
-    agents: deps.subagents.agents,
-    forkTurns: "none",
-    ...(deps.childSessions !== undefined ? { childSessions: { ...deps.childSessions, origin: "approval-review" as const } } : {}),
-  })
-
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), timeoutMs)
-    timer.unref?.()
-  })
-
+  const timeoutMs = deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS, controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(new Error('guardian review timed out')), timeoutMs)
+  timer.unref?.()
+  const cancel = () => controller.abort(request.signal?.reason)
+  request.signal?.addEventListener('abort', cancel, { once: true })
+  if (request.signal?.aborted) cancel()
+  let generation: ApprovalGenerationAction | undefined, selectedModel = deps.model ?? deps.parentModel
+  let child: Awaited<ReturnType<typeof spawnReviewer>> | undefined, completed = false
+  const expire = () => controller.abort(generation?.signal.reason)
+  let onAbort: (() => void) | undefined
   try {
-    const entry = deps.subagents.table.get(path)
-    if (entry === undefined) return { outcome: "deny", rationale: "guardian review failed: reviewer entry missing", cause: "operational" }
-    const settled = await Promise.race([
-      entry.followupChain ?? Promise.resolve(),
-      timeout,
-    ])
-    if (settled === "timeout") {
-      entry.controller.abort()
-      return { outcome: "deny", rationale: `guardian review timed out after ${timeoutMs}ms (fail-closed)`, cause: "timeout" }
-    }
-    const finalText = entry.finalText
-    if (finalText === undefined) {
-      return { outcome: "deny", rationale: `guardian review failed: ${entry.error ?? "no output"}`, cause: "operational" }
-    }
-    const parsed = parseGuardianAssessment(finalText)
-    if (parsed === undefined) {
-      return { outcome: "deny", rationale: "guardian review produced malformed output (fail-closed)", cause: "malformed" }
-    }
-    return { outcome: parsed.outcome, rationale: parsed.rationale }
+    controller.signal.throwIfAborted()
+    if (!isNondurableSession(deps.parentSession) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
+    generation = await request.generation?.({ timeoutMs, selectedClient: () => selectedModel })
+    generation?.signal.addEventListener('abort', expire, { once: true })
+    if (generation?.signal.aborted) expire()
+    const role = ensureReviewerRole(deps.subagents.roles)
+    const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
+    child = await spawnReviewer(deps, role, message, controller.signal, generation, model => { selectedModel = model })
+    const entry = deps.subagents.table.get(child.path)
+    if (!entry) return { outcome: 'deny', rationale: 'guardian review failed: reviewer entry missing', cause: 'operational' }
+    const aborted = new Promise<'timeout'>(resolve => {
+      onAbort = () => resolve('timeout')
+      controller.signal.addEventListener('abort', onAbort, { once: true })
+      if (controller.signal.aborted) onAbort()
+    })
+    const settled = await Promise.race([entry.followupChain ?? Promise.resolve(), aborted])
+    request.signal?.throwIfAborted()
+    if (settled === 'timeout') return { outcome: 'deny', rationale: 'guardian review timed out after ' + timeoutMs + 'ms (fail-closed)', cause: 'timeout' }
+    if (entry.finalText === undefined) return { outcome: 'deny', rationale: 'guardian review failed: ' + (entry.error ?? 'no output'), cause: 'operational' }
+    const parsed = parseGuardianAssessment(entry.finalText)
+    completed = parsed !== undefined
+    return parsed ? { outcome: parsed.outcome, rationale: parsed.rationale }
+      : { outcome: 'deny', rationale: 'guardian review produced malformed output (fail-closed)', cause: 'malformed' }
+  } catch (error) {
+    if (request.signal?.aborted) throw error
+    if (controller.signal.aborted) return { outcome: 'deny', rationale: 'guardian review timed out after ' + timeoutMs + 'ms (fail-closed)', cause: 'timeout' }
+    throw error
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
-    // Transient reviewer: reclaim resources (mirror of close_agent — abort,
-    // unmount the child scope, drop from the subagent registries).
-    const entry = deps.subagents.table.get(path)
-    if (entry) {
-      entry.controller.abort()
-      entry.unmount?.()
-      deps.subagents.table.remove(path)
-      if (sessionId) deps.subagents.agents.remove(sessionId)
-    }
-    if (jobId) {
-      try { deps.subagents.jobs.kill(jobId) } catch { /* best-effort */ }
-    }
+    clearTimeout(timer); request.signal?.removeEventListener('abort', cancel)
+    generation?.signal.removeEventListener('abort', expire)
+    if (onAbort) controller.signal.removeEventListener('abort', onAbort)
+    try {
+      if (child) {
+        const entry = deps.subagents.table.get(child.path)
+        if (entry) {
+          entry.controller.abort()
+          if (entry.dispose) await entry.dispose()
+          else { await entry.followupChain?.catch(() => {}); await entry.unmount?.() }
+          deps.subagents.table.remove(child.path)
+          if (child.sessionId) deps.subagents.agents.remove(child.sessionId)
+        }
+        if (child.jobId) try { deps.subagents.jobs.kill(child.jobId) } catch { /* Existing best-effort job cleanup. */ }
+      }
+    } finally { await generation?.close(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed') }
   }
 }

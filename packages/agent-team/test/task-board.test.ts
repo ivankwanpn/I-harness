@@ -21,7 +21,7 @@ const HELPER: TeamCaller = { id: "child-helper", name: "helper", role: "teammate
 function makeBoard(overrides?: Partial<TaskBoardDeps>) {
   const events: TeamEvent[] = []
   const state = createFoldState()
-  const lead = { append: (e: TeamEvent) => events.push(e), flush: async () => {} }
+  const lead = { commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }
   const board = createTaskBoard({
     teamId: "lead-1",
     state,

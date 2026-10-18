@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -16,13 +17,13 @@ it.each([false, true])("allows an owned teammate's unchanged read-only tool with
   await coordinator.create({ sessionId: "lead" })
   await writeFile(join(root, "fixture.txt"), "Owned read fixture")
   const requests: LLMRequest[] = []
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "Parent received reply" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream(request) {
+  const parent: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Parent received reply" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const child: ModelClient = controlledModel(request => ({ async *stream(request) {
     requests.push(request)
     if (requests.length === 1) yield { type: "tool_call", call: { id: "child-read", name: "read", args: { path: "fixture.txt" } } }
     else yield { type: "text/chunk", text: "Child reply ended" }
     yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model: parent, sandbox: "read-only", approveAll: true, coordinator,
     team: {}, concurrentSessionTeams: true, roleSelectionFor: (role) => role === "teammate" ? { provider: "local", model: "fixture" } : undefined,
     allowSubagentModelSelection: true, resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
@@ -62,15 +63,15 @@ async function heldChildFixture(constantPolicy = false, codeWrapper = false) {
   await coordinator.create({ sessionId: "lead" })
   await writeFile(join(root, "fixture.txt"), "Owned read fixture")
   let bodies = 0
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } }
+  const parent: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   let childRounds = 0
-  const child: ModelClient = { async *stream() {
+  const child: ModelClient = controlledModel(request => ({ async *stream() {
     if (++childRounds === 1) yield { type: "tool_call", call: codeWrapper
       ? { id: "held-wrapper", name: "code_exec", args: { code: 'const result = await tools.read({path:"fixture.txt"});text(result.content)' } }
       : { id: "held-read", name: "read", args: { path: "fixture.txt" } } }
     else yield { type: "text/chunk", text: "Reply ended" }
     yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model: parent, sandbox: "read-only", approveAll: true, coordinator,
     team: {}, concurrentSessionTeams: true, roleSelectionFor: (role) => role === "teammate" ? { provider: "local", model: "fixture" } : undefined,
     allowSubagentModelSelection: true, resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),

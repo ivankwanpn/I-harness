@@ -64,7 +64,7 @@ export interface DesktopHandlers {
   provider?: ProviderRuntime
   codingPlans?: ReturnType<typeof import("./coding-plans.ts").createCodingPlans>
   memory?: MemoryStore
-  compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
+  compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<import('@i-harness/sdk').SessionCompactResult>
   sessionQuery?: SessionQuery
   sandboxState?: () => SandboxState | Promise<SandboxState>
   interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession" | "replyTrustedHuman" | "rememberPending">>

@@ -45,14 +45,18 @@ it('indexes human-selected source roots and rejects hits after current membershi
 it('owns refresh timers only while explicitly enabled and drains refresh on close',async()=>{
   const{runtime}=await setup()
   const intervals=vi.spyOn(globalThis,'setInterval'),cleared=vi.spyOn(globalThis,'clearInterval')
+  const indexing=vi.spyOn(runtime.codeRetrieval,'startIndex')
   try{
     runtime.syncAutoRefresh();expect(intervals).not.toHaveBeenCalled()
     await runtime.codeRetrieval.configure({enabled:true});runtime.syncAutoRefresh();expect(intervals).not.toHaveBeenCalled()
     await runtime.codeRetrieval.configure({autoRefresh:true});runtime.syncAutoRefresh()
     expect(intervals).toHaveBeenCalledTimes(1)
-    await vi.waitFor(()=>expect(runtime.codeRetrieval.status().state).toBe('ready'))
+    expect(indexing).toHaveBeenCalledTimes(1)
+    const {jobId}=await indexing.mock.results[0]!.value
+    expect((await runtime.codeRetrieval.wait(jobId)).lastJob?.outcome).toBe('completed')
+    expect(runtime.codeRetrieval.status().state).toBe('ready')
     await runtime.codeRetrieval.configure({autoRefresh:false});runtime.syncAutoRefresh()
     expect(cleared).toHaveBeenCalledTimes(1)
     await runtime.close();expect(runtime.codeRetrieval.status().activeJobs).toBe(0)
-  }finally{intervals.mockRestore();cleared.mockRestore()}
+  }finally{intervals.mockRestore();cleared.mockRestore();indexing.mockRestore()}
 })

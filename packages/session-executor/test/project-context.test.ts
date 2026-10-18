@@ -1,7 +1,9 @@
-import { afterEach, expect, it } from "vitest"
+import { appendStandalone as append } from "./helpers.ts"
+import { afterEach, expect, it, vi } from "vitest"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import { observeModelClient, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
+import { controlledModel } from "./controlled-model.ts"
 import { createSessionAssembly, type SessionProjectContext } from "../src/assembly.ts"
 import { createSessionService } from "../src/service.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
@@ -10,11 +12,11 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader } from "../src/durable-session.ts"
 import type { SubagentStateSnapshot } from "@i-harness/subagent"
-import { append } from "@i-harness/core-session"
+
 import type { WorkflowExecutor } from "@i-harness/workflow"
 
 const fixtures: string[] = []
-afterEach(() => { for (const fixture of fixtures.splice(0)) rmWorkspaceSync(fixture) })
+afterEach(() => { vi.unstubAllGlobals(); for (const fixture of fixtures.splice(0)) rmWorkspaceSync(fixture) })
 function fixture() {
   // The unrelated folder must be outside the platform temp grant, so `tmpdir()`
   // is NOT usable here: the runner's private temp sits inside it, which would
@@ -60,15 +62,17 @@ it("writes to another project folder without an extra approval and revokes a rem
 
 it("normal and rebuilt resident children inherit the live project scope for requests and writes", async () => {
   const { root, a, b, c } = fixture()
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   let context: SessionProjectContext = { id: "p", name: "Initial child project", roots: [a, b], primaryRoot: a }
   let target = join(b, "child-initial.txt")
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) {
+  const model = controlledModel(async function* (request) {
     requests.push(request)
-    yield* createMockClient([request.messages.at(-1)?.role === "tool" ? { role: "assistant", text: "child finished" } : { role: "assistant", toolCalls: [{ name: "write", args: { path: target, text: "child wrote current project" } }] }]).stream(request)
-  } }
+    if (request.messages.at(-1)?.role === "tool") yield { type: "text/chunk", text: "child finished" }
+    else yield { type: "tool_call", call: { name: "write", args: { path: target, text: "child wrote current project" } } }
+    yield { type: "end" }
+  })
   const options = { workspace: a, sessionId: "parent", coordinator, model, approveAll: true, sandbox: "workspace-write" as const, projectContext: () => context,
     pluginAgents: [{ name: "project-child", description: "project worker", systemPrompt: "PROJECT_CHILD", tools: ["write"] }],
   }
@@ -76,6 +80,7 @@ it("normal and rebuilt resident children inherit the live project scope for requ
   try {
     const spawn = await assembly.tools.execute({ name: "spawn_agent", args: { task_name: "project-worker", agent_type: "project-child", message: "write initial file", fork_turns: "none", background: false } })
     const path = (spawn.output as { agent_path: string }).agent_path
+    expect(existsSync(target), JSON.stringify(spawn.output)).toBe(true)
     expect(readFileSync(target, "utf8")).toBe("child wrote current project")
     expect(requests.at(-1)!.systemPrompt).toContain("Initial child project")
 
@@ -188,15 +193,15 @@ it("the selected shell receives current project roots and refuses removed cwd an
 
 it("a teammate receives the same live project context as its parent", async () => {
   const { root, a, b } = fixture()
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "team-parent" })
   const requests: LLMRequest[] = []
   const cassette = createMockClient([
     { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "project worker", prompt: "read project folders" } }] },
     { role: "assistant", text: "done" }, { role: "assistant", text: "done" },
   ])
-  const model: ModelClient = { async *stream(request) { requests.push(request); yield* cassette.stream(request) } }
-  const assembly = await createSessionAssembly({ workspace: a, sessionId: "team-parent", coordinator, model, approveAll: true, team: {}, projectContext: () => ({ id: "p", name: "Teammate Project", roots: [a, b], primaryRoot: a }) })
+  const model = observeModelClient(cassette, { start(request) { requests.push(request) }, finish() {} })
+  const assembly = await createSessionAssembly({ workspace: a, sessionId: "team-parent", coordinator, model, modelPolicy: "test-mock", approveAll: true, team: {}, projectContext: () => ({ id: "p", name: "Teammate Project", roots: [a, b], primaryRoot: a }) })
   try {
     await assembly.agent.run("delegate project work")
     await waitFor(() => requests.some((request) => request.systemPrompt.includes("You are a teammate in an agent team.")))

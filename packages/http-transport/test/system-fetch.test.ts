@@ -45,6 +45,20 @@ function transport(options: Parameters<typeof createSystemFetch>[0] = {}) {
   cleanup.push(() => value.close()); return value
 }
 
+it('runs a per-generation guard after awaited proxy selection and preserves its refusal', async () => {
+  const selected = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), trace: string[] = []
+  vi.stubGlobal('fetch', async () => { trace.push('network'); return new Response('unexpected') })
+  const value = transport({ resolveProxy: async () => { selected.resolve(); await release.promise; return 'DIRECT' } })
+  const ownerFailure = Object.assign(new Error('owner refused'), { code: 'GENERATION_STALE' })
+  const guarded = value.fetch as typeof value.fetch & ((input: string, init: RequestInit, beforeTransport: () => Promise<() => void>) => Promise<Response>)
+  const pending = guarded('https://guard.fixture.invalid', { method: 'POST' }, async () => { trace.push('reserve'); return () => { trace.push('issue-check'); throw ownerFailure } })
+  await selected.promise
+  expect(trace).toEqual([])
+  release.resolve()
+  await expect(pending).rejects.toBe(ownerFailure)
+  expect(trace).toEqual(['reserve', 'issue-check'])
+})
+
 describe("system proxy fetch", () => {
   it("sends through an actual local CONNECT proxy using environment precedence", async () => {
     const n = await network()

@@ -1,15 +1,20 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
+import { appendStandalone as append } from "./helpers.ts"
 import { it, expect, vi } from "vitest"
-import { append } from "@i-harness/core-session"
+
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
 
 it("switches the live output cap, compaction window and context tool together", async () => {
   const requests: LLMRequest[] = []
-  const first: ModelClient = { async *stream() { yield { type: "text/chunk", text: "A" }; yield { type: "end" } } }
-  const second: ModelClient = { async *stream(request) {
+  const first: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "A" }; yield { type: "end" } } }
+  let mainCalls = 0
+  const second: ModelClient = { prepare: prepareTextFixture,  async *stream(request) {
     requests.push(request)
-    if (requests.length === 2) yield { type: "tool_call", call: { name: "get_context_remaining", args: {} } }
-    else yield { type: "text/chunk", text: "Keep the existing task and its decisions. ".repeat(20) }
+    const directive = request.messages.at(-1)?.content
+    const summary = typeof directive === "string" && directive.includes("You are now acting as a compaction engine")
+    if (!summary && ++mainCalls === 1) yield { type: "tool_call", call: { name: "get_context_remaining", args: {} } }
+    else yield { type: "text/chunk", text: summary ? checkpointOfLength(600) : "Keep the existing task and its decisions. ".repeat(20) }
     yield { type: "end" }
   } }
   const service = createSessionService({ workspace: process.cwd(), compact: { auto: true },
@@ -20,13 +25,21 @@ it("switches the live output cap, compaction window and context tool together", 
   try {
     await service.submit("s", "first", new AbortController().signal)
     const assembly = await service.assemblyFor("s")
-    append(assembly.session, { type: "user/message", text: "x".repeat(170000) })
+    // Same total input, now lawful balanced segments: a single 170K-character
+    // user unit is indivisible and cannot fit the actual prepared 50K window.
+    for (let i = 0; i < 4; i++) append(assembly.session, { type: "user/message", text: "x".repeat(42500) })
     service.rebindModel("s", { providerId: "test", modelId: "b", label: "b", model: second, contextWindow: 50000, maxOutputTokens: 777 })
     expect(await service.assemblyFor("s")).toBe(assembly)
     await service.submit("s", "continue", new AbortController().signal)
-    expect(assembly.session.events.some(e => e.type === "compaction/summary")).toBe(true)
-    expect(requests.every(r => r.maxOutputTokens !== undefined && r.maxOutputTokens <= 777)).toBe(true)
-    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ window: 50000 }) }))
+    expect(assembly.session.events.some(e => e.type === "compaction/replacement")).toBe(true)
+    expect(requests.every(r => r.maxOutputTokens !== undefined && r.maxOutputTokens <= (String(r.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? 4096 : 777))).toBe(true)
+    const summaryRequests = requests.filter(request => String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine"))
+    // The oldest tiny run is tried once without progress; the later complete
+    // groups then partition into two useful checkpoints under the same bound.
+    expect(summaryRequests).toHaveLength(3)
+    expect(summaryRequests[0]!.messages.slice(0, -1).map(message => message.content)).toEqual(["first"])
+    expect(summaryRequests.flatMap(request => request.messages).reduce((sum, message) => sum + (typeof message.content === "string" && /^x+$/.test(message.content) ? message.content.length : 0), 0)).toBe(170000)
+    expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ kind:'unavailable', observation:expect.objectContaining({pressure:expect.objectContaining({inputBudget:44223}),dimensions:expect.arrayContaining([expect.objectContaining({dimension:'context',limit:50000})])}) }) }))
   } finally { await service.close() }
 })
 
@@ -34,7 +47,7 @@ it("rejects a rebind while a turn is running without changing the reported model
   let release!: () => void
   const gate = new Promise<void>(r => { release = r })
   let started = false
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = { prepare: prepareTextFixture,  async *stream() {
     started = true
     await gate
     yield { type: "text/chunk", text: "A" }
@@ -55,10 +68,10 @@ it("rejects rebinding while a manually invoked compaction is awaiting a model", 
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   let started = false
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = { prepare: prepareTextFixture,  async *stream() {
     started = true
     await gate
-    yield { type: "text/chunk", text: "Keep the requested task and decisions. ".repeat(20) }
+    yield { type: "text/chunk", text: checkpointOfLength(600) }
     yield { type: "end" }
   } }
   const service = createSessionService({ workspace: process.cwd(), compact: { auto: true },

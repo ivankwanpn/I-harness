@@ -21,16 +21,21 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { append, subscribe, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { openExecutorDocument } from './lifecycle/managed-document.ts'
+import { prepareInputExecution } from './lifecycle/input-preparation.ts'
+import { runManualGeneration } from './lifecycle/manual-generation.ts'
+import { completeSubmission } from './service/submission-completion.ts'
+import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
 import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
-import { breakdown } from "@i-harness/token-meter"
+import { createContextStateReader } from "./service/context-state.ts"
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
 // `session`: the message is about THIS session's resolved model binding (a
@@ -41,7 +46,6 @@ import { breakdown } from "@i-harness/token-meter"
 const d = diagnosticsFor("session")
 import {
   createSessionAssembly,
-  createAssemblySession,
   ModelUnavailableError,
   type AssemblyOptions,
   type SessionAssembly,
@@ -54,6 +58,8 @@ export type SessionModelBindingResult =
   | {
       status: "ready"
       binding: {
+        budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding
+        contextMetadata?: import("@i-harness/core-session").ContextBindingMetadata
         model: ModelClient
         providerId: string
         modelId: string
@@ -100,7 +106,15 @@ type SessionModelState =
   | Exclude<SessionModelBindingResult, { status: "ready" }>
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
+type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'assertOpen'> & {
+  readonly openGeneration?: import('@i-harness/llm-seam').TitleGenerationFactory
+  readonly view: Session
+  readonly facts: Pick<ManagedAction<ProducerFactOutcome>['facts'], 'metadata'>
+}
+
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Loaded settings only; never resolves authentication or constructs a model client. */
+  modelMetadataFor?: (sessionId: string, meta: SessionMeta | undefined) => import("@i-harness/core-session").ContextBindingMetadata | undefined | Promise<import("@i-harness/core-session").ContextBindingMetadata | undefined>
   /** Host structural management shares this admission boundary with all writers. */
   sessionOperation?: { run<T>(id: string, operation: () => Promise<T>): Promise<T>; assertOpen(id: string): void }
   /** Bind the session once; its returned getter follows current membership. */
@@ -112,7 +126,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
-  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }) => Promise<void>
+  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number; budgetBinding?: import('@i-harness/llm-seam').ModelBudgetBinding }, action: PostTurnAction) => Promise<void>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
     options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral" | "hookContext">
@@ -169,19 +183,25 @@ export interface SessionServiceOptions extends AssemblyOptions {
   outputSpill?: OutputSpillGuardConfig
 }
 
+interface SessionSubmitOptions {
+  context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string
+  /** Trusted host preparation callback; never comes from model or wire data. */
+  prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
+}
 export interface SessionService {
+  compact(sessionId: string, instructions?: string, signal?: AbortSignal): Promise<import('@i-harness/compaction').CompactionResult>
   /** Update plugin-owned capabilities without replacing sessions or agents. */
   refreshExtensions(): Promise<void>
   /** One prompt for one session (tier send). Serialized per session;
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
-  /** Estimated active transcript size; no provider request is made. */
-  contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }>
+  /** Actual owned prepared budget or validated saved facts; no provider request. */
+  contextState(sessionId: string): Promise<SessionContextState>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -221,7 +241,8 @@ export interface SessionService {
    * executing (never leaving the lane to turn). `cancelled: false` for an
    * unknown/already-finished row or a RUNNING one (whole-turn cancel is
    * session/cancel, not row cancel). */
-  cancelQueued(sessionId: string, id: string): { cancelled: boolean }
+  receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>>
+  cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }>
   /** Cancel the executing submission; queued submissions retain their own controllers. */
   cancelRunning?(sessionId: string): { cancelled: boolean }
   /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
@@ -256,6 +277,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const assemblies = new Map<string, SessionAssembly>()
   const mountingAssemblies = new Map<string, SessionAssembly>()
   const writableSessions = new Map<string, Session>()
+  const inputInboxes = new Map<string, AsyncInbox>()
   const loadingWriters = new Map<string, Promise<Session | undefined>>()
   const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
@@ -271,6 +293,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const active = new Set<Promise<void>>()
   const closing = new Map<string, Promise<void>>()
   const telemetry = opts.telemetry
+  function failureDiagnostics(error: unknown) {
+    const modelFailure = modelFailureFacts(error)
+    return { error: modelFailure?.message ?? "Session execution failed.", ...(modelFailure ? { modelFailure } : {}) }
+  }
   let closed = false
   let currentSandbox = opts.sandbox
   const cancelledParents = new Set<string>()
@@ -282,14 +308,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     cancelledParents.add(id)
     for (const controller of notificationControllers.get(id)?.values() ?? []) controller.abort()
     const assembly = assemblies.get(id)
-    let cancelled = false
     for (const input of assembly?.inbox.pending() ?? []) {
-      if (input.intent === "system" && input.inputId.startsWith("parent-notify-")) cancelled = assembly!.inbox.cancel(input.inputId, "parent stopped") || cancelled
-    }
-    if (cancelled && opts.coordinator) {
-      const job = opts.coordinator.flush(id)
+      if (input.intent !== "system" || !input.inputId.startsWith("parent-notify-")) continue
+      const job = assembly!.inbox.cancel(input.inputId, 'parent stopped').then(() => {})
       notificationStops.add(job)
-      void job.catch((error) => d.warn(`[i-harness] parent notification cancellation flush failed: ${error instanceof Error ? error.message : String(error)}`)).finally(() => notificationStops.delete(job))
+      void job.catch(() => {}).finally(() => notificationStops.delete(job))
     }
   }
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
@@ -303,12 +326,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (input.sessionId !== id || !assembly || assembly !== owner()) throw new Error("parent notification admission unavailable")
           const inputId = `parent-notify-${createHash("sha256").update(input.text).update(input.description).digest("hex")}`
           if (!assembly.session.events.some((event) => event.type === "agent/input/admitted" && event.inputId === inputId)) {
-            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
+            await assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", provenance: { kind: input.display && ["task", "team-message", "team-result"].includes(input.display.kind) ? "child-report" : "plugin", authority: "observation", scope: "turn", producer: "session.notification" }, synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
           }
-          await opts.coordinator?.flush(id)
           if (closed || closing.has(id) || cancelledParents.has(id)) {
-            assembly.inbox.cancel(inputId, "parent stopped during admission")
-            await opts.coordinator?.flush(id)
+            await assembly.inbox.cancel(inputId, "parent stopped during admission")
             throw new ParentNotificationStoppedError()
           }
           let inputs = notificationInputs.get(id)
@@ -356,6 +377,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     controller: AbortController
     state: "wait" | "queued" | "running" | "cancelled"
     scheduled?: boolean
+    postTurn?: true
   }
   interface SessionQueueState {
     byId: Map<string, QueueRowRecord>
@@ -443,29 +465,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     }
   }
 
-  async function contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }> {
-    if (closed) throw new Error("session service closed")
-    const model = await bindingFor(sessionId)
-    if (model.status !== "ready") return { kind: "unavailable", reason: model.reason }
-    const window = model.binding.contextWindow
-    if (window === undefined) return { kind: "unavailable", reason: "This model has no configured context window" }
-    // A per-ID writer overrides the static session for assembly construction.
-    // Cold readers preserve that identity without invoking the writer loader.
-    let session = assemblies.get(sessionId)?.session ?? (opts.sessionFor === undefined ? opts.session : undefined)
-    if (session === undefined && opts.coordinator !== undefined) {
-      if (!opts.coordinator.snapshot) return { kind: "unavailable", reason: "Read-only session snapshots are unavailable" }
-      const saved = (await opts.coordinator.snapshot(sessionId)).session
-      // A cold inspection can overlap assembly startup. The owned sessionFor
-      // loader belongs to writers; prefer a live session published while this
-      // immutable read was awaiting its durable prefix.
-      session = assemblies.get(sessionId)?.session ?? saved
+  function liveContextState(sessionId: string): SessionContextState | undefined {
+    const assembly = assemblies.get(sessionId)
+    if (assembly) return contextStateFromBudget(assembly.agent.contextBudget?.() ?? { kind: "unavailable", reason: "Live Agent context budget reader is unavailable" })
+    for (const parent of assemblies.values()) {
+      const read = parent.liveChildBudget?.(sessionId)
+      if (read) return contextStateFromBudget(read)
     }
-    if (session === undefined) return { kind: "unavailable", reason: "Session history is unavailable" }
-    const measured = breakdown(session)
-    const roleTokens = { user: 0, assistant: 0, tool: 0 }
-    for (const message of measured.perMessage) roleTokens[message.role] += message.tokens
-    return { kind: "ready", estimatedTokens: measured.total, contextWindow: window, roleTokens }
+    return undefined
   }
+  const contextState = createContextStateReader<SessionMeta>({
+    assertOpen() { if (closed) throw new Error("session service closed") },
+    live: liveContextState,
+    meta: async sessionId => await opts.loadMeta?.(sessionId) ?? (opts.coordinator ? (await opts.coordinator.profile(sessionId)).meta : undefined),
+    snapshot: async sessionId => opts.coordinator?.snapshot ? (await opts.coordinator.snapshot(sessionId)).session : opts.sessionFor === undefined ? opts.session : undefined,
+    ...(opts.modelMetadataFor ? { metadata: opts.modelMetadataFor } : {}),
+  })
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
     if (closed) throw new Error("session service closed")
@@ -505,16 +520,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // Close owns the pending load. Its late completion cannot install a
         // writer in the next lifecycle or publish an execution assembly.
         assertWritableOpen(sessionId)
-        // Explicit session/sessionFor retain their caller-owned hooks. Only a
-        // metadata producer's supplied fallback restores a cold document; a
-        // coordinator alone keeps the assembly's original fresh-parent mirror.
-        const writer = session ?? createAssemblySession({ coordinator: opts.coordinator, sessionId })
-        writableSessions.set(sessionId, writer)
-        return writer
+        const attachment = await openExecutorDocument({ ...(opts.coordinator ? { coordinator: opts.coordinator, sessionId } : {}), ...(session ? { session } : {}) })
+        writableSessions.set(sessionId, attachment.session)
+        inputInboxes.set(sessionId, attachment.inbox)
+        return attachment.session
       })().finally(() => { if (loadingWriters.get(sessionId) === pending) loadingWriters.delete(sessionId) })
       loadingWriters.set(sessionId, pending)
     }
     return pending
+  }
+
+  async function receivedInputFor(sessionId: string): Promise<Pick<AsyncInbox, 'pending' | 'admit' | 'cancel'>> {
+    await writableSessionFor(sessionId)
+    assertWritableOpen(sessionId)
+    const inbox = assemblies.get(sessionId)?.inbox ?? mountingAssemblies.get(sessionId)?.inbox ?? inputInboxes.get(sessionId)
+    if (!inbox) throw Object.assign(new Error('Trusted received-input owner is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    return { pending: () => inbox.pending(), admit: (input, signal) => inbox.admit(input, signal), cancel: (id, reason) => inbox.cancel(id, reason) }
   }
 
   function getOrCreate(sessionId: string): Promise<SessionAssembly> {
@@ -539,6 +560,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           && (liveAssembly(sessionId) === assembly || mountingAssemblies.get(sessionId) === assembly)
         let sandboxAtBuild: SandboxMode | undefined
         if (opts.modelBindingFor !== undefined) {
+          // Durable writable acquisition (including the format barrier) precedes
+          // executable model resolution; a held/refused upgrade has no model side effect.
+          const resolvedSession = await writableSessionFor(sessionId)
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
           const binding = result.binding
@@ -559,9 +583,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
                 "The binding is authoritative — a window from the config is not used to override its absence.",
             )
           }
-          const resolvedSession = await writableSessionFor(sessionId)
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
+            prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
@@ -578,15 +602,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             modelLabel: binding.label,
             contextWindow: binding.contextWindow,
             maxOutputTokens: binding.maxOutputTokens,
+            budgetBinding: binding.budgetBinding,
+            contextMetadata: binding.contextMetadata,
             reasoningEffort: binding.reasoningEffort,
             compact,
           })
         } else {
           // Legacy path retained for explicit embedders; production apps use
           // modelBindingFor so state and construction share one resolution.
+          const resolvedSession = await writableSessionFor(sessionId)
           const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
           const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
-          const resolvedSession = await writableSessionFor(sessionId)
           // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
           // decides even when it resolves to undefined (fail-closed).
           const contextWindow = opts.contextWindowFor === undefined
@@ -601,6 +627,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             : opts.reasoningEffortFor(sessionId, meta)
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
+            prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
@@ -618,7 +645,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
           })
         }
-        if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode: currentSandbox })
+        if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) await assembly.recordSandboxMode(currentSandbox)
         writableSessions.set(sessionId, assembly.session)
         mountingAssemblies.set(sessionId, assembly)
         if (extensions?.mount) {
@@ -690,10 +717,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options)) : submitUnfenced(sessionId, prompt, signal, options)
   }
-  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
+  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -771,79 +798,57 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         settle() // the queued turn never starts; the chain keeps moving
         return
       }
-      getOrCreate(sessionId).then(async (assembly) => {
-        if (controller.signal.aborted || closed) {
-          settle()
-          return
-        }
+      let preparedInput: Awaited<ReturnType<typeof prepareInputExecution>> | undefined
+      void completeSubmission(async () => {
+        const assembly = opts.coordinator ? await prepareInputExecution({
+          ownerSessionId: sessionId,
+          acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
+          assemble: () => getOrCreate(sessionId),
+          input: { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
+            ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) },
+          alreadyAdmitted: !!options?.admittedInputId, signal: controller.signal,
+          modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+          localTestEnabled: opts.modelPolicy === 'test-mock',
+          prepare: options?.prepareInput ?? opts.transformPrompt,
+        }).then(prepared => { preparedInput = prepared; return prepared.assembly }) : await getOrCreate(sessionId)
+        if (controller.signal.aborted || closed) return
         const lane = lanes.get(sessionId)!
+        await extensionRefreshes.get(sessionId)?.catch(() => undefined)
+        const prepared = !preparedInput && !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
+        if (controller.signal.aborted || closed) return
+        const text = context ? prepared + '\n\n' + context : prepared
         let execution: Promise<void>
-        try {
-          await extensionRefreshes.get(sessionId)?.catch(() => undefined)
-          const prepared = !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
-          if (controller.signal.aborted || closed) { settle(); return }
-          // M41b: the submit signal now rides INTO the lane — the agent's
-          // run() gets it and aborts at step boundaries/yields (in-flight
-          // cancel reaches the engine, not just the queue gate). Task 11:
-          // the row id is RETAINED through the lane (public id == lane input
-          // id) so the projection merges service-front + lane rows by id.
-          const text = context ? `${prepared}\n\n${context}` : prepared
-          if (options?.admittedInputId) {
-            const pending = assembly.inbox.pending().find((input) => input.inputId === id)
-            if (!pending) { settle(); return }
-            if (pending.text !== text) throw new Error("Admitted input does not match submitted text")
-            execution = lane.runAdmitted(id, controller.signal)
-          } else {
-            assembly.inbox.admit({ inputId: id, text, delivery: "queue", intent: "user", ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) })
-            execution = lane.runAdmitted(id, controller.signal)
-          }
-          record.state = "queued"
-        } catch (error) {
-          // A synchronous lane failure still settles this turn.
-          if (!closed) telemetry?.emit({
-            type: "session/error",
-            ts: Date.now(),
-            data: { sessionId, error: error instanceof Error ? error.message : String(error) },
-          })
-          settleError(error)
-          return
+        if (preparedInput) {
+          execution = lane.runAdmitted(id, controller.signal, { generation: preparedInput.generation, preparation: preparedInput.preparation })
+        } else if (options?.admittedInputId) {
+          const pending = assembly.inbox.pending().find(input => input.inputId === id)
+          if (!pending) return
+          if (pending.text !== text) throw new Error('Admitted input does not match submitted text')
+          execution = lane.runAdmitted(id, controller.signal)
+        } else {
+          await assembly.inbox.admit({ inputId: id, text, delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' }, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }, controller.signal)
+          execution = lane.runAdmitted(id, controller.signal)
         }
-        // Lane drain: rejects on the first turn failure (A-plan semantics) —
-        // the rejection becomes this submit's rejection (host error frame).
-        execution.then(
-          async () => {
-            if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
-              try {
-                const state = await bindingFor(sessionId)
-                await opts.afterSuccessfulSubmit(sessionId, assembly, state.status === "ready"
-                  ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
-                  : {})
-              } catch (error) {
-                d.warn(`[i-harness] post-turn host callback failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
-              }
-            }
-            settle()
-          },
-          (error: unknown) => {
-            if (!signal.aborted && !closed) {
-              telemetry?.emit({
-                type: "session/error",
-                ts: Date.now(),
-                data: { sessionId, error: error instanceof Error ? error.message : String(error) },
-              })
-            }
-            settleError(error)
-          },
-        )
-      }, (error: unknown) => {
-        // Assembly build failure (e.g. loadMeta unknown session) → reject.
-        telemetry?.emit({
-          type: "session/error",
-          ts: Date.now(),
-          data: { sessionId, error: error instanceof Error ? error.message : String(error) },
-        })
-        settleError(error)
+        record.state = 'queued'
+        // Keep the entire lane/post-turn/drain flow inside caller settlement.
+        await execution
+        if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
+          record.postTurn = true
+          try {
+            await runPostSubmit({
+              sessionId, assembly, signal: controller.signal, localTestEnabled: opts.modelPolicy === 'test-mock',
+              binding: () => bindingFor(sessionId), callback: (...args) => opts.afterSuccessfulSubmit!(...args),
+              warn: error => d.warn('[i-harness] post-turn host callback failed for ' + sessionId + ': ' + (error instanceof Error ? error.message : String(error))),
+            })
+          } finally { delete record.postTurn }
+        }
+      }, () => preparedInput?.close(), {
+        resolve: settle, reject: settleError,
+        report(error) {
+          if (!signal.aborted && !closed) telemetry?.emit({ type: 'session/error', ts: Date.now(), data: { sessionId, ...failureDiagnostics(error) } })
+        },
       })
+
     }
     void prev.then(startTurn, startTurn)
     return turn
@@ -914,7 +919,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
         continue
       }
-      if (rec.scheduled && rec.state === "running") {
+      if (rec.postTurn || rec.scheduled && rec.state === "running") {
         // Lane execution finished, but this service submission still owns
         // post-turn settlement work. Its cleanup removes the row.
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "running", order: rec.order })
@@ -934,7 +939,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return out
   }
 
-  function cancelQueued(sessionId: string, id: string): { cancelled: boolean } {
+  async function cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }> {
     // THE LANE is the ground truth for "running": the record's state is a
     // queue()-read projection and can lag a fresh promotion — consulting it
     // alone would abort a running turn's controller (agent.run's signal) and
@@ -943,13 +948,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const rec = queues.get(sessionId)?.byId.get(id)
     // Already-cancelled / running / unknown ids are all an honest false — the
     // row is no longer cancellable at the moment (the UI refresh shows truth).
-    if (rec === undefined || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
+    if (rec === undefined || rec.postTurn || rec.state === "running" || rec.state === "cancelled") return { cancelled: false }
     // Abort the row controller (settles the submit's chain gate without
     // executing) and retract a lane-admitted input synchronously — the inbox
     // cancel is append-marked, so the projection drops the row immediately.
     rec.controller.abort()
+    const cancelled = await lanes.get(sessionId)?.cancel(id)
+    if (cancelled?.cancelled === false && lanes.get(sessionId)?.currentInput()?.inputId === id) return { cancelled: false }
     rec.state = "cancelled"
-    lanes.get(sessionId)?.cancel(id)
     notifyExecutionState(sessionId)
     return { cancelled: true }
   }
@@ -963,9 +969,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       return result
     }
     const records = queues.get(sessionId)?.byId
-    const record = current === undefined
+    const postTurn = current === undefined ? [...(records?.values() ?? [])].find(record => record.postTurn) : undefined
+    const record = postTurn ?? (current === undefined
       ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
-      : records?.get(current.inputId)
+      : records?.get(current.inputId))
     if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
     record.controller.abort()
     stopNotifications(sessionId)
@@ -976,6 +983,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const failedClose = new Set<string>()
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
+  function revokeSession(sessionId: string): void {
+    opts.coordinator?.revokeManagedDocumentNewWork(sessionId)
+    ;(assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId))?.revokeNewWork()
+    for (const row of queues.get(sessionId)?.byId.values() ?? []) row.controller.abort()
+  }
   let closeAttempt: Promise<void> | undefined
   function close(): Promise<void> {
     if (closeAttempt) return closeAttempt
@@ -987,7 +999,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   async function closeAll(): Promise<void> {
     if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0) return
     closed = true
-    for (const id of assemblies.keys()) stopNotifications(id)
+    for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
+      revokeSession(id); stopNotifications(id)
+    }
     await Promise.allSettled([
       ...active,
       ...creating.values(),
@@ -1006,15 +1020,20 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     for (const [id, handle] of ownedAssemblies()) {
       try {
         await handle.dispose()
-        assemblies.delete(id); mountingAssemblies.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
+        assemblies.delete(id); mountingAssemblies.delete(id); writableSessions.delete(id); inputInboxes.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
       } catch (error) { failedClose.add(id); failures.push(error) }
     }
+    for (const id of writableSessions.keys()) {
+      if (assemblies.has(id) || mountingAssemblies.has(id)) continue
+      try { await opts.coordinator?.closeManagedDocument(id); writableSessions.delete(id); inputInboxes.delete(id); failedClose.delete(id) }
+      catch (error) { failedClose.add(id); failures.push(error) }
+    }
     if (failures.length) throw new AggregateError(failures, "Session service process cleanup incomplete")
-    writableSessions.clear()
     if (failure !== undefined) throw failure
   }
 
   function closeSession(sessionId: string): Promise<void> {
+    revokeSession(sessionId)
     stopNotifications(sessionId)
     const existing = closing.get(sessionId)
     if (existing !== undefined) return existing
@@ -1030,11 +1049,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (binding !== undefined) await Promise.allSettled([binding])
       await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
-      try { await handle?.dispose() } catch (error) { failedClose.add(sessionId); throw error }
+      try { if (handle) await handle.dispose(); else await opts.coordinator?.closeManagedDocument(sessionId) }
+      catch (error) { failedClose.add(sessionId); throw error }
       failedClose.delete(sessionId)
       assemblies.delete(sessionId)
       mountingAssemblies.delete(sessionId)
       writableSessions.delete(sessionId)
+      inputInboxes.delete(sessionId)
       lanes.delete(sessionId)
       modelBindings.delete(sessionId)
       chains.delete(sessionId)
@@ -1079,12 +1100,30 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (errors.length) throw new AggregateError(errors.map((result) => result.reason), "Some live plugin updates failed")
     },
     submit,
+    compact(sessionId, instructions, signal = new AbortController().signal) {
+      const run = async () => {
+        assertWritableOpen(sessionId)
+        signal.throwIfAborted()
+        const state = queueState(sessionId)
+        if (state.running || state.queued > 0) throw new Error('session is busy')
+        if (!opts.coordinator) return (await getOrCreate(sessionId)).compactNow(instructions)
+        return runManualGeneration({ ownerSessionId: sessionId, signal, instructions, timeoutMs: opts.modelActionTimeoutMs,
+          localTestEnabled: opts.modelPolicy === 'test-mock',
+          acquire: async () => {
+            await opts.coordinator!.profile(sessionId)
+            return openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) })
+          }, assemble: () => getOrCreate(sessionId),
+        })
+      }
+      return opts.sessionOperation ? opts.sessionOperation.run(sessionId, run) : run()
+    },
     assemblyFor: getOrCreate,
     modelState,
     contextState,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     writableSessionFor,
+    receivedInputFor,
     liveAssembly,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState,
@@ -1120,9 +1159,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     updateSandboxMode: async (mode) => {
       if (closed || currentSandbox === undefined) throw new Error("sandbox mode is unavailable")
       const changed = currentSandbox !== mode
-      currentSandbox = mode
       const owned = ownedAssemblies()
-      if (changed) for (const assembly of owned.values()) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode })
+      if (changed) for (const assembly of owned.values()) await assembly.recordSandboxMode(mode)
+      currentSandbox = mode
       await Promise.all([...owned.values()].map(assembly => assembly.reconcileExecutionAuthority()))
     },
     executionBackendStatus: () => Promise.all([...assemblies].map(async ([sessionId, assembly]) => ({ sessionId, status: await assembly.executionBackendStatus() }))),

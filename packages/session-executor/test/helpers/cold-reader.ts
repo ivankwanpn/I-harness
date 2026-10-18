@@ -1,3 +1,4 @@
+import { controlledModel } from "../controlled-model.ts"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -29,11 +30,11 @@ export async function coldReaderFixture() {
     loadOwned: (sessionId: string) => inspect(() => coordinator.loadOwned(sessionId), false),
     snapshot: (sessionId: string) => inspect(() => coordinator.snapshot!(sessionId), true),
   }
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = controlledModel(async function* () {
     yield { type: "reasoning", text: "Owned live reasoning" }
     streaming.resolve(); await releaseModel.promise
     yield { type: "text/chunk", text: "Owned result" }; yield { type: "end" }
-  } }
+  })
   const service = createSessionService({ workspace: root, coordinator: observed, sandbox: "read-only", sessionFor: createDurableSessionLoader(observed),
     modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "owned", modelId: "held", label: "Owned fixture", contextWindow: 100_000 } }) })
   return { root, store, id, coordinator, observed, service, entered: entered.promise, releaseRead: releaseRead.resolve,

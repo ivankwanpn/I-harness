@@ -10,7 +10,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
-  "devDependencies": { "@i-harness/session-persistence-jsonl": "workspace:*" },
+  "devDependencies": {
+    "@i-harness/session-persistence-jsonl": "workspace:*"
+  },
   "dependencies": {
     "@i-harness/media": "workspace:*",
     "@i-harness/code-mode": "workspace:*",
@@ -58,6 +60,7 @@
     "@i-harness/tool-search": "workspace:*",
     "@i-harness/web": "workspace:*",
     "@i-harness/workflow": "workspace:*",
-    "@i-harness/context-output": "workspace:*"
+    "@i-harness/context-output": "workspace:*",
+    "@i-harness/context-engine": "workspace:*"
   }
 }

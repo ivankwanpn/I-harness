@@ -1,7 +1,6 @@
-import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
-import { deriveMessages } from "@i-harness/core-session"
-import { createHash, randomUUID } from 'node:crypto'
+import { deriveMessages, renderConversation, stringifyJsonData } from "@i-harness/core-session"
+import { createHash } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
 /**
@@ -125,273 +124,16 @@ export function replayBlockOrder<T>(
   return visibleText === content && seenReasoning.size === reasoning.length && seenTools.size === tools.length ? result : undefined
 }
 
-export type RetryableErrorCode =
-  | "RATE_LIMIT"
-  | "SERVER"
-  | "TIMEOUT"
-  | "TRANSPORT"
-  | "EMPTY_RESPONSE"
-  | "CONTEXT_WINDOW_EXCEEDED"
-  | "QUOTA"
+export { resolveRetryPolicy, backoffDelay } from './retry/policy.ts'
+export type { RetryableErrorCode, RetryBackoffConfig, NormalRetryPolicyConfig, AlwaysRetryPolicyConfig, RetryPolicyConfig, ResolvedRetryBackoff, ResolvedNormalRetryPolicy, ResolvedAlwaysRetryPolicy, ResolvedRetryPolicy } from './retry/policy.ts'
 
-export interface RetryBackoffConfig {
-  initialDelayMs?: number
-  maxDelayMs?: number
-  jitterRatio?: number
-}
-
-export interface NormalRetryPolicyConfig {
-  mode: "normal"
-  maxRetries?: number
-  retryableCodes?: string[]
-  backoff?: RetryBackoffConfig
-}
-
-export interface AlwaysRetryPolicyConfig {
-  mode: "always"
-  backoff?: RetryBackoffConfig
-}
-
-export type RetryPolicyConfig = NormalRetryPolicyConfig | AlwaysRetryPolicyConfig
-
-export interface ResolvedRetryBackoff {
-  readonly initialDelayMs: number
-  readonly maxDelayMs: number
-  readonly jitterRatio: number
-}
-
-export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {
-  readonly mode: "normal"
-  readonly maxRetries: number
-  readonly retryableCodes: readonly string[]
-}
-
-export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {
-  readonly mode: "always"
-}
-
-export type ResolvedRetryPolicy = ResolvedNormalRetryPolicy | ResolvedAlwaysRetryPolicy
-
-const DEFAULT_MAX_RETRIES = 5
-const DEFAULT_INITIAL_DELAY_MS = 500
-const DEFAULT_MAX_DELAY_MS = 10_000
-const DEFAULT_JITTER_RATIO = 0.1
-const DEFAULT_RETRYABLE_CODES = Object.freeze(["RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT", "EMPTY_RESPONSE"])
-
-function resolveBackoff(config: RetryBackoffConfig | undefined, path: string): ResolvedRetryBackoff {
-  const initialDelayMs = config?.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS
-  const maxDelayMs = config?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS
-  const jitterRatio = config?.jitterRatio ?? DEFAULT_JITTER_RATIO
-  if (!Number.isFinite(initialDelayMs) || initialDelayMs <= 0) throw new Error(`${path}.initialDelayMs must be a positive finite number`)
-  if (!Number.isFinite(maxDelayMs) || maxDelayMs <= 0) throw new Error(`${path}.maxDelayMs must be a positive finite number`)
-  if (initialDelayMs > maxDelayMs) throw new Error(`${path}.initialDelayMs must be <= maxDelayMs`)
-  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) throw new Error(`${path}.jitterRatio must be between 0 and 1`)
-  return Object.freeze({ initialDelayMs, maxDelayMs, jitterRatio })
-}
-
-export function resolveRetryPolicy(config: RetryPolicyConfig | undefined, path = "retryPolicy"): ResolvedRetryPolicy {
-  if (config === undefined) {
-    return Object.freeze({ mode: "normal", maxRetries: DEFAULT_MAX_RETRIES, retryableCodes: [...DEFAULT_RETRYABLE_CODES], ...resolveBackoff(undefined, `${path}.backoff`) })
-  }
-  if (config.mode === "normal") {
-    const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES
-    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) throw new Error(`${path}.maxRetries must be a non-negative safe integer`)
-    const retryableCodes = config.retryableCodes ?? [...DEFAULT_RETRYABLE_CODES]
-    if (retryableCodes.length === 0) throw new Error(`${path}.retryableCodes must not be empty`)
-    if (new Set(retryableCodes).size !== retryableCodes.length) throw new Error(`${path}.retryableCodes must not contain duplicates`)
-    return Object.freeze({ mode: "normal", maxRetries, retryableCodes: Object.freeze([...retryableCodes]), ...resolveBackoff(config.backoff, `${path}.backoff`) })
-  }
-  if (config.mode === "always") {
-    return Object.freeze({ mode: "always", ...resolveBackoff(config.backoff, `${path}.backoff`) })
-  }
-  throw new Error(`${path}.mode must be "normal" or "always"`)
-}
-
-// Error classification: prefer a stable code (err.code / err.cause), then a
-// message regex fallback.
-const CONTEXT_OVERFLOW_RE = /(?:^|[^a-z0-9])context[\s_-]?(?:length|window)[\s_-]?(?:exceed|overflow)/i
-const QUOTA_RE = /(?:quota|balance|credit|budget|usage[\s_-]limit)[\s_-]?(?:exceeded|exhausted|reached|depleted)/i
-const RATE_RE = /429|rate[\s_-]limit|too many requests/i
-const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT/i
-const SERVER_RE = /\b5\d\d\b|internal server|bad gateway|service unavailable/i
-const CAPACITY_RE = /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i
-const CAPACITY_CODE_RE = /^server_(?:is_)?overloaded$/i
-const TERMINAL_CODES = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
-
-function normalizedCode(code: string): string {
-  if (CONTEXT_OVERFLOW_RE.test(code)) return "CONTEXT_WINDOW_EXCEEDED"
-  if (/^(rate_limit_exceeded|rate_limit_error)$/i.test(code)) return "RATE_LIMIT"
-  if (/^(server_error|api_error|overloaded_error)$/i.test(code) || CAPACITY_CODE_RE.test(code)) return "SERVER"
-  if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
-  if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
-  if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
-  if (/^(AbortError|ABORT_ERR|ERR_CANCELED)$/.test(code)) return "ABORTED"
-  if (/^(insufficient_quota|billing_hard_limit_reached|quota_exceeded|ServiceQuotaExceededException)$/i.test(code)) return "QUOTA"
-  if (/^(invalid_api_key|authentication_error|permission_error|permission_denied|AccessDeniedException|UnrecognizedClientException)$/i.test(code)) return "AUTH"
-  if (/^(invalid_request_error|invalid_argument|not_found_error|request_too_large|ValidationException)$/i.test(code)) return "INVALID_ARGUMENT"
-  if (/^(ThrottlingException|TooManyRequestsException)$/i.test(code)) return "RATE_LIMIT"
-  if (/^(ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/i.test(code)) return "SERVER"
-  return code
-}
-
-export function retryErrorCode(err: unknown): string | undefined {
-  // Walk the cause chain for a structured code.
-  let cur: unknown = err
-  for (let i = 0; i < 5 && cur != null; i++) {
-    if (typeof cur === "object") {
-      const record = cur as { code?: unknown; name?: string; httpStatus?: number; $metadata?: { httpStatusCode?: number } }
-      if (record.name === "AbortError") return "ABORTED"
-      if (record.name === "SSEParseError" || record.name === "SyntaxError") return "MALFORMED_RESPONSE"
-      if (typeof record.code === "string") return normalizedCode(record.code)
-      if (record.name && normalizedCode(record.name) !== record.name) return normalizedCode(record.name)
-      const status = record.httpStatus ?? record.$metadata?.httpStatusCode
-      if (status === 401 || status === 403) return "AUTH"
-      if (status === 429) return "RATE_LIMIT"
-      if (status !== undefined && status >= 500 && status <= 599) return "SERVER"
-    }
-    cur = (cur as { cause?: unknown }).cause
-  }
-  const msg = err instanceof Error ? `${err.message} ${err.cause instanceof Error ? err.cause.message : ""}` : String(err)
-  if (CONTEXT_OVERFLOW_RE.test(msg)) return "CONTEXT_WINDOW_EXCEEDED"
-  if (QUOTA_RE.test(msg)) return "QUOTA"
-  if (/insufficient_quota|billing|payment required|not enough (?:credit|balance)/i.test(msg)) return "QUOTA"
-  if (/malformed|invalid (?:tool|function).*argument|invalid json/i.test(msg)) return "MALFORMED_RESPONSE"
-  if (/\b(?:401|403)\b|invalid.api.key|authentication|unauthorized|permission denied/i.test(msg)) return "AUTH"
-  if (/certificate|self.signed|unable to verify|\bTLS\b|\bSSL\b/i.test(msg)) return "TLS"
-  if (RATE_RE.test(msg)) return "RATE_LIMIT"
-  if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
-  if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|fetch failed|network error|socket hang up/i.test(msg)) return "TRANSPORT"
-  if (SERVER_RE.test(msg) || CAPACITY_RE.test(msg)) return "SERVER"
-  return undefined
-}
-
-function isModelCapacityError(error: unknown): boolean {
-  let current = error
-  for (let i = 0; i < 5 && current !== null && typeof current === "object"; i++) {
-    const value = current as { code?: unknown; message?: unknown; capacityLimited?: unknown; cause?: unknown }
-    if (value.capacityLimited === true || typeof value.code === "string" && CAPACITY_CODE_RE.test(value.code)
-      || typeof value.message === "string" && CAPACITY_RE.test(value.message)) return true
-    current = value.cause
-  }
-  return false
-}
-
-/** HTTP status and server delay are structured; response bodies never enter retry diagnostics. */
-export async function describeHttpError(label: string, response: Response, request?: Pick<LLMRequest, "onTerminalResponse">): Promise<Error> {
-  // Preserve body-based classification (notably 400 context overflow), but let
-  // a guarded host retain known terminal status if this error body's read parks.
-  if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
-    const code = response.status === 401 || response.status === 403 ? "AUTH" : response.status === 402 ? "QUOTA" : "INVALID_ARGUMENT"
-    try { request?.onTerminalResponse?.({ code, httpStatus: response.status }) } catch { /* diagnostic observer */ }
-  }
-  const body = await response.text()
-  let bodyCode: string | undefined
-  let capacityLimited = CAPACITY_RE.test(body.slice(0, 8192))
-  try {
-    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; message?: unknown } }
-    const value = parsed.error?.code ?? parsed.error?.type
-    if (typeof value === "string") { bodyCode = normalizedCode(value); capacityLimited ||= CAPACITY_CODE_RE.test(value) }
-  } catch { /* Non-JSON error responses still carry a reliable HTTP status. */ }
-  const classified = retryErrorCode(new Error(body.slice(0, 8192)))
-  const code = bodyCode && TERMINAL_CODES.has(bodyCode) ? bodyCode
-    : classified && TERMINAL_CODES.has(classified) ? classified
-    : response.status === 401 || response.status === 403 ? "AUTH"
-    : response.status === 402 ? "QUOTA"
-    : response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429 ? "INVALID_ARGUMENT"
-    : capacityLimited ? "SERVER"
-    : response.status === 429 ? "RATE_LIMIT"
-    : response.status === 408 ? "TIMEOUT"
-    : response.status >= 500 ? "SERVER" : "INVALID_ARGUMENT"
-  const advice = response.headers.get("retry-after")?.trim()
-  const now = Date.now()
-  const parsedDeadline = advice === undefined || advice === "" ? NaN
-    : /^\d+(?:\.\d+)?$/.test(advice) ? now + Number(advice) * 1000 : Date.parse(advice)
-  capacityLimited &&= code === "SERVER"
-  return Object.assign(new Error(`${label} request failed: ${response.status}${capacityLimited ? " (model is at capacity)" : ""}`), {
-    code, httpStatus: response.status,
-    ...(capacityLimited ? { capacityLimited: true } : {}),
-    ...(Number.isFinite(parsedDeadline) ? { retryAfterAt: Math.max(now, parsedDeadline) } : {}),
-  })
-}
-
-// Exponential backoff with symmetric jitter. attemptNo starts at 1 for the
-// wait AFTER the first failed attempt; the delay is capped at maxDelayMs and
-// never negative (jitter is ±jitterRatio of the capped base).
-export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): number {
-  const base = policy.initialDelayMs * 2 ** (attemptNo - 1)
-  const capped = Math.min(base, policy.maxDelayMs)
-  const jitter = (Math.random() * 2 - 1) * policy.jitterRatio * capped
-  return Math.min(policy.maxDelayMs, Math.max(0, Math.round(capped + jitter)))
-}
-
-// Retry only the model request. Consumers must explicitly opt into discarding
-// output; tools and earlier committed steps never belong to this boundary.
-export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
-  async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-    const requestId = randomUUID()
-    let attemptNo = 0
-    let recovery: ModelRetryInfo | undefined
-    while (true) {
-      request.signal?.throwIfAborted()
-      if (recovery) yield { type: "retry", retry: { ...recovery, phase: "attempting" } }
-      request.signal?.throwIfAborted()
-      let produced = false
-      let failure: unknown
-      let failed = false
-      let failureEvent: Extract<LLMStreamEvent, { type: "error" }> | undefined
-      const pendingUsage: LLMStreamEvent[] = []
-      try {
-        for await (const ev of client.stream(request)) {
-          request.signal?.throwIfAborted()
-          const output = ev.type === "tool_call" || ((ev.type === "text/chunk" || ev.type === "reasoning") && ev.text.length > 0)
-          if (output) produced = true
-          if (ev.type === "usage") { pendingUsage.push(ev); continue }
-          if (ev.type === "error") { failure = ev.error; failureEvent = ev; failed = true; break }
-          if (recovery && (output || ev.type === "end")) {
-            yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
-            recovery = undefined
-          }
-          if (ev.type === "end") { yield* pendingUsage; yield ev; return }
-          yield ev
-        }
-      } catch (error) { failure = error; failed = true }
-      request.signal?.throwIfAborted()
-      if (!failed) {
-        if (recovery) yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
-        yield* pendingUsage
-        return
-      }
-      const code = retryErrorCode(failure)
-      const retryable = !TERMINAL_CODES.has(code ?? "") && (policy.mode === "always" || policy.retryableCodes.includes(code ?? ""))
-      const budgetExhausted = policy.mode === "normal" && attemptNo >= policy.maxRetries
-      const detail = failure as { retryAfterAt?: number; httpStatus?: number } | undefined
-      const serverWait = typeof detail?.retryAfterAt === "number" && Number.isFinite(detail.retryAfterAt) ? Math.max(0, detail.retryAfterAt - Date.now()) : 0
-      if (retryable && (!produced || request.retryOutput === "discard") && !budgetExhausted && serverWait <= 60_000) {
-        attemptNo++
-        const capacityLimited = isModelCapacityError(failure)
-        // Model capacity is temporary service load, not account quota. Give it
-        // a fixed ten-second minimum while retaining any longer server advice.
-        const delayMs = Math.max(serverWait, capacityLimited ? 10_000 : backoffDelay(policy, attemptNo))
-        recovery = {
-          requestId, phase: "waiting", attempt: attemptNo,
-          ...(policy.mode === "normal" ? { maxRetries: policy.maxRetries } : {}),
-          delayMs, nextAttemptAt: Date.now() + delayMs, code: capacityLimited ? "CAPACITY" : code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNKNOWN",
-          ...(detail?.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
-          ...(metadata?.providerId === undefined ? {} : { providerId: metadata.providerId.slice(0, 256) }),
-          ...(metadata?.modelId === undefined ? {} : { modelId: metadata.modelId.slice(0, 256) }),
-          ...(request.retryOutput === "discard" ? { discardOutput: true as const } : {}),
-        }
-        yield { type: "retry", retry: recovery }
-        request.signal?.throwIfAborted()
-        await delay(Math.max(0, recovery.nextAttemptAt! - Date.now()), undefined, { signal: request.signal })
-        continue
-      }
-      if (failureEvent && !budgetExhausted) { yield failureEvent; return }
-      throw failure
-    }
-  }
-  return { stream: wrapped }
-}
+// Provider failure classification and payload-free facts share one public facade.
+export { retryErrorCode } from "./provider-error/classify.ts"
+export { describeHttpError } from "./provider-error/http.ts"
+export { modelFailureFacts, safeModelFailureFacts } from "./provider-error/facts.ts"
+export type { ModelFailureFacts } from "./provider-error/types.ts"
+import { retryErrorCode } from "./provider-error/classify.ts"
+import { modelFailureFacts } from "./provider-error/facts.ts"
 
 export interface ToolSchema {
   name: string
@@ -437,6 +179,11 @@ export interface LLMRequestScope {
 }
 
 export interface LLMRequest {
+  generation?: import('./prepared/generation.ts').GenerationControl
+  onTransportIssue?: () => void
+  confirmExecution?: (confirmation: import("./prepared/execution.ts").ExecutionConfirmation) => void
+  /** Internal owner guard; wrappers forward it to each physical transport boundary. */
+  validateBeforeTransport?: () => void
   /** Host-only conversation scope; never serialize into a provider body. */
   requestScope?: LLMRequestScope
   /** Host-only fallback for an error body that outlives a guard deadline. */
@@ -479,15 +226,19 @@ export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, in
 }
 
 export interface ModelClient {
+  readonly executionIdentity?: import("./prepared/execution.ts").LiveExecutionIdentity
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
+  prepare?(request: LLMRequest): Promise<import("./prepared/types.ts").PreparedModelRequest>
 }
 
 export { createWaitingGuard, reportStreamActivity, type ModelWaitPolicy, type StreamActivity, type TerminalResponseHint } from "./waiting-guard.ts"
 
-export function assertMessagesFromLog(messages: LLMMessage[], session: Session): void {
-  const logged = deriveMessages(session)
-  const msgJson = JSON.stringify(messages)
-  const logJson = JSON.stringify(logged)
+export function assertMessagesFromLog(messages: LLMMessage[], source: Session | Parameters<typeof renderConversation>[0]): void {
+  // A captured projection is a source-owned view of the log. Revalidating its
+  // renderer must not fold a newer live archive into this request in place.
+  const logged = "events" in source ? deriveMessages(source) : renderConversation(source)
+  const msgJson = stringifyJsonData(messages)
+  const logJson = stringifyJsonData(logged)
   if (msgJson !== logJson) throw new Error("model-visible messages must derive from the session log (audit F01-3)")
 }
 
@@ -624,6 +375,8 @@ export async function describeTransportError(
   err.cause = error
   const code = retryErrorCode(error)
   if (code !== undefined) Object.assign(err, { code })
+  const modelFailure = modelFailureFacts(error)
+  if (modelFailure) Object.assign(err, { modelFailure })
   return err
 }
 
@@ -642,19 +395,6 @@ export class SSEParseError extends Error {
 }
 
 /**
- * M72 Ⅱ: the margin `clampOutputCap` keeps between the input we estimate and
- * the window. Sampled from Pi's `clampMaxTokensToContext` (`context − estimated
- * input − 4096`): the request-level clamp exists so that sending a model's full
- * output ceiling cannot turn a request that would have run into a 400 —
- * Anthropic treats `input + max_tokens > context` as a validation error.
- *
- * NOT exported on purpose: this file is its only consumer, and the reachability
- * instrument reads a single-file export as an unconsumed one (one new row = a
- * red gate). The number is documented here and asserted by this package's tests.
- */
-const OUTPUT_CAP_SAFETY_MARGIN = 4096
-
-/**
  * M72 Ⅱ: what Anthropic gets when the chain resolves NOTHING. Its Messages API
  * lists `max_tokens` as required — today every such request is a 400 — so this
  * is the one adapter that must always send a number. The value is Anthropic's
@@ -670,33 +410,32 @@ const OUTPUT_CAP_SAFETY_MARGIN = 4096
  */
 export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
 
-/**
- * M72 Ⅱ: `min(value, room left in the window)`. Pure so every caller clamps the
- * same way; the host supplies the estimate because only the host knows how it
- * prices a message (this package deliberately owns no tokenizer).
- *
- * Three arms. No window known ⇒ the value is returned untouched. The estimated
- * input alone fills the window ⇒ ALSO untouched: the request cannot run at that
- * size whichever cap it carries, and clamping to 1 token would turn a context
- * overflow into a silent truncation. A non-finite estimate ⇒ ALSO untouched:
- * `NaN` would make every comparison false and `Math.min(value, NaN)` is `NaN`,
- * so a positive test on the room is what keeps a degenerate estimate from
- * turning into a `max_tokens: NaN` on the wire. Otherwise the value is clamped
- * into the hard room, preferring `hardRoom − margin` and falling back to the
- * hard room itself when the margin does not fit — the margin is insurance
- * against our estimate being low, never a licence to exceed the provider's rule.
- */
-export function clampOutputCap(value: number, contextWindow: number | undefined, estimatedInputTokens: number): number {
-  if (contextWindow === undefined) return value
-  // The provider's OWN rule is `input + max_tokens <= context` — the safety
-  // margin is insurance against our estimate being low, NOT a licence to exceed
-  // that rule. So the hard room is computed first and always honoured; the
-  // margin only decides how much of it we are willing to promise.
-  // A POSITIVE test (`hardRoom >= 1`), not `hardRoom < 1`: a non-finite
-  // estimate makes the room NaN, and `NaN < 1` is false — the negated form
-  // would let NaN fall through to `Math.min(value, NaN)`.
-  const hardRoom = contextWindow - estimatedInputTokens
-  if (!(hardRoom >= 1)) return value
-  const room = hardRoom - OUTPUT_CAP_SAFETY_MARGIN
-  return Math.min(value, room >= 1 ? room : hardRoom)
-}
+
+export type { PreparedModelRequest, PreparedStreamControl } from "./prepared/types.ts"
+export type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness/token-meter"
+export { prepareModelRequest } from "./prepared/fallback.ts"
+export { wrapPreparedRequest, withPreparedRequests, mapModelRequest, snapshotModelData, preparedControls, freezePreparedFacts, invalidPreparedRequest, validateOutputCap } from "./prepared/wrappers.ts"
+export { createPreparedPayload } from "./prepared/payload.ts"
+export { createPreparedHttpPayload } from './prepared/http-terminal.ts'
+export { assertOwnedPreparedTerminal } from './prepared/owned-terminal.ts'
+export type { PreparedValidation, FinalValidator, FinalRejectionReason } from './prepared/validation.ts'
+export { assertNativeProducerWitnesses } from './prepared/native-witness.ts'
+export { stringifyJsonData } from '@i-harness/core-session'
+export { validationCollector, readPreparedValidation } from './prepared/validation.ts'
+export { assertPreparedValidation, preparedBindingError } from './prepared/rejection.ts'
+export { preparedModelClient } from "./prepared/wrappers.ts"
+
+export { createRetryingClient } from './retry/execution.ts'
+export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./binding.ts"
+
+export type { LiveExecutionIdentity, ExecutionConfirmation, ExecutionReceipt, PreparedExecutionContext } from "./prepared/execution.ts"
+export { sameExecutionIdentity, validExecutionIdentity, isExecutionControlError } from "./prepared/execution.ts"
+export { readPreparedTextOutput, type PreparedTextOutput } from './prepared/text-output.ts'
+export { withPreparedSignal, observeModelClient } from './prepared/owned-wrappers.ts'
+export { modelExecutionSource } from './prepared/client-source.ts'
+export { createStableModelClient } from './prepared/wrappers.ts'
+export { createGenerationControl, isGenerationControl, generationError, isGenerationError, generationCandidate, freezeGenerationRetry, NO_GENERATION_RETRY } from './prepared/generation.ts'
+export type { GenerationControl, GenerationReservation, GenerationIssue } from './prepared/generation.ts'
+export type { AuxiliaryGenerationAction, ApprovalGenerationAction, TitleGenerationFactory, MediaGenerationAction, ToolModelGeneration, ApprovalGenerationFactory, CodeGenerationLineage, CodeGenerationScope } from './prepared/auxiliary.ts'
+
+export { preparedExecutionSource } from './prepared/owned-terminal.ts'

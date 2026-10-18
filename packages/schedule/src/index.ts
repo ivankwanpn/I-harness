@@ -14,7 +14,7 @@
  * UTC-instant-based and prompt delivery is an injected seam (see driver.ts).
  */
 
-import type { SessionEvent } from "@i-harness/core-session"
+import type { SessionEventView as SessionEvent } from "@i-harness/core-session"
 
 /** Fixed v1 lower bound for a fixed-rate reminder. */
 export const MIN_EVERY_INTERVAL_SECONDS = 300

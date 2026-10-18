@@ -5,6 +5,7 @@
 //
 // Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
 // sibling release folder when an earlier portable app is still open.
+// IH_DESKTOP_GATEWAY_DIR reuses a qualified repository runtime read-only.
 // Assumes `electron-vite build` and `scripts/build-gateway.mjs` already ran.
 import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -14,23 +15,19 @@ import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 import { verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
+import { resolvePackagePaths, validateGatewayRuntime } from "./package-inputs.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
-const outDir = join(packageRoot, "out")
-const gatewayDir = join(packageRoot, ".gateway-dist")
-const releaseLabel = process.env.IH_DESKTOP_RELEASE_LABEL ?? "release"
-if (!/^release(?:-[a-z0-9-]+)?$/.test(releaseLabel)) throw new Error("invalid release folder label")
-const releaseDir = resolve(packageRoot, releaseLabel)
-if (dirname(releaseDir) !== packageRoot) throw new Error("release folder escaped the Desktop package")
+const { outDir, gatewayDir, releaseDir, appDir } = resolvePackagePaths(packageRoot)
 const appName = "I-harness"
-const appDir = join(releaseDir, appName)
+const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
+validateGatewayRuntime(gatewayDir, manifest.version)
 
 for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", "pdf.worker.mjs", "cmaps", "standard_fonts", "wasm", "node_modules/@napi-rs/canvas"].map((part) => join(outDir, "main", part))]) {
   if (!existsSync(required)) throw new Error(`missing ${required} — run the build steps first`)
 }
 
-const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
 verifyNativeAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-windows-psec"))
 verifyWslAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-wsl/worker"))
 const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("electron"))

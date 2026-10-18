@@ -1,43 +1,18 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import type { SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
+import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
+import { createFactJournalBackend } from './backend/fact-journal.ts'
+import { upgradeFactJournal } from './backend/format-upgrade.ts'
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
 // answer (no turn/start yet); a larger one is served non-blank without a read
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
-
-async function replaceSessionFile(path: string, headerLine: string, events: SessionEvent[]): Promise<void> {
-  const tmp = `${path}.${randomUUID()}.tmp`
-  const body = [headerLine, ...events.map((event) => JSON.stringify(event)), ""].join("\n")
-  const handle = await open(tmp, "wx")
-  try {
-    await handle.writeFile(body, { encoding: "utf-8" })
-    await handle.sync()
-  } catch (error) {
-    await handle.close().catch(() => {})
-    await unlink(tmp).catch(() => {})
-    throw error
-  }
-  await handle.close()
-  try {
-    await rename(tmp, path)
-  } catch (error) {
-    await unlink(tmp).catch(() => {})
-    throw error
-  }
-  // Directory fsync is not supported uniformly on Windows. Best-effort keeps
-  // the stronger durability path on platforms/filesystems that allow it.
-  const directory = await open(dirname(path), "r").catch(() => undefined)
-  if (directory !== undefined) {
-    try { await directory.sync() } catch { /* best-effort */ }
-    await directory.close().catch(() => {})
-  }
-}
 
 export function createJsonlBackend(root: string): PersistenceBackend {
   const rootPath = resolve(root)
@@ -102,6 +77,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   }
 
   return {
+    ...createFactJournalBackend(filePath, assertNotDeleted),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -110,20 +86,45 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       await assertNotDeleted("session", sessionId)
+      if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")
       await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
-      await writeFile(filePath(sessionId), serializeHeader(meta) + "\n", { flag: "wx" })
+      const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
+      await writeFile(filePath(sessionId), serializeHeader({ ...meta, journal }) + "\n", { flag: "wx" })
     },
 
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
+      const header = await readHeader(path)
+      if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
+      for (const event of events) validateConversationEventShape(event, header.formatVersion)
+      if (events.some(event => isContextEventType(event.type) && (header.formatVersion < 2 || !validContextEvent(event)))) throw new Error("operational context append requires format 2 and valid facts")
       const handle = await open(path, "r+")
       let committedBytes = 0
       try {
         committedBytes = (await handle.stat()).size
-        const text = events.map((e) => JSON.stringify(e)).join("\n") + "\n"
-        await handle.write(text, committedBytes)
+        const lastByte = Buffer.alloc(1)
+        if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
+        const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
+        const data = [6, 7, 8, 9].includes(header.formatVersion)
+          ? (() => {
+            const raw = readFile(path)
+            return raw.then(bytes => {
+              const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion, header)
+              if (journal.torn) throw new Error('Journal recovery required')
+              const addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
+              return addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed).bytes : new Uint8Array()
+            })
+          })()
+          : Promise.resolve(Buffer.from(separator + events.map((e) => JSON.stringify(e)).join("\n") + "\n"))
+        const bytes = await data
+        let offset = 0
+        while (offset < bytes.length) {
+          const { bytesWritten } = await handle.write(bytes, offset, bytes.length - offset, committedBytes + offset)
+          if (bytesWritten <= 0) throw new Error('Session write made no progress')
+          offset += bytesWritten
+        }
         await handle.sync()
       } catch (err) {
         // F01-2 rollback: truncate back to the committed byte length so a
@@ -142,7 +143,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
-      const events = parseEventLines(lines.slice(1))
+      const events = [6, 7, 8, 9].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
+      if (![6, 7, 8, 9].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
       return { version: header.formatVersion, events, meta: header }
     },
 
@@ -162,9 +164,35 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const lines = text.split("\n")
       const headerLine = lines[0]!
       const header = parseHeader(headerLine)
+      if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
+      if ([6, 7, 8, 9].includes(header.formatVersion)) {
+        const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header)
+        const closers = missingClosers(decoded.events).map((event, position) => ({ ...event, seq: decoded.events.length + position }))
+        if (decoded.torn || closers.length) {
+          const raw = Buffer.from(lines.slice(1).join('\n')).subarray(0, decoded.prefix.bodyBytes)
+          const addition = closers.length ? encodeFactBatch(randomUUID(), decoded.prefix.prefixDigest, closers).bytes : new Uint8Array()
+          await replaceRawSessionFile(path, Buffer.concat([Buffer.from(headerLine + '\n'), raw, Buffer.from(addition)]))
+        }
+        return { version: header.formatVersion, events: [...decoded.events, ...closers], meta: header }
+      }
       const events = parseEventLines(lines.slice(1))
+      if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
       const torn = hasTornTail(lines.slice(1))
       const closers = missingClosers(events)
+      if (events.some(event => event.type === "conversation/semantics")) {
+        for (const [index, event] of closers.entries()) event.seq = events.length + index
+        if (torn || closers.length) {
+          let committed = lines[0]! + "\n"
+          for (const line of lines.slice(1)) {
+            if (line.trim()) { try { JSON.parse(line) } catch { break } }
+            committed += line + "\n"
+          }
+          // Preserve every existing committed line, including whitespace. Only
+          // the torn suffix is removed; repair facts get new coordinates.
+          await replaceRawSessionFile(path, committed + closers.map(event => JSON.stringify(event) + "\n").join(""))
+        }
+        return { version: header.formatVersion, events: [...events, ...closers], meta: header }
+      }
       if (torn || closers.length > 0) {
         await replaceSessionFile(path, headerLine, [...events, ...closers])
       }
@@ -176,8 +204,23 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
       const headerLine = text.split("\n")[0]!
-      parseHeader(headerLine)
+      const header = parseHeader(headerLine)
+      if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
+      if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
+      if ([6, 7, 8, 9].includes(header.formatVersion)) {
+        const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
+        const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
+        await replaceRawSessionFile(path, Buffer.concat([Buffer.from(serializeHeader({ ...header, journal }) + '\n'), Buffer.from(frame)]))
+        return
+      }
       await replaceSessionFile(path, headerLine, events)
+    },
+
+    async upgradeSessionFormat(sessionId, expected, target) {
+      await assertNotDeleted("session", sessionId)
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      const path = filePath(sessionId)
+      return upgradeFactJournal(path, expected)
     },
 
     async profile(sessionId) {
@@ -190,7 +233,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: parseEventLines(lines.slice(1)).every((ev) => ev.type !== "turn/start"), updatedAt,
+          blank: ([6, 7, 8, 9].includes(parseHeader(lines[0]!).formatVersion)
+            ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion, parseHeader(lines[0]!)).events
+            : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }
       }
       return { meta: await readHeader(path), blank: false, updatedAt }
@@ -208,7 +253,10 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       if (lines.length === 0 || lines[0]!.trim() === "") {
         throw new Error(`empty session file: ${sessionId}`)
       }
-      const merged: SessionMeta = { ...parseHeader(lines[0]!), ...patch }
+      const previous = parseHeader(lines[0]!)
+      if (Object.hasOwn(patch, 'journal') && JSON.stringify(patch.journal) !== JSON.stringify(previous.journal)) throw new Error('Journal metadata changes require fenced recovery')
+      if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== previous.formatVersion) throw new Error("format changes require durable upgrade; downgrade refused")
+      const merged: SessionMeta = { ...previous, ...patch }
       const out = lines.slice()
       out[0] = serializeHeader(merged)
       const tmp = `${path}.${randomUUID()}.tmp`
@@ -293,7 +341,7 @@ async function readHeader(path: string): Promise<SessionMeta> {
 
 // Track turn/step nesting; a session stopped inside either gets synthetic
 // closers so deriveMessages() reconstructs normally (F01-2 commitRepair).
-function missingClosers(events: SessionEvent[]): SessionEvent[] {
+function missingClosers(events: SessionEvent[]): Array<Extract<SessionEvent, { type: 'step/end' | 'turn/end' }>> {
   let inTurn = false
   let inStep = false
   for (const ev of events) {
@@ -302,7 +350,7 @@ function missingClosers(events: SessionEvent[]): SessionEvent[] {
     if (ev.type === "step/end") inStep = false
     if (ev.type === "turn/end") inTurn = false
   }
-  const closers: SessionEvent[] = []
+  const closers: Array<Extract<SessionEvent, { type: 'step/end' | 'turn/end' }>> = []
   if (inStep) closers.push({ type: "step/end" })
   if (inTurn) closers.push({ type: "turn/end" })
   return closers

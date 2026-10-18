@@ -1,5 +1,31 @@
 // Shared test helpers for this package.
 import { rmSync } from "node:fs"
+import { append, committedFactSeqs, isNondurableSession, type FactOwner, type SessionView, type SessionEvent } from '@i-harness/core-session'
+
+/** Arrange owned test history through the existing specific fact constructors. */
+export async function recordFixture(owner: FactOwner, event: SessionEvent): Promise<void> {
+  const action = owner.beginAction()
+  try {
+    const facts = action.facts
+    switch (event.type) {
+      case 'turn/start': case 'turn/end': case 'step/start': case 'step/end': case 'step/failed':
+      case 'conversation/semantics': case 'assistant/chunk': case 'reasoning': case 'model/retry':
+        committedFactSeqs(await facts.agent.lifecycle(event)); return
+      case 'user/message':
+        committedFactSeqs(await facts.agent.feedback({ ...event, source: event.source ?? { kind: 'plugin', plugin: 'fixture' } })); return
+      case 'assistant/message': committedFactSeqs(await facts.agent.auditAssistant(event)); return
+      case 'todo/write': case 'sandbox/mode': case 'plan/mode': case 'session/title':
+        committedFactSeqs(await facts.metadata.admit(event)); return
+      default: throw new Error(`Fixture requires its specific source for ${event.type}`)
+    }
+  } finally { action.finish() }
+}
+
+/** Explicit standalone fixture setup. Managed views use their real fact ports. */
+export function appendStandalone(session:SessionView,event:SessionEvent):void{
+  if(!isNondurableSession(session))throw new TypeError('Managed fixture requires actual fact admission')
+  append(session,event)
+}
 
 /**
  * Remove a test workspace, tolerating Windows' delayed handle release.

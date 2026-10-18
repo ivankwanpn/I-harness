@@ -106,6 +106,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 const SUPPORTED_MCP_TYPES = new Set(["stdio", "http", "streamable-http"])
 
 /**
+ * Accept wrapped { mcpServers: {...} } and direct server maps. An own
+ * mcpServers field always selects the wrapper (the literal direct server name
+ * is reserved); malformed wrappers never fall back or merge direct siblings.
  * Strictly parse .mcp.json text into a MCP config record. Unknown fields are
  * dropped; known fields are type-checked (wrong types → plugin-invalid). The
  * `type` tag is read (D-MCP-2): a recognised value is fine, an unrecognised
@@ -131,11 +134,15 @@ function parseMcpConfigText(text: string, context: string): Record<string, MCP_C
   } catch {
     failInvalid(`.mcp.json is not valid JSON (${context})`)
   }
-  if (!isRecord(raw) || !isRecord(raw.mcpServers)) {
+  if (!isRecord(raw)) {
+    failInvalid(`.mcp.json must be an object (${context})`)
+  }
+  const servers = Object.hasOwn(raw, "mcpServers") ? raw.mcpServers : raw
+  if (!isRecord(servers)) {
     failInvalid(`.mcp.json must be an object with an object 'mcpServers' field (${context})`)
   }
   const out: Record<string, MCP_CONFIG_SHAPE> = {}
-  for (const [server, rawCfg] of Object.entries(raw.mcpServers)) {
+  for (const [server, rawCfg] of Object.entries(servers)) {
     if (server === "") {
       d.warn(`[plugin-registry] skipping MCP server with an empty name in ${context}: a server needs a key`)
       continue

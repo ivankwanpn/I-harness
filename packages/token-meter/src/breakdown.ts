@@ -1,4 +1,4 @@
-import type { Session } from "@i-harness/core-session"
+import type { SessionView as Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
 import { estimateContent, estimateMessage } from "./estimate.ts"
 

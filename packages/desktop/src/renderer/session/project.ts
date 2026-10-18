@@ -35,7 +35,8 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }
     if (event.type === "agent/input/promoted") { promotedInput = admittedInputs.get(event.inputId); continue }
     if (event.type === "agent/input/cancelled") { admittedInputs.delete(event.inputId); if (promotedInput?.inputId === event.inputId) promotedInput = undefined; continue }
-    if (event.type === "session/title" || event.type === "sandbox/mode") continue
+    if (event.type === "session/title" || event.type === "sandbox/mode"
+      || event.type === "context/budget" || event.type === "context/usage") continue
     if (event.type === "reasoning" || event.type === "reasoning/chunk") {
       const streamId = event.streamId
       if (event.type === "reasoning/chunk" && completedReasoning.has(event.streamId)) continue
@@ -173,6 +174,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
 }
 
 function readableEventDetail(event: WireEvent): string | undefined {
+  if (event.type === "context/recovery") return `Context recovery: ${event.state}${event.reason ? `\n${event.reason}` : ""}`
   if (event.type === "compaction/summary") return event.text
   if (event.type === "subagent/inbox") return event.message
   if (event.type === "team/task") return `${event.task.subject}\n${event.task.description}`

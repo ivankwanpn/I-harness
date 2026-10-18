@@ -1,5 +1,5 @@
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
-import { TOOL_TIMEOUT } from "@i-harness/core-tools"
+import { TOOL_TIMEOUT, hasRetainedToolBody, type ToolExec } from "@i-harness/core-tools"
 
 // Re-exported from @i-harness/core-tools, which owns the tool-result contract
 // and the codes a synthetic result can carry (M5 T4 block ③ moved this one
@@ -21,7 +21,7 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
         const d = dispatch as {
           name: string
           args: unknown
-          exec: { abortSignal?: AbortSignal }
+          exec: ToolExec
           tool: { timeoutMs?: number }
         }
         const timeoutMs = d.tool.timeoutMs
@@ -55,19 +55,22 @@ export function createTimeoutGuard(_ctx: PluginContext): Plugin {
             // would bury it one level deeper). Only spread when the raw output
             // is an object; a non-object output is replaced as-is.
             const base = result && typeof result === "object" ? result : {}
-            return {
+            const output = {
               ...base,
               error: `tool call timed out after ${timeoutMs}ms`,
               code: TOOL_TIMEOUT,
             }
+            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
           }
           return result
         } catch (err) {
+          if (hasRetainedToolBody(d.exec, err)) throw err
           // A deadline tool that honors the abort by REJECTING must still
           // surface a structured TOOL_TIMEOUT when OUR timer fired; otherwise
           // the rejection aborts the whole agent run with no marker.
           if (timedOut) {
-            return { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
+            const output = { error: `tool call timed out after ${timeoutMs}ms`, code: TOOL_TIMEOUT }
+            return ctx.cascade("tools/project-synthetic-result", { name: d.name, output }, async () => output)
           }
           throw err
         } finally {

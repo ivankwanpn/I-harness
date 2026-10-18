@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -13,12 +14,12 @@ it("exposes a teammate's exact management path and job/session identity and clos
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
   await coordinator.create({ sessionId: "parent" })
   const release = Promise.withResolvers<void>()
-  const child: ModelClient = { async *stream(request) {
+  const child: ModelClient = controlledModel(request => ({ async *stream(request) {
     request.signal?.addEventListener("abort", () => release.resolve(), { once: true })
     await release.promise
     request.signal?.throwIfAborted()
     yield { type: "text/chunk", text: "Child done" }; yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sandbox: "read-only", approveAll: true,
     team: {}, concurrentSessionTeams: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
     resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
@@ -84,7 +85,7 @@ it("retains a closed teammate job's identity after coordinator and app restart",
   const storeRoot = join(root, "sessions")
   const coordinator = createSessionCoordinator(createJsonlBackend(storeRoot))
   await coordinator.create({ sessionId: "parent" })
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: "Child done" }; yield { type: "end" } } }
+  const child: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Child done" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sandbox: "read-only", approveAll: true, team: {}, concurrentSessionTeams: true,
     roleSelectionFor: () => ({ provider: "fixture", model: "child" }), allowSubagentModelSelection: true,
     resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),

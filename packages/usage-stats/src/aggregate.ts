@@ -1,4 +1,5 @@
 import type { UsageDetail, UsageGroup, UsagePrice, UsageQuery, UsageRecord, UsageSnapshot, UsageTotals } from "./types.js"
+import { validateRequestMetrics } from "./request-metrics.js"
 
 const DAY = 86_400_000
 function object(value: unknown): Record<string, unknown> {
@@ -27,6 +28,7 @@ export function validateUsageRecord(value: unknown): UsageRecord {
     billing: choice(r.billing, ["api", "subscription", "unknown"], "billing"), status: choice(r.status, ["completed", "failed", "cancelled"], "status"),
   }
   if (!Number.isFinite(new Date(result.startedAt).getTime())) throw new Error("Invalid startedAt")
+  if (r.requestMetrics !== undefined) result.requestMetrics = validateRequestMetrics(r.requestMetrics)
   if (r.sessionId !== undefined) result.sessionId = text(r.sessionId, "sessionId")
   if (r.projectId !== undefined) result.projectId = text(r.projectId, "projectId")
   if (r.firstTokenMs !== undefined) result.firstTokenMs = number(r.firstTokenMs, "firstTokenMs")
