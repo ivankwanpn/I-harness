@@ -16,7 +16,29 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
   const makeCapture = createCaptureFactory(options, supervisor, launchTransport)
-  const observe = (capture: Capture) => { if (capture.frames) options.resultRetention?.observe(capture.frames) }
+  const observe = (capture: Capture) => { if (capture.frames) void retain(capture) }
+  /** Bind then settle this exact original capture once; a later query reuses
+   * the same committed dependency instead of triggering a second settlement. */
+  const retention = new WeakMap<Capture, Promise<void>>()
+  function retain(capture: Capture): Promise<void> {
+    const existing = retention.get(capture)
+    if (existing) return existing
+    const frames = capture.frames, owner = options.resultRetention
+    const next = (async () => {
+      if (!frames || !owner) return
+      const observation = await owner.observe(frames)
+      const job = [...jobs.values()].find(candidate => candidate.capture === capture)
+      if (!job) return
+      if (observation.kind === 'ready') job.retained = observation.dependency
+      else job.retentionFailure = 'recovery-required'
+      if (job.retained?.retention.kind === 'unavailable') job.retentionFailure = 'unavailable'
+    })().catch(() => {
+      const job = [...jobs.values()].find(candidate => candidate.capture === capture)
+      if (job) job.retentionFailure = 'recovery-required'
+    })
+    retention.set(capture, next)
+    return next
+  }
   const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed, observe })
 
   function cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement> {
@@ -38,13 +60,18 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       }
       publish(job)
     }, cause => { job.status = "running"; job.cleanupDetail = String(cause); publish(job) })
-    void capture.complete.then(result => {
+    // Settle the original frame capture before the terminal view is published,
+    // so any later job query returns the same source/ref revision without
+    // relying on somebody asking for the output first.
+    const settle = () => { job.retention ??= retain(capture); return job.retention }
+    void capture.complete.then(async result => {
       job.exitCode = result.exitCode
       job.failure = undefined
       job.cleanupDetail = undefined
       job.status = result.timedOut ? "killed" : result.exitCode === 0 ? "completed" : "error"
+      await settle()
       publish(job)
-    }, cause => {
+    }, async cause => {
       if (job.settlement?.kind === "incomplete" || job.cleanupDetail !== undefined) {
         job.status = "running"
         if (job.settlement?.kind === "incomplete") job.cleanupDetail = `${job.settlement.phase}: ${job.settlement.detail}`
@@ -52,6 +79,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
         job.failure = cause instanceof Error ? cause.message : String(cause)
         job.status = "error"
       }
+      await settle()
       publish(job)
     })
     return id
@@ -133,8 +161,13 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     launchTransport, cancelExecution,
     async dispose() {
       disposed = true
-      try { await supervisor.dispose(); await host.dispose?.() }
-      finally { for (const job of jobs.values()) job.listeners.clear() }
+      try {
+        await supervisor.dispose()
+        // Close join: every already-started capture settles its own frame
+        // dependency before the producer-side services are torn down.
+        await Promise.allSettled([...jobs.values()].map(job => job.retention ?? job.capture.complete.then(() => retain(job.capture), () => undefined)))
+        await host.dispose?.()
+      } finally { for (const job of jobs.values()) job.listeners.clear() }
     },
   }
 }

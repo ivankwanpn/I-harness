@@ -19,6 +19,8 @@ export function view(job: Job): BackgroundJobView {
       ? { ...job.settlement, root: { ...job.settlement.root } } : { ...job.settlement } }),
     ...(job.cleanupDetail === undefined ? {} : { cleanupDetail: job.cleanupDetail }),
     ...(job.capture.diagnostics() === undefined ? {} : { outputDiagnostics: job.capture.diagnostics() }),
+    ...(job.retained === undefined ? {} : { retained: job.retained }),
+    ...(job.retentionFailure === undefined ? {} : { retentionFailure: job.retentionFailure }),
   }
   registerRetainedOutput(result, execOutputReader([stdout, stderr]))
   return result

@@ -12,7 +12,7 @@ export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
-export type { ExecFramePart, ExecFrameCapture, ExecResultRetention } from './capture/frames.ts'
+export type { ExecFrameObservation, ExecFramePart, ExecFrameCapture, ExecResultRetention } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
@@ -71,6 +71,11 @@ export interface BackgroundJobView {
   settlement?: ExecutionSettlement
   cleanupDetail?: string
   outputDiagnostics?: { outputAbandoned: boolean; discardedOutputBytes: number }
+  /** This job's exact settled native frame dependency; absent while unsettled.
+   * A later query returns the same source/ref revision once committed. */
+  retained?: import('@i-harness/core-session').ResultDependency
+  /** Explicit settlement refusal; never presented as a retained ref. */
+  retentionFailure?: 'recovery-required' | 'unavailable'
 }
 
 /** Host functions are trusted composition, never values from tool/model JSON. */

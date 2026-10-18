@@ -25,7 +25,7 @@ it('tees ordered native bytes before collector loss without changing exit or pro
   }
   const options: ExecServiceOptions = { spill: { maxOutputBytes: 16, maxSpillBytes: 32 }, execution: { defaultOwner: { sessionId: 'source-owner' }, selectBackend: () => backend, validateAuthority() {},
     resolvePolicy: (owner: { sessionId: string }) => compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'frame-source', workspaceRoot: resolve('.') } }) },
-    resultRetention: { begin() { return { sourceId: 'frame-source-1', async write(part: { frame: number; offset: number; end: boolean; bytes: Uint8Array }) { seenBytes += part.bytes.length; actual.update(part.bytes); if (part.offset === 0) ordinals.push(part.frame) }, complete(value: string) { complete = value }, async settle() { return { kind: 'ready', dependency: { kind: 'exec-frames', sourceId: 'frame-source-1', retention: { kind: 'unavailable', reason: 'storage-refused' } } } } } }, observe() { observed++ } } }
+    resultRetention: { begin() { const capture = { sourceId: 'frame-source-1', async write(part: { frame: number; offset: number; end: boolean; bytes: Uint8Array }) { seenBytes += part.bytes.length; actual.update(part.bytes); if (part.offset === 0) ordinals.push(part.frame) }, complete(value: string) { complete = value }, async settle() { return { kind: 'ready' as const, dependency: { kind: 'exec-frames' as const, sourceId: 'frame-source-1', retention: { kind: 'unavailable' as const, reason: 'storage-refused' as const } } } } }; return capture }, async observe(capture) { observed++; return capture.settle() } } }
   const exec = createExecService(options)
   try {
     const result = await exec.run({ argv: ['controlled-native-frame-source'] })

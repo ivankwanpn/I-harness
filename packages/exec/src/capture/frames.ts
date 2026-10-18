@@ -8,9 +8,14 @@ export interface ExecFrameCapture {
   complete(completeness: ResultCompleteness): void
   settle(): Promise<{ kind: 'ready'; dependency: ResultDependency } | { kind: 'recovery-required' }>
 }
+export type ExecFrameObservation =
+  | { kind: 'ready'; dependency: ResultDependency }
+  | { kind: 'recovery-required' }
 export interface ExecResultRetention {
   readonly previewBytes?: number
   begin(input: { sourceId: string; owner: Readonly<ExecutionOwner> }): ExecFrameCapture
-  /** Trusted source registration only; it must not change native settlement. */
-  observe(capture: ExecFrameCapture): void
+  /** Trusted source registration only; it must not change native settlement.
+   * Resolves with this exact source's settled dependency even when no tool
+   * producer is active any more (background job completion, host close). */
+  observe(capture: ExecFrameCapture): Promise<ExecFrameObservation>
 }
