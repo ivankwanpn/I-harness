@@ -47,7 +47,7 @@ describe("subagent state snapshot", () => {
     const { id } = s.jobs.registerJob("root", "subagent", "helper")
     s.jobs.updateJob(id, { status: "completed", output: "done" })
     const snap = snapshotState(s)
-    expect(snap.formatVersion).toBe(1)
+    expect(snap.formatVersion).toBe(2)
     expect(snap.jobs).toHaveLength(1)
     expect(snap.jobs[0]).toMatchObject({ id, status: "completed", output: "done", terminal: true })
     expect(snap.roles.map((r) => r.name)).toContain("general")
@@ -262,12 +262,14 @@ describe("task 4.4: job stamp persistence + job/status events", () => {
     }
     const wired = wireSubagentPersistence(s, persist)
     const { id } = wired.jobs.registerJob("root", "subagent", "h")
+    await wired.flushFacts()
     expect(parent.events.map((e) => e.type)).toEqual(["job/status"])
     const first = parent.events[0] as Extract<SessionEvent, { type: "job/status" }>
     expect(first.job).toMatchObject({ jobId: id, kind: "subagent", label: "h", status: "running", outputAvailable: false })
     expect(typeof first.job.startedAt).toBe("number")
     // completed transition → second event
     wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    await wired.flushFacts()
     expect(parent.events.map((e) => e.type)).toEqual(["job/status", "job/status"])
     const second = parent.events[1] as Extract<SessionEvent, { type: "job/status" }>
     expect(second.job).toMatchObject({ status: "completed", outputAvailable: true })
@@ -275,10 +277,13 @@ describe("task 4.4: job stamp persistence + job/status events", () => {
     // updating the same terminal job with the same status/output again is a
     // no-op state change → NO spurious event (the wrapper compares snapshots).
     wired.jobs.updateJob(id, { status: "completed", output: "done" })
+    await wired.flushFacts()
     expect(parent.events).toHaveLength(2)
     // kill on a finished job is a no-op → no event
     expect(wired.jobs.kill(id)).toBe("already-finished")
+    await wired.flushFacts()
     expect(parent.events).toHaveLength(2)
+    await wired.closeFacts()
   })
 
   it("wireSubagentPersistence WITHOUT a parentSession appends no events (additive-only)", async () => {

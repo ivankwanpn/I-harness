@@ -1,3 +1,4 @@
+import { publishChildResult } from "../child/result.ts"
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 import { subagentFactOwner } from '../facts.ts'
@@ -118,9 +119,10 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         if (err instanceof TaskIdentityConflictError) throw new Error(`task identity conflict for this call: ${err.message}`)
         throw err
       }
-      source.bindTask(task.id, () => deps.tasks.flushPersistence())
+      source.bindTask(task.id, () => deps.tasks.retainResult(task.id))
       let observationAborted = false
       try {
+        const resultStore = await deps.tasks.prepareResult(task.id, exec, source.settlementHeld)
         await deps.tasks.flushPersistence()
         await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
         const executed = await spawnChild({
@@ -152,6 +154,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort,
           inheritedBindingForStep: deps.inheritedBindingForStep,
           summaryFactory: deps.summaryFactory,
+          results: resultStore ?? deps.results,
           ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
           jobs: deps.jobs,
           table: deps.table,
@@ -161,6 +164,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           validateBeforeLaunch: source.assertLaunch,
           onPublished: source.published,
           onSettled: async (info) => {
+            source.settling()
             // M26-D1: settle → terminalize（interrupt 中止的初始 turn 視為 cancelled——
             // 被等待的回答不會到來；後續 followup 沿用 M9 job 流，不再入本 task）。
             const outcome: TaskOutcome = info.aborted
@@ -179,21 +183,30 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
               source.failed(error, Object.freeze({ ...info }))
               throw error
             }
+            const observedEntry = deps.table.get(task.agentPath)
+            const observedTask = deps.tasks.get(task.id)!
+            if (observedEntry && observedTask.result) publishChildResult(deps, observedEntry, observedTask, observedTask.outcome ?? outcome, task.id)
             // subagent/end —— parent 側的 durable 記號（D2 通知的資料源）。
             // 若已被 stop_task/close_agent 先行終態化（cancelTree 寫入 cancelled），
             // 本次 terminalize 為 no-op（CAS），但仍據 record 現值 append。
+            await source.prepareEnd(async () => {
+              await deps.tasks.retainResult(task.id)
+              const settled = deps.tasks.get(task.id)!
+              if (observedEntry && settled.result) publishChildResult(deps, observedEntry, settled, settled.outcome ?? outcome, task.id)
+              return { event: {
+                type: "subagent/end", version: 1, taskId: task.id, outcome: settled.outcome ?? outcome,
+                ...(settled.result?.kind === "retained" ? { envelope: settled.result.envelope, resultRevision: settled.result.revision } : {}),
+                ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
+                ...(settled.error !== undefined ? { error: settled.error } : {}),
+              }, output: spawnObservation(source.identity(), settled) }
+            })
             const settled = deps.tasks.get(task.id)!
-            await source.end({
-              type: "subagent/end", version: 1, taskId: task.id,
-              outcome: settled.outcome ?? outcome,
-              ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
-              ...(settled.error !== undefined ? { error: settled.error } : {}),
-            }, spawnObservation(source.identity(), settled))
+            return settled
           },
         })
         // WHY: child.ts:340 spells the resolved label; task-protocol.ts:150 keeps
         // it in the task snapshot, so closing a live entry cannot erase the evidence.
-        deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel)
+        deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel, executed.jobId)
         const base = source.identity()
         if (args.background === false) {
           const reason = await waitForObservation({
@@ -234,6 +247,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           try {
             await source.end({
               type: 'subagent/end', version: 1, taskId: task.id, outcome: settled.outcome,
+              ...(settled.result?.kind === "retained" ? { envelope: settled.result.envelope, resultRevision: settled.result.revision } : {}),
               ...(settled.resultText !== undefined ? { resultText: settled.resultText } : {}),
               ...(settled.error !== undefined ? { error: settled.error } : {}),
             })

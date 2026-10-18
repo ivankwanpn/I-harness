@@ -75,6 +75,7 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
         let delivered = 0
         let changed = false
         for (const n of opts.tasks.notifications()) {
+          if (opts.tasks.get(n.submissionId)?.publication === 'unqualified') continue
           const candidate =
             n.status === "pending" || n.status === "error" ||
             (n.status === "delivered" && n.timeWoken === undefined)

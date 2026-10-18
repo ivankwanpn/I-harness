@@ -3,11 +3,15 @@ import { boundary, checkAbort, floorBoundary, prefix, serializedBytes } from './
 import { configureContext, DEFAULT_CONTEXT_OUTPUT_CONFIG, identity, integer } from './config.ts'
 import { ContextStore, digest, referenceId } from './store.ts'
 import type { ContextAccess, ContextOutputOptions, ContextOutputService, ContextOutputStatus, ContextResultRef, ContextSearchResult } from './types.ts'
+import { createArtifactOwnership } from './artifact/ownership.ts'
 
 export function createContextOutputService(options: ContextOutputOptions): ContextOutputService {
   identity(options.workspaceId, 'workspaceId')
   identity(options.root, 'root')
   let config = configureContext({ ...DEFAULT_CONTEXT_OUTPUT_CONFIG }, options.config ?? {})
+  const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes)
+  const unsubscribeDeletions = options.documentDeletions?.(artifacts.releaseDocuments)
+  let protectedResults = 0
   let state: ContextOutputStatus['state'] = config.enabled ? 'ready' : 'disabled'
   let closed = false
   let closing = false
@@ -22,7 +26,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   function status(): ContextOutputStatus {
     return { enabled: config.enabled && !closing && !closed, state, config: { ...config },
       ...(store?.counters() ?? { retainedBytes: 0, results: 0 }), activeJobs: jobs.size,
-      ...(error ? { error } : {}) }
+      ...(error ? { error } : {}), ...(protectedResults ? { protectedResults, clearDisposition: 'protected' as const } : {}) }
   }
   function serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = mutations.then(operation)
@@ -92,6 +96,12 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   }
 
   return {
+    registerResultScope: artifacts.registerResultScope,
+    beginResult: artifacts.beginResult,
+    confirmResultOwner: artifacts.confirmResultOwner,
+    readResult: artifacts.readResult,
+    readExecResult: artifacts.readExecResult,
+    reconcileResult: artifacts.reconcileResult,
     status,
     async configure(patch) {
       if (closed || closing) throw new Error('Context output is closed')
@@ -218,15 +228,20 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       const ids = [...new Set(refIds)]
       const caller = { sessionId: access.sessionId }
       if (ids.length > 100) throw new Error('grant supports at most 100 references')
+      const managedIds = ids.filter(id => /^ctxv1_[a-f0-9]{64}$/.test(id))
+      if (managedIds.length) await artifacts.grantResults(access, managedIds, targetSessionId)
+      const legacyIds = ids.filter(id => !managedIds.includes(id))
+      if (!legacyIds.length) return
       return run(access.signal, async (owned) => {
-        for (const id of ids) await readable(caller, id, owned)
-        if (ids.length) await store!.addOwners(ids, targetSessionId, config.maxDiskBytes, owned)
+        for (const id of legacyIds) await readable(caller, id, owned)
+        if (legacyIds.length) await store!.addOwners(legacyIds, targetSessionId, config.maxDiskBytes, owned)
       }, true, true)
     },
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
       await transition(async () => {
+        protectedResults = await artifacts.protectedCount()
         if (!store) {
           const candidate = new ContextStore(options.root, options.workspaceId)
           try { await fileAccess(candidate.directory) } catch { return }
@@ -239,7 +254,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
     async close() {
       if (closed) return
       if (closing) { await transitions; return }
-      await transition(async () => { store?.close(); closed = true }, true)
+      await transition(async () => { unsubscribeDeletions?.(); await artifacts.close(); store?.close(); closed = true }, true)
     },
   }
 }

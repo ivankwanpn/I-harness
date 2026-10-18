@@ -122,6 +122,10 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
       if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 1000)) throw new Error("invalid history limit")
       return { sessionId: text("sessionId", 256), childSessionId: text("childSessionId", 256), ...(value.afterSeq === undefined ? {} : { afterSeq: value.afterSeq }), ...(value.limit === undefined ? {} : { limit: value.limit }) }
     }
+    case "desktop/session/subagents/result": {
+      for (const key of ["offset", "maxBytes"]) if (value[key] !== undefined && (typeof value[key] !== "number" || !Number.isSafeInteger(value[key]) || (value[key] as number) < (key === "offset" ? 0 : 1024) || key === "maxBytes" && (value[key] as number) > 16384)) throw new Error("invalid result page")
+      return { sessionId: text("sessionId", 256), childSessionId: text("childSessionId", 256), ...(value.offset === undefined ? {} : { offset: value.offset }), ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes }), ...Object.fromEntries(["resultRevision", "refId", "refRevision"].filter(key => value[key] !== undefined).map(key => [key, text(key, 128)])) }
+    }
     case "desktop/session/subagents/control": {
       if (!["followup", "message", "interrupt", "close"].includes(String(value.action))) throw new Error("invalid subagent action")
       return { sessionId: text("sessionId", 256), childSessionId: text("childSessionId", 256), action: value.action, ...(["followup", "message"].includes(String(value.action)) ? { text: text("text", 65536) } : {}) }

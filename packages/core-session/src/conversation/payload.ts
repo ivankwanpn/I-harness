@@ -3,6 +3,8 @@ import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, type ImageInput } from "../images.ts"
 import { renderPruneSubstitute, type PruneRecord } from "../projection/pruning.ts"
 import { stringifyJsonData } from "../serialization/json-data.ts"
+import { resultText } from '../results/projection.ts'
+import type { ResultEnvelope } from '../results/types.ts'
 
 export type ConversationPayloadCapture = (value: unknown, source: ConversationSourceRef) => unknown
 
@@ -28,6 +30,10 @@ export function outcomeField(output: unknown, key: string): unknown {
 
 /** Preflight exactly the retained result components before any JSON serializer. */
 export function projectToolResult(event: Extract<SessionEvent, { type: "tool/result" }>, record: PruneRecord | undefined, source: ConversationSourceRef, imageSource: ConversationSourceRef, capture?: ConversationPayloadCapture): { content: string; images?: ImageInput[] } {
+  if (event.envelope) {
+    const envelope = readConversationPayload<{ envelope?: unknown }, 'envelope'>(event, 'envelope', source, capture) as ResultEnvelope
+    return { content: resultText(envelope), ...(envelope.media.length ? { images: [...envelope.media] } : {}) }
+  }
   const output = record === undefined ? readConversationPayload(event, "output", source, capture) : undefined
   // A pruned view retains its preview and images, not excluded raw output.
   const out = record === undefined ? output : readConversationPayload(event, "output", source, capture ? value => value : undefined)

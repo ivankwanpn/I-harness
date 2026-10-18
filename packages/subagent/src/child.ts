@@ -48,14 +48,17 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   let preparedRuntime: import('@i-harness/code-mode').CodeModeMount | undefined
   try {
   controller.signal.throwIfAborted()
+  if (opts.results?.forSource) opts = { ...opts, results: await opts.results.forSource() }
+  const ordinary = (opts.childSessions?.origin ?? "subagent") === "subagent"
+  const protocol = ordinary ? { subagentProtocolVersion: 1 as const } : {}
   if (opts.childSessions) {
     sessionId = `child-${randomUUID()}`
     await opts.childSessions.coordinator.create({ sessionId,
       parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length,
-      origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth })
+      origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth, ...protocol })
   }
   const opened = await openChildDocument(seedEvents,
-    { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth },
+    { ...(opts.childSessions ? { parentSession: opts.childSessions.parentSessionId } : {}), seedLength: seedEvents.length, origin: opts.childSessions?.origin ?? 'subagent', delegationDepth: childDepth, ...protocol },
     opts.childSessions && sessionId ? { coordinator: opts.childSessions.coordinator, sessionId } : undefined)
   const { session: childSession, factOwner } = opened
   document = opened.document

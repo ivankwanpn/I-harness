@@ -5,10 +5,11 @@ import type { GuardianReviewDeps } from './reviewer.ts'
 
 /** Existing reviewer role/model precedence, with a purpose-bound parent grant.
  * Resolving the final child binding updates only the selected-client witness. */
-export function spawnReviewer(deps: GuardianReviewDeps, role: SubagentRole, message: string, signal: AbortSignal, generation: ApprovalGenerationAction | undefined, selected: (model: ModelClient) => void) {
+export function spawnReviewer(deps: GuardianReviewDeps, role: SubagentRole, message: string, signal: AbortSignal, generation: ApprovalGenerationAction | undefined, selected: (model: ModelClient) => void, observed?: (info: { finalText?: string; error?: string; aborted: boolean }) => void) {
   return spawnChild({
     taskName: `review-${randomUUID().slice(0, 8)}`, message, parentPath: 'root', parentRegistry: deps.parentRegistry,
     parentSession: deps.parentSession, parentCtx: deps.parentCtx, signal, sharedGeneration: generation,
+    onSettled: observed,
     role: { ...role, ...(deps.policyText !== undefined ? { systemPrompt: deps.policyText } : {}), tools: [] },
     parentModel: deps.model ?? deps.parentModel,
     resolveModel: async selection => {
@@ -21,6 +22,7 @@ export function spawnReviewer(deps: GuardianReviewDeps, role: SubagentRole, mess
     ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     summaryFactory: deps.summaryFactory,
+    results: deps.results,
     ...(deps.model === undefined && deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
     ...(deps.model === undefined ? { budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort, inheritedBindingForStep: deps.inheritedBindingForStep } : {}),
     ...(deps.model === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),

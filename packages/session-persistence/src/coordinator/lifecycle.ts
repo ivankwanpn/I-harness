@@ -12,7 +12,12 @@ export function createLifecycle(
   { closeAdmissions: closeDocumentAdmissions, pendingWrites: pendingDocuments }:
     Pick<Documents, "closeAdmissions" | "pendingWrites">,
 ) {
+  const deletedListeners = new Set<(sessionId: string, manifest: SessionArtifactManifest) => Promise<void>>()
   return {
+    onDocumentDeleted(listener: (sessionId: string, manifest: SessionArtifactManifest) => Promise<void>) {
+      deletedListeners.add(listener)
+      return () => { deletedListeners.delete(listener) }
+    },
     async deleteOwnedSession(sessionId: string, manifest: SessionArtifactManifest) {
       // Close local admissions synchronously, before awaiting the existing writes.
       closeAdmission(sessionId)
@@ -22,7 +27,10 @@ export function createLifecycle(
       await pendingDocuments()
       await withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId)
-        try { await backend.deleteOwnedSession!(sessionId, manifest) }
+        try {
+          await backend.deleteOwnedSession!(sessionId, manifest)
+          for (const listener of deletedListeners) await listener(sessionId, manifest)
+        }
         finally { await releaseOwnershipUnlocked(sessionId) }
       })
     },

@@ -67,6 +67,7 @@ export type DesktopRequest =
   | { kind: "desktop/subagents/mutate"; workspaceId: string; command: SubagentSettingsCommand }
   | { kind: "desktop/session/subagents/list"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }
+  | { kind: "desktop/session/subagents/result"; workspaceId: string; sessionId: string; childSessionId: string; offset?: number; maxBytes?: number; resultRevision?: string; refId?: string; refRevision?: string }
   | { kind: "desktop/session/subagents/control"; workspaceId: string; sessionId: string; childSessionId: string; action: "followup" | "message" | "interrupt" | "close"; text?: string }
   | { kind: "desktop/agent-settings/state"; workspaceId: string }
   | { kind: "desktop/agent-settings/configure"; workspaceId: string; patch: Partial<AgentDefaults> }

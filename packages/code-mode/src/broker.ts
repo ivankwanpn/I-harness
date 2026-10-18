@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { captureLegacyFact, committedFactSeqs, FactRecoveryRequiredError, stringifyJsonData } from "@i-harness/core-session"
-import { isPolicyRefusal, retainedToolOutcome, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
+import { isOriginalResultFinalization, isPolicyRefusal, retainedToolOutcome, resultExecution, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
 import type { Cell, Queued } from './broker/types.ts'
@@ -10,7 +10,7 @@ import { codeModeFactOwner } from './facts.ts'
 /** The broker owns admission/dispatch; real results retain their original slot
  * through a failed join. Only the document's exact receipt marks them recorded. */
 export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) {
-  const owner = codeModeFactOwner(options), records = createCodeModeRecords(complete)
+  const owner = codeModeFactOwner(options), records = createCodeModeRecords(complete, (item, output, execution) => tools.captureSyntheticResult?.({ view: options.session, source: item.source, callId: item.call.invocationId, name: item.call.name }, output, execution), options.session)
   const cells = new Map<string, Cell>(), queue: Queued[] = [], active = new Set<Queued>(), jobs = new Set<Promise<void>>(), unsettled = new Set<Queued>()
   const stop = new AbortController(), parallel = Math.min(16, Math.max(1, options.maxParallel ?? 4))
   let pumping = false, disposed = false, closed = false, exclusive = false, closeAttempt: Promise<void> | undefined
@@ -20,16 +20,34 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
     if (item.completion) return item.completion
     const completion = finalizers.then(async () => {
       if (!item.prepared) throw recovery(item.recoveryCause)
-      item.finalizing ??= tools.finalize(item.prepared, item.bodyOutput)
-      const result = await item.finalizing
-      await records.record(item, result.output)
-      if (!item.signal.aborted) {
-        try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, output: result.output, session: options.session, signal: item.signal }) }
+      if (!item.finalized && item.finalization) {
+        const settled = await item.finalization.settle()
+        if (settled.kind !== 'ready') throw recovery(item.recoveryCause)
+        item.finalized = { name: item.call.name, ...(settled.program.kind === 'value' ? { output: settled.program.value } : {}), program: settled.program, envelope: settled.envelope }
+      }
+      if (!item.finalized) {
+        item.finalizing ??= tools.finalize(item.prepared, item.bodyOutput)
+        try { item.finalized = await item.finalizing }
+        catch (cause) {
+          const handle = tools.resultFinalization?.(item.prepared)
+          if (isOriginalResultFinalization(item.prepared, handle)) { item.finalization = handle; item.source.holdRecovery() }
+          throw cause
+        }
+        const handle = tools.resultFinalization?.(item.prepared)
+        if (isOriginalResultFinalization(item.prepared, handle)) item.finalization = handle
+      }
+      const result = item.finalized
+      await records.record(item, result.output, false, result.envelope)
+      if (!item.signal.aborted && !item.postToolStarted) {
+        item.postToolStarted = true
+        try { await ctx.emit("agent/post-tool", { name: item.call.name, args: item.call.args, ...(result.program?.kind === 'unavailable' ? { program: result.program } : { output: result.output }), session: options.session, signal: item.signal }) }
         catch (error) { throw fatal(`Code Mode post-tool hook failed: ${message(error)}`) }
       }
-      return result.output
+      if (result.program?.kind === 'unavailable') throw Object.assign(new Error('Code Mode tool result is unavailable for transfer'), { code: 'CODE_MODE_RESULT_UNAVAILABLE', reason: result.program.reason })
+      return result.program?.kind === 'value' ? result.program.value : result.output
     })
     item.completion = completion
+    void completion.catch(() => { if (item.finalization && !item.result && item.completion === completion) item.completion = undefined })
     finalizers = completion.then(() => {}, () => {})
     return completion
   }
@@ -79,14 +97,15 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       // A real body/finalizer value can never be overwritten with a synthetic
       // storage error. Its retained source is reconciled without execution.
       if (item.hasOutput || item.result) {
-        if (!item.result && !item.recorded) item.source.requireRecovery()
+        if (!item.result && !item.recorded && !item.finalization) item.source.requireRecovery()
         const failure = item.recorded ? error : !item.result
           ? Object.assign(fatal(`Code Mode finalization failed: ${message(error)}`), { code: 'FACT_RECOVERY_REQUIRED' }) : recovery(error)
         if (isPolicyRefusal(failure)) retireCell(item.call.cellId)
         records.settle(item, { error: failure })
       } else {
         try {
-          await records.record(item, { error: message(error), code: isPolicyRefusal(error) ? "POLICY_REFUSAL" : item.signal.aborted ? "TOOL_ABORTED" : "TOOL_FAILED" }, true)
+          await records.record(item, { error: message(error), code: isPolicyRefusal(error) ? "POLICY_REFUSAL" : item.signal.aborted ? "TOOL_ABORTED" : "TOOL_FAILED" }, true, undefined,
+            item.prepared ? resultExecution(item.prepared) : { outcome: item.signal.aborted ? 'canceled' : 'failed', dispatch: 'not-dispatched' })
           records.settle(item, { error })
         } catch (cause) { records.settle(item, { error: recovery(cause) }) }
       }

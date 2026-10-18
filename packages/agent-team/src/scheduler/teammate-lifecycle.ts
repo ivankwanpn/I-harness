@@ -57,6 +57,7 @@ export function createTeammateSpawner(
       ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),
       budgetBinding: sub.budgetBinding, contextMetadata: sub.contextMetadata, reasoningEffort: sub.reasoningEffort, inheritedBindingForStep: sub.inheritedBindingForStep,
       summaryFactory: sub.summaryFactory,
+      results: sub.results,
       ...(sub.maxOutputTokens !== undefined ? { maxOutputTokens: sub.maxOutputTokens } : {}),
       jobs: teamJobs,
       table: sub.table,

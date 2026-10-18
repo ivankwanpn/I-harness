@@ -90,13 +90,14 @@ export async function finishCancelledBatch(_session: Session, batch: BatchCall[]
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     const message = cancellation.failureMessage(i, () => fallbackMessage)
-    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } })
+    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'unknown', dispatch: 'unknown' }, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } })
   }
   for (let i = records.startedUpTo; i < batch.length; i += 1) {
     // A typed preparation failure may already fill a never-started slot.
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     records.setSlot(i, { callId: call.callId, name: call.name, synthetic: true,
+      execution: { outcome: 'canceled', dispatch: 'not-dispatched' },
       output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH } })
   }
   try { await records.drainSettled() }
@@ -109,7 +110,7 @@ export async function finishCheckpointFailure(_session: Session, batch: BatchCal
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     const message = cancellation.failureMessage(i, () => cancellation.firstError instanceof Error ? cancellation.firstError.message : String(cancellation.firstError))
-    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_FAILED } })
+    records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'unknown', dispatch: 'unknown' }, output: { error: message, code: TOOL_FAILED } })
   }
   // Record a commit failure without suppressing never-started fills. The
   // checkpoint failure keeps its original precedence, even when undefined.
@@ -120,6 +121,7 @@ export async function finishCheckpointFailure(_session: Session, batch: BatchCal
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
     records.setSlot(i, { callId: call.callId, name: call.name, synthetic: true,
+      execution: { outcome: 'canceled', dispatch: 'not-dispatched' },
       output: { error: "tool call cancelled: the batch checkpoint failed", code: TOOL_CANCELLED_BY_SIBLING } })
   }
   try { await records.drainSettled() } catch (error) { hasCommitError = true; commitError = error }

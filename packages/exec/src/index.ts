@@ -12,6 +12,7 @@ export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
+export type { ExecFramePart, ExecFrameCapture, ExecResultRetention } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
@@ -86,6 +87,7 @@ export interface ExecExecutionHost {
   dispose?(): Promise<void>
 }
 export interface ExecServiceOptions {
+  resultRetention?: import('./capture/frames.ts').ExecResultRetention
   execution?: ExecExecutionHost
   workspaceRoot?: string
   /** Trusted standalone composition only, for human Desktop's separate owner. */

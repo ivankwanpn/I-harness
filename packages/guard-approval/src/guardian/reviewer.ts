@@ -52,6 +52,7 @@ export interface GuardianReviewDeps {
   contextMetadata?: SpawnOptions["contextMetadata"]
   reasoningEffort?: SpawnOptions["reasoningEffort"]
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
+  results?: SpawnOptions['results']
   summaryFactory?: SpawnOptions['summaryFactory']
   autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
@@ -151,6 +152,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
   if (request.signal?.aborted) cancel()
   let generation: ApprovalGenerationAction | undefined, selectedModel = deps.model ?? deps.parentModel
   let child: Awaited<ReturnType<typeof spawnReviewer>> | undefined, completed = false
+  let observedText: string | undefined
   const expire = () => controller.abort(generation?.signal.reason)
   let onAbort: (() => void) | undefined
   try {
@@ -161,7 +163,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     if (generation?.signal.aborted) expire()
     const role = ensureReviewerRole(deps.subagents.roles)
     const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
-    child = await spawnReviewer(deps, role, message, controller.signal, generation, model => { selectedModel = model })
+    child = await spawnReviewer(deps, role, message, controller.signal, generation, model => { selectedModel = model }, info => { observedText = info.finalText })
     const entry = deps.subagents.table.get(child.path)
     if (!entry) return { outcome: 'deny', rationale: 'guardian review failed: reviewer entry missing', cause: 'operational' }
     const aborted = new Promise<'timeout'>(resolve => {
@@ -172,8 +174,9 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     const settled = await Promise.race([entry.followupChain ?? Promise.resolve(), aborted])
     request.signal?.throwIfAborted()
     if (settled === 'timeout') return { outcome: 'deny', rationale: 'guardian review timed out after ' + timeoutMs + 'ms (fail-closed)', cause: 'timeout' }
-    if (entry.finalText === undefined) return { outcome: 'deny', rationale: 'guardian review failed: ' + (entry.error ?? 'no output'), cause: 'operational' }
-    const parsed = parseGuardianAssessment(entry.finalText)
+    const actualText = observedText ?? (entry.result ? undefined : entry.finalText)
+    if (actualText === undefined) return { outcome: 'deny', rationale: 'guardian review failed: ' + (entry.error ?? 'no output'), cause: 'operational' }
+    const parsed = parseGuardianAssessment(actualText)
     completed = parsed !== undefined
     return parsed ? { outcome: parsed.outcome, rationale: parsed.rationale }
       : { outcome: 'deny', rationale: 'guardian review produced malformed output (fail-closed)', cause: 'malformed' }

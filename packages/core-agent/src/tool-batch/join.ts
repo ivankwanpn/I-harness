@@ -51,6 +51,7 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   opts.sourceFacts = source.tools
   opts.settlementSource = source
   opts.requireFactRecovery = () => source.requireRecovery()
+  opts.holdFactRecovery = () => source.holdRecovery()
   let executionFailure: unknown
   try {
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true

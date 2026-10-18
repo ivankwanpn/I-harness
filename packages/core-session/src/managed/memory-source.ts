@@ -6,10 +6,11 @@ import { captureMemoryFact, rejectedMemoryCapture } from './memory-capture.ts'
 import { validGenerationEvent } from '../events/generation.ts'
 import { validInputPreparationEvent } from '../events/input-preparation.ts'
 import { validSoftTerminalDraft } from '../events/soft-reduction.ts'
+import { bindMemorySettlementSource } from './source-scope.ts'
 
 /** Required standalone outcomes share the closed constructors and local source
  * lifetime, while remaining explicitly nondurable. */
-export function createMemorySettlementSource(session: Session, drain: () => Promise<void>, reconcilePending?: () => Promise<void>): SettlementFacts<NondurableFactOutcome> {
+export function createMemorySettlementSource(session: Session, drain: () => Promise<void>, reconcilePending?: () => Promise<void>, recovery?: { hold(source: object): void; release(source: object): void }): SettlementFacts<NondurableFactOutcome> {
   let active = true, closing: Promise<void> | undefined
   const assertHeld = () => {
     if (!active) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
@@ -21,7 +22,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
       assertHeld()
       await reconcilePending?.()
       assertHeld()
-    }).then(drain).then(() => { active = false })
+    }).then(drain).then(() => { active = false; recovery?.release(source) })
     closing = pending
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
@@ -30,7 +31,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
     assertHeld()
     return validSettlementEvent(kind, event) ? captureMemoryFact(session, draft, assertHeld) : rejectedMemoryCapture()
   }
-  return {
+  const source: SettlementFacts<NondurableFactOutcome> = {
     softReduction: { capture(event) {
       assertHeld()
       return validSoftTerminalDraft(event) && event.publication === 'none' ? captureMemoryFact(session, { kind: 'soft-reduction', event }, assertHeld) : rejectedMemoryCapture()
@@ -45,7 +46,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
       return validGenerationEvent(event) && (event.type === 'context/attempt' && event.op === 'settle' || event.type === 'context/action' && (event.op === 'close' || event.op === 'local-settle'))
         ? captureMemoryFact(session, { kind: 'generation', events: [event] }, assertHeld) : rejectedMemoryCapture()
     } },
-    assertHeld, close, requireRecovery() { assertHeld() },
+    assertHeld, close, requireRecovery() { assertHeld() }, holdRecovery() { assertHeld(); recovery?.hold(source) },
     retention: { capture: event => capture('retention', event, { kind: 'result-reference', event }) },
     rewind: { capture: event => capture('rewind', event, { kind: 'legacy-compaction', events: [event] }) },
     tools: {
@@ -66,4 +67,6 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
       auditAssistant: event => capture('assistant-audit', event, { kind: 'assistant-audit', assistant: event }).admit(),
     },
   }
+  bindMemorySettlementSource(session, source)
+  return source
 }

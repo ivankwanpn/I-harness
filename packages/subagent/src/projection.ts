@@ -119,7 +119,7 @@ export function projectAgentTasks(state: SubagentTaskSource): AgentTaskView[] {
       ...(parentPathOf(path) !== undefined ? { parentId: parentPathOf(path) } : {}),
       group: "subagent",
       label: entry.roleName ?? lastSegmentOf(path) ?? path,
-      status: fusedStatus(entry.status, recordByPath.get(path)),
+      status: fusedStatus(entry, recordByPath.get(path)),
       ...(summaryOf(entry, recordByPath.get(path)) !== undefined ? { summary: summaryOf(entry, recordByPath.get(path)) } : {}),
       canCancel: entry.status === "running",
     })
@@ -172,6 +172,9 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
       const roleName = entry?.roleName ?? pool?.agent
       const modelLabel = entry?.modelLabel ?? pool?.modelLabel
       const role = roleName !== undefined ? state.roles.get(roleName) : undefined
+      const current = entry && currentResidentResult(entry, pool)
+      const resultText = current ? entry.finalText : pool?.resultText ?? entry?.finalText
+      const resultError = current ? entry.error : pool?.error ?? entry?.error
       const detail: AgentTaskDetail = {
         id: row.id,
         group: row.group,
@@ -185,8 +188,8 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
             ? { model: modelLabelOf(role.model) }
             : { model: "model not recorded" }),
         ...(pool?.prompt !== undefined ? { parentPrompt: pool.prompt } : {}),
-        ...(pool?.resultText ?? entry?.finalText !== undefined ? { result: pool?.resultText ?? entry?.finalText } : {}),
-        ...(pool?.error ?? entry?.error !== undefined ? { error: pool?.error ?? entry?.error } : {}),
+        ...(resultText !== undefined ? { result: resultText } : {}),
+        ...(resultError !== undefined ? { error: resultError } : {}),
         transcriptAvailability:
           entry !== undefined
             ? entry.sessionId !== undefined
@@ -250,12 +253,18 @@ export function projectWorkflowRows(rows: ReadonlyArray<WorkflowTaskRow>, forOwn
 
 /** Durable terminal outcome wins over the live entry's transient state; a
  * record with no outcome keeps the live status (running/waiting/…). */
-function fusedStatus(entryStatus: ChildStatus, record: TaskRecord | undefined): AgentTaskStatus {
+function currentResidentResult(entry: ChildAgentEntry, record: TaskRecord | undefined): boolean {
+  return entry.publication === 'unqualified' || entry.status === 'recovery-required' || entry.result !== undefined && entry.result.revision !== record?.result?.revision
+}
+function fusedStatus(entry: ChildAgentEntry, record: TaskRecord | undefined): AgentTaskStatus {
+  if (currentResidentResult(entry, record)) return projectStatus({ status: entry.status })
   if (record?.outcome !== undefined) return projectStatus({ status: record.outcome })
-  return projectStatus({ status: entryStatus })
+  return projectStatus({ status: entry.status })
 }
 
 function summaryOf(entry: ChildAgentEntry, record: TaskRecord | undefined): string | undefined {
+  if (entry.publication === 'unqualified' || entry.status === 'recovery-required') return 'recovery required (original result publication unconfirmed)'
+  if (currentResidentResult(entry, record)) return entry.error ?? oneLineOf(entry.finalText)
   const out = errorOrOutcomeOf(record)
   if (out !== undefined) return out
   return entry.error

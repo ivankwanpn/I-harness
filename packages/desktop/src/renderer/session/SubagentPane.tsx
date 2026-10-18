@@ -1,3 +1,4 @@
+import { RetainedChildBody } from "./RetainedChildBody.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { HistoryRange } from "@i-harness/sdk"
 import type { DesktopSubagentCatalog, DesktopSubagentControl, DesktopSubagentControlResult, DesktopSubagentRow, DesktopSubagentStatus } from "@i-harness/desktop-gateway/src/session-subagents.ts"
@@ -225,6 +226,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       {displayedHistory?.startSeq ? <p className="subagent-history-bound">{t("顯示最近 {count} 筆記錄", { count: displayedHistory.events.length })}</p> : null}
       <div className="subagent-transcript">{displayedHistory ? rows.length ? <Timeline key={selected} rows={rows} running={selectedAgent?.live === true && selectedAgent.status === "running"} /> : <p className="muted">{t("沒有可顯示的子代理記錄")}</p> : displayedError === undefined ? <p role="status" className="muted">{t("正在讀取…")}</p> : null}</div>
       {selectedAgent?.finalText ? <details className="subagent-final-result"><summary>{t("最終結果")}</summary><pre>{selectedAgent.finalText}</pre></details> : null}
+      {selectedAgent?.fullResult ? <RetainedChildBody key={JSON.stringify(selectedAgent.fullResult)} bridge={bridge} workspaceId={workspaceId} request={selectedAgent.fullResult} /> : null}
       <div className="subagent-readonly" role="status"><Bot size={16} aria-hidden="true" /><span>{t("子會話為唯讀；可用操作由父會話管理。")}</span></div>
       {feedback[selected]?.error ? <p role="alert" className="notice error-text">{feedback[selected].error}</p> : feedback[selected]?.notice ? <p role="status" className="subagent-action-notice">{feedback[selected].notice}</p> : null}
       {selectedAgent?.canFollowup || selectedAgent?.canMessage ? <label className="subagent-input">{t("子代理輸入")}<textarea rows={3} maxLength={8000} value={text} disabled={disabled} onChange={(event) => setDrafts((current) => ({ ...current, [selected]: event.target.value }))} /></label> : null}

@@ -1,7 +1,8 @@
 import { waitForObservation } from "@i-harness/core-tools"
+import type { ResultPublication } from './result-publication.ts'
 
-export type JobStatus = "running" | "completed" | "killed" | "error"
-export interface JobSnapshot {
+export type JobStatus = "running" | "completed" | "killed" | "error" | "recovery-required"
+export interface JobSnapshot extends ResultPublication {
   id: string
   // M49 Task 12: the registry's owner lane on the public snapshot (the private
   // record + the durable DurableJobRecord have always carried it) — the task
@@ -11,6 +12,8 @@ export interface JobSnapshot {
   label: string
   status: JobStatus
   output: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
   /** Durable provenance, retained when the child runtime table is removed. */
   agentPath?: string
   sessionId?: string
@@ -28,12 +31,12 @@ export interface JobRegistry {
   // verbatim so persisted job ids survive resume; duplicates fail loud.
   // Task 4.4: `startedAt` (optional, restore path) seeds the creation stamp —
   // the live registry mints Date.now() when absent.
-  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }): { id: string; finish?(status:Exclude<JobStatus,"running">,output:string):boolean }
+  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }): { id: string; finish?(status:Exclude<JobStatus,"running"|"recovery-required">,output:string):boolean }
   // M24a (G2/Ruling M24a-P4): returns false for an unknown id (observable
   // instead of a silent no-op). Existing callers may ignore the return.
   // Task 4.4: the patch may also carry startedAt/endedAt — the restore path
   // replays persisted stamps instead of re-minting them.
-  updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt">>): boolean
+  updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt" | "result" | "publication" | "savedObservation" | "taskId">>): boolean
   read(id: string): JobSnapshot
   list(owner: string): JobSnapshot[]
   // M49 Task 12: the full enumeration (every owner lane) — the task projection
@@ -93,7 +96,7 @@ export function createJobRegistry(): JobRegistry {
       if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
       publish(records.get(resolved)!)
       let settled=false
-      return { id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running">,output:string) {
+      return { id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running"|"recovery-required">,output:string) {
         const rec=records.get(resolved)
         if(!rec)return false
         // Only this registered producer can enrich its terminal row. A late
@@ -105,10 +108,14 @@ export function createJobRegistry(): JobRegistry {
         return true
       } } : {}) }
     },
-    updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt">>): boolean {
+    updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt" | "result" | "publication" | "savedObservation" | "taskId">>): boolean {
       const rec = records.get(id)
       if (!rec) return false // G2: unknown id is observable, not silent
-      if (rec.terminal && patch.status !== "running") return true
+      if (rec.terminal && patch.status !== "running") {
+        const originalPending = rec.result?.kind === 'pending' && patch.result?.kind === 'retained'
+          && patch.result.revision === rec.result.revision && (patch.status === undefined || patch.status === rec.status)
+        if (!originalPending) return true
+      }
       // Task 4.4: stamps — explicit patch values (restore path) win; a re-open
       // to "running" clears the end stamp (the same logical job is live again,
       // e.g. a followup turn on the same background agent).
@@ -116,8 +123,16 @@ export function createJobRegistry(): JobRegistry {
       if (patch.endedAt !== undefined) rec.endedAt = patch.endedAt
       if (patch.status === "running") { rec.terminal = false; rec.endedAt = undefined }
       if (patch.status !== undefined) rec.status = patch.status
+      if (patch.status === "running") { delete rec.result; delete rec.publication; delete rec.savedObservation }
+      if (patch.result !== undefined) rec.result = patch.result
+      if (patch.taskId !== undefined) {
+        if (rec.taskId !== undefined && rec.taskId !== patch.taskId) throw new Error('Original job task identity conflict')
+        rec.taskId = patch.taskId
+      }
+      if (patch.publication !== undefined) rec.publication = patch.publication
+      if (patch.savedObservation !== undefined) rec.savedObservation = patch.savedObservation
       if (patch.output !== undefined) rec.output = patch.output
-      if (rec.status !== "running") { rec.terminal = true; rec.endedAt = rec.endedAt ?? Date.now(); cancellation.delete(id) }
+      if (rec.status !== "running") { rec.terminal = true; if (rec.status !== "recovery-required") rec.endedAt = rec.endedAt ?? Date.now(); cancellation.delete(id) }
       publish(rec)
       return true
     },
@@ -125,7 +140,7 @@ export function createJobRegistry(): JobRegistry {
       const rec = records.get(id)
       if (!rec) throw new Error(`unknown job: ${id}`)
       return {
-        id: rec.id, owner: rec.owner, kind: rec.kind, label: rec.label, status: rec.status, output: rec.output,
+        id: rec.id, owner: rec.owner, kind: rec.kind, label: rec.label, status: rec.status, output: rec.output, ...(rec.result ? { result: rec.result } : {}), ...(rec.taskId ? { taskId: rec.taskId } : {}), ...(rec.publication ? { publication: rec.publication } : {}), ...(rec.savedObservation ? { savedObservation: rec.savedObservation } : {}),
         ...(rec.agentPath !== undefined ? { agentPath: rec.agentPath } : {}),
         ...(rec.sessionId !== undefined ? { sessionId: rec.sessionId } : {}),
         ...(rec.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
@@ -135,7 +150,7 @@ export function createJobRegistry(): JobRegistry {
     list(owner: string) {
       return [...records.values()].filter((r) => r.owner === owner)
         .map((r) => ({
-          id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
+          id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output, ...(r.result ? { result: r.result } : {}), ...(r.taskId ? { taskId: r.taskId } : {}), ...(r.publication ? { publication: r.publication } : {}), ...(r.savedObservation ? { savedObservation: r.savedObservation } : {}),
           ...(r.agentPath !== undefined ? { agentPath: r.agentPath } : {}),
           ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
           ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),
@@ -144,7 +159,7 @@ export function createJobRegistry(): JobRegistry {
     },
     listAll() {
       return [...records.values()].map((r) => ({
-        id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
+        id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output, ...(r.result ? { result: r.result } : {}), ...(r.taskId ? { taskId: r.taskId } : {}), ...(r.publication ? { publication: r.publication } : {}), ...(r.savedObservation ? { savedObservation: r.savedObservation } : {}),
         ...(r.agentPath !== undefined ? { agentPath: r.agentPath } : {}),
         ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
         ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),

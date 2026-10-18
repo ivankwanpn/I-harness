@@ -9,6 +9,7 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
   return Object.freeze({
     ...base, status: task.status,
     ...(task.outcome !== undefined ? { outcome: task.outcome } : {}),
+    ...(task.result ? { result_revision: task.result.revision, result_ref: task.result.kind === "retained" && task.result.envelope.retention.kind === "artifact" ? task.result.envelope.retention.ref : undefined } : {}),
     ...(task.resultText !== undefined ? { resultText: task.resultText } : {}),
     ...(task.error !== undefined ? { error: task.error } : {}),
     message: `subagent ${base.agent_path} settled: ${task.status}`,
@@ -30,7 +31,23 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let saving: Promise<void> | undefined
   let taskSaved = false, terminalSaved = false, unused = false, retainPublished = false
   let resultPublished = false
+  let settling = false
+  const terminalReady = Promise.withResolvers<void>()
+  void terminalReady.promise.catch(() => {})
   let captureFailure: Readonly<{ cause: unknown; observedOutcome?: unknown }> | undefined
+  let prepareEnd: (() => Promise<{ event: Extract<SessionEvent, { type: 'subagent/end' }>; output?: ReturnType<typeof spawnObservation> }>) | undefined
+  let preparingEnd: Promise<void> | undefined
+
+  const prepareTerminal = async () => {
+    if (terminal || !prepareEnd) return
+    const pending = preparingEnd ??= (async () => {
+      const prepared = await prepareEnd!()
+      terminalEvent ??= Object.freeze({ ...prepared.event })
+      terminal ??= source.delivery.capture(terminalEvent)
+      terminalOutput ??= prepared.output
+    })()
+    try { await pending } finally { if (preparingEnd === pending) preparingEnd = undefined }
+  }
 
   const reconcileStart = async () => {
     if (!start) return
@@ -55,6 +72,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     try { await pending } finally { if (saving === pending) saving = undefined }
   }
   const settleTerminal = async () => {
+    await prepareTerminal()
     if (captureFailure || !terminal) throw Object.assign(new FactRecoveryRequiredError(), { cause: captureFailure })
     const results = await Promise.allSettled([
       terminalSaved ? Promise.resolve() : terminal.reconcile().then(outcome => { committedFactSeqs(outcome); terminalSaved = true }),
@@ -69,11 +87,12 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   }, reconcileStart)
   retained?.beforeRead(async () => {
     await reconcileStart()
-    if (terminal) await settleTerminal()
+    if (terminal || prepareEnd) await settleTerminal()
     publishResult()
   })
   return {
     bindTask(id: string, save: () => Promise<void>) { taskId = id; taskSave = save },
+    settling() { settling = true },
     published(info: PublishedChild) {
       published = Object.freeze({ ...info })
       base = Object.freeze({ agent_path: info.path, job_id: info.jobId, task_id: taskId! })
@@ -82,6 +101,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     },
     hasPublished() { return published !== undefined },
     assertLaunch() { action.assertOpen() },
+    settlementHeld() { try { source.assertHeld(); return true } catch { return false } },
     identity,
     async releaseUnused() { unused = true; await source.close() },
     async start(event: Extract<SessionEvent, { type: 'subagent/start' }>) {
@@ -93,10 +113,18 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       terminalEvent ??= Object.freeze({ ...event })
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= output
-      await settleTerminal()
-      await source.close()
+      try { await settleTerminal(); terminalReady.resolve(); await source.close() }
+      catch (error) { terminalReady.reject(error); throw error }
+    },
+    async prepareEnd(prepare: NonNullable<typeof prepareEnd>) {
+      prepareEnd ??= prepare
+      settling = true
+      try { await settleTerminal(); terminalReady.resolve(); await source.close() }
+      catch (error) { terminalReady.reject(error); throw error }
     },
     async foreground() {
+      if (prepareEnd) await settleTerminal()
+      else if (settling && !terminal) await terminalReady.promise
       await settleTerminal()
       if (!terminalOutput) throw new FactRecoveryRequiredError()
       return terminalOutput
@@ -108,6 +136,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     },
     failed(cause: unknown, observedOutcome?: unknown) {
       captureFailure = Object.freeze({ cause, observedOutcome })
+      terminalReady.reject(cause)
       source.requireRecovery()
     },
     finish() { action.finish() },

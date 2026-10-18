@@ -1,10 +1,12 @@
 import type { Session, SessionEvent } from '../events/types.ts'
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown ? T
+export type DeepReadonly<T> = T extends import('../results/types.ts').ResultEnvelope ? import('../results/types.ts').ResultEnvelopeView
+  : T extends (...args: never[]) => unknown ? T
   : T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } : T
 export type SessionView = DeepReadonly<Session>
 export type SessionEventView = DeepReadonly<SessionEvent>
-export type DeepMutable<T> = T extends (...args: never[]) => unknown ? T
+export type DeepMutable<T> = T extends import('../results/types.ts').ResultEnvelopeView ? import('../results/types.ts').ResultEnvelope
+  : T extends (...args: never[]) => unknown ? T
   : T extends object ? { -readonly [K in keyof T]: DeepMutable<T[K]> } : T
 export type SeqRef<K extends SessionEvent['type']> =
   | { kind: 'prior'; seq: number; expectedType: K }

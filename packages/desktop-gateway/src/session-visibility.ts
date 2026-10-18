@@ -14,6 +14,7 @@ export function createSubagentVisibility(coordinator: SessionCoordinator) {
   const legacy = new Map<string, boolean>()
   return async (id: string, meta: SessionMeta): Promise<boolean> => {
     if (meta.origin !== "subagent" || !meta.parentSession) return false
+    if (meta.subagentProtocolVersion !== undefined) return meta.subagentProtocolVersion === 1
     if (meta.seedLength !== 0) return true
     if (legacy.has(id)) return legacy.get(id)!
     if (!coordinator.snapshot) throw new Error("Read-only session snapshots are unavailable")

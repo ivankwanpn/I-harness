@@ -23,6 +23,7 @@ export interface RoleModelSelection {
  * and `RegisterSubagentOptions` all carry this shape, so it is written here
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
+  results?: import("../task/result.ts").TaskResultStore
   generationFactoryFor?: import('@i-harness/core-agent').DocumentGenerationFactory
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number

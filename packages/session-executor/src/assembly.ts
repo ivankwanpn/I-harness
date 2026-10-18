@@ -34,9 +34,13 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
+import { createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
 import { createNativeCodeTextRetention, installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
+import { createTaskResultRetention } from './lifecycle/task-result-retention.ts'
+import { createToolResultRetention } from './lifecycle/result-retention.ts'
+import { acquireAssemblyResultStore } from './lifecycle/result-store.ts'
+import { createExecResultRetention } from './lifecycle/exec-result-retention.ts'
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import { registerExec, type ExecService } from "@i-harness/exec"
@@ -215,6 +219,7 @@ export interface AssemblyOptions {
   /** Host-owned tools participate in the same validation and approval pipeline. */
   additionalTools?: Tool[]
   contextOutput?: ContextOutputService
+  contextOutputSettingsPath?: string
   contextOutputSourceFor?: (sessionId: string) => Promise<ContextCapture['source']>
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
@@ -548,8 +553,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // literal below).
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   const model = createStableModelClient(() => currentModel)
+  const resultStore = await acquireAssemblyResultStore(opts)
+  opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}) }
   const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx)
+  const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId) })
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   // Created BEFORE the execution environment on purpose: the sandbox policy
@@ -725,7 +732,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
   // One assembly execution owner is registered before either transport surface.
-  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution })
+  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution, resultRetention: createExecResultRetention(opts.contextOutput, opts.shellRetention?.maxBytes ?? 64000) })
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     execService: assemblyExec,
     cwd: opts.workspace,
@@ -885,8 +892,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
   // (spill outermost so it sees the largest unprocessed output).
-  if (opts.outputSpill) ctx.mount(createOutputSpillGuard(ctx, { ...opts.outputSpill, boundSyntheticFailures: true }))
-  if (opts.contextOutput) installNativeContextOutput(ctx,{service:opts.contextOutput,session,factOwner,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
+  if (opts.contextOutput) installNativeContextOutput(ctx,{legacyToolCapture:false,service:opts.contextOutput,session,factOwner,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
     ...(opts.coordinator&&opts.sessionId?{inheritedSessionFor:async(id:string)=>{
       const {meta}=await opts.coordinator!.profile(id)
       if(meta.parentSession!==opts.sessionId||meta.origin!=='subagent'||meta.seedLength===undefined)return undefined
@@ -1229,6 +1235,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => action =>
       createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient })
     const subagent = registerSubagent(ctx, tools, {
+      results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
       generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       factOwner,
       reportPolicy: SHIPPING_REPORT_POLICY,
@@ -1368,6 +1375,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
         ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
         subagents: {
@@ -1423,6 +1431,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session, factOwner,
         parentRegistry: tools,
         subagents: {
+          results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
           reportPolicy: SHIPPING_REPORT_POLICY,
           generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           retainResults: subagent.retainResults,
@@ -1774,6 +1783,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     catch (error) { processCleanupFailures.push(error); d.warn(`Subagent persistence drain failed: ${String(error)}`) }
     if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
     await managedDocument?.close()
+    await resultStore.release()
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —
     // the owner (run.ts / createSessionService) owns their lifecycle.
   }

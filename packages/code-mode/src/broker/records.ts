@@ -1,15 +1,32 @@
 import { committedFactSeqs, FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { Queued } from './types.ts'
+import type { ResultEnvelope, ResultExecution } from '@i-harness/core-session'
+import type { ResultFinalization } from '@i-harness/core-tools'
+import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from '@i-harness/core-tools'
 
 export const message = (error: unknown) => error instanceof Error ? error.message : String(error)
 export const fatal = (error: unknown) => Object.assign(new Error(message(error)), { policyRefusal: true as const })
 
-export function createCodeModeRecords(complete: (item: Queued) => Promise<unknown>) {
+export function createCodeModeRecords(complete: (item: Queued) => Promise<unknown>, captureSynthetic?: (item: Queued, output: unknown, execution: ResultExecution) => ResultFinalization | undefined, view?: import('@i-harness/core-session').SessionView) {
   return {
-    async record(item: Queued, output: unknown, error = false) {
+    async record(item: Queued, output: unknown, error = false, envelope?: ResultEnvelope, execution: ResultExecution = { outcome: 'failed', dispatch: 'not-dispatched' }) {
       if (item.recorded) return
-      item.result ??= item.source.code.capture({ type: 'code/result', cellId: item.call.cellId, callId: item.call.invocationId, name: item.call.name, output, ...(error ? { isError: true } : {}) })
-      committedFactSeqs(await item.result.admit())
+      if (!envelope && !item.result) {
+        item.syntheticFinalization ??= captureSynthetic?.(item, output, execution)
+        const result = await item.syntheticFinalization?.settle()
+        if (result && result.kind !== 'ready') {
+          if (view && isOriginalSyntheticResultFinalization({ view, source: item.source, callId: item.call.invocationId, name: item.call.name }, item.syntheticFinalization)) item.source.holdRecovery()
+          throw new FactRecoveryRequiredError()
+        }
+        if (result?.kind === 'ready') envelope = result.envelope
+      }
+      item.result ??= item.source.code.capture({ type: 'code/result', cellId: item.call.cellId, callId: item.call.invocationId, name: item.call.name, ...(envelope ? { envelope } : { output, ...(error ? { isError: true } : {}) }) })
+      try { committedFactSeqs(await item.result.admit()) }
+      catch (error) {
+        if (item.prepared && isOriginalResultFinalization(item.prepared, item.finalization)
+          || view && isOriginalSyntheticResultFinalization({ view, source: item.source, callId: item.call.invocationId, name: item.call.name }, item.syntheticFinalization)) item.source.holdRecovery()
+        throw error
+      }
       item.recorded = true
     },
     async drain(item: Queued) {
@@ -26,7 +43,7 @@ export function createCodeModeRecords(complete: (item: Queued) => Promise<unknow
       if (item.result) { committedFactSeqs(await item.result.admit()); item.recorded = true; return }
       if (item.hasOutput) {
         try { await complete(item) }
-        catch (error) { if (!item.result) item.source.requireRecovery(); throw error }
+        catch (error) { if (!item.result) { if (item.finalization) item.source.holdRecovery(); else item.source.requireRecovery() } throw error }
       }
     },
     settle(item: Queued, outcome: { value: unknown } | { error: unknown }) {

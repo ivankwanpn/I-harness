@@ -5,12 +5,15 @@ import { isContextEventType, validContextEvent } from './context.ts'
 import { validateReplacementShape } from './replacement.ts'
 import { isGenerationEventType, validGenerationEvent } from './generation.ts'
 import { validInputPreparationEvent } from './input-preparation.ts'
+import { validateResultFact } from '../results/validate.ts'
 
 type IntakeSession = { readonly formatVersion: number; readonly events: readonly { type: string; inputId?: string; images?: readonly ImageInput[] }[] }
 
 /** The existing event intake contract shared by explicit memory append and
  * owned staging. Only the newly allocated event is normalized. */
 export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
+  const resultType = Object.getOwnPropertyDescriptor(event, 'type')?.value
+  if (resultType === 'tool/result' || resultType === 'code/result' || resultType === 'subagent/end' || resultType === 'job/status') validateResultFact(event, session.formatVersion)
   if (isGenerationEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)
     && (session.formatVersion < 8 || !validGenerationEvent(event))) throw new TypeError('Invalid generation fact')
   if (Object.getOwnPropertyDescriptor(event, 'type')?.value === 'agent/input/preparation' && (session.formatVersion < 8 || !validInputPreparationEvent(event))) throw new TypeError('Invalid input preparation')

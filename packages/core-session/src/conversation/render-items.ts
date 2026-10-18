@@ -8,6 +8,7 @@ import { finishItem } from './exchange.ts'
 import { copyConversationData } from './render.ts'
 import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
 import { archivePruneSubstitutes } from '../projection/pruning.ts'
+import { resultIsError } from '../results/projection.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
@@ -41,7 +42,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
     }
     if (recipe.kind === 'result') {
       if (event?.type !== 'tool/result') throw new Error('Invalid result recipe')
-      return { role: 'tool', toolCallId: event.callId, content: result(index).content, ...(event.isError === true ? { isError: true } : {}) }
+      return { role: 'tool', toolCallId: event.callId, content: result(index).content, ...((event.envelope ? resultIsError(event.envelope) : event.isError === true) ? { isError: true } : {}) }
     }
     if (recipe.kind === 'images') {
       const images = result(index).images ?? []

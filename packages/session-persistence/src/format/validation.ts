@@ -1,3 +1,4 @@
+import { validateSubagentHeader } from "@i-harness/core-session"
 import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationHistory, validateConversationEventShape, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionMeta } from "../coordinator/types.ts"
 import { upgrades, isKnownEventType, SessionFormatUnsupportedError } from "./registry.ts"
@@ -70,12 +71,14 @@ export function guardIgnorable(events: SessionEvent[], retainIgnorable = false):
 }
 
 export function buildSession(meta: SessionMeta | undefined, events: SessionEvent[]): Session {
+  validateSubagentHeader(meta)
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events }
   if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
     || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
     session.header = {
       ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
       ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+      ...(meta.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
       ...(meta.origin !== undefined ? { origin: meta.origin } : {}),
     }

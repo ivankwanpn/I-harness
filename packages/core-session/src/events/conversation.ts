@@ -6,6 +6,7 @@ import { scalarFields } from './attribution.ts'
 import { isStrictFactData } from '../managed/capture.ts'
 import { validSoftReductionEvent } from './soft-reduction.ts'
 import { validAdmissionObservation } from './admission.ts'
+import { validateResultFact } from '../results/validate.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 
 export interface InputProvenance {
@@ -39,6 +40,7 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
+  if (event.type === 'tool/result' || event.type === 'code/result' || event.type === 'subagent/end' || event.type === 'job/status') validateResultFact(event, formatVersion)
   if (event.type === 'context/budget' && event.version === 2) {
     if (formatVersion < 9 || !validAdmissionObservation(event.snapshot)) conversationFormatError('invalid admission observation or format')
     return

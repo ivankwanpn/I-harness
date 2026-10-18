@@ -1,5 +1,6 @@
 import { types } from 'node:util'
 import { isStrictFactData } from './capture.ts'
+import { validateResultFact } from '../results/validate.ts'
 
 export type SettlementEventKind = 'tool-result' | 'code' | 'delivery' | 'rewind' | 'retention' | 'lifecycle' | 'usage' | 'assistant-audit'
 const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'])
@@ -13,6 +14,14 @@ export function validSettlementEvent(kind: SettlementEventKind, event: unknown):
   try {
     const type = Object.getOwnPropertyDescriptor(event, 'type')
     if (!type || !('value' in type) || typeof type.value !== 'string') return false
+    if ((type.value === 'tool/result' || type.value === 'code/result' || type.value === 'subagent/end') && Object.getOwnPropertyDescriptor(event, 'envelope')) {
+      if (!isStrictFactData(event)) return false
+      validateResultFact(event, 10)
+    }
+    if (type.value === "job/status") {
+      if (!isStrictFactData(event)) return false
+      validateResultFact(event, 10)
+    }
     switch (kind) {
       case 'tool-result': return type.value === 'tool/result'
       case 'code': {

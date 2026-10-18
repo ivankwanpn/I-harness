@@ -41,5 +41,5 @@ export interface SpawnOptions extends RoleModelHost {
   // task protocol's spawn record transitions on it). Additive: absent = today.
   validateBeforeLaunch?: () => void
   onPublished?: (info: { path: string; jobId: string; sessionId?: string; modelLabel?: string }) => void
-  onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void | Promise<void>
+  onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void | import("../task/result.ts").TaskResultProjection | Promise<void | import("../task/result.ts").TaskResultProjection>
 }

@@ -10,6 +10,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   reconcile(key: BatchKey): Promise<FactOutcome>
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
+  holdRecovery(): void
 }, released: () => void, reconcilePending?: () => Promise<void>): SettlementFacts {
   let active = true, closing: Promise<void> | undefined
   const assertHeld = () => {
@@ -65,6 +66,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     assertHeld,
     close,
     requireRecovery() { assertHeld(); operations.quarantineCapture() },
+    holdRecovery() { assertHeld(); operations.holdRecovery() },
     rewind: { capture: event => capture('rewind', event, { kind: 'legacy-compaction', events: [event] }) },
     retention: { capture: event => capture('retention', event, { kind: 'result-reference', event }) },
     tools: {

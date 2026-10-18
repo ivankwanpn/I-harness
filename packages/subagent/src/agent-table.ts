@@ -1,8 +1,9 @@
 import type { SessionView, FactOwner } from "@i-harness/core-session"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
+import type { ResultPublication } from './result-publication.ts'
 
-export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
-export interface ChildAgentEntry {
+export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error" | "recovery-required"
+export interface ChildAgentEntry extends ResultPublication {
   path: string
   status: ChildStatus
   session: SessionView
@@ -12,6 +13,11 @@ export interface ChildAgentEntry {
   executionModel?: () => import('@i-harness/llm-seam').ModelClient
   controller: AbortController
   finalText?: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
+  /** Original process-local body capture; never serialized. */
+  resultCapture?: import("./child/result.ts").ChildResultSettlement
+  resultLifetime?: () => boolean
   error?: string
   retention?: "memory" | "pending" | "durable" | "failed"
   retentionError?: string

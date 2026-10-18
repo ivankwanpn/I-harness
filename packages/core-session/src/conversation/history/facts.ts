@@ -1,6 +1,7 @@
 import type { SessionEventView } from '../../managed/types.ts'
 import type { ConversationCoverage, ConversationItemRef } from '../../events/replacement.ts'
 import { outcomeField } from '../payload.ts'
+import { resultDisposition, resultIsError } from '../../results/projection.ts'
 
 /** Only structural metadata. No text, arguments, result/native/image bodies,
  * request attribution or receipts are retained by the history index. */
@@ -25,6 +26,7 @@ export function historyFact(event: SessionEventView, index: number): HistoryFact
     case 'tool/call': return { ...base, callId: event.callId, name: event.name }
     case 'tool/dispatch': return { ...base, callId: event.callId, eventSeq: event.eventSeq }
     case 'tool/result': {
+      if (event.envelope) return { ...base, callId: event.callId, name: event.name, error: resultIsError(event.envelope), images: event.envelope.media.length > 0, disposition: resultDisposition(event.envelope) }
       const output = outcomeField(event, 'output'), code = outcomeField(output, 'code')
       return { ...base, callId: event.callId, name: event.name, error: event.isError === true,
         images: Array.isArray(outcomeField(output, 'images')) && (outcomeField(output, 'images') as unknown[]).length > 0,

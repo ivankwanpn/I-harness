@@ -1,25 +1,22 @@
-import {createHash} from 'node:crypto'
-import {realpath} from 'node:fs/promises'
 import {join} from 'node:path'
-import {createContextOutputService,type ContextOutputConfig,type ContextResultRef} from '@i-harness/context-output'
+import {createContextOutputService,contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef} from '@i-harness/context-output'
+import type {ManagedArtifactRef} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator} from '@i-harness/session-persistence'
 import type {SessionProjectContext} from '@i-harness/session-executor'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 
-const pathKey=(path:string)=>process.platform==='win32'?path.toLowerCase():path
 export async function createNativeContextRuntime(options:{
-  workspace:string;storageRoot:string;coordinator:Pick<SessionCoordinator,'profile'>
+  workspace:string;storageRoot:string;coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'>
   // A durable binding is independent of its currently confirmed scope. An
   // absent scope for a bound consumer is revoked authority, never unassigned.
   projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext}>
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
-  visibleRefsFor?(sessionId:string):Promise<readonly ContextResultRef[]>
+  visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
   registerJob?:CodeRetrievalOptions['registerJob']
 }) {
-  const canonical=await realpath(options.workspace)
-  const workspaceKey=createHash('sha256').update(pathKey(canonical)).digest('hex')
+  const{canonical,workspaceKey}=await contextWorkspaceIdentity(options.workspace)
   const humanSessionId=`native-index-human:${workspaceKey}`
   let references=structuredClone(typeof options.references==='function'?options.references(workspaceKey):options.references??[]),closed=false
   let timer:ReturnType<typeof setInterval>|undefined,refreshing:Promise<unknown>|undefined
@@ -33,10 +30,17 @@ export async function createNativeContextRuntime(options:{
   }
   async function sourceFor(sessionId:string){
     const scope=await projectScope(sessionId)
-    const sourceId='session-scope:'+createHash('sha256').update(JSON.stringify([scope?.id??workspaceKey,(scope?.roots??[canonical]).map(pathKey).sort()])).digest('hex')
+    const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
-  const contextOutput=createContextOutputService({root:join(options.storageRoot,'context-output'),workspaceId:workspaceKey,config:options.contextConfig,
+  const contextOutput=createContextOutputService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,
+    ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
+    authorizeResult:async(access,metadata)=>{
+      try{
+        if(metadata.workspaceId!==workspaceKey||!metadata.owner.source||(await sourceFor(access.sessionId)).sourceId!==metadata.owner.source.sourceId)return false
+        return access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>visible.id===metadata.ref.id&&visible.revision===metadata.ref.revision))
+      }catch{return false}
+    },
     authorize:async(access,ref)=>{
       try{
         if(ref.workspaceId!==workspaceKey||!ref.source||(await sourceFor(access.sessionId)).sourceId!==ref.source.sourceId)return false
@@ -69,11 +73,11 @@ export async function createNativeContextRuntime(options:{
       references=structuredClone(next)
       await codeRetrieval.cancel();await codeRetrieval.clear()
     },
-    async inheritFork(parentId:string,targetId:string,refs:readonly ContextResultRef[]){
+    async inheritFork(parentId:string,targetId:string,refs:readonly (ContextResultRef|ManagedArtifactRef)[]){
       const target=(await options.coordinator.profile(targetId)).meta
       if(target.parentSession!==parentId)throw new Error('Native reference target is not this fork')
       for(const ref of refs){
-        if(ref.expiresAt<=Date.now())continue
+        if('expiresAt' in ref&&ref.expiresAt<=Date.now())continue
         try{await contextOutput.grant({sessionId:parentId},[ref.id],targetId)}catch(error){
           const message=error instanceof Error?error.message:''
           if(/unavailable|expired|not found|unknown reference|not readable|not authorized/i.test(message))continue

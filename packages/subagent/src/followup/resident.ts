@@ -42,7 +42,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const childCtx = deps.parentCtx.scope.mount()
   let installed = false, codeModeMount: import('@i-harness/code-mode').CodeModeMount | undefined
   try {
-  const childReg = createToolRegistry(childCtx)
+  const childReg = createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry })
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
   // model resolution identical to spawnChild (child.ts): the declared selection
@@ -146,7 +146,9 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     registerContextRemaining(childCtx, childReg, { contextWindow, budgetRead: () => agent.contextBudget!() })
   }
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
+  let resultLifetime = true
   deps.table.update(entry.path, entry, {
+    resultLifetime: () => resultLifetime,
     executionModel: () => model,
     status: "waiting", closing: false, controller, toolRegistry: childReg, modelLabel,
     factoryTools: [...(codeModeMount ? ["code_exec", "code_wait"] : []), "get_context_remaining"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }),
@@ -159,6 +161,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
       await codeModeMount?.cancel("Subagent closed")
       await codeModeMount?.dispose()
       await entry.followupChain?.catch(() => {})
+      resultLifetime = false
       if (childSessionId) await childCoordinator?.closeManagedDocument(childSessionId)
       await childCtx.scope.unmount()
     },
@@ -177,5 +180,5 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
 // tools carries the lazy rebuild so a wakeup for a restored (fresh-registry)
 // entry recovers the resident agent instead of silently dropping the drive.
 export function followupDepsWithRebuild(deps: SubagentToolDeps): FollowupDeps {
-  return { agents: deps.agents, table: deps.table, jobs: deps.jobs, rebuild: (entry, controller) => ensureResidentAgent(deps, entry, controller), openGeneration: (entry, input, controller) => openFollowupGeneration(deps, entry, input, controller) }
+  return { results: deps.results, agents: deps.agents, table: deps.table, jobs: deps.jobs, rebuild: (entry, controller) => ensureResidentAgent(deps, entry, controller), openGeneration: (entry, input, controller) => openFollowupGeneration(deps, entry, input, controller) }
 }

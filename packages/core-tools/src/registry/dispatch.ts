@@ -1,6 +1,8 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../types.ts"
 import { beginRetainedDispatch } from './retained-outcome.ts'
+import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome } from './result-finalization.ts'
+import { withToolResultProducer } from './result-dependencies.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -33,14 +35,20 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
         validatePrepared(prepared)
-        const result = await prepared.tool.execute(prepared.call.args as never, prepared.exec)
+        dispatchResultStarted(prepared.exec)
+        const result = await withToolResultProducer(prepared.exec, () => prepared.tool.execute(prepared.call.args as never, prepared.exec))
+        dispatchResultReturned(prepared.exec)
         retained?.body.observed(); retained?.body.ready(result)
         return result
       },
     )
     retained?.success()
     return output
-    } catch (error) { throw retained?.failure(error) ?? error }
+    } catch (error) {
+      // The actual throw site owns failure; payload fields never do.
+      try { declareToolResultOutcome(prepared.exec, prepared.exec.abortSignal?.aborted ? 'unknown' : 'failed') } catch { /* Authority gate may precede actual dispatch. */ }
+      throw retained?.failure(error) ?? error
+    }
   }
 
   return dispatch

@@ -1,5 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { assertToolSettlementScope, bindPreparedSettlement } from './retained-outcome.ts'
+import { registerResultPrepared } from './result-finalization.ts'
 import { validateJsonSchemaValue, type JsonSchemaNode } from "../json-schema.ts"
 import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type ToolDecision, type PreparedApprovalInput, type ApprovalGuardian, type ToolRegistry } from "../types.ts"
 import { freezeArguments } from "../approval/arguments.ts"
@@ -110,6 +111,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
 
     const prepared = { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
     bindPreparedSettlement(prepared, identity?.settlementSource)
+    registerResultPrepared(prepared, identity?.settlementSource)
     return prepared
   }
 

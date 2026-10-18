@@ -69,6 +69,7 @@ export interface TeamSubagentDeps {
   contextMetadata?: SpawnOptions["contextMetadata"]
   reasoningEffort?: SpawnOptions["reasoningEffort"]
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
+  results?: SpawnOptions['results']
   summaryFactory?: SpawnOptions['summaryFactory']
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   // M8 durable child sessions: coordinator + parent session id. When present,

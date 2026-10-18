@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "讀取完整結果": "Read full result", "JSON 編碼片段": "Encoded JSON fragment",
   "壓縮後的完整請求仍超過目標。": "The complete request is still above the target after compaction.",
   "壓縮未完成。": "Compaction did not complete.",
   "引用內容合計過長，請移除部分引用或附件；草稿仍保留。": "The combined reference content is too long. Remove some references or attachments; your draft is retained.",

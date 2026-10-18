@@ -354,9 +354,18 @@ importers:
 
   packages/context-output:
     dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/core-agent:
     dependencies:
@@ -657,6 +666,9 @@ importers:
 
   packages/exec:
     dependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -998,6 +1010,12 @@ importers:
 
   packages/output-retention:
     dependencies:
+      '@i-harness/context-output':
+        specifier: workspace:*
+        version: link:../context-output
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -1007,6 +1025,9 @@ importers:
       '@i-harness/diagnostics':
         specifier: workspace:*
         version: link:../diagnostics
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
 
   packages/plan-mode:
     dependencies:

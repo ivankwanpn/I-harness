@@ -42,3 +42,24 @@ it('counts 64 active tickets, cancels head/middle waiters, preserves FIFO and re
   final.release()
   for (const ticket of active) if (typeof ticket !== 'string') ticket.release()
 })
+
+it('keeps source-specific temporary holds separate from permanent and closing capacity blocks', async () => {
+  const capacity = createFactCapacity(1), a = {}, b = {}
+  const first = await capacity.acquire()
+  if (typeof first === 'string') throw new Error('Expected original capacity ticket')
+  const waitingOptional = capacity.acquire(), waitingRequired = capacity.acquire(undefined, true)
+  capacity.holdOptional(a); capacity.holdOptional(b)
+  expect(await waitingOptional).toBe('FACT_RECOVERY_REQUIRED')
+  first.release()
+  const required = await waitingRequired
+  if (typeof required === 'string') throw new Error('Required settlement remains admitted')
+  required.release()
+  capacity.releaseOptional(a)
+  expect(await capacity.acquire()).toBe('FACT_RECOVERY_REQUIRED')
+  capacity.blockOptional('FACT_CLOSED')
+  capacity.releaseOptional(b); capacity.resume()
+  expect(await capacity.acquire()).toBe('FACT_CLOSED')
+  const final = await capacity.acquire(undefined, true)
+  expect(typeof final).toBe('object')
+  if (typeof final !== 'string') final.release()
+})

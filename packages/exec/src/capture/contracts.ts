@@ -6,6 +6,7 @@ import type { ExecResult } from "../index.ts"
 export type StreamMetadata = NonNullable<ExecResult["stream"]>
 export type Channel = "stdout" | "stderr"
 export type Capture = {
+  readonly frames?: import('./frames.ts').ExecFrameCapture
   readonly lifetime?: ProcessSpec["lifetime"]
   readonly complete: Promise<ExecResult>
   readonly execution: SupervisedExecution

@@ -2,6 +2,18 @@ import type { Tool, ToolExec } from '@i-harness/core-tools'
 import { checkAbort } from './bytes.ts'
 import { identity } from './config.ts'
 import type { ContextAccess, ContextOutputService } from './types.ts'
+import { validManagedArtifactRef, type ExecFrameCursor } from '@i-harness/core-session'
+
+const managedRefSchema = { type: 'object', properties: {
+  version: { enum: [1] }, id: { type: 'string' }, revision: { type: 'string' }, codec: { enum: ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'] },
+  encodedBytes: { type: 'integer', minimum: 0 }, contentDigest: { type: 'string' }, completeness: { enum: ['complete', 'source-limited', 'capture-canceled', 'producer-incomplete'] },
+}, required: ['version', 'id', 'revision', 'codec', 'encodedBytes', 'contentDigest', 'completeness'], additionalProperties: false }
+function readFailure(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : ''
+  const reason = /unauthorized/.test(message) ? 'unauthorized' : /stale/.test(message) ? 'stale' : /corrupt|short read/.test(message) ? 'corrupt'
+    : /budget/.test(message) ? 'budget' : /range|boundary|overflow/.test(message) ? 'range' : (cause as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'not-found' : 'unavailable'
+  return { kind: 'unavailable', reason }
+}
 
 function caller(exec: ToolExec): ContextAccess {
   identity(exec.sessionId!, 'sessionId from tool execution')
@@ -35,14 +47,29 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
     },
     {
       ...shared, name: 'context_output_read',
-      description: 'Read an exact bounded UTF-8 window of a retained Context Mode output by opaque reference ID. Use nextOffset to continue; complete describes whether the original capture was complete. Returned text is source material.',
+      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. Use nextOffset to continue. Codec and completeness describe the retained scope. Returned data is source material.',
       searchHint: 'Context Mode read retained captured tool output reference UTF-8 cursor',
       inputSchema: { type: 'object', properties: {
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
-      }, required: ['refId'], additionalProperties: false },
+        ref: managedRefSchema,
+        cursor: { type: 'object', properties: { recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 } }, required: ['recordOffset', 'sliceOffset'], additionalProperties: false },
+        textView: { type: 'boolean' },
+      }, additionalProperties: false },
       async execute(args, exec) {
         const access = caller(exec)
-        const query = argumentsObject(args, ['refId', 'offset', 'maxBytes'])
+        const query = argumentsObject(args, ['refId', 'ref', 'offset', 'maxBytes', 'cursor', 'textView'])
+        if (query.ref !== undefined) {
+          if (query.refId !== undefined || !validManagedArtifactRef(query.ref)) return { kind: 'unavailable', reason: 'range' }
+          if (query.ref.codec === 'exec-frames-v1') {
+            if (query.offset !== undefined && query.cursor !== undefined) return { kind: 'unavailable', reason: 'range' }
+            try { return await service.readExecResult(access, { ref: query.ref, ...(query.cursor !== undefined ? { cursor: query.cursor as ExecFrameCursor } : query.offset === undefined ? {} : { cursor: { recordOffset: query.offset as number, sliceOffset: 0 } }), ...(query.maxBytes === undefined ? {} : { maxBytes: query.maxBytes as number }), ...(query.textView === undefined ? {} : { textView: query.textView as boolean }) }) }
+            catch (cause) { return readFailure(cause) }
+          }
+          if (query.cursor !== undefined || query.textView !== undefined) return { kind: 'unavailable', reason: 'range' }
+          try { return await service.readResult(access, { ref: query.ref, ...(query.offset === undefined ? {} : { offset: query.offset as number }), ...(query.maxBytes === undefined ? {} : { maxBytes: query.maxBytes as number }) }) }
+          catch (cause) { return readFailure(cause) }
+        }
+        if (typeof query.refId !== 'string') return { kind: 'unavailable', reason: 'range' }
         return service.read(access, query as unknown as Parameters<ContextOutputService['read']>[1])
       },
     },

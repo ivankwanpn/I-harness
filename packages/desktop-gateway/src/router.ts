@@ -225,7 +225,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
-      if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
+      if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/result", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
         const params = asRecord(message.params)
         try {
           if (typeof params?.sessionId !== "string" || !params.sessionId || params.sessionId.length > 256) throw new Error("Invalid parent session")
@@ -233,7 +233,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           if (message.method.endsWith("/list")) result = await handlers.sessionSubagents.list(params.sessionId)
           else {
             if (typeof params.childSessionId !== "string" || !params.childSessionId || params.childSessionId.length > 256) throw new Error("Invalid child session")
-            if (message.method.endsWith("/history")) {
+            if (message.method.endsWith("/result")) {
+              for (const key of ["offset", "maxBytes"]) if (params[key] !== undefined && (typeof params[key] !== "number" || !Number.isSafeInteger(params[key]) || (params[key] as number) < (key === "offset" ? 0 : 1024) || key === "maxBytes" && (params[key] as number) > 16384)) throw new Error("Invalid child result page")
+              for (const key of ["resultRevision", "refId", "refRevision"]) if (params[key] !== undefined && (typeof params[key] !== "string" || !(params[key] as string).length || (params[key] as string).length > 128)) throw new Error("Invalid child result identity")
+              result = await handlers.sessionSubagents.result(params.sessionId, params.childSessionId, { offset: params.offset as number | undefined, maxBytes: params.maxBytes as number | undefined, resultRevision: params.resultRevision as string | undefined, refId: params.refId as string | undefined, refRevision: params.refRevision as string | undefined })
+            } else if (message.method.endsWith("/history")) {
               if (params.afterSeq !== undefined && (typeof params.afterSeq !== "number" || !Number.isSafeInteger(params.afterSeq) || params.afterSeq < 0)) throw new Error("Invalid history cursor")
               if (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > 1000)) throw new Error("Invalid history limit")
               result = await handlers.sessionSubagents.history(params.sessionId, params.childSessionId, { ...(params.afterSeq !== undefined ? { afterSeq: params.afterSeq as number } : {}), ...(params.limit !== undefined ? { limit: params.limit as number } : {}) })

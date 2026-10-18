@@ -64,7 +64,7 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
     isReadOnly: true,
     execute: async (args, exec) => {
       // Resolve and authorize the backend before installing any observation.
-      let read: () => { status: string; output: string }
+      let read: () => { status: string; output: string; result?: import("../task/result.ts").RetainedTaskResult }
       let subscribe: (wake: (view: { status: string }) => void) => () => void
       if (deps.workflow && args.job_id.startsWith("workflow-")) {
         const workflow = deps.workflow
@@ -90,6 +90,7 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
       const view = read()
       const entry = [...deps.table.entries().values()].find(row => row.jobId === args.job_id)
       return { text: deps.reportPolicy ? view.output : `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status, ...(deps.reportPolicy ? { job_id: args.job_id,
+        ...(view.result ? { result_revision: view.result.revision, result_ref: view.result.kind === "retained" && view.result.envelope.retention.kind === "artifact" ? view.result.envelope.retention.ref : undefined, result_retention: view.result.kind === "pending" ? "pending" : view.result.envelope.retention.kind } : {}),
         ...(entry?.retention !== undefined ? { retention: entry.retention } : {}),
         ...(entry?.retentionError !== undefined ? { retention_error: entry.retentionError } : {}),
       } : {}),

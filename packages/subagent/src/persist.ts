@@ -1,14 +1,17 @@
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
+import { append, CURRENT_FORMAT_VERSION, createNondurableFactOwner, isNondurableSession, isManagedFactOwner, validRetainedResultRevision, type SessionView, type FactOwner, type SessionEvent } from "@i-harness/core-session"
+import { retainedResultWitness, unknownResult, validResultPublication, type ResultPublication, type AuxiliaryResultStatus } from './result-publication.ts'
 import { createJobFacts } from './job-facts.ts'
 import type { JobRegistry, JobStatus, JobSnapshot } from "./jobs.ts"
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { RoleRegistry, SubagentRole } from "./roles.ts"
 
-export interface DurableAgentEntry {
+export interface DurableAgentEntry extends ResultPublication {
   path: string
   status: ChildStatus
   finalText?: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
   error?: string
   retention?: "memory" | "pending" | "durable" | "failed"
   retentionError?: string
@@ -28,13 +31,15 @@ export interface DurableAgentEntry {
   lastInboxSeq?: number
 }
 
-export interface DurableJobRecord {
+export interface DurableJobRecord extends ResultPublication {
   id: string
   owner: string
   kind: string
   label: string
   status: JobStatus
   output: string
+  result?: import("./task/result.ts").RetainedTaskResult
+  taskId?: string
   terminal: boolean
   agentPath?: string
   sessionId?: string
@@ -46,7 +51,7 @@ export interface DurableJobRecord {
 }
 
 export interface SubagentStateSnapshot {
-  formatVersion: 1
+  formatVersion: 1 | 2
   jobs: DurableJobRecord[]
   agentTable: DurableAgentEntry[]
   roles: SubagentRole[]
@@ -75,8 +80,8 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
   // registerJob("root", "subagent", ...)); list("root") is the enumeration.
   const jobSnaps = state.jobs.list("root")
   const jobsOut: DurableJobRecord[] = jobSnaps.map((j) => ({
-    id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output,
-    terminal: j.status !== "running",
+    id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output, ...(j.result ? { result: j.result } : {}),
+    terminal: j.status !== "running", ...(j.publication ? { publication: j.publication } : {}), ...(j.savedObservation ? { savedObservation: j.savedObservation } : {}), ...(j.taskId ? { taskId: j.taskId } : {}),
     ...(j.agentPath !== undefined ? { agentPath: j.agentPath } : {}),
     ...(j.sessionId !== undefined ? { sessionId: j.sessionId } : {}),
     // Task 4.4: stamps ride the doc verbatim (restore replays them, they are
@@ -89,6 +94,9 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     path: e.path,
     status: e.status,
     ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
+    ...(e.result ? { result: e.result } : {}),
+    ...(e.taskId ? { taskId: e.taskId } : {}),
+    ...(e.publication ? { publication: e.publication } : {}), ...(e.savedObservation ? { savedObservation: e.savedObservation } : {}),
     ...(e.error !== undefined ? { error: e.error } : {}),
     ...(e.retention !== undefined ? { retention: e.retention } : {}),
     ...(e.retentionError !== undefined ? { retentionError: e.retentionError } : {}),
@@ -102,7 +110,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
 
   const roles = state.roles.list().filter((role) => !role.ephemeral)
 
-  return { formatVersion: 1, jobs: jobsOut, agentTable, roles }
+  return { formatVersion: 2, jobs: jobsOut, agentTable, roles }
 }
 
 export function restoreState(
@@ -114,7 +122,19 @@ export function restoreState(
   // registerSubagent / ensureResidentAgent) — NOT implemented here.
   persistence?: SubagentPersistence,
 ): void {
-  void persistence
+  if (snap.formatVersion !== 1 && snap.formatVersion !== 2) throw new Error("Unsupported subagent state version")
+  if (snap.formatVersion === 1 && [...snap.agentTable, ...snap.jobs].some(row => row.result !== undefined || row.publication !== undefined || row.savedObservation !== undefined)) throw new Error("Invalid legacy result descriptor")
+  for (const row of [...snap.agentTable, ...snap.jobs]) if (row.result !== undefined && !validRetainedResultRevision(row.result)) throw new Error('Invalid retained state result')
+  for (const row of [...snap.agentTable, ...snap.jobs]) if (!validResultPublication(row)) throw new Error('Unsupported retained result publication metadata')
+  const parent = persistence?.parentSession, owner = persistence?.factOwner
+  const qualifiedParent = parent && owner?.view === parent && isManagedFactOwner(parent, owner) ? parent : undefined
+  const resultProjection = (row: DurableAgentEntry | DurableJobRecord, identity: { jobId?: string; taskId?: string }, job: boolean) => {
+    if (snap.formatVersion !== 2 || !row.result) return undefined
+    const observed = row.savedObservation ?? { status: row.status as AuxiliaryResultStatus, ...(row.result.kind === 'retained' ? { execution: { ...row.result.envelope.execution } } : {}) }
+    const witness = observed.status === 'running' ? undefined : retainedResultWitness(qualifiedParent, row.result, identity)
+    const proof = witness && (!job || witness.status === observed.status) ? witness : undefined
+    return { status: proof ? observed.status : 'recovery-required' as const, result: proof?.result ?? unknownResult(row.result), publication: proof ? 'committed' as const : 'unqualified' as const, savedObservation: observed }
+  }
   // Restore roles first (register may be used by later spawns).
   for (const role of snap.roles) {
     if (!state.roles.get(role.name)) state.roles.register(role)
@@ -127,18 +147,21 @@ export function restoreState(
   // re-drive can resume it. Only "running" is interrupted by resume.
   for (const entry of snap.agentTable) {
     const wasRunning = entry.status === "running"
-    const status: ChildStatus = wasRunning ? "error" : entry.status
+    const result = resultProjection(entry, { jobId: entry.jobId, taskId: entry.taskId }, false)
+    const status: ChildStatus = result?.status ?? (wasRunning ? "error" : entry.status)
     state.table.add(entry.path, {
       path: entry.path,
       status,
       session: createSessionFromEmpty(),
       controller: new AbortController(),
       ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
+      ...(result ? { result: result.result, publication: result.publication, savedObservation: result.savedObservation } : entry.result ? { result: entry.result } : {}),
       ...(wasRunning || entry.error !== undefined ? { error: wasRunning ? "interrupted by resume" : entry.error } : {}),
       ...(entry.retention !== undefined ? { retention: entry.retention } : {}),
       ...(entry.retentionError !== undefined ? { retentionError: entry.retentionError } : {}),
       mailbox: [...entry.mailbox],
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
+      ...(entry.taskId !== undefined ? { taskId: entry.taskId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
       ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
       ...(entry.modelLabel !== undefined ? { modelLabel: entry.modelLabel } : {}),
@@ -152,6 +175,7 @@ export function restoreState(
   // jobId links are advisory.
   for (const rec of snap.jobs) {
     const wasRunning = rec.status === "running"
+    const result = resultProjection(rec, { jobId: rec.id, taskId: rec.taskId }, true)
     // Older documents carried provenance only on the agent entry. Preserve
     // that exact job-id link before a later close removes the entry; never
     // infer historical ownership from a reusable task name or job label.
@@ -161,8 +185,10 @@ export function restoreState(
     const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label, rec.id, rec.startedAt, undefined,
       agentPath !== undefined ? { agentPath, ...(sessionId !== undefined ? { sessionId } : {}) } : undefined)
     state.jobs.updateJob(id, {
-      status: wasRunning ? "error" : rec.status,
+      status: result?.status === 'waiting' ? 'recovery-required' : result?.status ?? (wasRunning ? "error" : rec.status),
       output: wasRunning ? "interrupted by resume" : rec.output,
+      ...(result ? { result: result.result, publication: result.publication, savedObservation: result.savedObservation } : rec.result ? { result: rec.result } : {}),
+      ...(rec.taskId !== undefined ? { taskId: rec.taskId } : {}),
       // Task 4.4: replay persisted stamps verbatim — a restored job keeps its
       // original startedAt / endedAt instead of re-minting them.
       ...(rec.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
@@ -185,6 +211,7 @@ export type JobTransitionObserver = (job: JobSnapshot) => void
 // registered in session-persistence's load gate). Whole-job snapshot per
 // event so a consumer folds last-wins by jobId (the goal/change pattern).
 function jobStatusEvent(job: JobSnapshot): Extract<SessionEvent, { type: 'job/status' }> {
+  if (job.status === 'recovery-required') throw new Error('Derived cold publication cannot issue a job status fact')
   return {
     type: "job/status",
     version: 1,
@@ -194,6 +221,7 @@ function jobStatusEvent(job: JobSnapshot): Extract<SessionEvent, { type: 'job/st
       label: job.label,
       status: job.status,
       outputAvailable: job.output.length > 0,
+      ...(job.result ? { result: job.result } : {}),
       ...(job.startedAt !== undefined ? { startedAt: job.startedAt } : {}),
       ...(job.endedAt !== undefined ? { endedAt: job.endedAt } : {}),
     },
@@ -237,7 +265,7 @@ export function persistentJobRegistry(
       // same rule as the no-op kill above.
       if (updated) {
         const next = jobs.read(id)
-        if (prev !== undefined && (prev.status !== next.status || prev.output !== next.output)) observe?.(next)
+        if (prev !== undefined && (prev.status !== next.status || prev.output !== next.output || prev.result !== next.result)) observe?.(next)
         void save()
       }
       return updated
@@ -273,7 +301,7 @@ export function emitRestoredJobTransitions(
 ): void {
   if (persist.parentSession === undefined) return
   for (const rec of snap.jobs) {
-    if (rec.status !== "running") continue
+    if (rec.status !== "running" || snap.formatVersion === 2 && rec.result) continue
     const view = jobs.read(rec.id)
     if (observe) observe(view)
     else {
@@ -337,7 +365,7 @@ export function wireSubagentPersistence(
   const observe: JobTransitionObserver | undefined =
     persist.parentSession === undefined
       ? undefined
-      : (job) => { facts!.record(jobStatusEvent(job)) }
+      : (job) => { if (job.status !== 'recovery-required' && job.publication !== 'unqualified') facts!.record(jobStatusEvent(job)) }
   // Return wrapped registries (deterministic — no in-place mutation). The
   // caller uses the returned object for the 11 tools and later lookups.
   return {

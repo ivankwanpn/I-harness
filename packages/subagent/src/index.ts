@@ -1,3 +1,5 @@
+export { taskBodyPreview as childResultPreview, readTaskResultPage } from "./task/result.ts"
+export type { TaskResultStore, RetainedTaskResult, TaskResultBody, TaskResultPage, TaskResultPageArgs } from "./task/result.ts"
 export { createJobRegistry } from "./jobs.ts"
 export type { JobRegistry, JobSnapshot, JobStatus } from "./jobs.ts"
 export { projectAgentTasks, projectAgentTaskDetail, projectStatus, projectWorkflowRows } from "./projection.ts"
@@ -21,6 +23,7 @@ export { createSubagentTools } from "./tools.ts"
 export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
 export { restoreState, wireSubagentPersistence, snapshotState } from "./persist.ts"
+export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
@@ -54,6 +57,7 @@ import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
+  results?: import("./task/result.ts").TaskResultStore
   reportPolicy?: ReportPolicy
   /** The host mounted the generic shell tool; expose it to built-in workers. */
   includeAgentShell?: boolean
@@ -153,7 +157,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // M24a (Ruling M24a-P2): restoreState stays SYNC — it rebuilds the
     // registries with empty stub sessions; the async G1a mirror rebuild and
     // the G4 sweep run afterwards behind `ready` (below).
-    restoreState({ jobs, table, roles }, opts.restoredState, opts.persist)
+    restoreState({ jobs, table, roles }, opts.restoredState, opts.persist ? { ...opts.persist, parentSession: opts.parentSession, factOwner } : undefined)
   }
   if (opts.persist) {
     const wired = wireSubagentPersistence({ jobs, table, roles }, { ...opts.persist, factOwner: opts.persist.factOwner ?? opts.factOwner })
@@ -170,6 +174,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // triggers an immediate delivery attempt.
   let notifDrainHook: (() => void) | undefined
   const tasks = createTaskRegistry({
+    results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
     maxConcurrency: opts.maxConcurrency,
@@ -181,6 +186,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   const subagentDeps: SubagentToolDeps = {
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
+    results: opts.results,
     reportPolicy: opts.reportPolicy,
     table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
@@ -274,6 +280,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       }
       await ready
       const results = await Promise.allSettled(entries.map(async entry => {
+        await entry.resultCapture?.settle()
         if (entry.dispose) await entry.dispose()
         else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
         if (entry.sessionId) agents.remove(entry.sessionId)
@@ -317,12 +324,10 @@ async function restoreTasksAndSweep(
   // dependency), and `ready` still gates the whole chain for hosts.
   await restoreMirrorsAndSweep(deps, table)
   if (deps.childSessions) {
-    try {
-      const doc = await deps.childSessions.coordinator.getDocument(taskDocKey(persist.stateId))
-      if (doc !== undefined) tasks.restore(doc as TaskProtocolDocument)
-    } catch {
-      // task doc missing/corrupt → empty registry（既有 subagent-state 同姿態）
-    }
+    let doc: unknown
+    try { doc = await deps.childSessions.coordinator.getDocument(taskDocKey(persist.stateId)) } catch { /* Missing/corrupt legacy document stays unavailable. */ }
+    if (doc !== undefined) tasks.restore(doc as TaskProtocolDocument)
+    await tasks.qualifyRestoredResults()
     await classifyRestoredTasks(tasks, deps.childSessions.coordinator)
     // M26-D2: 冷啟先交付（前次 run 的完成通知 = 本次啟動時父 session 的收件箱輸入）。
     await notifDrain.drain()

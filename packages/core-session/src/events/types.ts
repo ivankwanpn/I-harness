@@ -52,12 +52,12 @@ export type SessionEvent =
     // `callId` is the identity; `eventSeq` is the durable seq of the `tool/call`
     // it belongs to, present when the caller knows it (the production path does).
     | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
-    | { type: "tool/result"; callId: string; name: string; output: unknown; isError?: true; seq?: number }
+    | ({ type: "tool/result"; callId: string; name: string; seq?: number } & import('../results/types.ts').ResultFactPayload)
     // Durable Code Mode inspection records; only outer exec/wait results enter inference.
     | { type: "code/cell"; cellId: string; sessionId?: string; parentCallId?: string; state: "started" | "running" | "completed" | "failed" | "terminated" | "interrupted"; source?: string; error?: string; seq?: number }
     | { type: "code/call"; cellId: string; parentCallId?: string; callId: string; name: string; args: unknown; seq?: number }
     | { type: "code/dispatch"; cellId: string; callId: string; eventSeq?: number; seq?: number }
-    | { type: "code/result"; cellId: string; callId: string; name: string; output: unknown; isError?: true; seq?: number }
+    | ({ type: "code/result"; cellId: string; callId: string; name: string; seq?: number } & import('../results/types.ts').ResultFactPayload)
     | { type: "code/output"; cellId: string; content: unknown; seq?: number }
     | { type: "context/result-ref"; ignorable?: true; ref: { id: string; workspaceId: string; sessionId: string; callId: string; label: string; revision: string; bytes: number; originalBytes: number; complete: boolean; expiresAt: number; source?: { sourceId: string; path?: string; revision?: string; readonly?: boolean } }; seq?: number }
     // Candidate JSON writes become replayable only with a later successful
@@ -122,7 +122,7 @@ export type SessionEvent =
     // version stays 1. The status vocabulary is @i-harness/subagent's
     // JobStatus — INLINED because core-session must stay dependency-free
     // (team/* precedent); the producer (subagent persist.ts) owns the event.
-    | { type: "job/status"; version: 1; job: { jobId: string; kind: string; label: string; status: "running" | "completed" | "killed" | "error"; outputAvailable: boolean; startedAt?: number; endedAt?: number }; seq?: number }
+    | { type: "job/status"; version: 1; job: { jobId: string; kind: string; label: string; status: "running" | "completed" | "killed" | "error"; outputAvailable: boolean; result?: import("../results/types.ts").RetainedResultRevision; startedAt?: number; endedAt?: number }; seq?: number }
     // E9 schedule: durable schedule mutation events (dsh schedule/change
     // parity, IH-shaped: payload fields inline — the shape's single source is
     // packages/schedule). UI-plane: deriveMessages default branch keeps it
@@ -152,7 +152,7 @@ export type SessionEvent =
     // skips them — the parent wake input arrives via the A-plan input tier);
     // subagent/start is appended on task submit, subagent/end on terminalize.
     | { type: "subagent/start"; version: 1; taskId: string; agentPath: string; role: string; description: string; parentSessionId?: string; seq?: number }
-    | { type: "subagent/end"; version: 1; taskId: string; outcome: "completed" | "error" | "cancelled" | "recovery-required"; resultText?: string; error?: string; seq?: number }
+    | { type: "subagent/end"; version: 1; taskId: string; outcome: "completed" | "error" | "cancelled" | "recovery-required"; resultText?: string; error?: string; envelope?: import("../results/types.ts").ResultEnvelope; resultRevision?: string; seq?: number }
     // C-region port (R-C1): the model's thinking trajectory, persisted to the
     // log but deliberately model-INVISIBLE — deriveMessages skips it (default
     // branch) and deriveSearchText returns "" (unindexed). Additive event type;
@@ -242,6 +242,8 @@ export interface SessionHeader {
   parentSession?: string
   seedLength?: number
   delegationDepth?: number
+  /** Minted only by current ordinary child creation; never a permission. */
+  subagentProtocolVersion?: 1
   origin?: string
 }
 
@@ -251,4 +253,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 9
+export const CURRENT_FORMAT_VERSION = 10

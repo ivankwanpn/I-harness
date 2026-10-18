@@ -1,3 +1,5 @@
+import type { ContextResultRef } from "@i-harness/context-output"
+import type { ManagedArtifactRef } from "@i-harness/core-session"
 import { createModelWaitSettings } from "./model-wait-settings.ts"
 import { readFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
@@ -62,6 +64,7 @@ import { createInteractionBridge } from "./interaction.ts"
 import { createProjectScopeBroker } from "./project-scope.ts"
 import { createDesktopInput } from "./input.ts"
 import { createNativeContextRuntime } from "./context-runtime.ts"
+import { managedResultRefs } from '@i-harness/core-session'
 import { createContextSubsystemSettings } from "./context-subsystems.ts"
 import { createCodeRetrievalTools } from "@i-harness/code-retrieval"
 import { createCredentialStore } from "@i-harness/credentials"
@@ -224,7 +227,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     visibleRefsFor:async id=>{
       const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
       const cuts=rewindCuts(snapshot)
-      return snapshot.events.flatMap(event=>event.type==="context/result-ref"&&!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?[event.ref]:[])
+      return snapshot.events.flatMap<ContextResultRef | ManagedArtifactRef>(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?event.type==="context/result-ref"?[event.ref]:managedResultRefs(event):[])
     },
     resolveCredential:ref=>nativeCredentials.resolve(ref),
     registerJob:(access,job)=>{
@@ -382,7 +385,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
-  const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
+  const sessionSubagents = createDesktopSubagents(coordinator, service, {
+    async readResult(access, ref, args) {
+      const sameScope = async () => { if ((await nativeContext.sourceFor(access.sessionId)).sourceId !== (await nativeContext.sourceFor(access.ownerSessionId)).sourceId) throw new Error("Child result source is outside the current parent scope") }
+      await sameScope()
+      const page = await nativeContext.contextOutput.readResult({ sessionId: access.ownerSessionId }, { ref, ...args })
+      await sameScope()
+      return page
+    },
+    onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,

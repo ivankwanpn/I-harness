@@ -66,7 +66,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     const idleChildren = new Set<string>()
     async function inspectAgents(state: ManagedAgentState | undefined) {
       if (state === undefined) return
-      if (!state || state.formatVersion !== 1 || !Array.isArray(state.agentTable) || !Array.isArray(state.jobs)) throw new Error("Session durable agent state is invalid")
+      if (!state || (state.formatVersion !== 1 && state.formatVersion !== 2) || !Array.isArray(state.agentTable) || !Array.isArray(state.jobs)) throw new Error("Session durable agent state is invalid")
       if (state.agentTable.some(row => !row || !["running", "waiting", "completed", "killed", "error"].includes(row.status ?? "") || !Array.isArray(row.mailbox)) || state.jobs.some(row => !row || !["running", "completed", "killed", "error"].includes(row.status ?? ""))) throw new Error("Session durable agent rows are invalid")
       if (state.agentTable.some(row => row.status === "running" || (row.mailbox?.length ?? 0) > 0) || state.jobs.some(row => row.status === "running")) throw new Error("Session has active or pending durable agents/inbox")
       for (const row of state.agentTable) {
@@ -99,7 +99,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     if (service.tasks(id).some(task => task.status === "waiting" && (task.group !== "subagent" || !idleChildren.has(task.id)))) throw new Error("Session is busy")
     const tasks = await coordinator.getDocument(`task-${id}`) as { formatVersion?: unknown; tasks?: { status?: string }[]; notifications?: { status?: string }[] } | undefined
     if (tasks !== undefined) {
-      if (!tasks || tasks.formatVersion !== 1 || !Array.isArray(tasks.tasks) || !Array.isArray(tasks.notifications)) throw new Error("Session durable task state is invalid")
+      if (!tasks || (tasks.formatVersion !== 1 && tasks.formatVersion !== 2) || !Array.isArray(tasks.tasks) || !Array.isArray(tasks.notifications)) throw new Error("Session durable task state is invalid")
       if (tasks.tasks.some(row => !row || !["accepted", "running", "completed", "error", "cancelled", "recovery-required"].includes(row.status ?? "")) || tasks.notifications.some(row => !row || !["pending", "delivered", "woken", "error", "suppressed"].includes(row.status ?? ""))) throw new Error("Session durable task rows are invalid")
       if (tasks.tasks.some(row => ["accepted", "running", "recovery-required"].includes(row.status ?? "")) || tasks.notifications.some(row => ["pending", "delivered", "error"].includes(row.status ?? ""))) throw new Error("Session has pending durable tasks/outbox")
     }

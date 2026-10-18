@@ -123,7 +123,9 @@ export interface ToolCall {
 
 export interface ToolResult {
   name: string
-  output: unknown
+  output?: unknown
+  envelope?: import('@i-harness/core-session').ResultEnvelope
+  program?: import('./registry/result-finalization.ts').ResultProgram
 }
 
 // The codes a SYNTHETIC tool result can carry. They live here, not in
@@ -213,6 +215,8 @@ export interface ToolRegistry {
   prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code"; settlementSource?: SettlementFacts<ProducerFactOutcome>; modelGeneration?: ToolModelGeneration }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
+  resultFinalization?(prepared: PreparedCall): import('./registry/result-finalization.ts').ResultFinalization | undefined
+  captureSyntheticResult?(context: import('./registry/result-finalization.ts').SyntheticResultContext, output: unknown, execution: import('@i-harness/core-session').ResultExecution): import('./registry/result-finalization.ts').ResultFinalization | undefined
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
   genToolCatalog(): ToolSchema[]
   verifyToolCatalog(expected: Tool[], catalog: ToolSchema[]): void

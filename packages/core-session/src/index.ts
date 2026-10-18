@@ -1,3 +1,4 @@
+export { validateSubagentHeader } from "./events/header.ts"
 // Stable package facade. Internal owners import each other directly.
 export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
 export { readInbox } from './inbox-view.ts'
@@ -71,7 +72,7 @@ export type { ExchangeAcceptedEventV2 } from "./events/conversation.ts"
 export { contextUsageAnchorId } from "./events/usage-anchor.ts"
 export type { DeepReadonly, SessionView, SessionEventView, SeqRef, OwnerToken, BatchKey, FactReceipt, FactCode, FactOutcome, JournalPrefix, JournalMetadata, EncodedFactBatch } from './managed/types.ts'
 export { FactRecoveryRequiredError } from './managed/types.ts'
-export { captureLegacyFact, isStrictFactData } from './managed/capture.ts'
+export { captureLegacyFact, isStrictFactData, freezeJsonData } from './managed/capture.ts'
 export { validSettlementEvent, type SettlementEventKind } from './managed/settlement-event.ts'
 export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts'
 export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
@@ -81,7 +82,7 @@ export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, Li
 export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
 export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'
 export { createFactPorts } from './managed/ports-factory.ts'
-export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource } from './managed/source-scope.ts'
+export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource, isOwnedSettlementSource, settlementSourceSessionId } from './managed/source-scope.ts'
 export { createNondurableFactOwner, isNondurableSession, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
 export { committedFactSeqs } from './managed/outcome.ts'
 
@@ -93,3 +94,9 @@ export { createSoftReductionIndex } from './conversation/soft-reduction.ts'
 export type { SoftReductionState } from './conversation/soft-reduction.ts'
 export type { RequestBudgetSnapshotV2, AdmissionPurpose, AdmissionEstimate, AdmissionDimension, AdmissionDimensionResult, AdmissionPressure, AdmissionDisposition, AdmissionReason, AdmissionUnknownReason } from './events/admission.ts'
 export { validAdmissionObservation } from './events/admission.ts'
+
+export type * from './results/types.ts'
+export { validResultEnvelope, validManagedArtifactRef, validRetainedResultRevision } from './results/validate.ts'
+export { resultText, resultIsError, resultDisposition, managedResultRefs } from './results/projection.ts'
+export { streamJsonData, lowerJsonData, containsNativeRawJson, type JsonStreamOptions } from './serialization/json-stream.ts'
+export { encodeExecFrameRecord, decodeExecFrameRecord, type ExecFrameRecord, type ExecFrameCursor } from './results/exec-frames.ts'

@@ -111,6 +111,7 @@ export function createTaskOutputTool(deps: SubagentToolDeps): Tool {
             description: t.description,
             ...(t.resultText !== undefined ? { resultText: t.resultText } : {}),
             ...(t.error !== undefined ? { error: t.error } : {}),
+            ...(t.result ? { result_revision: t.result.revision, result_ref: t.result.kind === "retained" && t.result.envelope.retention.kind === "artifact" ? t.result.envelope.retention.ref : undefined, result_retention: t.result.kind === "retained" ? t.result.envelope.retention.kind : "pending" } : {}),
             time_created: t.timeCreated,
           }
         }),

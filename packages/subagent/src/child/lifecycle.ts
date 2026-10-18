@@ -1,3 +1,4 @@
+import { retainChildResult } from "./result.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { committedFactSeqs, deriveMessages, type SessionView, type FactOwner } from "@i-harness/core-session"
 import { randomUUID } from 'node:crypto'
@@ -29,7 +30,9 @@ export async function publishChild(
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
     { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
+  let resultLifetime = true
   const entry: ChildAgentEntry = {
+    resultLifetime: () => resultLifetime,
     path: childPath,
     status: "running",
     // W11: the initial run starts HERE — one of the two sites that write
@@ -63,6 +66,7 @@ export async function publishChild(
       await codeModeMount?.cancel("Subagent closed")
       await codeModeMount?.dispose()
       await entry.followupChain?.catch(() => {})
+      resultLifetime = false
       await document?.close()
       await childCtx.scope.unmount()
     },
@@ -79,16 +83,15 @@ export async function publishChild(
       // The turn is done, but the child is KEPT alive (waiting) so a later
       // followup can re-drive the same agent (M9 spec §2.2). A stale error
       // from an earlier interrupted attempt is cleared on success.
-      opts.table.update(childPath, entry, { status: "waiting", error: undefined, finalText: result.finalText })
-      opts.jobs.updateJob(jobId, { status: "completed", output: result.finalText })
-      await opts.onSettled?.({ finalText: result.finalText, aborted: false })
+      const settled = await opts.onSettled?.({ finalText: result.finalText, aborted: false })
+      await retainChildResult(opts, entry, { resultText: result.finalText }, "completed", settled)
     },
     async (err) => {
       const aborted = controller.signal.aborted
       // An interrupted turn leaves the child ALIVE (waiting) so followups still work.
-      opts.table.update(childPath, entry, { status: "waiting", error: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
-      opts.jobs.updateJob(jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
-      await opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
+      const settled = await opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
+      const error = opts.results ? (err instanceof Error ? err.message : String(err)) : aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+      await retainChildResult(opts, entry, { error }, aborted ? "cancelled" : "error", settled)
     },
   )
   entry.followupChain = completion.finally(() => initial?.close())

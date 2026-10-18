@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, validateSubagentHeader, type SessionEvent } from "@i-harness/core-session"
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
@@ -74,6 +74,7 @@ export function createMutations(
           formatVersion: CURRENT_FORMAT_VERSION,
         }
         try {
+          validateSubagentHeader(fullMeta)
           await backend.create(id, fullMeta)
         } catch (err) {
           if (acquired) {
@@ -104,7 +105,9 @@ export function createMutations(
       // serialized with appends/write-behind flushes on the same session.
       return withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId)
-        await ensureWritableFormatUnlocked(backend, sessionId)
+        const previous = await ensureWritableFormatUnlocked(backend, sessionId)
+        if (Object.hasOwn(patch, "subagentProtocolVersion") && patch.subagentProtocolVersion !== previous.meta?.subagentProtocolVersion) throw new Error("Subagent protocol is immutable creation metadata")
+        validateSubagentHeader({ ...previous.meta, ...patch })
         return backend.updateMeta(sessionId, patch)
       })
     },

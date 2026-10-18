@@ -41,11 +41,12 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   const managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report)
 
   return {
+    ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
     openManagedDocument: managed.open,
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument: managed.closeOne,
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
-    ...(backend.deleteOwnedSession ? { deleteOwnedSession: lifecycle.deleteOwnedSession } : {}),
+    ...(backend.deleteOwnedSession ? { deleteOwnedSession: lifecycle.deleteOwnedSession, onDocumentDeleted: lifecycle.onDocumentDeleted } : {}),
     ensureWritableFormat: mutations.ensureWritableFormat,
     create: mutations.create,
     append(sessionId, events) {

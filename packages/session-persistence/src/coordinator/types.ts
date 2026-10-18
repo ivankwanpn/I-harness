@@ -63,6 +63,8 @@ export interface PersistenceBackend {
    * it as the default lock root when `lock.lockRoot` is not given.
    */
   lockRoot?: string
+  /** Actual backend data root, independent of ownership lock placement. */
+  readonly storageRoot?: string
   /** C5: cheap per-session meta profile (header read only on jsonl; no event
    * decode). `blank` = the log has no turn/start yet. Throws for an unknown
    * session — the caller surfaces it (never a silent default row). */
@@ -100,6 +102,9 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  readonly storageRoot?: string
+  /** Fires only after the actual backend confirms its owned deletion. */
+  onDocumentDeleted?(listener: (sessionId: string, manifest: SessionArtifactManifest) => Promise<void>): () => void
   openManagedDocument(sessionId: string): Promise<import('./fact-types.ts').ManagedDocument>
   revokeManagedDocumentNewWork(sessionId: string): void
   closeManagedDocument(sessionId: string): Promise<void>

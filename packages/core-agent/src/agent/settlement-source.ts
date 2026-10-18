@@ -45,6 +45,7 @@ export function trackSettlementSource(parent: SettlementFacts<ProducerFactOutcom
             assertOpen();
             parent.requireRecovery();
         },
+        holdRecovery() { assertOpen(); parent.holdRecovery() },
         close() {
             if (!active)
                 return Promise.resolve();

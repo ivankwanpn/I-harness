@@ -7,6 +7,8 @@ type Waiter = { grant(ticket: Ticket): void; refuse(code: FactCode): void; signa
 export function createFactCapacity(limit: number) {
   let active = 0, closed: FactCode | undefined, optionalBlocked: FactCode | undefined
   const waiting: Waiter[] = []
+  const recoverable = new Set<object>()
+  const optionalCode = () => optionalBlocked ?? (recoverable.size ? 'FACT_RECOVERY_REQUIRED' as const : undefined)
   const ticket = (): Ticket => {
     active++
     let released = false
@@ -23,7 +25,7 @@ export function createFactCapacity(limit: number) {
     while (!closed && active < limit && waiting.length) {
       const next = waiting.shift()!
       removeAbort(next)
-      if (!next.required && optionalBlocked) next.refuse(optionalBlocked)
+      if (!next.required && optionalCode()) next.refuse(optionalCode()!)
       else if (next.signal?.aborted) next.refuse('FACT_CANCELLED')
       else next.grant(ticket())
     }
@@ -31,7 +33,7 @@ export function createFactCapacity(limit: number) {
   return {
     acquire(signal?: AbortSignal, required = false): Promise<Ticket | FactCode> {
       if (closed) return Promise.resolve(closed)
-      if (optionalBlocked && !required) return Promise.resolve(optionalBlocked)
+      if (optionalCode() && !required) return Promise.resolve(optionalCode()!)
       if (signal?.aborted) return Promise.resolve('FACT_CANCELLED')
       if (active < limit && !waiting.length) return Promise.resolve(ticket())
       return new Promise(resolve => {
@@ -58,6 +60,15 @@ export function createFactCapacity(limit: number) {
         waiting.splice(index, 1); removeAbort(waiter); waiter.refuse(code)
       }
     },
+    holdOptional(owner: object) {
+      recoverable.add(owner)
+      for (let index = waiting.length - 1; index >= 0; index--) {
+        const waiter = waiting[index]!
+        if (waiter.required) continue
+        waiting.splice(index, 1); removeAbort(waiter); waiter.refuse('FACT_RECOVERY_REQUIRED')
+      }
+    },
+    releaseOptional(owner: object) { recoverable.delete(owner); grant() },
     revokeNewWork() { this.blockOptional('FACT_CLOSED') },
     resume() { closed = undefined; grant() },
   }

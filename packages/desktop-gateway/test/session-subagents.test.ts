@@ -12,6 +12,50 @@ import { append, createSession, copyConversationData, decodeFactBatch } from "@i
 import { createDesktopSubagents } from "../src/session-subagents.ts"
 import { createAgentTable, createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 import { createChildObservation } from "../../session-executor/src/child-observation.ts"
+import { createContextOutputService } from '@i-harness/context-output'
+import { createResultCapture } from '../../output-retention/src/index.ts'
+
+it('uses committed revision metadata for retained child catalogs and lineage-gates exact body pages before I/O', async () => {
+  const f = await fixture(), body = { resultText: '中文🙂"\n'.repeat(6000), error: '' }
+  await f.coordinator.create({ sessionId: 'retained', parentSession: 'parent', origin: 'subagent', seedLength: 1 })
+  const store = createContextOutputService({ root: join(f.root, 'results'), workspaceId: 'w' })
+  const tasks = createTaskRegistry({ reportPolicy: { childPreviewBytes: 2048, maxReportBytes: 16384 }, coordinator: f.coordinator, stateId: 'parent', results: {
+    capture(task, body, revision, execution) {
+      const scope = store.registerResultScope({ operationId: revision, sessionId: 'parent', callId: task.id, documentId: 'task-parent' }, () => true)
+      return createResultCapture(body, execution!, { forceArtifact: true, openArtifact: () => store.beginResult(scope, 'json-utf8-v1') })
+    }, read: (_task, ref, args) => store.readResult({ sessionId: 'parent' }, { ref, ...args }),
+  } })
+  const task = tasks.submit({ identity: { parentSessionId: 'parent', callEventSeq: 1 }, childSessionId: 'retained', agentPath: 'root/retained', description: 'retained', prompt: 'go', agent: 'general', delivery: 'tool' })
+  tasks.claim(task.id); tasks.terminalize({ taskId: task.id, outcome: 'completed', ...body }); await tasks.retainResult(task.id)
+  if (task.result?.kind !== 'retained') throw new Error('Expected retained fixture')
+  await f.coordinator.putDocumentStrict!('parent', { formatVersion: 2, roles: [], jobs: [], agentTable: [{ path: task.agentPath, sessionId: 'retained', status: 'waiting', mailbox: [], finalText: task.resultText, error: task.error, result: task.result }] })
+  await f.coordinator.append('parent', [{ type: 'subagent/end', version: 1, taskId: task.id, outcome: 'completed', resultRevision: task.result.revision, envelope: task.result.envelope, resultText: task.resultText, error: task.error }])
+  if (!f.coordinator.snapshot) throw new Error('Actual coordinator snapshot capability unavailable')
+  const originalSnapshot = f.coordinator.snapshot.bind(f.coordinator)
+  const snapshots = vi.spyOn(f.coordinator as typeof f.coordinator & { snapshot: NonNullable<typeof f.coordinator.snapshot> }, 'snapshot').mockImplementation(async id => { if (id === 'retained') throw new Error('Retained report must not load the child transcript'); return originalSnapshot(id) })
+  const read = vi.fn(async (access: { ownerSessionId: string }, ref: any, args: any) => store.readResult({ sessionId: access.ownerSessionId }, { ref, ...args }))
+  const catalog = createDesktopSubagents(f.coordinator, f.service, { readResult: read })
+  try {
+    const row = (await catalog.list('parent')).agents.find(row => row.sessionId === 'retained')!
+    expect(row.status).toBe('completed')
+    expect(row.fullResult?.resultRevision).toBe(task.result.revision)
+    expect(read).not.toHaveBeenCalled()
+    expect(snapshots.mock.calls.filter(([id]) => id === 'retained')).toHaveLength(0)
+    await expect(catalog.result('other', 'retained')).rejects.toThrow(/scope/)
+    await expect(catalog.result('parent', 'retained', { resultRevision: 'stale' })).rejects.toThrow(/revision/)
+    expect(read).not.toHaveBeenCalled()
+    let offset = 0, encoded = ''
+    for (;;) {
+      const page = await catalog.result('parent', 'retained', { offset, maxBytes: 2048, resultRevision: task.result.revision })
+      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(2048)
+      expect(page.codec).toBe('json-utf8-v1'); encoded += page.data.text
+      if (page.eof) break
+      expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset!
+    }
+    expect(JSON.parse(encoded)).toEqual(body)
+    expect(f.assemble).not.toHaveBeenCalled()
+  } finally { await catalog.close(); await store.close(); await f.close() }
+})
 
 it("real service pushes one committed child result after its actual receipt, with lineage checked before live access", async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-child-push-assembly-'))
@@ -69,7 +113,7 @@ it("real service pushes one committed child result after its actual receipt, wit
     await expect(coordinator.snapshot!(childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect(pushedResults).toEqual([])
     access.mockClear()
-    await expect(catalog.history('other', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    await expect(catalog.history('other', childId)).rejects.toThrow(/scope/)
     expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled(); expect(assemble).not.toHaveBeenCalled()
     const requestsBefore = [parentRequests, childRequests]
     await expect(catalog.history('parent', childId)).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
@@ -563,8 +607,9 @@ it("restores a completed closed child's actual model from its JSONL task documen
     await f.coordinator.flush(owned.sessionId!)
     reader = createSessionCoordinator(createJsonlBackend(f.root), { lock: { enabled: true } })
     const doc = await reader.getDocument(taskDocKey("parent")) as TaskProtocolDocument
-    const restored = createTaskRegistry()
+    const restored = createTaskRegistry({ coordinator: reader })
     restored.restore(doc)
+    await restored.qualifyRestoredResults()
     expect(restored.get(spawned.task_id)).toMatchObject({ status: "completed", modelLabel: "deepseek:deepseek-flash" })
     const catalog = await createDesktopSubagents(reader, f.service).list("parent")
     expect(catalog.agents.find(row => row.sessionId === owned.sessionId)).toMatchObject({ status: "completed", live: false, roleName: "explore", modelLabel: "deepseek:deepseek-flash" })

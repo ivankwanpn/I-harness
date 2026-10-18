@@ -1,5 +1,5 @@
 import type { ContextSnapshot, ReductionPolicy } from '@i-harness/context-engine'
-import { createConversationValidationIndex, type SessionView, type SessionEventView, type SoftReductionStart } from '@i-harness/core-session'
+import { createConversationValidationIndex, resultDisposition, type SessionView, type SessionEventView, type SoftReductionStart } from '@i-harness/core-session'
 import { projectionFingerprint } from '@i-harness/token-meter'
 
 /** Private summary addresses normalize to the stable replacement identity. */
@@ -13,7 +13,7 @@ export function softWorkFacts(snapshot: ContextSnapshot, policy: ReductionPolicy
 }
 export function softAdvances(events: readonly SessionEventView[]) {
   let acceptedExchanges = 0, humanTurns = 0
-  const results = new Set(events.flatMap(event => event.type === 'tool/result' && !(event.isError && event.output && typeof event.output === 'object'
+  const results = new Set(events.flatMap(event => event.type === 'tool/result' && !(event.envelope ? resultDisposition(event.envelope) === 'unknown' : event.isError && event.output && typeof event.output === 'object'
     && Object.getOwnPropertyDescriptor(event.output, 'code')?.value === 'TOOL_OUTCOME_UNKNOWN' && Object.getOwnPropertyDescriptor(event.output, 'replay')?.value === false) ? [event.callId] : []))
   for (const event of events) {
     if (event.type === 'turn/end') humanTurns++

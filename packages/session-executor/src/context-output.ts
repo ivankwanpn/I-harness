@@ -9,6 +9,7 @@ import { createResultReferencePublisher } from './lifecycle/result-references.ts
 import { createReferenceRetention } from './lifecycle/reference-retention.ts'
 
 export interface NativeContextOutputOptions {
+  legacyToolCapture?: boolean
   service: ContextOutputService; session: Session; sessionId?: string
   factOwner?: FactOwner
   sourceFor?(sessionId: string): Promise<ContextCapture['source']>
@@ -75,6 +76,7 @@ export function installNativeContextOutput(ctx:PluginContext,options:NativeConte
       }
     }
   })
+  if (options.legacyToolCapture === false) return
   ctx.onCascade('tools/execute',async(payload,next)=>{
     const input=payload as {name:string;exec?:ToolExec}
     const exec=input.exec,actor=exec?.sessionId ?? options.sessionId

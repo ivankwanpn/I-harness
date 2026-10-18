@@ -23,6 +23,7 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
     }
     if (cancellation.batchSignal.aborted) {
       records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
+        execution: { outcome: 'canceled', dispatch: 'not-dispatched' },
         output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH } })
       return
     }
@@ -49,6 +50,7 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
         if (isPolicyRefusal(err)) cancellation.stopForRefusal(err)
         else if (!opts.signal?.aborted) {
           records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
+            execution: { outcome: 'failed', dispatch: 'dispatched' },
             output: { error: err instanceof Error ? err.message : String(err), code: TOOL_FAILED } })
         }
         try {

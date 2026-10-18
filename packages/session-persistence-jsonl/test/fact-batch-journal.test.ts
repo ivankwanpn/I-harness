@@ -52,7 +52,7 @@ it('publishes an atomic source-order frame only after a scoped receipt and reope
     expect(result.seqs).toEqual([0])
     expect(document.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
     const lines = (await readFile(join(root, `${id}.jsonl`), 'utf8')).trimEnd().split('\n')
-    expect(JSON.parse(lines[0]!).formatVersion).toBe(9)
+    expect(JSON.parse(lines[0]!).formatVersion).toBe(10)
     expect(JSON.parse(lines[1]!)).toMatchObject({ recordKind: 'session/fact-batch', version: 1, firstSeq: 0, count: 1 })
     expect((await coordinator.snapshot!(id)).session.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
   } finally { await coordinator.close() }
@@ -396,12 +396,36 @@ it('latches a registered source finalization failure before capture and still dr
   const other = action.registerSettlementSource(async () => { core.committedFactSeqs(await handle.admit()) })
   try {
     handle = other.tools.captureResult({ type: 'tool/result', callId: 'other', name: 'read', output: 'real result' })
+    other.holdRecovery()
     failed.requireRecovery()
+    await other.close()
     expect(() => action.assertOpen()).toThrow(core.FactRecoveryRequiredError)
     await expect(document.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
     expect((await backend.read(id)).events).toEqual([{ type: 'tool/result', callId: 'other', name: 'read', output: 'real result', seq: 0 }])
     expect(coordinator.ownerOf(id)).toBe(true)
   } finally { await coordinator.close().catch(() => {}) }
+})
+
+it('releases only the successfully drained source hold and preserves Stop and another unresolved source', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-r4a-source-holds-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), action = document.beginAction()
+  let finishB = false
+  const a = action.registerSettlementSource(async () => {}), b = action.registerSettlementSource(async () => { if (!finishB) throw new core.FactRecoveryRequiredError() })
+  try {
+    a.tools.captureResult({ type: 'tool/result', callId: 'a', name: 'read', output: 'original a' })
+    b.tools.captureResult({ type: 'tool/result', callId: 'b', name: 'read', output: 'original b' })
+    a.holdRecovery(); b.holdRecovery(); action.stop()
+    expect(() => document.beginAction()).toThrow(core.FactRecoveryRequiredError)
+    await a.close()
+    expect(() => document.assertReady()).toThrow(core.FactRecoveryRequiredError)
+    await expect(b.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(() => document.beginAction()).toThrow(core.FactRecoveryRequiredError)
+    finishB = true; await b.close()
+    const next = document.beginAction(); next.finish()
+    expect(() => action.assertOpen()).toThrowError('FACT_CANCELLED')
+    expect((await backend.read(id)).events.filter(event => event.type === 'tool/result').map(event => event.callId)).toEqual(['a', 'b'])
+  } finally { finishB = true; await a.close(); await b.close(); await coordinator.close() }
 })
 
 it('preserves image intake validation and computes source summaries before encoding a managed input-start', async () => {

@@ -10,6 +10,7 @@ export interface Queued {
   action: ManagedAction<ProducerFactOutcome>; source: SettlementFacts<ProducerFactOutcome>
   done: ReturnType<typeof Promise.withResolvers<void>>
   hasOutput: boolean; bodyOutput?: unknown; finalizing?: Promise<ToolResult>
+  finalized?: ToolResult; finalization?: import('@i-harness/core-tools').ResultFinalization; syntheticFinalization?: import('@i-harness/core-tools').ResultFinalization; postToolStarted?: true
   prepared?: PreparedCall; retained?: RetainedToolOutcome; recoveryCause?: unknown; completion?: Promise<unknown>
   generation?: import('@i-harness/core-tools').CodeGenerationScope
   result?: CapturedSettlementFact<ProducerFactOutcome>

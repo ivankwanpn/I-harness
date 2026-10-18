@@ -5,6 +5,11 @@ import { createPreparer } from "./registry/prepare.ts"
 import { createDispatcher } from "./registry/dispatch.ts"
 import { createFinalizer } from "./registry/finalize.ts"
 import { installPreExecuteDecision } from "./approval/decision.ts"
+import { assertSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
+export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, resultExecution, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
+export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext } from './registry/result-finalization.ts'
+export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
+export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
@@ -18,12 +23,20 @@ export { retainedToolOutcome, hasRetainedToolBody, type RetainedToolOutcome, typ
 export { registerContextRemaining } from "./context-remaining.ts"
 export type { ContextRemainingOptions } from "./context-remaining.ts"
 
-export function createToolRegistry(ctx: PluginContext): ToolRegistry {
+const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
+export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry } = {}): ToolRegistry {
+  if (options.inheritResultRetention && !registryRetention.has(options.inheritResultRetention)) throw new Error('Original tool registry unavailable')
+  const retention = options.resultRetention ?? (options.inheritResultRetention ? registryRetention.get(options.inheritResultRetention) : undefined)
   const catalog = createCatalog()
   installPreExecuteDecision(ctx)
-  const prepare = createPreparer(ctx, catalog, () => registry)
+  const prepareCall = createPreparer(ctx, catalog, () => registry)
+  const prepare: ToolRegistry['prepare'] = async (...args) => {
+    const prepared = await prepareCall(...args)
+    await retention?.prepare?.(prepared)
+    return prepared
+  }
   const dispatch = createDispatcher(ctx, catalog.get, () => registry)
-  const finalize = createFinalizer(ctx)
+  const { finalize, resultFinalization } = createFinalizer(ctx, retention)
 
   // M13: thin sequential wrapper — behavior byte-identical to the pre-M13
   // `execute` for every existing caller (tests, CLI paths, subagent drivers).
@@ -41,6 +54,12 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     prepare,
     dispatch,
     finalize,
+    resultFinalization,
+    captureSyntheticResult(context, output, execution) {
+      if (!retention) return undefined
+      assertSyntheticResult(context)
+      return bindSyntheticFinalization(context, retention.captureSynthetic(context, output, execution))
+    },
     execute,
     genToolCatalog: catalog.genToolCatalog,
     verifyToolCatalog: catalog.verifyToolCatalog,
@@ -50,5 +69,6 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     deferredSearchIndex: catalog.deferredSearchIndex,
     deferredToolCount: catalog.deferredToolCount,
   }
+  registryRetention.set(registry, retention)
   return registry
 }

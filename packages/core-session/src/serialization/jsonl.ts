@@ -1,3 +1,4 @@
+import { validateSubagentHeader } from "../events/header.ts"
 import { CURRENT_FORMAT_VERSION } from "../events/types.ts"
 import type { Session, SessionEvent, SessionHeader } from "../events/types.ts"
 import { isContextEventType, validContextEvent } from "../events/context.ts"
@@ -8,7 +9,8 @@ import type { JournalMetadata } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
 
 export function toJSONL(session: import('../managed/types.ts').SessionView): string {
-  if ([6, 7, 8, 9].includes(session.formatVersion)) {
+  validateSubagentHeader(session.header)
+  if ([6, 7, 8, 9, 10].includes(session.formatVersion)) {
     validateConversationHistory(session.events, session.formatVersion, session.header)
     const journal: JournalMetadata = { version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }
     const { journal: _sourceJournal, formatVersion: _sourceFormat, ...metadata } = session.header as (SessionHeader & { formatVersion?: number }) ?? {}
@@ -35,11 +37,12 @@ export function fromJSONL(text: string): Session {
   }
   const lines = text.split("\n")
   const header = JSON.parse(lines[0]!) as SessionHeader & { formatVersion?: number; sessionId?: string }
+  validateSubagentHeader(header)
   if (typeof header.formatVersion !== 'number' || !supportedVersion(header.formatVersion)) {
     throw new Error(`session format version ${header.formatVersion} not supported`)
   }
-  if ([6, 7, 8, 9].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
-  const events = [6, 7, 8, 9].includes(header.formatVersion)
+  if ([6, 7, 8, 9, 10].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
+  const events = [6, 7, 8, 9, 10].includes(header.formatVersion)
     ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events
     : lines.slice(1).filter(line => line.trim()).map((l) => JSON.parse(l) as SessionEvent)
   validateConversationHistory(events, header.formatVersion, header)
@@ -49,6 +52,7 @@ export function fromJSONL(text: string): Session {
 }
 
 export function migrate(session: Session, targetVersion: number): Session {
+  validateSubagentHeader(session.header)
   if (targetVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error(`no migration path to format version ${targetVersion}`)
   }

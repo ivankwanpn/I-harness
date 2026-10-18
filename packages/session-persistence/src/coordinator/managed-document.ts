@@ -60,6 +60,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const actionControllers = new Set<AbortController>();
     const ownedActions = new WeakSet<object>();
     const sourceDispositions = new WeakMap<CapturedFactGroup, FactOutcome>();
+    const recoveryHolds = new Set<object>();
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let pump: Promise<void> = Promise.resolve();
     const held = heldFactOwner(owner, ownership, () => {
@@ -75,7 +76,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             failSource();
             throw new FactRecoveryRequiredError();
         }
-        if (quarantined || sourceFault && !authorization.required)
+        if (quarantined || (sourceFault || recoveryHolds.size > 0) && !authorization.required)
             throw new FactRecoveryRequiredError();
         if (!authorization.required && (closing || authorization.action.stopped || authorization.action.signal?.aborted)) {
             const code = closing ? 'FACT_CLOSED' : 'FACT_CANCELLED';
@@ -169,7 +170,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     catch (error) {
                         entry.ticket.release();
                         entry.resolve({ kind: 'not-issued', code: (error as {
-                                code?: 'FACT_CLOSED' | 'FACT_CANCELLED';
+                                code?: 'FACT_CLOSED' | 'FACT_CANCELLED' | 'FACT_RECOVERY_REQUIRED';
                             }).code ?? 'FACT_INVALID_GROUP' });
                     }
                 }
@@ -200,7 +201,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         for (const entry of entries) {
                             entry.ticket.release();
                             const code = (error as { code?: string }).code;
-                            entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' ? code : 'FACT_INVALID_GROUP' });
+                            entry.resolve({ kind: 'not-issued', code: code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED' || code === 'FACT_RECOVERY_REQUIRED' ? code : 'FACT_INVALID_GROUP' });
                         }
                     }
                 }
@@ -230,14 +231,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             return { kind: 'not-issued', code: 'FACT_CLOSED' };
         if (!authorization.required && (authorization.action.stopped || authorization.action.signal?.aborted))
             return { kind: 'not-issued', code: 'FACT_CANCELLED' };
-        if (quarantined || sourceFault && !authorization.required)
+        if (quarantined || (sourceFault || recoveryHolds.size > 0) && !authorization.required)
             return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
         const ticket = await capacity.acquire(authorization.required ? undefined : authorization.action.signal, authorization.required);
         if (typeof ticket === 'string')
             return { kind: 'not-issued', code: ticket };
-        if (closed || closing && !authorization.required || quarantined || sourceFault && !authorization.required) {
+        if (closed || closing && !authorization.required || quarantined || (sourceFault || recoveryHolds.size > 0) && !authorization.required) {
             ticket.release();
-            return { kind: 'not-issued', code: quarantined || sourceFault ? 'FACT_RECOVERY_REQUIRED' : 'FACT_CLOSED' };
+            return { kind: 'not-issued', code: quarantined || sourceFault || recoveryHolds.size ? 'FACT_RECOVERY_REQUIRED' : 'FACT_CLOSED' };
         }
         const capture = captured ? { kind: 'captured' as const, group: draft as CapturedFactGroup } : captureFactGroup(draft as FactGroupDraft);
         if (capture.kind !== 'captured') {
@@ -331,9 +332,17 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         },
                         reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group),
                         quarantineCapture: failSource,
-                    }, () => sourceDrains.delete(source), reconcilePending);
+                        holdRecovery() {
+                            if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
+                            recoveryHolds.add(source); capacity.holdOptional(source);
+                            for (let index = queue.length - 1; index >= 0; index--) {
+                                const entry = queue[index]!; if (entry.authorization.required) continue;
+                                queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
+                            }
+                        },
+                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source) }, reconcilePending);
                     required.source = source;
-                    bindFactSettlementSource(state.view, document, source);
+                    bindFactSettlementSource(state.view, document, source, id);
                     sourceDrains.add(source);
                     return source;
                 },
@@ -381,7 +390,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             document.revokeNewWork();
             const drains = await Promise.allSettled([...sourceDrains].map(source => source.close()));
             await pump;
-            if (pending || quarantined || sourceFault || drains.some(result => result.status === 'rejected'))
+            if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
                 throw new FactRecoveryRequiredError();
             closed = true;
         },

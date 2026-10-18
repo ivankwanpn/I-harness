@@ -39,6 +39,8 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         stop ??= "timeout"; signal.abort("timeout")
       }, command.timeoutMs)
       const { handle } = execution
+      const frames = options.resultRetention?.begin({ sourceId: `process:${execution.id}`, owner: execution.policy.owner })
+      let frameOrdinal = 0, frameCaptureFailed = false
       const stream = optionsForRun?.stream
       const metadata: StreamMetadata | undefined = stream ? { bytesRead: { stdout: 0, stderr: 0 }, bytesAdmitted: { stdout: 0, stderr: 0 } } : undefined
       const retention = createCaptureRetention(options, stream)
@@ -97,6 +99,13 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
           if (frame.channel !== "stdout" && frame.channel !== "stderr") throw new Error("Pipe backend returned a PTY output frame")
           const channel: Channel = frame.channel
           const bytes = Buffer.from(frame.data)
+          const ordinal = frameOrdinal++
+          if (frames && !frameCaptureFailed) {
+            for (let offset = 0; offset < bytes.length; offset += 32768) {
+              try { await frames.write({ channel, frame: ordinal, offset, end: offset + 32768 >= bytes.length, bytes: bytes.subarray(offset, Math.min(bytes.length, offset + 32768)) }) }
+              catch { frameCaptureFailed = true; break }
+            }
+          }
           if (metadata) {
             metadata.bytesRead[channel] += bytes.length
             if (stop !== undefined) { discardedAfterStop += bytes.length; continue }
@@ -151,7 +160,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
         // without making failed capture depend on native EOF again.
         void requestIteratorReturn()
       }
-      const complete = completeCapture({ execution, handle, metadata, consume, writeInput, output,
+      const completing = completeCapture({ execution, handle, metadata, consume, writeInput, output,
         stop: () => stop, isStopped: () => captureStopped, stopFailedCapture, waitForCapture,
         cancellation: () => cancellation, observerFailures: () => observerFailed ? [observerFailure] : [],
         iteratorFailures, discardedAfterStop: () => discardedAfterStop, finalizeOutput,
@@ -160,8 +169,13 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
           command.abortSignal?.removeEventListener("abort", externalAbort)
         },
       })
+      const complete = completing.then(result => {
+        const diagnostics = result.outputDiagnostics
+        frames?.complete(frameCaptureFailed || diagnostics?.outputAbandoned || (diagnostics?.discardedOutputBytes ?? 0) > 0 ? 'producer-incomplete' : stop !== undefined || captureStopped ? 'capture-canceled' : 'complete')
+        return result
+      }, cause => { frames?.complete('producer-incomplete'); throw cause })
       void complete.catch(() => {})
-      return { execution, complete, output, ...(request.executionTarget === "wsl" ? { lifetime: "complete-tree" as const } : {}),
+      return { execution, complete, output, ...(frames ? { frames } : {}), ...(request.executionTarget === "wsl" ? { lifetime: "complete-tree" as const } : {}),
         diagnostics: () => handle.io.diagnostics?.() }
     }, cause => {
       if (timer !== undefined) clearTimeout(timer)

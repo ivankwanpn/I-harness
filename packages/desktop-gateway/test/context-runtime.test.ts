@@ -34,6 +34,19 @@ it('binds output references to actual session lineage and current project scope'
   expect((await runtime.contextOutput.read({sessionId:'child'},{refId:ref!.id})).text).toBe('captured')
   move();await expect(runtime.contextOutput.read({sessionId:'s'},{refId:ref!.id})).rejects.toThrow()
 })
+it('authorizes managed results with actual source metadata and denies current project revocation',async()=>{
+  const{runtime,move,visibleRefs}=await setup()
+  const scope=runtime.contextOutput.registerResultScope({operationId:'managed-original',sessionId:'s',callId:'call',source:await runtime.sourceFor('s')},()=>true)
+  const sink=await runtime.contextOutput.beginResult(scope,'text-utf8-v1')
+  await sink.write(Buffer.from('managed complete output'))
+  const result=await sink.finish('complete')
+  if(result.kind!=='committed')throw new Error('Expected managed source fixture')
+  expect((await runtime.contextOutput.readResult({sessionId:'s'},{ref:result.ref})).data).toEqual({kind:'text',text:'managed complete output'})
+  visibleRefs.child=[result.ref]
+  await expect(runtime.contextOutput.readResult({sessionId:'child'},{ref:result.ref})).rejects.toThrow(/unauthorized/)
+  move()
+  await expect(runtime.contextOutput.readResult({sessionId:'s'},{ref:result.ref})).rejects.toThrow(/unauthorized/)
+})
 it('indexes human-selected source roots and rejects hits after current membership changes',async()=>{
   const{runtime,move}=await setup();await runtime.codeRetrieval.configure({enabled:true})
   const{jobId}=await runtime.codeRetrieval.startIndex({sessionId:runtime.humanSessionId});await runtime.codeRetrieval.wait(jobId)

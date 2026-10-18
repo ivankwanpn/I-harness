@@ -1,3 +1,4 @@
+import { captureChildResult } from "../child/result.ts"
 import { isNondurableSession, type SessionEventView } from "@i-harness/core-session"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { AgentTable, ChildAgentEntry } from "../agent-table.ts"
@@ -12,6 +13,7 @@ import type { FollowupGeneration } from './generation.ts'
 // Exported for the agent-team scheduler (M19 Ruling 28): the team wakeup
 // policy is the SAME serialized drain, shared instead of vendored.
 export interface FollowupDeps {
+  results?: import("../task/result.ts").TaskResultStore
   agents: AgentRegistry
   table: AgentTable
   jobs: JobRegistry
@@ -32,21 +34,25 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
     )
     for (const ev of pending) {
       if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
+      await entry.resultCapture?.settle()
       // Errors belong to the previous turn; a new attempt has no failure yet.
       // W11: a re-drive starts a NEW run, so the start stamp moves with the
       // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp
       // here would report a child woken a moment ago as one that has been
       // running since it was spawned — the exact wrong answer W11's signal
       // exists to prevent.
-      deps.table.update(entry.path, entry, { error: undefined, finalText: undefined, status: "running", startedAt: Date.now(), controller: new AbortController(),
+      deps.table.update(entry.path, entry, { error: undefined, finalText: undefined, result: undefined, publication: undefined, savedObservation: undefined, status: "running", startedAt: Date.now(), controller: new AbortController(),
         ...(entry.retention !== undefined || entry.retentionError !== undefined ? { retention: undefined, retentionError: undefined } : {}),
       })
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
+      let resultStore = deps.results
+      let returned = false, dispatched = false
       let generation: FollowupGeneration | undefined
       const controller = entry.controller, cancel = () => controller.abort(signal?.reason)
       signal?.addEventListener('abort', cancel, { once: true })
       try {
         if (signal?.aborted) cancel()
+        if (resultStore?.forSource) resultStore = await resultStore.forSource()
         if (!isNondurableSession(entry.session) && !deps.openGeneration) throw Object.assign(new Error('Managed child wake requires its generation owner'), { code: 'GENERATION_UNSUPPORTED' })
         if (deps.openGeneration) generation = await deps.openGeneration(entry, ev, entry.controller)
         let agent = deps.agents.get(sessionId)
@@ -59,16 +65,30 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         if (entry.status !== 'running') deps.table.update(entry.path, entry, { status: 'running' })
         signal?.removeEventListener('abort', cancel)
         entry.lastInboxSeq = ev.seq ?? 0
+        dispatched = true
         const result = await agent.followup(ev.message, entry.controller.signal, generation?.options ?? { provenance: ev.provenance ?? { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox", ...(entry.session.header?.parentSession ? { originSessionId: entry.session.header.parentSession } : {}) } })
         // Clear a stale error (e.g. "aborted" from an earlier interrupted
         // turn) once a followup succeeds — otherwise a misleading error would
         // persist into the M6 snapshot.
-        deps.table.update(entry.path, entry, { error: undefined, status: "waiting", finalText: result.finalText })
-        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: result.finalText })
+        returned = true
+        const capture = resultStore ? captureChildResult(resultStore, entry, { resultText: result.finalText }, "completed") : undefined
+        const publish = (projection?: import("../task/result.ts").TaskResultProjection) => {
+          deps.table.update(entry.path, entry, { error: undefined, status: "waiting", finalText: projection ? projection.resultText : result.finalText, ...(projection ? { result: projection.result } : {}) })
+          if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "completed", output: projection ? projection.resultText ?? "" : result.finalText, ...(projection ? { result: projection.result } : {}) })
+        }
+        publish(capture?.projection())
+        if (capture) publish(await capture.settle())
       } catch (err) {
+        if (returned) throw err
         const aborted = entry.controller.signal.aborted
-        deps.table.update(entry.path, entry, { status: "waiting", error: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
-        if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
+        const error = aborted ? "aborted" : (err instanceof Error ? err.message : String(err))
+        const capture = resultStore ? captureChildResult(resultStore, entry, { error }, aborted ? "cancelled" : "error", dispatched ? "dispatched" : "not-dispatched") : undefined
+        const publish = (projection?: import("../task/result.ts").TaskResultProjection) => {
+          deps.table.update(entry.path, entry, { status: "waiting", error: projection ? projection.error : error, ...(projection ? { result: projection.result } : {}) })
+          if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: projection ? projection.error ?? "" : error, ...(projection ? { result: projection.result } : {}) })
+        }
+        publish(capture?.projection())
+        if (capture) publish(await capture.settle())
       } finally { signal?.removeEventListener('abort', cancel); await generation?.close() }
     }
   })

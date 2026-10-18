@@ -15,6 +15,7 @@ import { validInputPreparationEvent } from '../events/input-preparation.ts'
 import { captureMemorySoftStart } from './memory-soft-reduction.ts'
 import { validContextEvent } from '../events/context.ts'
 import { installMemoryGroup } from './memory-group.ts'
+const memoryRecoveryHolds = new WeakMap<Session, Set<object>>()
 
 /** Explicit standalone memory adapter. It has no receipt and makes no durable
  * recovery promise. A managed/frozen Session can never silently enter it. */
@@ -23,15 +24,21 @@ export function isNondurableSession(session: SessionView): session is Session {
 }
 export function createNondurableFactOwner(session: Session): FactOwner<NondurableFactOutcome> {
   if (!isNondurableSession(session)) throw new TypeError('Managed Session requires its owned fact capability')
+  let holds = memoryRecoveryHolds.get(session)
+  if (!holds) memoryRecoveryHolds.set(session, holds = new Set())
+  const recoveryHolds = holds
+  const assertNewWork = () => { if (recoveryHolds.size) throw Object.assign(new Error('Managed facts require reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' }) }
   return {
     view: session,
     registerReceivedInputSource(drain) {
+      assertNewWork()
       let active = true, accepting = true
       const assertHeld = () => { if (!active) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' }) }
       return {
         async close() { accepting = false; await drain(); active = false },
         captureAdmitted(event) {
           assertHeld()
+          assertNewWork()
           if (!accepting) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
           return captureMemoryFact(session, { kind: 'input-admission', admitted: event }, assertHeld)
         },
@@ -39,11 +46,13 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
       }
     },
     beginAction(signal) {
+      assertNewWork()
       const cancel = new AbortController()
       signal = signal ? AbortSignal.any([signal, cancel.signal]) : cancel.signal
       let stopped = false
-      const assertOpen = () => { if (stopped || signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }) }
+      const assertOpen = () => { assertNewWork(); if (stopped || signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }) }
       const admit = async (draft: FactGroupDraft): Promise<NondurableFactOutcome> => {
+        if (recoveryHolds.size) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' }
         if (stopped || signal?.aborted) return { kind: 'not-issued', code: 'FACT_CANCELLED' }
         const capture = captureFactGroup(draft)
         if (capture.kind !== 'captured') return capture
@@ -113,7 +122,7 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         },
         registerSettlementSource(drain, reconcilePending) {
           assertOpen()
-          return createMemorySettlementSource(session, drain, reconcilePending)
+          return createMemorySettlementSource(session, drain, reconcilePending, { hold(source) { recoveryHolds.add(source) }, release(source) { recoveryHolds.delete(source) } })
         },
       }
     },

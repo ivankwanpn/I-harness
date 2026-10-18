@@ -56,6 +56,9 @@ export interface SettlementFacts<Outcome = FactOutcome> {
   /** The registered real source retains an outcome it cannot finalize/capture.
    * This blocks new work without claiming an unknown journal issuance. */
   requireRecovery(): void
+  /** Retained original work blocks optional admission until this same source
+   * drains successfully. It never clears an uncapturable sticky fault. */
+  holdRecovery(): void
   retention: { capture(event: Event<'context/result-ref'>): CapturedSettlementFact<Outcome> }
   rewind: { capture(event: Event<'rewind/point'>): CapturedSettlementFact<Outcome> }
   tools: Pick<ToolFacts<Outcome>, 'result'> & { captureResult(event: Event<'tool/result'>): CapturedSettlementFact<Outcome> }

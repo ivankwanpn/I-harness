@@ -6,10 +6,11 @@ interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
   registerJob(capture: Capture): string
   isDisposed(): boolean
+  observe?(capture: Capture): void
 }
 
 /** Promotion changes observation of one capture; it never launches again. */
-export function createJobObservation({ makeCapture, registerJob, isDisposed }: JobObservation) {
+export function createJobObservation({ makeCapture, registerJob, isDisposed, observe }: JobObservation) {
   async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
     validateInput(command)
     if (runOptions && "stream" in runOptions && (runOptions.backgroundAfterMs !== undefined || runOptions.promotionWake !== undefined)) throw new Error("stream cannot be combined with promotion")
@@ -26,7 +27,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed }: J
     const threshold = runOptions && "backgroundAfterMs" in runOptions ? runOptions.backgroundAfterMs : undefined
     const wake = runOptions?.promotionWake
     const capture = await makeCapture(command, streaming, false, threshold !== undefined)
-    if (threshold === undefined && wake === undefined) return capture.complete
+    if (threshold === undefined && wake === undefined) return capture.complete.then(result => { observe?.(capture); return result }, cause => { observe?.(capture); throw cause })
     const started = Date.now()
     return new Promise<ExecResult | PromotedRun>((resolve, reject) => {
       let finished = false
@@ -43,7 +44,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed }: J
         try { unsubscribe?.() } catch (error) { errors.push(error) }
         unsubscribe = undefined
         if (errors.length) { reject(errors.length === 1 ? errors[0] : new AggregateError(errors, "Execution observation failed")); return }
-        if ("result" in outcome) resolve(outcome.result)
+        if ("result" in outcome) { observe?.(capture); resolve(outcome.result) }
         else if ("reason" in outcome) resolve({ jobId: registerJob(capture), promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
       }
       // Register capture settlement first. Deferring promotion one microtask

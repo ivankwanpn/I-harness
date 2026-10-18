@@ -15,6 +15,7 @@ export function recordPreparationFailure(index: number, call: BatchCall, error: 
   if (isPolicyRefusal(error) || !(error instanceof ToolArgsError || error instanceof ToolNotFoundError)) throw error
   cancellation.recordFailure(index, error)
   records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
+    execution: { outcome: 'failed', dispatch: 'not-dispatched' },
     output: { error: error.message, code: TOOL_FAILED } })
 }
 
@@ -27,6 +28,7 @@ export async function markDispatch(session: Session, index: number, call: BatchC
 export function recordCheckpointFailure(index: number, call: BatchCall, error: unknown, records: BatchRecords, cancellation: BatchCancellation): void {
   cancellation.recordFailure(index, error)
   records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
+    execution: { outcome: 'canceled', dispatch: 'not-dispatched' },
     output: { error: `tool call aborted before dispatch: ${error instanceof Error ? error.message : String(error)}`, code: TOOL_ABORTED_BEFORE_DISPATCH } })
   cancellation.stopForCheckpoint(error)
 }

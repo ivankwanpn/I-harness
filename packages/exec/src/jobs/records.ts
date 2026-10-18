@@ -16,7 +16,8 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
   const makeCapture = createCaptureFactory(options, supervisor, launchTransport)
-  const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed })
+  const observe = (capture: Capture) => { if (capture.frames) options.resultRetention?.observe(capture.frames) }
+  const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed, observe })
 
   function cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement> {
     const execution = supervisor.list().find(entry => entry.id === id)
@@ -87,6 +88,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     getOutput(jobId) {
       const job = jobs.get(jobId)
       if (!job || !canAccess(job.owner)) throw new Error(`unknown job: ${jobId}`)
+      if (job.status !== 'running') observe(job.capture)
       return view(job)
     },
     subscribeJob(jobId, listener) {
@@ -96,7 +98,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       return () => { job.listeners.delete(listener) }
     },
     listJobs() {
-      return [...jobs.values()].filter(job => canAccess(job.owner)).map(view)
+      return [...jobs.values()].filter(job => canAccess(job.owner)).map(job => { if (job.status !== 'running') observe(job.capture); return view(job) })
     },
     async killJob(jobId) {
       const job = jobs.get(jobId)
