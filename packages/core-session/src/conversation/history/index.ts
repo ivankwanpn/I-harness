@@ -21,10 +21,11 @@ export function createHistoryIndex(formatVersion: number) {
       const nextFacts = new Map<number, HistoryFact>(), nextCounts = new Map<number, number>()
       const nextDependencies = new Map<number, ReadonlySet<number>>(), nextAddresses = new Set<number>()
       const nextConsumed = new Set<string>(), nextAdmissions = new Map<string, number | undefined>()
+      const baseCount = count
       let stagedLength = 0
       return { advance(event: SessionEventView) {
         validateConversationEventShape(event, formatVersion)
-        const position = count + stagedLength++, fact = historyFact(event, position)
+        const position = baseCount + stagedLength++, fact = historyFact(event, position)
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)
         if (event.type === 'user/message') for (const id of [event.input?.inputId, event.imageInputId]) {
           if (id === undefined) continue
@@ -52,6 +53,8 @@ export function createHistoryIndex(formatVersion: number) {
           nextCounts.set(event.seq, existing + 1)
         }
         nextFacts.set(position, fact)
+      }, history() {
+        return projectHistory({ length: baseCount + stagedLength, get: position => nextFacts.get(position) ?? facts.get(position)! })
       }, commit() {
         for (const [key, value] of nextFacts) facts.set(key, value)
         for (const [key, value] of nextCounts) counts.set(key, value)

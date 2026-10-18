@@ -79,3 +79,20 @@ describe("active projection provenance", () => {
     }
   })
 })
+
+// Hand-priced: user 5 + empty assistant/read({}) 10 + substitute 11 + image companion 1045 = 1071.
+it('prices non-ASCII and escaped prune text plus a tool-image companion at the literal eventual price', () => {
+  const source = createSession(), output = { text: '雪"\\\n'.repeat(100), images: [{ mediaType: 'image/png' as const, dataBase64: 'aW1hZ2U=' }] }
+  append(source, { type: 'user/message', text: 'H' })
+  append(source, { type: 'tool/call', callId: 'c', name: 'read', args: {} })
+  append(source, { type: 'tool/result', callId: 'c', name: 'read', output })
+  const records = [{ callId: 'c', head: '雪"', tail: '\\end', removedBytes: 93 }]
+  const before = JSON.stringify(source)
+  expect(surfaceTokensAfterPrune(source, records)).toBe(1071)
+  expect(surfaceTokensAfterPrune(source, [])).toBe(activeTokens(source))
+  expect(JSON.stringify(source)).toBe(before)
+  append(source, { type: 'compaction/prune', version: 1, pruned: records })
+  expect(activeTokens(source)).toBe(1071)
+  expect(deriveMessages(source).find(message => message.role === 'tool')?.content).toBe('雪"\n…(pruned 93 bytes)…\n\\end')
+  expect(source.events.find(event => event.type === 'tool/result')).toMatchObject({ output })
+})

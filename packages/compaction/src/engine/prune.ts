@@ -1,4 +1,5 @@
-import { deriveMessages, derivePruneSubstitutes, renderPruneSubstitute, type SessionView as Session, type PruneRecord } from "@i-harness/core-session"
+import { deriveMessages, derivePruneSubstitutes, renderPruneSubstitute, projectConversationCandidate, renderConversation, type SessionView as Session, type PruneRecord } from "@i-harness/core-session"
+import { estimateContent } from "@i-harness/token-meter"
 import type { ResolvedPruneConfig } from "../config.ts"
 import { activeTokens } from "../tokens.ts"
 
@@ -41,7 +42,11 @@ export function planPrune(session: Session, prune: ResolvedPruneConfig): PruneRe
 
 /** Price the same candidate fold that the marker would produce. */
 export function surfaceTokensAfterPrune(session: Session, records: PruneRecord[]): number {
-  return activeTokens({ ...session, events: [...session.events, { type: "compaction/prune", version: 1, pruned: records, seq: session.events.length }] })
+  if (!records.length) return activeTokens(session)
+  const candidate = projectConversationCandidate(session, [
+    { type: "compaction/prune", version: 1, pruned: records },
+  ], { candidateId: "prune-price" })
+  return estimateContent(renderConversation(candidate.projection))
 }
 
 function safeStringifyOutput(output: unknown): string | null {

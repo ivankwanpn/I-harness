@@ -1,3 +1,4 @@
+import { eventArchive, type ConversationEventArchive } from '../conversation/archive.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 
 // M33: one pruned tool/result — the stringified output is narrowed on the
@@ -21,8 +22,14 @@ export function renderPruneSubstitute(record: PruneRecord): string {
 // drives deriveMessages' tool/result projection AND the compaction engine's
 // summary-input render; the durable log is never rewritten.
 export function derivePruneSubstitutes(session: Session): Map<string, PruneRecord> {
+  return archivePruneSubstitutes(eventArchive(session.events))
+}
+
+/** Shared archive reader for committed and prospective payload projection. */
+export function archivePruneSubstitutes(archive: ConversationEventArchive): Map<string, PruneRecord> {
   const map = new Map<string, PruneRecord>()
-  for (const ev of session.events) {
+  for (let index = 0; index < archive.length; index++) {
+    const ev = archive.get(index)
     if (ev.type !== "compaction/prune") continue
     // defensive `?? []`: persisted logs bypass append validation (fromJSONL
     // does not validate), so a malformed marker must not throw here

@@ -1,36 +1,37 @@
+import type { ConversationEventArchive } from './archive.ts'
 import type { SessionView, SessionEventView } from '../managed/types.ts'
 import type { ConversationProjection, ConversationDiagnostic } from './types.ts'
 import type { LLMMessage } from '../projection/types.ts'
 import type { HistoryItem, HistoryRecipe } from './history/types.ts'
-import { conversationSources } from './sources.ts'
+import { archiveConversationSources } from './sources.ts'
 import { finishItem } from './exchange.ts'
 import { copyConversationData } from './render.ts'
 import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
-import { derivePruneSubstitutes } from '../projection/pruning.ts'
+import { archivePruneSubstitutes } from '../projection/pruning.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
-export function renderConversationItems(session: SessionView, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[] }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture } = {}): ConversationProjection {
+export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[] }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number } } = {}): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
-  const sources = conversationSources(session, options.ownerSessionId, diagnostics)
+  const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, options)
   const source = (ref: { eventIndex: number; part: string }) => sources.ref(ref.eventIndex, ref.part)
-  const pruned = derivePruneSubstitutes(session)
+  const pruned = archivePruneSubstitutes(archive)
   const results = new Map<number, ReturnType<typeof projectToolResult>>()
   const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readConversationPayload(event, key, sources.ref(index, part), options.capturePayload))
   const result = (index: number) => {
     const previous = results.get(index)
     if (previous) return previous
-    const event = session.events[index] as Extract<SessionEventView, { type: 'tool/result' }>
+    const event = archive.get(index) as Extract<SessionEventView, { type: 'tool/result' }>
     const rendered = projectToolResult(event, pruned.get(event.callId), sources.ref(index, 'result'), sources.ref(index, 'image'), options.capturePayload)
     results.set(index, rendered)
     return rendered
   }
   const render = (recipe: HistoryRecipe, item: HistoryItem): LLMMessage => {
     const index = recipe.index!
-    const event = session.events[index]
+    const event = index === undefined ? undefined : archive.get(index)
     if (recipe.kind === 'input') {
       if (event?.type !== 'user/message') throw new Error('Invalid input recipe')
-      const admission = session.events[item.imageAdmissionIndex ?? -1]
+      const admission = item.imageAdmissionIndex === undefined ? undefined : archive.get(item.imageAdmissionIndex)
       const images = event.imageInputId === undefined ? payload(event, 'images', index, 'image') : admission?.type === 'agent/input/admitted' ? payload(admission, 'images', item.imageAdmissionIndex!, 'admission') : undefined
       return images?.length ? { role: 'user', content: [{ type: 'text', text: event.text }, ...images.map(image => ({ type: 'image' as const, image }))] } : { role: 'user', content: event.text }
     }
@@ -49,7 +50,7 @@ export function renderConversationItems(session: SessionView, history: { items: 
     const thinkingBlocks = event?.type === 'assistant/message' ? payload(event, 'thinkingBlocks', index, 'message') : undefined
     const providerContinuation = event?.type === 'assistant/message' ? payload(event, 'providerContinuation', index, 'message') : undefined
     const toolCalls = recipe.calls?.map(callIndex => {
-      const call = session.events[callIndex]
+      const call = archive.get(callIndex)
       if (call?.type !== 'tool/call') throw new Error('Invalid call recipe')
       return { id: call.callId, name: call.name, args: payload(call, 'args', callIndex, 'call') }
     })
@@ -57,7 +58,7 @@ export function renderConversationItems(session: SessionView, history: { items: 
   }
   const items = history.items.map(item => {
     const establishment = source(item.establishment)
-    const own = session.events[item.establishmentIndex]
+    const own = archive.get(item.establishmentIndex)
     const rendered = finishItem({ ...item, id: `${establishment.id}:${item.kind}`, establishment, sources: item.sources.map(source), provenance: sources.provenance(item.establishmentIndex, item.establishment.part, item.admissionIndex),
       ...(item.stepSource ? { stepSource: source(item.stepSource) } : {}),
       ...(item.unitInfo ? { unitInfo: Object.freeze({ source: source(item.unitInfo.source), state: item.unitInfo.state }) } : {}),
@@ -70,9 +71,9 @@ export function renderConversationItems(session: SessionView, history: { items: 
   // Structural diagnostics use owner-neutral IDs; source them from this view.
   for (const diagnostic of history.diagnostics) if (!['missing-source-seq', 'invalid-source-seq', 'duplicate-source-seq'].includes(diagnostic.code)) diagnostics.push({ ...diagnostic, sourceIds: diagnostic.sourceIds.map(id => {
     const [_, coordinate, part] = JSON.parse(id) as [unknown, number | string, string]
-    const index = typeof coordinate === 'number' ? session.events.findIndex(event => event.seq === coordinate) : Number(coordinate.slice(6))
+    const index = typeof coordinate === 'number' ? sources.indexOfSeq(coordinate) : Number(coordinate.slice(6))
     return sources.ref(index, part).id
   }) })
-  return Object.freeze({ version: 1, ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: session.events.length,
+  return Object.freeze({ version: 1, ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: options.candidate?.baseCount ?? archive.length,
     ...(options.throughSeq === undefined ? {} : { throughSeq: options.throughSeq }), items: Object.freeze(items), diagnostics: Object.freeze(diagnostics.map(diagnostic => Object.freeze({ ...diagnostic, sourceIds: Object.freeze(diagnostic.sourceIds) }))) })
 }

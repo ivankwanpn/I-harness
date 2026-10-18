@@ -75,3 +75,5 @@ export { createFactPorts } from './managed/ports-factory.ts'
 export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource } from './managed/source-scope.ts'
 export { createNondurableFactOwner, isNondurableSession, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
 export { committedFactSeqs } from './managed/outcome.ts'
+
+export { projectConversationCandidate } from "./conversation/candidate.ts"

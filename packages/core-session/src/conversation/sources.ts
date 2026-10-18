@@ -1,33 +1,44 @@
+import { eventArchive, type ConversationEventArchive } from './archive.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
 
 /** Source coordinates belong to the original archive, even for a prefix view. */
-export function conversationSources(session: Session, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[]) {
+export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number } } = {}) {
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
-  for (const event of session.events) if (valid(event.seq)) counts.set(event.seq, (counts.get(event.seq) ?? 0) + 1)
+  const positions = new Map<number, number>()
+  let fenceIndex = -1
+  for (let index = 0; index < archive.length; index++) {
+    const event = archive.get(index)
+    if (valid(event.seq) && !(options.candidate && index >= options.candidate.baseCount)) {
+      counts.set(event.seq, (counts.get(event.seq) ?? 0) + 1)
+      if (!positions.has(event.seq)) positions.set(event.seq, index)
+    }
+    if (fenceIndex < 0 && event.type === "conversation/semantics") fenceIndex = index
+  }
   const cache = new Map<string, ConversationSourceRef>()
-  const fenceIndex = session.events.findIndex(event => event.type === "conversation/semantics")
   const ref = (eventIndex: number, part: string): ConversationSourceRef => {
     const key = `${eventIndex}:${part}`
     let source = cache.get(key)
     if (source) return source
-    const seq = session.events[eventIndex]!.seq
-    const addressable = valid(seq) && counts.get(seq) === 1
-    source = Object.freeze({ id: JSON.stringify([ownerSessionId ?? null, addressable ? seq : `event:${eventIndex}`, part]), eventIndex, ...(addressable ? { seq } : {}), part, addressable })
+    const seq = archive.get(eventIndex).seq
+    const prospective = options.candidate !== undefined && eventIndex >= options.candidate.baseCount
+    const addressable = !prospective && valid(seq) && counts.get(seq) === 1
+    const coordinate = prospective ? `candidate:${options.candidate!.id}:${eventIndex - options.candidate!.baseCount}` : addressable ? seq : `event:${eventIndex}`
+    source = Object.freeze({ id: JSON.stringify([ownerSessionId ?? null, coordinate, part]), eventIndex, ...(addressable ? { seq } : {}), part, addressable })
     cache.set(key, source)
     return source
   }
-  for (let index = 0; index < session.events.length; index++) {
-    const seq = session.events[index]!.seq
+  for (let index = 0; index < archive.length; index++) {
+    const seq = archive.get(index).seq
     const code = seq === undefined ? "missing-source-seq" : !valid(seq) ? "invalid-source-seq" : counts.get(seq)! > 1 ? "duplicate-source-seq" : undefined
-    if (code) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
+    if (code && !(options.candidate && index >= options.candidate.baseCount)) diagnostics.push({ code, sourceIds: [ref(index, "event").id] })
   }
   const provenance = (eventIndex: number, part: string, admissionIndex?: number): ConversationProvenance => {
-    const event = session.events[eventIndex]!
+    const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
     const evidence = [source]
-    const admission = admissionIndex === undefined ? undefined : session.events[admissionIndex]
+    const admission = admissionIndex === undefined ? undefined : archive.get(admissionIndex)
     if (admissionIndex !== undefined) evidence.push(ref(admissionIndex, "admission"))
     let kind: ConversationProvenance["kind"] = "unknown"
     let authority: ConversationProvenance["authority"] = "unknown"
@@ -54,12 +65,17 @@ export function conversationSources(session: Session, ownerSessionId: string | u
       if (event.input && !matching) diagnostics.push({ code: "missing-admission", sourceIds: [source.id] })
     }
     const inherited = isInherited(eventIndex) || admissionIndex !== undefined && isInherited(admissionIndex) && admission?.type === "agent/input/admitted" && admission.provenance !== undefined
-    return Object.freeze({ kind: inherited ? "inherited" : kind, authority: inherited ? "observation" : authority, scope, evidence: Object.freeze(evidence), ...(producer === undefined ? {} : { producer }), ...(inherited ? { originSessionId: session.header!.parentSession } : originSessionId === undefined ? {} : { originSessionId }) })
+    return Object.freeze({ kind: inherited ? "inherited" : kind, authority: inherited ? "observation" : authority, scope, evidence: Object.freeze(evidence), ...(producer === undefined ? {} : { producer }), ...(inherited ? { originSessionId: options.header!.parentSession } : originSessionId === undefined ? {} : { originSessionId }) })
   }
   function isInherited(index: number): boolean {
-    return session.header?.parentSession !== undefined && index < (session.header.seedLength ?? 0)
+    return options.header?.parentSession !== undefined && index < (options.header.seedLength ?? 0)
   }
-  return { ref, provenance }
+  return { ref, provenance, indexOfSeq: (seq: number) => positions.get(seq) ?? -1 }
 }
 
-export type ConversationSources = ReturnType<typeof conversationSources>
+/** Existing Session consumer entry, backed by the same archive source owner. */
+export function conversationSources(session: Session, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[]) {
+  return archiveConversationSources(eventArchive(session.events), ownerSessionId, diagnostics, { header: session.header })
+}
+
+export type ConversationSources = Pick<ReturnType<typeof conversationSources>, 'ref' | 'provenance'>

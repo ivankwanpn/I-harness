@@ -13,7 +13,7 @@ export interface ConversationValidationIndex {
   readonly formatVersion: number
   readonly eventCount: number
   readonly semanticsStartSeq: number | undefined
-  stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void }
+  stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void; history(): ReturnType<typeof projectHistory> }
   history(throughSeq?: number): ReturnType<typeof projectHistory>
   replacementDependencies(): ReadonlyMap<number, ReadonlySet<number>>
 }
@@ -165,9 +165,16 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         if (event.type === "step/end" || event.type === "turn/start" || event.type === "turn/end") nextStep = undefined
       }
       let committed = false
-      return { commit() {
-        if (committed) return
+      const assertCurrent = () => {
+        if (committed) fail("consumed staged suffix")
         if (epoch !== revision) fail("stale staged suffix")
+      }
+      return { history() {
+        assertCurrent()
+        return stagedHistory.history()
+      }, commit() {
+        if (committed) return
+        assertCurrent()
         for (const [key, value] of newCompletions) completions.set(key, value)
         for (const [key, value] of newAcceptances) acceptances.set(key, value)
         for (const [key, value] of newAnchors) anchors.set(key, value)
