@@ -1,3 +1,4 @@
+import {prepareTextFixture,checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
@@ -28,7 +29,7 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     else yield{type:'text/chunk',text:'Finished native capture.'}
     yield{type:'end'}
   }}
-  const summarizer:ModelClient={async *stream(){yield{type:'text/chunk',text:'The tools completed; resume using native references.'};yield{type:'end'}}}
+  const summarizer:ModelClient={prepare:prepareTextFixture,async *stream(){yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}}
   const options={workspace:root,sandbox:'danger-full-access' as const,approveAll:true,model,contextWindow:100000,codeMode:{mode:'mixed' as const},compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1},additionalTools:[{name:'fixture_long',description:'fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=> 'a'.repeat(20000)+'DIRECT_MIDDLE'+'b'.repeat(20000)}]}
   let service=createSessionService({...options,coordinator,sessionFor:createDurableSessionLoader(coordinator),contextOutput:context})
   try {

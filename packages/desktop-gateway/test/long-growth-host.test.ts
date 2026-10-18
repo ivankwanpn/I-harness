@@ -1,3 +1,4 @@
+import {checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
 import { expect, it } from "vitest"
 import { createServer } from "node:http"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
@@ -7,6 +8,7 @@ import { isRpcSuccess, type RpcMessage } from "@i-harness/sdk"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createSession, deriveMessages } from "@i-harness/core-session"
 import { describeContext } from "../../llm-openai-compatible/src/context.ts"
+import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import { createDesktopHost } from "../src/host.ts"
 
 it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)("shipping host compacts cumulative moderate growth with window %s across %s", async (contextWindow, mode) => {
@@ -24,7 +26,7 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
       const input = describeContext(body, { model: "fixture", apiKey: "controlled" }).input
       const measured = Object.values(input.components).reduce((n, c) => n + c.heuristicTokens, 0)
       requests.push({ kind: summary ? "summary" : title ? "title" : "main", input: measured, reasoning: input.components.replayedReasoning.heuristicTokens, cap: body.max_tokens, body })
-      const delta = summary ? { content: "Checkpoint: preserve the requested task, authorized workspace and all completed read outcomes in source history. ".repeat(8) }
+      const delta = summary ? { content: checkpointOfLength(600, "Checkpoint: preserve the requested task and completed reads.") }
         : title ? { content: "Controlled growth" }
           : (mode === "autonomous" || mainCalls++ % 2 === 0) && reads < 12 ? { reasoning_content: "推理保留".repeat(250), tool_calls: [{ index: 0, id: `read-${reads}`, type: "function", function: { name: "read", arguments: JSON.stringify({ path: `page-${reads++}.txt` }) } }] }
             : { content: "All twelve controlled reads completed." }
@@ -70,10 +72,21 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
     const prior = requests.slice(0, firstSummary).filter(r => r.kind === "main").at(-1)!
     const next = requests.slice(firstSummary + 1).find(r => r.kind === "main")!
     expect(prior.reasoning).toBeGreaterThan(0)
-    expect(next.input).toBeLessThan(prior.input)
+    // The preceding send does not yet include its completed output. Reprice
+    // the entire raw prefix immediately before R under the next main surface.
+    const rewriteIndex=events.findIndex(event=>event.type==='compaction/replacement')
+    expect(rewriteIndex).toBeGreaterThan(0)
+    const beforeMessages=deriveMessages({...createSession(),events:events.slice(0,rewriteIndex)})
+    const before=await createOpenAICompatibleClient({apiKey:'controlled',model:'fixture',baseUrl:'https://fixture.invalid'}).prepare!({
+      systemPrompt:next.body.messages.find((message:any)=>message.role==='system')?.content??'',
+      tools:next.body.tools.map((tool:any)=>({name:tool.function.name,description:tool.function.description,inputSchema:tool.function.parameters})),
+      messages:beforeMessages,maxOutputTokens:next.cap,
+    })
+    const beforeInput=Object.values(before.measurement.input.components).reduce((sum,component)=>sum+component.heuristicTokens,0)
+    expect(next.input).toBeLessThan(beforeInput)
     expect(requests.filter(r => r.kind === "main")).toHaveLength(mode === "autonomous" ? 13 : 24)
     expect(summaries.length).toBeGreaterThan(1)
-    expect(events.some(e => e.type === "compaction/summary")).toBe(true)
+    expect(events.some(e => e.type === "compaction/replacement")).toBe(true)
     const active = deriveMessages({ ...createSession(), events })
     expect(active.filter(m => typeof m.content === "string" && m.content.includes("Checkpoint: preserve"))).toHaveLength(1)
     const budget = events.filter(e => e.type === "context/budget").map(e => e.snapshot)

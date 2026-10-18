@@ -1,3 +1,5 @@
+import {prepareTextFixture,checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
+import type {LLMRequest} from '@i-harness/llm-seam'
 import { expect, it } from "vitest"
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -20,10 +22,10 @@ it("captures real host turns, titles and compaction with provenance, surviving a
   const frames: RpcMessage[] = []
   let modelCalls = 0
   const options = { workspace, sessionDir: join(root, "sessions"), settingsPath, credentialsPath, onWrite: (frame: RpcMessage) => frames.push(frame),
-    buildProviderClient: () => ({ async *stream() {
+    buildProviderClient: () => ({ prepare:prepareTextFixture, async *stream(request:LLMRequest) {
       modelCalls++
       yield { type: "usage" as const, usage: { inputTokens: 100, outputTokens: 5, cacheReadTokens: 80, cacheCreationTokens: 0, inputTokenSemantics: "includes-cache" as const } }
-      yield { type: "text/chunk" as const, text: "Keep the objective and useful facts in this conversation. ".repeat(12) }
+      yield { type: "text/chunk" as const, text: String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine") ? checkpointOfLength(600) : "Keep the objective and useful facts in this conversation. ".repeat(12) }
       yield { type: "end" as const }
     } }) }
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
