@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import type { ModelClient, LLMStreamEvent } from "@i-harness/llm-seam"
@@ -5,7 +6,7 @@ import { activeTokens } from "@i-harness/token-meter"
 import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 
 function mockModel(text: string): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       yield { type: "text/chunk", text }
       yield { type: "end" }
@@ -24,7 +25,7 @@ function longSession() {
 describe("compaction engine", () => {
   it("maybeCompact triggers above threshold and appends start/summary/end", async () => {
     const s = longSession() // ~2000 tokens > 500 threshold
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // ≥ 500 chars (M34 ⑦c floor)
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config }) // ≥ 500 chars (M34 ⑦c floor)
     const result = await engine.maybeCompact(s)
     expect(result.compacted).toBe(true)
     expect(result.shadowedSeqs.length).toBeGreaterThan(0)
@@ -48,7 +49,7 @@ describe("compaction engine", () => {
   it("compact is explicit (no pressure check) while maybeCompact is gated", async () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" }) // tiny session
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config }) // retainTokens default 0; ≥ 500 chars (M34 ⑦c floor)
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config }) // retainTokens default 0; ≥ 500 chars (M34 ⑦c floor)
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // tiny → below threshold → gated
     const result = await engine.compact(s)
     expect(result.compacted).toBe(true) // explicit call has no pressure gate; the single event is shadowable
@@ -56,7 +57,7 @@ describe("compaction engine", () => {
   })
 
   it("summarizer failure is fail-soft: no events appended", async () => {
-    const failing: ModelClient = {
+    const failing: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         yield { type: "error", error: new Error("model exploded") }
       },
@@ -71,7 +72,7 @@ describe("compaction engine", () => {
   })
 
   it("M73: a summarizer failure SAYS it was the summarizer", async () => {
-    const failing: ModelClient = {
+    const failing: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         yield { type: "error", error: new Error("model exploded") }
       },
@@ -89,7 +90,7 @@ describe("compaction engine", () => {
   })
 
   it("empty summarizer output is fail-soft", async () => {
-    const empty: ModelClient = { async *stream(): AsyncIterable<LLMStreamEvent> { yield { type: "end" } } }
+    const empty: ModelClient = { prepare: prepareTextFixture, async *stream(): AsyncIterable<LLMStreamEvent> { yield { type: "end" } } }
     const s = longSession()
     const engine = createCompactionEngine({ model: empty, config })
     expect((await engine.compact(s)).compacted).toBe(false)
@@ -110,7 +111,7 @@ describe("compaction engine", () => {
     // threshold — the re-fire guard, not pressure, must stop the loop.
     const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200 }
     const s = longSession()
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config: hotConfig })
     const first = await engine.maybeCompact(s)
     expect(first.compacted).toBe(true)
     const second = await engine.maybeCompact(s)
@@ -123,7 +124,7 @@ describe("compaction engine", () => {
     // default 3-turn hysteresis is covered by hysteresis-breaker.test.ts).
     const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200, minTurnsBeforeRecompact: 0 }
     const s = longSession()
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config: hotConfig })
     await engine.maybeCompact(s)
     expect(s.events.filter((e) => e.type === "compaction/start")).toHaveLength(1)
     append(s, { type: "user/message", text: "brand new work after the compaction" })
@@ -135,7 +136,7 @@ describe("compaction engine", () => {
   it("compact (explicit) is NOT gated by the re-fire guard", async () => {
     const hotConfig: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.005, retainTokens: 0, maxTokens: 200 }
     const s = longSession()
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n" + "work ".repeat(100)), config: hotConfig })
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config: hotConfig })
     await engine.maybeCompact(s) // appends one trio; no new events afterwards
     const explicit = await engine.compact(s) // no new material to replace
     expect(explicit.compacted).toBe(false)
@@ -219,7 +220,7 @@ describe("compaction engine", () => {
     const s = createSession()
     append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
     append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(100_000) } })
-    const engine = createCompactionEngine({ model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config })
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config })
     const first = await engine.maybeCompact(s)
     expect(first.compacted).toBe(true)
     expect(first.pruned).toBe(true)
@@ -246,7 +247,7 @@ describe("compaction engine", () => {
     const s = createSession()
     append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
     append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(100_000) } })
-    const engine = createCompactionEngine({ model: mockModel("checkpoint " + "work ".repeat(120)), config })
+    const engine = createCompactionEngine({ model: mockModel(checkpointOfLength(600)), config })
     expect((await engine.maybeCompact(s)).pruned).toBe(true)
     expect((await engine.maybeCompact(s)).compacted).toBe(false) // sticky: suppressed without new content
     append(s, { type: "user/message", text: "fresh turn work" }) // new non-marker event
@@ -256,13 +257,13 @@ describe("compaction engine", () => {
   it("until-success + sticky (M34 ⑦d): a manual compact success closes the breaker (until-success)", async () => {
     const calls = { n: 0 }
     let fail = true
-    const flip: ModelClient = {
+    const flip: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         calls.n += 1
         if (fail) {
           yield { type: "error", error: new Error("boom") }
         } else {
-          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) }
+          yield { type: "text/chunk", text: checkpointOfLength(600) }
           yield { type: "end" }
         }
       },
@@ -374,7 +375,7 @@ describe("compaction with a retained tail is block-aligned too (M5/D2)", () => {
     for (const retainTokens of [50, 150, 300, 500, 900]) {
       const s = toolSession()
       const engine = createCompactionEngine({
-        model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)),
+        model: mockModel(checkpointOfLength(600)),
         config: { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200, retainTokens },
       })
       await engine.compact(s)

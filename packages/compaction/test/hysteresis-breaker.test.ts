@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
 import type { LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
@@ -6,16 +7,16 @@ import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 // M33 §2 (hysteresis + breaker) and §3.1 (counting overhead) — auto-compaction
 // pressure-gate behavior.
 function countingModel(calls: { n: number }): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       calls.n += 1
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
+      yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }
 }
 function failingModel(calls: { n: number }): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       calls.n += 1
       yield { type: "error", error: new Error("boom") }
@@ -129,14 +130,14 @@ describe("breaker (M33 §2.2)", () => {
   it("a successful auto compaction resets the failure counter", async () => {
     const calls = { n: 0 }
     let fail = true
-    const flip: ModelClient = {
+    const flip: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         calls.n += 1
         if (fail) {
           yield { type: "error", error: new Error("boom") }
         } else {
           // long summary → the hot shape: pressure persists after the compaction
-          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
+          yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
           yield { type: "end" }
         }
       },

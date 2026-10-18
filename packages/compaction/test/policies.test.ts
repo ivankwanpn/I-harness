@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
@@ -9,7 +10,7 @@ import { activeTokens } from "@i-harness/token-meter"
 // engine build time (dsh shape + grok per-model threshold). A missing
 // provider/modelId or an unlisted model = the global defaults (forward compat).
 function mockModel(text: string): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       yield { type: "text/chunk", text }
       yield { type: "end" }
@@ -60,7 +61,7 @@ describe("per-model compaction policies (M34 ⑦a)", () => {
       modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.05, retainTokens: 400 } },
     }
     const engine = createCompactionEngine({
-      model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)), config, // ≥ 500 chars (M34 ⑦c floor)
+      model: mockModel(checkpointOfLength(600)), config, // ≥ 500 chars (M34 ⑦c floor)
       provider: "deepseek", modelId: "deepseek-v4-pro",
     })
     const result = await engine.maybeCompact(s)

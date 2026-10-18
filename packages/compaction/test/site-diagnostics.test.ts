@@ -1,3 +1,4 @@
+import { prepareTextFixture } from './fixtures/checkpoint.ts'
 // packages/compaction/test/site-diagnostics.test.ts — R15: the captured INSTANCE
 // net over this package's real diagnostics site.
 //
@@ -63,7 +64,7 @@ afterEach(() => {
 
 it("the summarizer's fail-soft report is the ambient handle's, at phase turn / level warn", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
-  const failing: ModelClient = {
+  const failing: ModelClient = { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       yield { type: "error", error: new Error("model exploded") }
     },

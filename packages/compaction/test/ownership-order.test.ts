@@ -1,17 +1,18 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { expect, it, vi } from "vitest"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { Telemetry } from "@i-harness/telemetry"
 import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 
-const text = "retained work ".repeat(60)
+const text = checkpointOfLength(600)
 const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: .005, retainTokens: 0, minTurnsBeforeRecompact: 0 }
 
 it("shares the until-success breaker across engines without resetting the count on fresh content", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
     let calls = 0, fail = true
-    const model: ModelClient = { async *stream() {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream() {
       calls++
       if (fail) yield { type: "error", error: new Error("shared breaker fixture") }
       else { yield { type: "text/chunk", text }; yield { type: "end" } }
@@ -43,7 +44,7 @@ it("shares the until-success breaker across engines without resetting the count 
 
 it("shares prune-only sticky state across engines even without an end marker", async () => {
   let calls = 0
-  const model: ModelClient = { async *stream() { calls++; yield { type: "text/chunk", text }; yield { type: "end" } } }
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream() { calls++; yield { type: "text/chunk", text }; yield { type: "end" } } }
   const session = createSession()
   append(session, { type: "tool/call", callId: "c", name: "read", args: {} })
   append(session, { type: "tool/result", callId: "c", name: "read", output: "x".repeat(100_000) })
@@ -72,7 +73,7 @@ it("captures config and method receivers but refuses an owned model change acros
   let markEntered!: () => void
   const entered = new Promise<void>(resolve => { markEntered = resolve })
   let request: LLMRequest | undefined
-  const model: ModelClient = { async *stream(input) {
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream(input) {
     expect(this).toBe(model)
     request = input
     trace.push("model:stream")
@@ -105,7 +106,7 @@ it("captures config and method receivers but refuses an owned model change acros
   expect(trace).toEqual(["context:get", "context:call", "overhead:get", "overhead:call", "compaction/prune", "model:get", "shape:get", "shape:call", "cap:get", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "telemetry:get", "provider/context", "model:get", "shape:get", "shape:call", "cap:get", "model:get", "shape:get", "shape:call", "cap:get", "model:stream"])
   expect(request?.maxOutputTokens).toBe(2048)
   expect(request?.systemPrompt).toBe("system")
-  liveModel = { async *stream() { throw new Error("model re-read across await") } }
+  liveModel = { prepare: prepareTextFixture, async *stream() { throw new Error("model re-read across await") } }
   liveTelemetry = later
   overhead = 100_000
   cap = 1
@@ -120,7 +121,7 @@ it("captures config and method receivers but refuses an owned model change acros
 it("keeps shape failures outside the summary catch and does not charge legacy overhead to summary input", async () => {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
-    const model: ModelClient = { async *stream() { throw new Error("must not call model") } }
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream() { throw new Error("must not call model") } }
     const session = createSession()
     append(session, { type: "user/message", text: "context" })
     const outside = createCompactionEngine({ model, config, requestShape() { throw new Error("shape fixture") } })

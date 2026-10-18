@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages, deriveMessagesUpTo, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
 import { activeTokens, estimateContent } from "@i-harness/token-meter"
@@ -8,11 +9,11 @@ import { createCompactionEngine, selectShadowableRange, type CompactionConfig } 
 // a `compaction/prune` shadow projection (append-only: the raw log never
 // changes; deriveMessages/renderShadowed substitute head/…pruned…/tail).
 function recordingModel(seen: { request?: LLMRequest; calls: number }): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       seen.calls += 1
       seen.request ??= request
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
+      yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }
@@ -200,7 +201,7 @@ describe("compaction/prune marker in region selection", () => {
 // The prune-only path, which appends its own marker and returns before any
 // summary is attempted, is not touched — its cases above are the control group.
 const M78_SHAPE = { systemPrompt: "SYS", tools: [{ name: "read", description: "d", inputSchema: {} }] as never[] }
-const M78_SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (M34 ⑦c floor)
+const M78_SUMMARY = checkpointOfLength(600) // ≥ 500 chars (M34 ⑦c floor)
 
 /** A `requestShape`-carrying model: the prefix path is the one under test, and
  * it records EVERY request (the legacy text path embeds the replay text in the
@@ -209,7 +210,7 @@ function shapeModel(): { model: ModelClient; requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
   return {
     requests,
-    model: {
+    model: { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
         yield { type: "text/chunk", text: M78_SUMMARY }
@@ -228,7 +229,7 @@ function strictShapeModel(contextWindow: number): { model: ModelClient; requests
   const requests: LLMRequest[] = []
   return {
     requests,
-    model: {
+    model: { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
         const cap = request.maxOutputTokens ?? ANTHROPIC_MAX_TOKENS_FALLBACK
@@ -325,7 +326,7 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
     const s = m78Session() // retainTokens 500: the region's last shadowed seq stops short of the marker (measured 104 vs the marker's 110)
     const lastShadowed = Math.max(...selectShadowableRange(s, M78_CONFIG.retainTokens!))
     const observed: { request: LLMRequest; mainFold: LLMMessage[] }[] = []
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         observed.push({ request, mainFold: deriveMessages(s) })
         yield { type: "text/chunk", text: M78_SUMMARY }
@@ -359,7 +360,7 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
 
   it("a summarizer failure leaves the prune APPLIED — the log is append-only", async () => {
     const s = m78Session()
-    const failing: ModelClient = {
+    const failing: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         yield { type: "error", error: new Error("model exploded") }
       },

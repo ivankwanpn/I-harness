@@ -1,3 +1,4 @@
+import { checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { afterEach, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession } from "@i-harness/core-session"
@@ -9,7 +10,7 @@ import { systemFetch } from "../../http-transport/src/index.ts"
 vi.mock("../../http-transport/src/index.ts", () => ({ systemFetch: vi.fn() }))
 import { createAgent, type ModelContextBindingDescriptor } from "../src/index.ts"
 
-const checkpoint = "checkpoint: objective and completed outcomes. ".repeat(15)
+const checkpoint = checkpointOfLength(600)
 afterEach(() => vi.unstubAllGlobals())
 function wireCapture() {
   const bodies: Record<string, unknown>[] = []

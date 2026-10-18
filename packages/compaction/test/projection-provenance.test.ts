@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -5,7 +6,7 @@ import { activeTokens, createCompactionEngine } from "../src/index.ts"
 import { planPrune, surfaceTokensAfterPrune } from "../src/engine/prune.ts"
 
 const policy = { enabled: true, thresholdChars: 100, headChars: 60, tailChars: 20 }
-const checkpoint = "checkpoint preserves completed outcomes. ".repeat(20)
+const checkpoint = checkpointOfLength(600)
 
 describe("active projection provenance", () => {
   it("does not prune the marker again when its rendered length exceeds the same custom threshold", () => {
@@ -53,12 +54,12 @@ describe("active projection provenance", () => {
     append(session, { type: "compaction/summary", text: legacy, shadowedSeqs: mode === "hidden image admission" ? [0] : [] })
     append(session, { type: "compaction/summary", text: anchor, shadowedSeqs: [] })
     for (let i = 0; i < 8; i++) append(session, { type: "user/message", text: `SEGMENT-${i} ` + "work ".repeat(200), ...(mode === "hidden image admission" && i === 0 ? { imageInputId: "image" } : {}) })
-    const summary: ModelClient = { async *stream(request) {
+    const summary: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
       requests.push(request)
       if (mode !== "preflight" && requests.length === 1) throw Object.assign(new Error("controlled full"), { code: "CONTEXT_WINDOW_EXCEEDED" })
       yield { type: "text/chunk", text: checkpoint }; yield { type: "end" }
     } }
-    const main: ModelClient = { async *stream() { throw new Error("main must not transport") } }
+    const main: ModelClient = { prepare: prepareTextFixture, async *stream() { throw new Error("main must not transport") } }
     const result = await createCompactionEngine({ model: main, config: { contextWindow: 100000, summarizationModel: summary,
       ...(mode === "preflight" ? { summaryLimits: { contextWindow: 3000 } } : {}) } }).compact(session)
     expect(result.compacted).toBe(true)

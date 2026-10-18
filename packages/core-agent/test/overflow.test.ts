@@ -1,3 +1,5 @@
+import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
+import type { LLMRequest } from '@i-harness/llm-seam'
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
 import { createAgent } from "../src/index.ts"
@@ -16,9 +18,10 @@ function makeModel(text: string) {
   // 回傳 Promise（async arrow 包裝）——`for await...of` 需要 async iterable，
   // 不會解包 Promise → 任何三層路徑都在 consumer 處 TypeError。改為標準
   // async generator method（與 agent.test.ts / engine.test.ts 的 mock 一致）。
-  return {
-    async *stream() {
-      yield { type: "text/chunk", text } as never
+  return { prepare: prepareTextFixture,
+    async *stream(request: LLMRequest) {
+      const summary = String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine')
+      yield { type: "text/chunk", text: summary ? completeCheckpoint(text) : text } as never
       yield { type: "end" } as never
     },
   }
@@ -44,7 +47,9 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
       // 500-char minSummaryChars floor would make this tiny-window compact
       // always degenerate, so the floor is opted out explicitly (this suite
       // measures the budget ladder, not the summary floor).
-      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
+      // A complete framed fixture needs 400 retained code units; the former
+      // 64-unit ceiling could hold only its old unframed word.
+      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
       budget: { contextWindow: 1500, reserveRatio: 0.5 },
     } as never)
     const r = await agent.run("work", undefined)
@@ -245,10 +250,10 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
     const session = createSession()
     for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(800) })
     const seen: Array<{ systemPrompt: string; tools: number; lastRole: string }> = []
-    const model = {
+    const model = { prepare: prepareTextFixture,
       async *stream(req: { systemPrompt: string; tools: unknown[]; messages: Array<{ role: string }> }) {
         seen.push({ systemPrompt: req.systemPrompt, tools: req.tools.length, lastRole: req.messages.at(-1)?.role ?? "" })
-        yield { type: "text/chunk", text: "answer" } as never
+        yield { type: "text/chunk", text: completeCheckpoint("answer") } as never
         yield { type: "end" } as never
       },
     }
@@ -265,7 +270,7 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
       model,
       systemPrompt: "SYS-PROMPT",
       maxTurns: 10,
-      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
+      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
       budget: { contextWindow: 1500, reserveRatio: 0.5 },
     } as never)
     await agent.run("work", undefined)
@@ -294,10 +299,10 @@ describe("the compaction engine gets the agent's resolved cap (M73)", () => {
     const session = createSession()
     for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(200) })
     const requests: Array<{ maxOutputTokens?: number }> = []
-    const model = {
+    const model = { prepare: prepareTextFixture,
       async *stream(req: { maxOutputTokens?: number }) {
         requests.push({ maxOutputTokens: req.maxOutputTokens })
-        yield { type: "text/chunk", text: "answer" } as never
+        yield { type: "text/chunk", text: completeCheckpoint("answer") } as never
         yield { type: "end" } as never
       },
     }
@@ -313,7 +318,7 @@ describe("the compaction engine gets the agent's resolved cap (M73)", () => {
       // `clampOutputCap` returns the value untouched when the window is missing
       // or when the input leaves room, so a cap LARGER than the window is the
       // one shape that can only have come out of the clamp.
-      compact: { contextWindow: 8_000, maxTokens: 16, minSummaryChars: 1 },
+      compact: { contextWindow: 8_000, maxTokens: 100, minSummaryChars: 1 },
     } as never)
     // The MANUAL path: `compact()` summarizes unconditionally (no threshold
     // gate) and makes exactly ONE model call — the summarizer's. So the single

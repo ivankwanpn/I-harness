@@ -1,3 +1,4 @@
+import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
 import { classifiedFixtureClient } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
@@ -78,14 +79,14 @@ it("invalidates the usage anchor after an append-only reset even if the input pr
 
 it("starts auto compaction from calibrated usage and returns to a fresh estimate after summary", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), requests: LLMRequest[] = [], events: TelemetryEvent[] = []
-  const model: ModelClient = { async *stream(request) {
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
     requests.push(request)
     if (requests.length === 1) {
       yield { type: "usage", usage: { inputTokens: 850, inputTokenSemantics: "includes-cache" } } as never
       yield { type: "text/chunk", text: "done" }
     } else if (requests.length === 2) {
       yield { type: "usage", usage: { inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" } }
-      yield { type: "text/chunk", text: "Summary retains the current objective and the completed work." }
+      yield { type: "text/chunk", text: completeCheckpoint() }
     }
     else yield { type: "text/chunk", text: "continued" }
     yield { type: "end" }

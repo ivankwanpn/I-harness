@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
@@ -16,14 +17,14 @@ function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
 }
 
 function longModel(text: string): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(): AsyncIterable<LLMStreamEvent> {
       yield { type: "text/chunk", text }
       yield { type: "end" }
     },
   }
 }
-const LONG_SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ~632 chars
+const LONG_SUMMARY = checkpointOfLength(600) // ~632 chars
 
 function pressureSession(): ReturnType<typeof createSession> {
   const s = createSession()
@@ -57,7 +58,7 @@ describe("compaction analytics (M34 ⑦b)", () => {
     append(s, { type: "tool/call", callId: "c1", name: "shell", args: {} })
     append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(1_000_000) } })
     const calls = { n: 0 }
-    const counting: ModelClient = {
+    const counting: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         calls.n += 1
         yield { type: "text/chunk", text: LONG_SUMMARY }
@@ -81,7 +82,7 @@ describe("compaction analytics (M34 ⑦b)", () => {
   })
 
   it("summarizer failure emits outcome failure (fail-soft retry still applies)", async () => {
-    const failing: ModelClient = {
+    const failing: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         yield { type: "error", error: new Error("model exploded") }
       },

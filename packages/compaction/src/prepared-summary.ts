@@ -1,4 +1,4 @@
-import { assertPreparedValidation, prepareModelRequest, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
+import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, type LLMRequest, type LLMUsage, type ModelClient } from "@i-harness/llm-seam"
 import { SummaryBlockedError } from "./summary-errors.ts"
 
 export interface SummaryLimits {
@@ -44,6 +44,8 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
   const candidate = output.capSupport === "unsupported" || provisionalRoom !== undefined && provisionalRoom < initialRequiredRoom ? prepared : prepared.withOutputCap(cap)
   const { input, output: finalOutput } = candidate.measurement
   assertPreparedValidation(candidate)
+  const textOutput = readPreparedTextOutput(candidate)
+  if (textOutput.status !== 'allowed') throw new SummaryBlockedError(textOutput.status === 'blocked' ? 'output-incompatible' : 'output-unknown')
   validate(input)
   const inputTokens = price(input), room = roomFor(inputTokens)
   const finalRequired = requiredOutput(finalOutput)

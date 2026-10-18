@@ -1,153 +1,15 @@
-import { summaryPieceCollector } from "./summary-observation.ts"
+import { readSummaryStream, type SummaryStreamResult } from "./summary/stream.ts"
+import { buildSummaryPrompt } from "./summary/prompt.ts"
+import { inspectCheckpoint } from "./summary/checkpoint.ts"
 import { prepareSummary, type SummaryLimits } from "./prepared-summary.ts"
 import { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
-export { SummaryBlockedError, SummaryCheckpointError } from "./summary-errors.ts"
 import { modelFailureFacts } from "@i-harness/llm-seam"
-import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
+import type { LLMMessage, LLMRequest, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import { deriveMessages, type SessionView as Session } from "@i-harness/core-session"
 import { sliceMessages } from "./slices.ts"
 
-// M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
-// a shadow line containing one is copied into the Sensitive Instructions
-// section verbatim (never interpreted, never reworded, never dropped).
-// 保守：字詞匹配僅作標記，不丟原文於提示 (spec §1.1).
-const SENSITIVE_MARKERS = ["修改", "改成", "不要", "必須", "禁止", "切記", "記得", "remind"] as const
-
-// Filter length: skips bare marker words ("不要", "記得", "要不要"-type
-// fragments) while keeping every substantive imperative sentence. Deliberately
-// more conservative than the spec's 32-char fragment proposal — the MARKER
-// match is the signal, not the length — and it never drops a real instruction.
-const SENSITIVE_MIN_CHARS = 8
-
-const CHECKPOINT_OPEN = "<compacted-summary>"
-const CHECKPOINT_CLOSE = "</compacted-summary>"
-
-// Fresh-summary wording (no prior checkpoint in the session).
-const FRESH_DIRECTIVE =
-  "Produce a fresh summary of this conversation. There is no prior summary to build on."
-
-// M33 §1.2 anchored: the previous summary is injected below; the model is told
-// to UPDATE rather than restate (opencode "Update the anchored summary"
-// semantics — 新增內容增補、舊內容合併, not duplicated).
-const ANCHORED_DIRECTIVE =
-  "Update the anchored summary below: merge the conversation ABOVE into the previous summary incrementally. Keep still-true content, fold in what changed, and do not restate old content."
-
-const SENSITIVE_GUIDANCE =
-  "- [user instructions in their exact original wording — imperative user text (修改/改成/不要/必須/禁止/切記/記得/remind): copy it verbatim, do not paraphrase]"
-
-// M33 §1.1 8-section structure (⑦ structural elements: the 7 sections wrapped
-// in the <compacted-summary> checkpoint framing, IH's existing framing).
-const CHECKPOINT_TEMPLATE = [
-  CHECKPOINT_OPEN,
-  "## Objective",
-  "- [the task goal on the first compaction, or what the new span progressed]",
-  "",
-  "## Important Details",
-  "- [facts and data that matter for correctness: exact identifiers, numbers, signatures, error strings]",
-  "",
-  "## Work State",
-  "- Completed: [work finished across compaction rounds]",
-  "- Active: [work in progress at this checkpoint]",
-  "- Blocked: [stuck work and the blocker, or \"(none)\"]",
-  "",
-  "## Next Move",
-  "- [the single next action, directly in line with the most recent request, or \"(none)\"]",
-  "",
-  "## Relevant Files",
-  "- [exact file paths touched in this work; preserve them verbatim]",
-  "",
-  "## Sensitive Instructions",
-  SENSITIVE_GUIDANCE,
-  "",
-  "## Tool Work Summary",
-  "- [tool calls: purpose and outcome, terse — not itemized]",
-  "",
-  CHECKPOINT_CLOSE,
-].join("\n")
-
-const RULES = [
-  "Rules:",
-  // M33 §1.1: tamper rule — the summarizer must never disclose the process.
-  "- Do not mention the summary process — never write that the context was compacted or describe this summarization request.",
-  "- Write concise engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.",
-  "- Capture user feedback and explicit instructions faithfully, especially corrections.",
-  "- Output only the checkpoint text: do not call any tool or take any other action.",
-].join("\n")
-
-/**
- * M33 §1: build the summarizer user-message prompt.
- *
- * - 8-section template with the `<compacted-summary>` checkpoint framing
- *   (M33 §1.1, replacing the M11 8-section template).
- * - Anchored (M33 §1.2): when a previous summary is given, inject it inside a
- *   `<previous-summary>` block and use the "Update the anchored summary"
- *   directive instead of the fresh-summary wording. The prompt, not the
- *   `compaction/summary` event shape, carries the anchored semantics.
- * - Sensitive Instructions (M33 §1.1): imperative shadow lines (marker-match
- *   only) are prefilled verbatim so the model copies their original wording.
- * - `instructions` threads the manual `session-compact` command's optional
- *   user instructions (Task 4; unused callers default to undefined).
- */
-export function buildSummaryPrompt(
-  shadowText: string,
-  previousSummary?: string,
-  instructions?: string,
-  // M5/D2: when the caller replays the region as REAL messages, the shadow text
-  // is already in the request — embedding it again would duplicate the whole
-  // conversation AND be pointless. The template still derives its sensitive-line
-  // prefill from `shadowText`, so that M33 behaviour is preserved either way.
-  opts?: { embedText?: boolean },
-): string {
-  const parts: string[] = [
-    "You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.",
-    "",
-    previousSummary !== undefined ? ANCHORED_DIRECTIVE : FRESH_DIRECTIVE,
-    "",
-    "Output EXACTLY the structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write \"(none)\" for an empty section — never drop a section.",
-    "",
-    renderTemplate(shadowText),
-    "",
-    RULES,
-  ]
-  if (previousSummary !== undefined) {
-    parts.push("", "<previous-summary>", previousSummary, "</previous-summary>")
-  }
-  if (instructions !== undefined && instructions.trim().length > 0) {
-    parts.push("", "## User instructions (they take priority over the template):", instructions)
-  }
-  if (opts?.embedText ?? true) parts.push("", shadowText)
-  return parts.join("\n")
-}
-
-// Render the checkpoint template with the verbatim imperative shadow lines
-// prefilled into the Sensitive Instructions section.
-function renderTemplate(shadowText: string): string {
-  const sensitive = extractSensitiveLines(shadowText)
-  if (sensitive.length === 0) return CHECKPOINT_TEMPLATE
-  const placeholder = "{{SENSITIVE_PREFILL}}"
-  const withPlaceholder = CHECKPOINT_TEMPLATE.replace(SENSITIVE_GUIDANCE, `${SENSITIVE_GUIDANCE}\n${placeholder}`)
-  return withPlaceholder.replace(placeholder, sensitive.map((line) => `- ${line}`).join("\n"))
-}
-
-// M33 §1.1 conservative extraction: scan the shadow region, line by line; a
-// line longer than the filter threshold that contains any imperative marker is
-// preserved ORIGINAL (trimmed of surrounding whitespace only). No semantics
-// are inferred — the marker is purely a flag (「字詞匹配僅作標記」).
-function extractSensitiveLines(shadowText: string): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const raw of shadowText.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (line.length < SENSITIVE_MIN_CHARS) continue
-    if (!SENSITIVE_MARKERS.some((m) => line.includes(m))) continue
-    if (seen.has(line)) continue
-    seen.add(line)
-    out.push(line)
-  }
-  return out
-}
-
 function confirmedOverflow(error: unknown): boolean {
+  if (error instanceof AggregateError) return false
   if (modelFailureFacts(error)?.code !== "CONTEXT_WINDOW_EXCEEDED") return false
   let current = error
   for (let i = 0; i < 5 && current && typeof current === "object"; i++) {
@@ -158,7 +20,15 @@ function confirmedOverflow(error: unknown): boolean {
   return false
 }
 
-/** Independent prepared summary admission. All physical calls share one bound. */
+function textOf(messages: LLMMessage[]) { return messages.map(message => {
+  const content = typeof message.content === "string" ? message.content : message.content.map(part => part.type === "text" ? part.text : `[image: ${part.image.mediaType}, ${Math.ceil(part.image.dataBase64.length * 3 / 4)} bytes]`).join("\n")
+  const calls = message.role === "assistant" ? (message.toolCalls ?? []).map(call => `tool ${call.name} (${call.id}): ${JSON.stringify(call.args)}`).join("\n") : ""
+  return `[${message.role}]\n${content}${calls ? `\n${calls}` : ""}`
+}).join("\n")
+}
+
+/** Independent prepared summary admission. Stream invocations share one bound;
+ * hidden transport retries remain outside this transaction-local count. */
 export async function summarizeWithModel(
   model: ModelClient, replayText: string, maxTokens: number,
   previousSummary?: string, instructions?: string, minSummaryChars = 500,
@@ -175,11 +45,6 @@ export async function summarizeWithModel(
   // Distinct summary bindings receive a text projection. Preserve semantic
   // tool work and image descriptors without replaying another model's signed
   // continuation, signatures or base64 payload as ordinary user text.
-  const textOf = (messages: LLMMessage[]) => messages.map(message => {
-    const content = typeof message.content === "string" ? message.content : message.content.map(part => part.type === "text" ? part.text : `[image: ${part.image.mediaType}, ${Math.ceil(part.image.dataBase64.length * 3 / 4)} bytes]`).join("\n")
-    const calls = message.role === "assistant" ? (message.toolCalls ?? []).map(call => `tool ${call.name} (${call.id}): ${JSON.stringify(call.args)}`).join("\n") : ""
-    return `[${message.role}]\n${content}${calls ? `\n${calls}` : ""}`
-  }).join("\n")
   type Piece = { messages: LLMMessage[]; text: string; shrinks: number; standalone?: true; rejectedTokens?: number }
   let whole = prefix?.messages ?? []
   if (!prefix && region) {
@@ -192,7 +57,7 @@ export async function summarizeWithModel(
     catch { whole = [{ role: "user", content: replayText }] } // malformed legacy images remain descriptor text
   }
   const pending: Piece[] = [{ messages: whole, text: replayText, shrinks: 0 }]
-  let lastLength = 0
+  let lastLength = 0, lastFailure: "retention-output" | "checkpoint-format" = "retention-output"
   while (pending.length) {
     const piece = pending[0]!
     let accepted = false
@@ -200,7 +65,7 @@ export async function summarizeWithModel(
       check()
       const directive = buildSummaryPrompt(piece.text, running, instructions, { embedText: prefix === undefined })
         + `\nRetained checkpoint must be between ${minSummaryChars} and ${maxTokens * 4} characters. Preserve the objective, authority, instructions and completed outcomes within that limit.`
-        + (qualityRound ? "\nThe previous output did not meet the retained checkpoint limits. Produce a complete shorter checkpoint within those limits." : "")
+        + (qualityRound ? "\nThe previous output did not meet the checkpoint contract. Produce all seven sections and exact framing, with nonempty content, within the stated minimum and maximum retained bounds." : "")
       // A later autonomous tool round can be summarized independently once all
       // preceding calls have results. Keep its native assistant/result payload
       // intact and open a legal standalone conversation. The rolling checkpoint
@@ -229,32 +94,11 @@ export async function summarizeWithModel(
       }
       check()
       attempts++; tracker.count++
-      let out = "", ended = false, refused = false, truncated = false
-      let endFingerprint: string | undefined
-      const usage: LLMUsage = {}
-      const collector = summaryPieceCollector(candidate)
+      let result: SummaryStreamResult
       try {
-        for await (const event of candidate.stream({ signal: limits.signal, validateBeforeTransport: check, confirmExecution: confirmation => collector.confirm(confirmation) })) {
-          limits.signal?.throwIfAborted()
-          if (ended && ["text/chunk", "reasoning", "tool_call"].includes(event.type)) throw new Error("Summary produced content after completion")
-          if (event.type === "text/chunk") out += event.text
-          else if (event.type === "error") throw event.error
-          else if (event.type === "usage") {
-            for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
-              const value = event.usage[field]
-              if (typeof value === "number" && Number.isFinite(value)) usage[field] = value
-            }
-            if (event.usage.inputTokenSemantics === "includes-cache" || event.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = event.usage.inputTokenSemantics
-          }
-          else if (event.type === "end") {
-            const fingerprint = JSON.stringify(event)
-            if (ended && endFingerprint !== fingerprint) throw new Error("Conflicting summary completion records")
-            endFingerprint = fingerprint; ended = true; refused = event.refused === true; truncated = event.truncated === true
-          }
-        }
+        result = await readSummaryStream(candidate, { ...limits, validateBeforeTransport: check, maxRetainedChars: maxTokens * 4 })
       } catch (error) {
-        limits.signal?.throwIfAborted()
-        if (!confirmedOverflow(error)) throw error
+        if (limits.signal?.aborted || !confirmedOverflow(error)) throw error
         check()
         if (piece.shrinks >= 2) throw new SummaryBlockedError("shrink-limit")
         const segments = sliceMessages(piece.messages, 1, true)
@@ -264,24 +108,18 @@ export async function summarizeWithModel(
         accepted = true
         break
       }
-      finally { collector.close() }
-      if (Object.keys(usage).length) limits.onUsage?.(usage)
       check()
-      if (refused) throw new SummaryBlockedError("refused")
-      if (truncated) throw new SummaryBlockedError("truncated")
-      if (!ended) throw new SummaryBlockedError("incomplete")
-      const trimmed = out.trim()
-      if (!trimmed) throw new Error("compaction: summarizer returned empty output")
-      lastLength = trimmed.length
-      if (trimmed.length < minSummaryChars || trimmed.length > maxTokens * 4) continue
-      // No lossy slice. Every accepted piece is a complete retained checkpoint.
-      const observation = collector.accepted()
-      if (observation) limits.onPieceAccepted?.(observation)
-      running = trimmed; pending.shift(); accepted = true; break
+      if (!result.chars) throw new Error('compaction: summarizer returned empty output')
+      lastLength = result.chars
+      if (result.overflow || result.chars < minSummaryChars || result.chars > maxTokens * 4) { lastFailure = 'retention-output'; continue }
+      const parsed = inspectCheckpoint(result.text)
+      if (parsed.kind !== 'complete') { lastFailure = 'checkpoint-format'; continue }
+      if (result.observation) limits.onPieceAccepted?.(result.observation)
+      running = parsed.text; pending.shift(); accepted = true; break
     }
-    if (!accepted) throw new SummaryBlockedError("retention-output", { chars: lastLength, floor: minSummaryChars, limit: maxTokens * 4 })
+    if (!accepted) throw new SummaryBlockedError(lastFailure, { chars: lastLength, floor: minSummaryChars, limit: maxTokens * 4 })
   }
   check()
-  if (running === undefined || running.length < minSummaryChars || running.length > maxTokens * 4) throw new Error("compaction: final retained checkpoint is invalid")
+  if (running === undefined || inspectCheckpoint(running).kind !== "complete" || running.length < minSummaryChars || running.length > maxTokens * 4) throw new Error("compaction: final retained checkpoint is invalid")
   return { text: running, attempts }
 }

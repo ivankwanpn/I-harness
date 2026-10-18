@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
@@ -6,7 +7,7 @@ import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { createCompactionEngine, activeTokens } from "../src/index.ts"
 import { planPrune, surfaceTokensAfterPrune } from "../src/engine/prune.ts"
 
-const checkpoint = "## Objective\n- " + "completed result; preserve instructions. ".repeat(20)
+const checkpoint = checkpointOfLength(600)
 function session(turns = 1) {
   const s = createSession()
   for (let i = 0; i < turns; i++) append(s, { type: "user/message", text: `segment ${i} ` + "word ".repeat(60) })
@@ -14,7 +15,7 @@ function session(turns = 1) {
 }
 function capture(text = checkpoint) {
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text }; yield { type: "end" } } }
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) { requests.push(request); yield { type: "text/chunk", text }; yield { type: "end" } } }
   return { model, requests }
 }
 afterEach(() => vi.unstubAllGlobals())
@@ -57,7 +58,7 @@ describe("bounded durable checkpoints", () => {
   it("passes Stop to held transport and prevents replacement after cancellation", async () => {
     const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), controller = new AbortController()
     let received: AbortSignal | undefined
-    const model: ModelClient = { async *stream(request): AsyncIterable<LLMStreamEvent> {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(request): AsyncIterable<LLMStreamEvent> {
       received = request.signal; entered.resolve(); await release.promise
       yield { type: "text/chunk", text: checkpoint }; yield { type: "end" }
     } }
@@ -71,7 +72,7 @@ describe("bounded durable checkpoints", () => {
   })
 
   it.each(["refused", "incomplete", "oversize"])("rejects %s output before replacement", async kind => {
-    const model: ModelClient = { async *stream() {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream() {
       yield { type: "text/chunk", text: kind === "oversize" ? "x".repeat(10000) : checkpoint }
       if (kind !== "incomplete") yield { type: "end", ...(kind === "refused" ? { refused: true } : {}) }
     } }
@@ -112,7 +113,7 @@ describe("bounded durable checkpoints", () => {
 
   it("balances only confirmed overflow and preserves every pending segment", async () => {
     const requests: LLMRequest[] = []
-    const model: ModelClient = { async *stream(request) {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
       requests.push(request)
       if (requests.length === 1) throw Object.assign(new Error("confirmed full"), { code: "CONTEXT_WINDOW_EXCEEDED" })
       yield { type: "text/chunk", text: checkpoint }; yield { type: "end" }
@@ -132,7 +133,7 @@ describe("bounded durable checkpoints", () => {
       append(s, { type: "tool/call", callId: `c${i}`, name: "read_file", args: { path: `FILE-${i}.ts` } })
       append(s, { type: "tool/result", callId: `c${i}`, name: "read_file", output: { outcome: `DONE-${i}` } })
     }
-    const model: ModelClient = { async *stream(request) {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
       requests.push(request)
       if (requests.length === 1) throw Object.assign(new Error("full"), { code: "CONTEXT_WINDOW_EXCEEDED" })
       yield { type: "text/chunk", text: checkpoint }; yield { type: "end" }
@@ -161,7 +162,7 @@ describe("bounded durable checkpoints", () => {
 
   it("shares call bounds between overflow pieces and quality retry", async () => {
     let calls = 0
-    const model: ModelClient = { async *stream() {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream() {
       calls++
       if (calls === 1) throw Object.assign(new Error("confirmed full"), { code: "CONTEXT_WINDOW_EXCEEDED" })
       yield { type: "text/chunk", text: calls === 2 ? "short" : checkpoint }; yield { type: "end" }
@@ -176,7 +177,7 @@ describe("bounded durable checkpoints", () => {
   it("does not reslice untyped failures or retry an indivisible confirmed overflow", async () => {
     for (const error of [new Error("context window exceeded"), Object.assign(new Error("full"), { code: "CONTEXT_WINDOW_EXCEEDED" })]) {
       let calls = 0
-      const model: ModelClient = { async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw error } }
+      const model: ModelClient = { prepare: prepareTextFixture, async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw error } }
       const result = await createCompactionEngine({ model, config: { contextWindow: 100000 } }).recover(session())
       expect(result.compacted).toBe(false)
       expect(calls).toBe(1)
@@ -185,7 +186,7 @@ describe("bounded durable checkpoints", () => {
 
   it("never reslices a plain error string on a divisible history", async () => {
     let calls = 0
-    const model: ModelClient = { async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw new Error("context window exceeded") } }
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw new Error("context window exceeded") } }
     expect((await createCompactionEngine({ model, config: { contextWindow: 100000 } }).recover(session(8))).compacted).toBe(false)
     expect(calls).toBe(1)
   })
@@ -234,14 +235,14 @@ describe("bounded durable checkpoints", () => {
 
   it("bounds always-overflowing divisible input to two shrink retries", async () => {
     let calls = 0
-    const model: ModelClient = { async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw Object.assign(new Error("full"), { code: "CONTEXT_WINDOW_EXCEEDED" }) } }
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(): AsyncIterable<LLMStreamEvent> { calls++; throw Object.assign(new Error("full"), { code: "CONTEXT_WINDOW_EXCEEDED" }) } }
     expect((await createCompactionEngine({ model, config: { contextWindow: 100000 } }).recover(session(32))).compacted).toBe(false)
     expect(calls).toBe(3)
   })
 
   it("stops at eight shared calls by default when pieces also need quality retries", async () => {
     let calls = 0
-    const model: ModelClient = { async *stream(request) {
+    const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
       calls++
       const segments = String(request.messages[0]!.content).match(/segment \d+ /g)?.length ?? 0
       if (segments > 4) throw Object.assign(new Error("full"), { code: "CONTEXT_WINDOW_EXCEEDED" })

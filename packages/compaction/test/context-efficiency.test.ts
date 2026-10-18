@@ -1,3 +1,4 @@
+import { prepareTextFixture, completeCheckpoint } from './fixtures/checkpoint.ts'
 import { expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -7,10 +8,10 @@ import { createCompactionEngine } from "../src/index.ts"
 it("marks the summary as a one-off cache request and records its actual reported usage separately", async () => {
   const session = createSession(), events: TelemetryEvent[] = [], requests: LLMRequest[] = []
   append(session, { type: "user/message", text: "inspect source" })
-  const model: ModelClient = { async *stream(request) {
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream(request) {
     requests.push(request)
     yield { type: "usage", usage: { inputTokens: 100, cacheReadTokens: 0, inputTokenSemantics: "includes-cache" } } as never
-    yield { type: "text/chunk", text: "The source was inspected; retain the objective and the next action." }
+    yield { type: "text/chunk", text: completeCheckpoint() }
     yield { type: "usage", usage: { outputTokens: 20 } }
     yield { type: "end" }
   } }
@@ -23,7 +24,7 @@ it("marks the summary as a one-off cache request and records its actual reported
 it("does not commit a provider-truncated summary even if its text exceeds the minimum", async () => {
   const session = createSession()
   append(session, { type: "user/message", text: "important context" })
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = { prepare: prepareTextFixture, async *stream() {
     yield { type: "text/chunk", text: "A long incomplete summary that should never become the next authoritative checkpoint." }
     yield { type: "end", truncated: true }
   } }

@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { estimateContent } from "@i-harness/token-meter"
@@ -23,7 +24,7 @@ import { createCompactionEngine, selectShadowableRange } from "../src/index.ts"
 // so the adapters apply the same projection (projectImagesForTextModel and
 // friends) they apply to the main request. Nothing extra to decide.
 
-const SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120)
+const SUMMARY = checkpointOfLength(600)
 
 const SHAPE = { systemPrompt: "SYS", tools: [{ name: "read", description: "d", inputSchema: {} }] as never[] }
 
@@ -31,7 +32,7 @@ function capturingModel(): { model: ModelClient; requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
   return {
     requests,
-    model: {
+    model: { prepare: prepareTextFixture,
       async *stream(req: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(req)
         yield { type: "text/chunk", text: SUMMARY }
@@ -265,7 +266,7 @@ function strictModel(contextWindow: number, overheadTokens = 0): { model: ModelC
   const requests: LLMRequest[] = []
   return {
     requests,
-    model: {
+    model: { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
         // The provider's own rule, priced the way this tree prices a request:
@@ -304,7 +305,7 @@ function strictModel(contextWindow: number, overheadTokens = 0): { model: ModelC
 // both ends of every text free of whitespace: the engine trims each accepted
 // output (`out.trim()`), so a text with a trailing space would travel into the
 // next request one byte shorter and `toContain` would miss it.
-const pieceText = (label: string): string => label.repeat(60)
+const pieceText = (label: string): string => checkpointOfLength(600, label.repeat(20))
 
 const PIECE_TEXTS = [pieceText("PIECE-ONE"), pieceText("PIECE-TWO"), pieceText("PIECE-THREE")]
 
@@ -313,7 +314,7 @@ function sequencedModel(texts: string[]): { model: ModelClient; requests: LLMReq
   let call = 0
   return {
     requests,
-    model: {
+    model: { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         requests.push(request)
         // Past the end of `texts` every call repeats the LAST one — the
@@ -487,7 +488,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     const s = toolSession()
     const counts: number[] = []
     const base = sequencedModel(PIECE_TEXTS)
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         // every call observes the log BEFORE the pass has appended anything
         counts.push(s.events.filter((e) => e.type.startsWith("compaction/")).length)
@@ -517,11 +518,11 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
   it("M75: a failure in a middle piece appends none of the summary trio — reason says so", async () => {
     const s = toolSession()
     let call = 0
-    const model: ModelClient = {
+    const model: ModelClient = { prepare: prepareTextFixture,
       async *stream(): AsyncIterable<LLMStreamEvent> {
         call += 1
         if (call === 2) yield { type: "error", error: new Error("piece two exploded") }
-        else { yield { type: "text/chunk", text: ("PIECE-" + call).repeat(100) }; yield { type: "end" } }
+        else { yield { type: "text/chunk", text: checkpointOfLength(600, "PIECE-" + call) }; yield { type: "end" } }
       },
     }
     const result = await createCompactionEngine({

@@ -1,3 +1,4 @@
+import { checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { afterEach, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, deriveContextRecovery, deriveMessages, fromJSONL, toJSONL } from "@i-harness/core-session"
@@ -15,7 +16,7 @@ vi.mock("../../http-transport/src/index.ts", () => ({ systemFetch: vi.fn() }))
 afterEach(() => vi.unstubAllGlobals())
 const variants = ["chat", "responses", "subscription", "anthropic", "gemini", "bedrock"] as const
 type Variant = typeof variants[number]
-const checkpoint = "Checkpoint: preserve the original task, authorization and completed effect; retain the raw outcome in source history. ".repeat(7)
+const checkpoint = checkpointOfLength(600)
 function frames(variant: Variant, text: string, tool = false): object[] {
   if (variant === "chat") return [{ choices: [{ delta: tool ? { tool_calls: [{ index: 0, id: "effect-1", type: "function", function: { name: "effect", arguments: "{}" } }] } : { content: text }, finish_reason: tool ? "tool_calls" : "stop" }] }]
   if (variant === "responses" || variant === "subscription") return tool ? [

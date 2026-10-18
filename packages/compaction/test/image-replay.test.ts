@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
@@ -7,11 +8,11 @@ import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
 // rendered replay text as the single user-message content (systemPrompt is
 // empty), so the replay surface is `request.messages[0].content`.
 function spyModel(inputs: string[]): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       const content = request.messages[0]?.content
       inputs.push(typeof content === "string" ? content : JSON.stringify(content))
-      yield { type: "text/chunk", text: "sum".repeat(200) } // ≥ 500 chars (M34 ⑦c floor)
+      yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }

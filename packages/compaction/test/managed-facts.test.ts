@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,8 +17,8 @@ it('commits existing summary markers as one ordinary managed group before publis
   const actual = backend.appendOwnedBatch!
   backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
   try {
-    const engine = createCompactionEngine({ facts: () => document.compaction, config: { contextWindow: 10000, thresholdRatio: .05, maxTokens: 200 }, model: { async *stream() {
-      yield { type: 'text/chunk', text: '## Primary Request and Intent\n- ' + 'work '.repeat(120) }
+    const engine = createCompactionEngine({ facts: () => document.compaction, config: { contextWindow: 10000, thresholdRatio: .05, maxTokens: 200 }, model: { prepare: prepareTextFixture, async *stream() {
+      yield { type: 'text/chunk', text: checkpointOfLength(600) }
       yield { type: 'end' }
     } } } as any)
     expect((await engine.compact(document.view as any)).compacted).toBe(true)

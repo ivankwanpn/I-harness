@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync } from "node:fs"
 import { resolve, join } from "node:path"
@@ -18,7 +19,7 @@ it("actual submit durably recovers while a parked child and previous tool effect
   let childSignal: AbortSignal | undefined, effects = 0, attempts = 0, summaries = 0, ordinary: "unknown" | "schema" | undefined
   const costs: number[] = [], statesAtTransport: (string | undefined)[] = []
   const child: ModelClient = { async *stream(request) { childSignal = request.signal; entered.resolve(); await release.promise; yield { type: "text/chunk", text: "child result" }; yield { type: "end" } } }
-  const summary: ModelClient = { async *stream() { summaries++; yield { type: "text/chunk", text: "Checkpoint: original task authorized one completed write; the previous outcome remains in source audit. ".repeat(6) }; yield { type: "end" } } }
+  const summary: ModelClient = { prepare: prepareTextFixture, async *stream() { summaries++; yield { type: "text/chunk", text: checkpointOfLength(600) }; yield { type: "end" } } }
   const model = createOpenAICompatibleClient({ apiKey: "controlled", model: "fixture", fetch: async (_url, init) => {
     attempts++; costs.push(Buffer.byteLength(String(init?.body)))
     statesAtTransport.push(deriveContextRecovery((await coordinator.snapshot!("parent")).session, "parent")?.state)

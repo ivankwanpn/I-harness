@@ -8,7 +8,7 @@ import { safeActiveTokens } from "../projection/window.ts"
 import { activeEvents, renderShadowed, hasReplacementHistory } from "../projection/shadowed.ts"
 import { planPrune, surfaceTokensAfterPrune } from "./prune.ts"
 import { prepareSummary, requestSummary } from "./summary.ts"
-import { SummaryBlockedError, SummaryCheckpointError } from "../summarizer.ts"
+import { SummaryBlockedError, SummaryCheckpointError } from "../summary-errors.ts"
 import type { SummaryDependencies, CompactSettings } from "./contracts.ts"
 
 const d = diagnosticsFor("turn")

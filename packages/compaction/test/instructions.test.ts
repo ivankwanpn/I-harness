@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
 import type { LLMRequest, ModelClient, LLMStreamEvent } from "@i-harness/llm-seam"
@@ -8,10 +9,10 @@ import { createCompactionEngine } from "../src/index.ts"
 // (G1's buildSummaryPrompt owns the full template; v0 keeps the additive
 // section so the merge point is a single signature).
 function recordingModel(seen: { content?: string }): ModelClient {
-  return {
+  return { prepare: prepareTextFixture,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       seen.content = request.messages[0]!.content as string
-      yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "work ".repeat(120) } // ≥ 500 chars (M34 ⑦c floor)
+      yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
   }

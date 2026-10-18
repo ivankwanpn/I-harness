@@ -1,3 +1,4 @@
+import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
 import { recordFixture } from "./helpers.ts"
 import { expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -16,7 +17,7 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
   const store = join(root, "sessions")
   const requests: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
-  const summarizer: ModelClient = { async *stream() { yield { type: "text/chunk", text: "A summary that deliberately omits all Todo details." }; yield { type: "end" } } }
+  const summarizer: ModelClient = { prepare: prepareTextFixture, async *stream() { yield { type: "text/chunk", text: completeCheckpoint() }; yield { type: "end" } } }
   let coordinator = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   let service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, contextWindow: 100_000, compact: { auto: false, summarizationModel: summarizer, minSummaryChars: 1 } })

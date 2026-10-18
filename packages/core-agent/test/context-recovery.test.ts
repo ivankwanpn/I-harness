@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, deriveMessages, deriveContextRecovery, fromJSONL, toJSONL } from "@i-harness/core-session"
@@ -31,7 +32,7 @@ function fixture(options: { failure?: () => Response; repeat?: boolean; fixed?: 
       yield* stream({ ...control, validateBeforeTransport() { control?.validateBeforeTransport?.(); attempts.push({ inputFingerprint: prepared.measurement.input.inputFingerprint, inputCost: Object.values(prepared.measurement.input.components).reduce((n, c) => n + c.heuristicTokens, 0) }) } })
     })())
   } }
-  const summary: ModelClient = { async *stream() { summaries++; await options.summary?.(); yield { type: "text/chunk", text: "Checkpoint: original task and authorized prior write completed; its outcome is retained in source history. ".repeat(6) }; yield { type: "end" } } }
+  const summary: ModelClient = { prepare: prepareTextFixture, async *stream() { summaries++; await options.summary?.(); yield { type: "text/chunk", text: checkpointOfLength(600) }; yield { type: "end" } } }
   const deps = { session, sessionId: "owned", tools, model, systemPrompt: "Keep authority and outcomes", budget: { contextWindow: 100000 }, maxOutputTokens: 1024,
     compact: { contextWindow: 100000, auto: false, retainTokens: 100, summarizationModel: summary, summaryLimits: { contextWindow: 100000 }, prune: options.prune ? { thresholdChars: 1000, headChars: 120, tailChars: 80 } : false as const },
     stepInputs: { claimAtStepBoundary() { claims++ } }, flush: () => options.flush?.(session) ?? Promise.resolve() }
