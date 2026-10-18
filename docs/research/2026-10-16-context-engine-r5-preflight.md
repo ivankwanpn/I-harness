@@ -50,3 +50,15 @@ The old failed whole-program evidence remains open until R6 fixed-HEAD qualifica
 ## F1 file-query reader follow-through (2026-10-17, still unreviewed)
 
 Actual CLI qualification found the file-backed session-query scanner interpreting format6 batch wrappers as individual events. F1 is correcting it through the shared byte-exact journal codec while retaining read-only, structural file observation semantics. A bare file reader can see a complete unsynced frame; it cannot manufacture an owned receipt, execution/permission proof or a current runtime Session. F1 adds no unused optional coordinator seam to the standalone storeRoot API. Rebase the accepted reader/API in R5 and decide the actual shipping composition of live-owned query observations where needed: use established immutable ownership/lineage checks, state unavailable honestly, and never load/repair/assemble/send to satisfy observation. Preserve standalone structural-file compatibility with explicit provenance and no false durability claim. This note adds no product completion or R4 artifact authority.
+
+## 2026-10-18 qualification obligation: renderer must not depend on Node fact machinery
+
+Actual F4 candidate c6a78be1 renderer build fails in core-session/managed/capture.ts: node:util `types` is not exported by Vite's browser external module. The exact sealed4b4cbe47 BASE build also fails, but its first error is core-session/events/usage-anchor.ts: node:crypto `createHash` is not exported. Both logs additionally report Node imports from managed/settlement-event.ts and serialization/fact-journal.ts. Current build transforms2107modules; BASE2102. These are DISTINCT initial failures. Unchanged source files do not prove unchanged dependency reachability or absence of an F4 contribution.
+
+Closed evidence in .superpowers/sdd/2026-10-18-context-engine-r3-f4-physical-attempts/evidence:
+- build-renderer-final1.log SHA256 a60af69bf430f66e9b404d05aaad5116cc9638403e900aea3fcf778017e798cf.
+- base-4b4c-renderer-build1.log SHA256 201ef3615f1256d3f74015fb53cdd16297d563164ef3b6b7c66ee33f01604375.
+
+Root independently read both causes/warnings and hashes. F4 records renderer as FAILED/unqualified, not an identical baseline or a renderer pass. Fresh F4 review still evaluates any concrete added risk. This does not block continued isolated Gateway/CLI evidence, nor does their success qualify the renderer.
+
+R5 must establish the actual browser-safe observation/DTO dependency boundary and migrate real renderer consumers, while Node retains the strict proxy/accessor checks, ownership, journal, hash and captured-fact validation it needs. Do not replace strict host validation with a permissive browser stub, blanket polyfill or suppressed build warning. Follow the live imports to decide the narrow split; do not move execution authority or capacity decisions into UI code merely to make bundling succeed. Qualify actual renderer build and its observed-state paths with zero prepare/auth/model/tool calls. R6 must include the corrected shipping renderer before any release claim. This is part of the existing observation-boundary redesign, not an extra independent frontend feature.
