@@ -11,6 +11,20 @@ import { describeContext } from "../../llm-openai-compatible/src/context.ts"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import { createDesktopHost } from "../src/host.ts"
 
+function decodeRequestChunks(chunks: readonly Buffer[]): string {
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+it('decodes a fixture request losslessly when a multibyte UTF-8 character crosses chunks', () => {
+  const raw = '{"text":"合"}', bytes = Buffer.from(raw, 'utf8')
+  for (let split = 1; split < bytes.length; split++) {
+    const decoded = decodeRequestChunks([bytes.subarray(0, split), bytes.subarray(split)])
+    expect(decoded).toBe(raw)
+    expect(JSON.parse(decoded)).toEqual({ text: '合' })
+    expect(Buffer.byteLength(decoded, 'utf8')).toBe(bytes.length)
+  }
+})
+
 it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)("shipping host compacts cumulative moderate growth with window %s across %s", async (contextWindow, mode) => {
   const root = await mkdtemp(join(tmpdir(), "ih-growth-host-")), workspace = join(root, "workspace")
   await mkdir(workspace)
@@ -20,7 +34,8 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
   const frames: RpcMessage[] = [], requests: { kind: string; input: number; reasoning: number; cap?: number; body: any }[] = []
   let reads = 0, mainCalls = 0
   const server = createServer((req, res) => {
-    let raw = ""; req.on("data", chunk => { raw += chunk }); req.on("end", () => {
+    const chunks: Buffer[] = []; req.on("data", chunk => { chunks.push(chunk) }); req.on("end", () => {
+      const raw = decodeRequestChunks(chunks)
       const body = JSON.parse(raw), last = JSON.stringify(body.messages?.at(-1))
       const summary = last.includes("You are now acting as a compaction engine"), title = !body.tools?.length && !summary
       const input = describeContext(body, { model: "fixture", apiKey: "controlled" }).input
