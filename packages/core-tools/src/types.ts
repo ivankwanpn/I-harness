@@ -1,5 +1,7 @@
 import type { SessionView as Session, SettlementFacts, ProducerFactOutcome, SessionEvent } from "@i-harness/core-session"
 import type { RetainedOutcomeSink } from './registry/retained-outcome.ts'
+import type { ToolModelGeneration, ApprovalGenerationFactory } from '@i-harness/llm-seam'
+export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from '@i-harness/llm-seam'
 
 export type ToolExposure = "direct" | "deferred" | "hidden"
 
@@ -41,6 +43,7 @@ export type PreparedApprovalProvider = (input: PreparedApprovalInput) => Prepare
 export type ApprovalAuthorityProvider = (input: PreparedApprovalInput) => (() => boolean)
 
 export interface ToolExec {
+  modelGeneration?: ToolModelGeneration
   /** Registry-bound source registration, never model JSON or a write port. */
   retainOutcome?(): RetainedOutcomeSink
   retainResultReference?(event: Extract<SessionEvent, { type: 'context/result-ref' }>): Promise<void>
@@ -198,7 +201,7 @@ export interface SearchableTool {
 // human answerer for `ask` decisions: deny ⇒ fail-closed throw; approve ⇒
 // auto-approve (answerer skipped); allow ⇒ human answerer as before. Absent
 // service ⇒ behavior byte-identical to pre-R-A9.
-export interface GuardianRequest { name: string; reason: string; args: unknown; signal?: AbortSignal }
+export interface GuardianRequest { name: string; reason: string; args: unknown; signal?: AbortSignal; generation?: ApprovalGenerationFactory }
 export interface GuardianVerdict { outcome: "approve" | "allow" | "deny"; rationale: string }
 export type ApprovalGuardian = (req: GuardianRequest) => Promise<GuardianVerdict>
 
@@ -207,7 +210,7 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code"; settlementSource?: SettlementFacts<ProducerFactOutcome> }): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code"; settlementSource?: SettlementFacts<ProducerFactOutcome>; modelGeneration?: ToolModelGeneration }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>

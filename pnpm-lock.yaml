@@ -404,6 +404,9 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
       '@i-harness/token-meter':
         specifier: workspace:*
         version: link:../token-meter
@@ -910,6 +913,9 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/http-transport':
+        specifier: workspace:*
+        version: link:../http-transport
       '@i-harness/image-validation':
         specifier: workspace:*
         version: link:../image-validation

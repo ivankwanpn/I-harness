@@ -1,6 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, projectImagesForProvider, describeHttpError, describeTransportError, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
-import { systemFetch } from "@i-harness/http-transport"
+import { preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import { createSubscriptionAffinity } from "./affinity.ts"
 import type { OpenAIConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -36,7 +35,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       affinity && scopeIdentity ? () => affinity.cacheKey(scopeIdentity) : undefined)
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    return createPreparedPayload({
+    return createPreparedHttpPayload({
       textOutput: observeTextOutput,
       validate: responsesValidator(capturedConfig, codexSubscription),
       body: body, request, describe: body => describeContext(body, capturedConfig, codexSubscription, generatedAffinity),
@@ -48,7 +47,8 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (value !== undefined) body.max_output_tokens = value
         return body
       },
-      async *execute(_actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
+      transport: { label: 'openai', ...(codexSubscription ? { proxy: 'system' as const } : {}),
+      async prepare(_actualBody, _serialized, control) {
         const request = { ...capturedRequest, ...control }
         let accessToken: string
         let accountId: string | undefined
@@ -66,37 +66,24 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           request.signal?.throwIfAborted()
         } catch (error) {
           if (request.signal?.aborted) throw error
-          yield { type: "error", error: Object.assign(error instanceof Error ? error : new Error("Unable to resolve account credentials"), { code: "AUTH" }) }
-          return
+          throw Object.assign(error instanceof Error ? error : new Error("Unable to resolve account credentials"), { code: "AUTH" })
         }
-        // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
-        // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
-        // TCP / TLS / proxy. Surface the cause chain instead.
-        let response: Response
-        execution.confirm(executionIdentity)
         const routing = affinity?.prepare(scope, accountId!, body.prompt_cache_key, cacheMode === "off", scopeIdentity)
-        try {
-          response = await (codexSubscription ? systemFetch : fetch)(endpoint, {
+        return { url: endpoint, identity: executionIdentity, state: routing, init: {
             method: "POST",
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream", ...routing!.headers } : {}) }),
             ...(codexSubscription ? { redirect: "error" as const } : {}),
-            body: serialized,
             // M61: the caller's abort signal reaches the transport — cancel must
             // kill a parked request, not wait for the first event.
             ...(request.signal !== undefined ? { signal: request.signal } : {}),
-          })
-        } catch (error) {
-          yield { type: "error", error: await describeTransportError("openai", endpoint, error) }
-          return
-        }
-        if (!response.ok || !response.body) {
-          yield { type: "error", error: await describeHttpError("openai", response, request) }
-          return
-        }
+        } }
+      },
+      async *read(response, _actualBody, control, routing) {
+        const request = { ...capturedRequest, ...control }
         routing?.capture(response, request.signal)
-        reportStreamActivity(request, "response-start")
         const fold = createResponseFold(capturedConfig, codexSubscription, () => reportStreamActivity(request, "tool-arguments"))
-        yield* decodeResponseStream(response.body, fold, codexSubscription, request)
+        yield* decodeResponseStream(response.body!, fold, codexSubscription, request)
+      },
       },
     })
   })

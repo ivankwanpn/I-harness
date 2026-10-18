@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { invalidPreparedRequest, preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeHttpError, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { invalidPreparedRequest, preparedModelClient, snapshotModelData, createPreparedHttpPayload, reportStreamActivity, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
 import { fingerprintPrefix } from "./request/messages.ts"
@@ -30,44 +30,29 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     const { payload, cacheEvidence } = prepared
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    return createPreparedPayload({
+    return createPreparedHttpPayload({
       textOutput: observeTextOutput,
       body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
       validate: anthropicValidator(capturedConfig, messages, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),
       cap: (body, cap) => capBody(body, cap, request, capturedConfig),
-      async *execute(actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
-        const request = { ...capturedRequest, ...control }
+      transport: { label: 'anthropic',
+        prepare(actualBody, _serialized, control) {
         // Bind signed responses to the lowered input that this handle sends.
         // Only producer-proven cache additions leave the native prefix.
         const { semantic } = describeCachedBody(actualBody, cacheEvidence)
         const prefix = fingerprintPrefix(semantic.system, semantic.tools, semantic.messages)
         const inputWitness = anthropicWitness(actualBody, capturedConfig)
-        // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
-        // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
-        // TCP / TLS / proxy. Surface the cause chain instead.
-        let response: Response
-        execution.confirm(capturedConfig.executionIdentity)
-        try {
-          response = await fetch(`${baseUrl}/v1/messages`, {
-            method: "POST",
+        return { url: `${baseUrl}/v1/messages`, identity: capturedConfig.executionIdentity, state: { prefix, inputWitness }, init: {
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", "x-api-key": capturedConfig.apiKey, "anthropic-version": "2023-06-01" }),
-            body: serialized,
-            // M61: the caller's abort signal reaches the transport — cancel must
-            // kill a parked request, not wait for the first event.
-            ...(request.signal !== undefined ? { signal: request.signal } : {}),
-          })
-        } catch (error) {
-          yield { type: "error", error: await describeTransportError("anthropic", `${baseUrl}/v1/messages`, error) }
-          return
-        }
-        if (!response.ok || !response.body) {
-          yield { type: "error", error: await describeHttpError("anthropic", response, request) }
-          return
-        }
-        reportStreamActivity(request, "response-start")
-        const fold = createAnthropicFold(capturedConfig, () => prefix, () => reportStreamActivity(request, "tool-arguments"), inputWitness)
-        yield* decodeAnthropicStream(response.body, fold, request)
+            signal: control.signal,
+        } }
+        },
+        async *read(response, _actualBody, control, { prefix, inputWitness }) {
+          const request = { ...capturedRequest, ...control }
+          const fold = createAnthropicFold(capturedConfig, () => prefix, () => reportStreamActivity(request, "tool-arguments"), inputWitness)
+          yield* decodeAnthropicStream(response.body!, fold, request)
+        },
       },
     })
   })

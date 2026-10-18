@@ -83,7 +83,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
         guardian = undefined
       }
       if (guardian) {
-        const verdict = await guardian({ name: call.name, reason: resolved.reason, args: call.args, ...(signal !== undefined ? { signal } : {}) })
+        const verdict = await guardian({ name: call.name, reason: resolved.reason, args: call.args, ...(identity?.modelGeneration ? { generation: identity.modelGeneration.approval } : {}), ...(signal !== undefined ? { signal } : {}) })
         if (verdict.outcome === "deny") throw new Error(`guardian denied: ${verdict.rationale}`)
         if (verdict.outcome === "allow") await approval.askHuman(resolved.reason)
       } else {
@@ -100,6 +100,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     // dispatch path can attribute the caller (agent-team resolves team-tool
     // callers from it). Additive: no identity → the exec is exactly as before.
     const exec: ToolExec = {}
+    if (identity?.modelGeneration) exec.modelGeneration = identity.modelGeneration
     if (signal) exec.abortSignal = signal
     if (identity?.sessionId !== undefined) exec.sessionId = identity.sessionId
     if (identity?.session !== undefined) exec.session = identity.session

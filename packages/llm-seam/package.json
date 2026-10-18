@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./internal/bedrock-terminal": "./src/prepared/bedrock-terminal.ts",
     ".": "./src/index.ts"
   },
   "scripts": {
@@ -11,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@i-harness/http-transport": "workspace:*",
     "@i-harness/image-validation": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/token-meter": "workspace:*"

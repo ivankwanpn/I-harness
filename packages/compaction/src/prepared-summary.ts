@@ -2,6 +2,8 @@ import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, 
 import { SummaryBlockedError, SummaryNativeSourceError } from "./summary-errors.ts"
 
 export interface SummaryLimits {
+  generation?: import('@i-harness/llm-seam').GenerationControl
+  bindGeneration?: (prepared: import('@i-harness/llm-seam').PreparedModelRequest) => Promise<void>
   expectedImages?: number
   maxOutputTokens?: number
   outputCapExplicit?: boolean
@@ -56,6 +58,8 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
   const reserve = finalOutput.capSupport === "supported" ? finalOutput.effectiveCap ?? cap : cap
   const requiredRoom = Math.max(finalRequired, reserve)
   if (ceiling < finalRequired || reserve < finalRequired) throw new SummaryBlockedError("output-floor", { output: reserve, floor: finalRequired })
+  await limits.bindGeneration?.(candidate)
+  check()
   return { candidate, inputTokens, room, requiredRoom,
     facts: { inputTokens, contextWindow: limits.contextWindow, outputReserve: reserve,
       ...(finalOutput.capSupport === "supported" && finalOutput.effectiveCap !== undefined ? { effectiveCap: finalOutput.effectiveCap } : {}), capSupport: finalOutput.capSupport, minimumCap: finalOutput.minimumCap,

@@ -1,4 +1,5 @@
 import type { LLMUsage, PreparedModelRequest } from '@i-harness/llm-seam'
+import { assertOwnedPreparedTerminal } from '@i-harness/llm-seam'
 import type { SummaryLimits } from '../prepared-summary.ts'
 import { SummaryBlockedError } from '../summary-errors.ts'
 import { summaryPieceCollector, type SummaryPieceObservation } from '../summary-observation.ts'
@@ -40,7 +41,7 @@ function recordUsage(usage: LLMUsage, next: LLMUsage): void {
 }
 /** Drain one actual prepared stream, preserving failed-attempt usage once. */
 export async function readSummaryStream(candidate: PreparedModelRequest,
-  limits: Pick<SummaryLimits, 'signal' | 'validateBeforeTransport' | 'onUsage'> & { maxRetainedChars: number },
+  limits: Pick<SummaryLimits, 'signal' | 'validateBeforeTransport' | 'onUsage' | 'generation'> & { maxRetainedChars: number },
 ): Promise<SummaryStreamResult> {
   if (!Number.isSafeInteger(limits.maxRetainedChars) || limits.maxRetainedChars < 0) throw new RangeError('Invalid retained checkpoint ceiling')
   const retained = retainedText(limits.maxRetainedChars), usage: LLMUsage = {}, collector = summaryPieceCollector(candidate)
@@ -48,8 +49,9 @@ export async function readSummaryStream(candidate: PreparedModelRequest,
   let failed = false, failure: unknown
   const check = () => { limits.signal?.throwIfAborted(); limits.validateBeforeTransport?.() }
   try {
+    if (limits.generation && !candidate.localExecutionIdentity) assertOwnedPreparedTerminal(candidate)
     limits.signal?.throwIfAborted()
-    for await (const event of candidate.stream({ signal: limits.signal, validateBeforeTransport: check, confirmExecution: c => collector.confirm(c) })) {
+    for await (const event of candidate.stream({ generation: limits.generation, signal: limits.signal, validateBeforeTransport: check, confirmExecution: c => collector.confirm(c) })) {
       limits.signal?.throwIfAborted()
       if (ended && ['text/chunk', 'reasoning', 'tool_call'].includes(event.type)) throw Error('Summary produced content after completion')
       if (event.type === 'text/chunk') retained.push(event.text)

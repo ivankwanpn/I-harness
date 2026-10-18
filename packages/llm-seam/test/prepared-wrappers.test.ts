@@ -1,4 +1,19 @@
 import { expect, it } from "vitest"
+import { preparedControls } from '../src/index.ts'
+it('intersects original caller cancellation with an override through prepared control composition', () => {
+  const caller = new AbortController(), override = new AbortController()
+  const controls = preparedControls({ signal: caller.signal }, { signal: override.signal })
+  caller.abort()
+  expect(controls.signal?.aborted).toBe(true)
+})
+it('the final retry composition and its cap derivatives expose the effective finite retry descriptor', async () => {
+  const base: ModelClient = { async *stream() { yield { type: 'end' } } }
+  const plain = await prepareModelRequest(base, request())
+  expect((plain as unknown as { retryPolicy: unknown }).retryPolicy).toEqual({ mode: 'off', maxRetries: 0 })
+  const retry = createRetryingClient(base, resolveRetryPolicy({ mode: 'normal', maxRetries: 3 }))
+  const actual = await prepareModelRequest(createWaitingGuard(retry, { firstResponseMs: 1000, progressMs: 1000 }), request())
+  expect((actual.withOutputCap(2000) as unknown as { retryPolicy: unknown }).retryPolicy).toEqual({ mode: 'normal', maxRetries: 3 })
+})
 it("cap derivatives preserve the waiting policy captured by their owner",async()=>{
   const policy={firstResponseMs:1000,progressMs:1000}
   const client=createWaitingGuard({async *stream(){yield {type:"end"}}},policy)

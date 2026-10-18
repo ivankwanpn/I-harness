@@ -7,9 +7,11 @@ import { freezePreparedFacts, preparedControls, snapshotModelData, validateOutpu
 import { createPreparedValidation, readPreparedValidation, sanitizePreparedValidation, type FinalValidator } from './validation.ts'
 import { finalValidationError } from './rejection.ts'
 import { normalizePreparedTextOutput, readPreparedTextOutput, type PreparedTextOutput } from './text-output.ts'
+import { NO_GENERATION_RETRY } from './generation.ts'
+import { assertOwnedPreparedTerminal } from './owned-terminal.ts'
 /** The adapter retains the private payload; derivatives replace generation
  * fields only. HTTP execution sends the very string whose bytes were measured. */
-export function createPreparedPayload<T>(options: {
+export interface PreparedPayloadOptions<T> {
   body: T
   request: LLMRequest
   kind?: "http-json-body" | "sdk-command-estimate"
@@ -19,7 +21,8 @@ export function createPreparedPayload<T>(options: {
   output: (body: T, request: LLMRequest) => PreparedRequestMeasurement["output"]
   cap: (body: T, cap: number | undefined) => T
   execute: (body: T, serialized: string, control: PreparedStreamControl, execution: PreparedExecutionContext) => AsyncIterable<LLMStreamEvent>
-}): PreparedModelRequest {
+}
+export function createPreparedPayload<T>(options: PreparedPayloadOptions<T>): PreparedModelRequest {
   // Lower HTTP values once: description, derivatives and send all observe the
   // same JSON semantics even when callers supplied Date/toJSON/accessors.
   const sdk = options.kind === "sdk-command-estimate"
@@ -49,7 +52,8 @@ export function createPreparedPayload<T>(options: {
       },
     })
     const validation = validated ?? readPreparedValidation({ measurement })
-    return Object.freeze({
+    const prepared: PreparedModelRequest = Object.freeze({
+      retryPolicy: NO_GENERATION_RETRY,
       measurement, validation,
       textOutput: options.textOutput ? normalizePreparedTextOutput(options.textOutput(actualBody)) : readPreparedTextOutput({}),
       withOutputCap(cap: number | undefined) {
@@ -58,12 +62,20 @@ export function createPreparedPayload<T>(options: {
         validateOutputCap(cap, output.minimumCap)
         return derive(options.cap(snapshotModelData(original), cap), { ...options.request, maxOutputTokens: cap })
       },
-      stream(control?: PreparedStreamControl) {
+      async *stream(control?: PreparedStreamControl) {
         const actual = preparedControls(options.request, control)
+        if (actual.generation) assertOwnedPreparedTerminal(prepared)
         actual.signal?.throwIfAborted()
-        return options.execute(snapshotModelData(actualBody), serialized, actual, preparedExecution(measurement, actual, validation))
+        const execution = preparedExecution(measurement, actual, validation)
+        try {
+          for await (const event of options.execute(snapshotModelData(actualBody), serialized, actual, execution)) {
+            if (event.type === 'end' || event.type === 'error') await execution.settle(event.type === 'end' ? 'completed' : (event.error as Error & { code?: string }).code === 'TRANSPORT' ? 'unknown' : 'failed')
+            yield event
+          }
+        } finally { await execution.settle('unknown') }
       },
     })
+    return prepared
   }
   return derive(original)
 }

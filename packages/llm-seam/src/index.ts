@@ -1,7 +1,6 @@
-import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
 import { deriveMessages, renderConversation, stringifyJsonData } from "@i-harness/core-session"
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
 /**
@@ -125,175 +124,16 @@ export function replayBlockOrder<T>(
   return visibleText === content && seenReasoning.size === reasoning.length && seenTools.size === tools.length ? result : undefined
 }
 
-export type RetryableErrorCode =
-  | "RATE_LIMIT"
-  | "SERVER"
-  | "TIMEOUT"
-  | "TRANSPORT"
-  | "EMPTY_RESPONSE"
-  | "CONTEXT_WINDOW_EXCEEDED"
-  | "QUOTA"
-
-export interface RetryBackoffConfig {
-  initialDelayMs?: number
-  maxDelayMs?: number
-  jitterRatio?: number
-}
-
-export interface NormalRetryPolicyConfig {
-  mode: "normal"
-  maxRetries?: number
-  retryableCodes?: string[]
-  backoff?: RetryBackoffConfig
-}
-
-export interface AlwaysRetryPolicyConfig {
-  mode: "always"
-  backoff?: RetryBackoffConfig
-}
-
-export type RetryPolicyConfig = NormalRetryPolicyConfig | AlwaysRetryPolicyConfig
-
-export interface ResolvedRetryBackoff {
-  readonly initialDelayMs: number
-  readonly maxDelayMs: number
-  readonly jitterRatio: number
-}
-
-export interface ResolvedNormalRetryPolicy extends ResolvedRetryBackoff {
-  readonly mode: "normal"
-  readonly maxRetries: number
-  readonly retryableCodes: readonly string[]
-}
-
-export interface ResolvedAlwaysRetryPolicy extends ResolvedRetryBackoff {
-  readonly mode: "always"
-}
-
-export type ResolvedRetryPolicy = ResolvedNormalRetryPolicy | ResolvedAlwaysRetryPolicy
-
-const DEFAULT_MAX_RETRIES = 5
-const DEFAULT_INITIAL_DELAY_MS = 500
-const DEFAULT_MAX_DELAY_MS = 10_000
-const DEFAULT_JITTER_RATIO = 0.1
-const DEFAULT_RETRYABLE_CODES = Object.freeze(["RATE_LIMIT", "SERVER", "TIMEOUT", "TRANSPORT", "EMPTY_RESPONSE"])
-
-function resolveBackoff(config: RetryBackoffConfig | undefined, path: string): ResolvedRetryBackoff {
-  const initialDelayMs = config?.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS
-  const maxDelayMs = config?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS
-  const jitterRatio = config?.jitterRatio ?? DEFAULT_JITTER_RATIO
-  if (!Number.isFinite(initialDelayMs) || initialDelayMs <= 0) throw new Error(`${path}.initialDelayMs must be a positive finite number`)
-  if (!Number.isFinite(maxDelayMs) || maxDelayMs <= 0) throw new Error(`${path}.maxDelayMs must be a positive finite number`)
-  if (initialDelayMs > maxDelayMs) throw new Error(`${path}.initialDelayMs must be <= maxDelayMs`)
-  if (!Number.isFinite(jitterRatio) || jitterRatio < 0 || jitterRatio > 1) throw new Error(`${path}.jitterRatio must be between 0 and 1`)
-  return Object.freeze({ initialDelayMs, maxDelayMs, jitterRatio })
-}
-
-export function resolveRetryPolicy(config: RetryPolicyConfig | undefined, path = "retryPolicy"): ResolvedRetryPolicy {
-  if (config === undefined) {
-    return Object.freeze({ mode: "normal", maxRetries: DEFAULT_MAX_RETRIES, retryableCodes: [...DEFAULT_RETRYABLE_CODES], ...resolveBackoff(undefined, `${path}.backoff`) })
-  }
-  if (config.mode === "normal") {
-    const maxRetries = config.maxRetries ?? DEFAULT_MAX_RETRIES
-    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) throw new Error(`${path}.maxRetries must be a non-negative safe integer`)
-    const retryableCodes = config.retryableCodes ?? [...DEFAULT_RETRYABLE_CODES]
-    if (retryableCodes.length === 0) throw new Error(`${path}.retryableCodes must not be empty`)
-    if (new Set(retryableCodes).size !== retryableCodes.length) throw new Error(`${path}.retryableCodes must not contain duplicates`)
-    return Object.freeze({ mode: "normal", maxRetries, retryableCodes: Object.freeze([...retryableCodes]), ...resolveBackoff(config.backoff, `${path}.backoff`) })
-  }
-  if (config.mode === "always") {
-    return Object.freeze({ mode: "always", ...resolveBackoff(config.backoff, `${path}.backoff`) })
-  }
-  throw new Error(`${path}.mode must be "normal" or "always"`)
-}
+export { resolveRetryPolicy, backoffDelay } from './retry/policy.ts'
+export type { RetryableErrorCode, RetryBackoffConfig, NormalRetryPolicyConfig, AlwaysRetryPolicyConfig, RetryPolicyConfig, ResolvedRetryBackoff, ResolvedNormalRetryPolicy, ResolvedAlwaysRetryPolicy, ResolvedRetryPolicy } from './retry/policy.ts'
 
 // Provider failure classification and payload-free facts share one public facade.
 export { retryErrorCode } from "./provider-error/classify.ts"
 export { describeHttpError } from "./provider-error/http.ts"
 export { modelFailureFacts, safeModelFailureFacts } from "./provider-error/facts.ts"
 export type { ModelFailureFacts } from "./provider-error/types.ts"
-import { retryErrorCode, isModelCapacityError } from "./provider-error/classify.ts"
+import { retryErrorCode } from "./provider-error/classify.ts"
 import { modelFailureFacts } from "./provider-error/facts.ts"
-import { terminalErrorCodes as TERMINAL_CODES } from "./provider-error/types.ts"
-
-// Exponential backoff with symmetric jitter. attemptNo starts at 1 for the
-// wait AFTER the first failed attempt; the delay is capped at maxDelayMs and
-// never negative (jitter is ±jitterRatio of the capped base).
-export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): number {
-  const base = policy.initialDelayMs * 2 ** (attemptNo - 1)
-  const capped = Math.min(base, policy.maxDelayMs)
-  const jitter = (Math.random() * 2 - 1) * policy.jitterRatio * capped
-  return Math.min(policy.maxDelayMs, Math.max(0, Math.round(capped + jitter)))
-}
-
-// Retry only the model request. Consumers must explicitly opt into discarding
-// output; tools and earlier committed steps never belong to this boundary.
-function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
-  async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-    const requestId = randomUUID()
-    let attemptNo = 0
-    let recovery: ModelRetryInfo | undefined
-    while (true) {
-      request.signal?.throwIfAborted()
-      if (recovery) yield { type: "retry", retry: { ...recovery, phase: "attempting" } }
-      request.signal?.throwIfAborted()
-      let produced = false
-      let failure: unknown
-      let failed = false
-      let failureEvent: Extract<LLMStreamEvent, { type: "error" }> | undefined
-      const pendingUsage: LLMStreamEvent[] = []
-      try {
-        for await (const ev of client.stream(request)) {
-          request.signal?.throwIfAborted()
-          const output = ev.type === "tool_call" || ((ev.type === "text/chunk" || ev.type === "reasoning") && ev.text.length > 0)
-          if (output) produced = true
-          if (ev.type === "usage") { pendingUsage.push(ev); continue }
-          if (ev.type === "error") { failure = ev.error; failureEvent = ev; failed = true; break }
-          if (recovery && (output || ev.type === "end")) {
-            yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
-            recovery = undefined
-          }
-          if (ev.type === "end") { yield* pendingUsage; yield ev; return }
-          yield ev
-        }
-      } catch (error) { failure = error; failed = true }
-      request.signal?.throwIfAborted()
-      if (!failed) {
-        if (recovery) yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
-        yield* pendingUsage
-        return
-      }
-      const code = retryErrorCode(failure)
-      const retryable = !TERMINAL_CODES.has(code ?? "") && (policy.mode === "always" || policy.retryableCodes.includes(code ?? ""))
-      const budgetExhausted = policy.mode === "normal" && attemptNo >= policy.maxRetries
-      const detail = failure as { retryAfterAt?: number; httpStatus?: number } | undefined
-      const serverWait = typeof detail?.retryAfterAt === "number" && Number.isFinite(detail.retryAfterAt) ? Math.max(0, detail.retryAfterAt - Date.now()) : 0
-      if (retryable && (!produced || request.retryOutput === "discard") && !budgetExhausted && serverWait <= 60_000) {
-        attemptNo++
-        const capacityLimited = isModelCapacityError(failure)
-        // Model capacity is temporary service load, not account quota. Give it
-        // a fixed ten-second minimum while retaining any longer server advice.
-        const delayMs = Math.max(serverWait, capacityLimited ? 10_000 : backoffDelay(policy, attemptNo))
-        recovery = {
-          requestId, phase: "waiting", attempt: attemptNo,
-          ...(policy.mode === "normal" ? { maxRetries: policy.maxRetries } : {}),
-          delayMs, nextAttemptAt: Date.now() + delayMs, code: capacityLimited ? "CAPACITY" : code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNKNOWN",
-          ...(detail?.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
-          ...(metadata?.providerId === undefined ? {} : { providerId: metadata.providerId.slice(0, 256) }),
-          ...(metadata?.modelId === undefined ? {} : { modelId: metadata.modelId.slice(0, 256) }),
-          ...(request.retryOutput === "discard" ? { discardOutput: true as const } : {}),
-        }
-        yield { type: "retry", retry: recovery }
-        request.signal?.throwIfAborted()
-        await delay(Math.max(0, recovery.nextAttemptAt! - Date.now()), undefined, { signal: request.signal })
-        continue
-      }
-      if (failureEvent && !budgetExhausted) { yield failureEvent; return }
-      throw failure
-    }
-  }
-  return { stream: wrapped }
-}
 
 export interface ToolSchema {
   name: string
@@ -339,6 +179,8 @@ export interface LLMRequestScope {
 }
 
 export interface LLMRequest {
+  generation?: import('./prepared/generation.ts').GenerationControl
+  onTransportIssue?: () => void
   confirmExecution?: (confirmation: import("./prepared/execution.ts").ExecutionConfirmation) => void
   /** Internal owner guard; wrappers forward it to each physical transport boundary. */
   validateBeforeTransport?: () => void
@@ -617,6 +459,8 @@ export type { PreparedRequestMeasurement, ProjectedInputFacts } from "@i-harness
 export { prepareModelRequest } from "./prepared/fallback.ts"
 export { wrapPreparedRequest, withPreparedRequests, mapModelRequest, snapshotModelData, preparedControls, freezePreparedFacts, invalidPreparedRequest, validateOutputCap } from "./prepared/wrappers.ts"
 export { createPreparedPayload } from "./prepared/payload.ts"
+export { createPreparedHttpPayload } from './prepared/http-terminal.ts'
+export { assertOwnedPreparedTerminal } from './prepared/owned-terminal.ts'
 export type { PreparedValidation, FinalValidator, FinalRejectionReason } from './prepared/validation.ts'
 export { assertNativeProducerWitnesses } from './prepared/native-witness.ts'
 export { stringifyJsonData } from '@i-harness/core-session'
@@ -624,12 +468,17 @@ export { validationCollector, readPreparedValidation } from './prepared/validati
 export { assertPreparedValidation, preparedBindingError } from './prepared/rejection.ts'
 export { preparedModelClient } from "./prepared/wrappers.ts"
 
-import { withPreparedRequests } from "./prepared/wrappers.ts"
-export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
-  return withPreparedRequests(client, inner => createRetryingExecution(inner, policy, metadata))
-}
+export { createRetryingClient } from './retry/execution.ts'
 export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./binding.ts"
 
 export type { LiveExecutionIdentity, ExecutionConfirmation, ExecutionReceipt, PreparedExecutionContext } from "./prepared/execution.ts"
-export { sameExecutionIdentity, validExecutionIdentity } from "./prepared/execution.ts"
+export { sameExecutionIdentity, validExecutionIdentity, isExecutionControlError } from "./prepared/execution.ts"
 export { readPreparedTextOutput, type PreparedTextOutput } from './prepared/text-output.ts'
+export { withPreparedSignal, observeModelClient } from './prepared/owned-wrappers.ts'
+export { modelExecutionSource } from './prepared/client-source.ts'
+export { createStableModelClient } from './prepared/wrappers.ts'
+export { createGenerationControl, isGenerationControl, generationError, isGenerationError, generationCandidate, freezeGenerationRetry, NO_GENERATION_RETRY } from './prepared/generation.ts'
+export type { GenerationControl, GenerationReservation, GenerationIssue } from './prepared/generation.ts'
+export type { AuxiliaryGenerationAction, ApprovalGenerationAction, TitleGenerationFactory, MediaGenerationAction, ToolModelGeneration, ApprovalGenerationFactory, CodeGenerationLineage, CodeGenerationScope } from './prepared/auxiliary.ts'
+
+export { preparedExecutionSource } from './prepared/owned-terminal.ts'

@@ -7,6 +7,7 @@ import { createFinalizer } from "./registry/finalize.ts"
 import { installPreExecuteDecision } from "./approval/decision.ts"
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
+export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
 export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { waitForObservation, userSteerForTool, type UserSteerSource } from "./observation.ts"

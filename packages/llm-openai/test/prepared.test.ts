@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest"
 import { systemFetch } from "@i-harness/http-transport"
-vi.mock("@i-harness/http-transport", () => ({ systemFetch: vi.fn(async () => new Response("")) }))
+vi.mock("@i-harness/http-transport", () => ({ systemFetch: vi.fn(async (_input, _init, beforeTransport) => { const issue = await beforeTransport?.(); issue?.(); return new Response("") }) }))
 import { createOpenAIClient } from "../src/index.ts"
 import type { LLMRequest } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
@@ -35,6 +35,9 @@ it("excludes generated subscription affinity only and retains raw and request ke
   expect(explicitA.measurement.input.semanticIdentity?.shapeId).not.toBe(explicitB.measurement.input.semanticIdentity?.shapeId)
 })
 it("validates owned input after held subscription auth and before transport, including cap derivatives", async () => {
+  const unexpectedFetch = vi.fn(async () => { throw new Error("Unexpected network destination") })
+  vi.stubGlobal("fetch", unexpectedFetch)
+  vi.mocked(systemFetch).mockClear()
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let current = true, checked = 0
   const client = createOpenAIClient({ apiKey: "", model: "fixture", codexSubscription: true, resolveCodexAuth: async () => { entered.resolve(); await release.promise; return { accessToken: "controlled", accountId: "fixture" } } })
@@ -46,7 +49,8 @@ it("validates owned input after held subscription auth and before transport, inc
   current = false; release.resolve()
   await expect(run).rejects.toThrow("stale before send")
   expect(checked).toBe(1)
-  expect(systemFetch).not.toHaveBeenCalled()
+  expect(systemFetch).toHaveBeenCalledOnce()
+  expect(unexpectedFetch).not.toHaveBeenCalled()
 })
 it.each(["system", "developer"])("prices raw Responses %s string and block policies as fixed system input", async role => {
   const request: LLMRequest = { systemPrompt: "", tools: [], messages: [] }

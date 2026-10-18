@@ -5,6 +5,7 @@ import { requestVideoAudio } from "../video-audio.ts"
 import { canonicalLlm } from "../configuration/store.ts"
 import { authRef, authValue } from "./auth.ts"
 import type { ProviderRuntime } from "../types.ts"
+import { isGenerationError } from '@i-harness/llm-seam'
 
 export function createMediaRuntime(
   options: Pick<CreateProviderRuntimeOptions, "settings">,
@@ -26,6 +27,7 @@ export function createMediaRuntime(
     },
 
     async analyzeVideoAudio(input) {
+      if (input.generation) input = { ...input, signal: AbortSignal.any([...(input.signal ? [input.signal] : []), input.generation.signal]) }
       input.signal?.throwIfAborted()
       const selection = options.settings.get().llm.videoAudio
       if (!selection) return { status: "unconfigured", reason: "Select a video audio model in Settings > Models and providers to analyze speech and sounds." }
@@ -39,7 +41,8 @@ export function createMediaRuntime(
         input.signal?.throwIfAborted()
         if (!key) return { status: "unconfigured", reason: "Configure an API key for the selected video audio provider." }
         return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers })
-      } catch {
+      } catch (error) {
+        if (isGenerationError(error)) throw error
         input.signal?.throwIfAborted()
         return { status: "failed", reason: "Unable to resolve the video audio provider credentials." }
       }

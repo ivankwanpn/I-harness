@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises"
 import { extname } from "node:path"
 import { resolvePath } from "@i-harness/fs"
 import { validateImage } from "@i-harness/image-validation"
-import type { ImageInput } from "@i-harness/core-session"
+import { isNondurableSession, type ImageInput } from "@i-harness/core-session"
 import type { Tool } from "@i-harness/core-tools"
 import { decodeVideo } from "./video-decoder.ts"
 import { VIDEO_LIMITS, type VideoAudioAnalyzer, type VideoAudioAnalysis, type VideoDecoder } from "./types.ts"
@@ -27,13 +27,19 @@ export function createReadVideoTool(deps: { workspace: string; analyzeAudio?: Vi
     isReadOnly: true, isConcurrencySafe: false, timeoutMs: VIDEO_LIMITS.toolTimeoutMs,
     async execute(args, exec) {
       const deadline = AbortSignal.timeout(VIDEO_LIMITS.toolTimeoutMs)
-      const signal = exec.abortSignal ? AbortSignal.any([exec.abortSignal, deadline]) : deadline
+      let signal = exec.abortSignal ? AbortSignal.any([exec.abortSignal, deadline]) : deadline
+      let generation: import('@i-harness/core-tools').MediaGenerationAction | undefined
+      let completed = false
       try {
         signal.throwIfAborted()
         const { path, startSeconds = 0, durationSeconds = 30, frameCount = 6, question } = args
         if (typeof path !== "string" || !path.trim() || !Number.isFinite(startSeconds) || startSeconds < 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > VIDEO_LIMITS.durationSeconds || !Number.isInteger(frameCount) || frameCount < 1 || frameCount > VIDEO_LIMITS.frameCount || (question !== undefined && (typeof question !== "string" || question.length > 2000))) throw new Error("Invalid video input: path, finite range up to 60 seconds and 1–8 frames are required")
         const resolved = resolvePath(deps.workspace, path)
         if (![".mp4", ".m4v", ".mov", ".webm", ".mkv", ".avi", ".mpeg", ".mpg", ".ogv"].includes(extname(resolved).toLowerCase())) throw new Error("Unsupported video container; use mp4, mov, webm, mkv, avi, mpeg or ogv")
+        if (exec.session && !isNondurableSession(exec.session) && !exec.modelGeneration) throw new Error('Managed video analysis requires its dispatch generation owner')
+        generation = await exec.modelGeneration?.media(90_000)
+        if (generation) signal = AbortSignal.any([signal, generation.signal])
+        signal.throwIfAborted()
         const info = await stat(resolved)
         if (!info.isFile() || info.size === 0 || info.size > VIDEO_LIMITS.sourceBytes) throw new Error("Video must be a nonempty regular file no larger than 256 MiB")
         const decoded = await (deps.decoder ?? decodeVideo)({ path: resolved, startSeconds, durationSeconds, frameCount, signal })
@@ -49,12 +55,13 @@ export function createReadVideoTool(deps: { workspace: string; analyzeAudio?: Vi
         else if (!deps.analyzeAudio) audio = { status: "unconfigured", reason: "Sound/speech was not analyzed. Configure Video audio analysis in Models settings (llm.videoAudio)." }
         else {
           try {
-            audio = await deps.analyzeAudio({ wav: decoded.wav, question, startSeconds: decoded.startSeconds, durationSeconds: decoded.durationSeconds, signal })
+            audio = await deps.analyzeAudio({ wav: decoded.wav, question, startSeconds: decoded.startSeconds, durationSeconds: decoded.durationSeconds, signal, ...(generation ? { generation } : {}) })
             if (audio.status === "analyzed" && (!audio.analysis.trim() || audio.analysis.length > 32000)) audio = { status: "failed", reason: "Audio analyzer returned an empty or oversized description" }
           } catch { audio = { status: "failed", reason: "Sound/speech could not be analyzed by the configured provider" } }
         }
         signal.throwIfAborted()
         const endSeconds = decoded.startSeconds + decoded.durationSeconds
+        completed = true
         return {
           status: audio.status === "analyzed" || audio.status === "absent" ? "complete" : "partial",
           coverage: { startSeconds: decoded.startSeconds, endSeconds, sourceDurationSeconds: decoded.sourceDurationSeconds, truncated: decoded.startSeconds > 0 || endSeconds < decoded.sourceDurationSeconds - 0.001, frameTimestamps: "approximate", note: "Frames are sparse samples, not continuous video. Sampling times are approximate, especially for variable frame rates; a frame boundary can precede the requested interval start." },
@@ -64,7 +71,7 @@ export function createReadVideoTool(deps: { workspace: string; analyzeAudio?: Vi
       } catch (error) {
         const message = error instanceof Error ? error.message : "Video could not be read"
         return { status: "error", code: signal.aborted ? "VIDEO_ABORTED" : message.startsWith("VIDEO_DECODER_UNAVAILABLE") ? "VIDEO_DECODER_UNAVAILABLE" : "VIDEO_READ_FAILED", error: signal.aborted ? "Video reading cancelled or timed out" : message.slice(0, 2048) }
-      }
+      } finally { await generation?.close(signal.aborted ? 'stopped' : completed ? 'completed' : 'failed') }
     },
   }
 }

@@ -165,7 +165,7 @@ it("constructs one default SDK runtime and retains it for later requests", async
   const reads: string[] = []
   const client = createBedrockClient({ model: "fixture", get region() { reads.push("region"); return "eu-west-1" }, get profile() { reads.push("profile"); return "fixture-profile" } })
   expect(reads).toEqual(["region", "profile", "profile"])
-  expect(sdk.construct).toHaveBeenCalledExactlyOnceWith({ region: "eu-west-1", profile: "fixture-profile" })
+  expect(sdk.construct).toHaveBeenCalledExactlyOnceWith({ region: "eu-west-1", profile: "fixture-profile", maxAttempts: 1, extensions: [expect.objectContaining({ configure: expect.any(Function) })] })
   await drain(client.stream(request)); await drain(client.stream(request))
   expect(sdk.construct).toHaveBeenCalledTimes(1)
   expect(sdk.send).toHaveBeenCalledTimes(2)

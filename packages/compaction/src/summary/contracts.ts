@@ -6,6 +6,8 @@ import type { Telemetry } from '@i-harness/telemetry'
 
 /** Unbound factory: every owner supplies its own live selected client/surface. */
 export interface SummaryFactoryInput {
+  generation?: import('@i-harness/llm-seam').GenerationControl
+  bindGeneration?: (prepared: import('@i-harness/llm-seam').PreparedModelRequest) => Promise<void>
   model: ModelClient
   config: ResolvedCompactionConfig
   contextMetadata?: ContextBindingMetadata

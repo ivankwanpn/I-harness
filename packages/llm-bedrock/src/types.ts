@@ -1,6 +1,8 @@
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass } from "@aws-sdk/client-bedrock-runtime"
 
 export interface BedrockConfig {
+  /** Trusted direct transport composition. SDK retries remain disabled. */
+  runtimeOptions?: Pick<import('@aws-sdk/client-bedrock-runtime').BedrockRuntimeClientConfig, 'credentials' | 'endpoint' | 'requestHandler'>
   executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
   model: string

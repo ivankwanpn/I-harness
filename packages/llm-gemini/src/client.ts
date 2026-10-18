@@ -1,5 +1,5 @@
 import { observeTextOutput } from './request/text-output.ts'
-import { preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeHttpError, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
+import { preparedModelClient, snapshotModelData, createPreparedHttpPayload, projectImagesForProvider, type ModelClient } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "./types.ts"
 import { toGeminiContents } from "./request/messages.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -25,7 +25,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
     const body = createRequestBody(request, capturedConfig, contents)
     request.signal?.throwIfAborted()
     const capturedRequest = request
-    return createPreparedPayload({
+    return createPreparedHttpPayload({
       textOutput: observeTextOutput,
       body: body, request, describe: body => describeContext(body, capturedConfig),
       validate: geminiValidator(capturedConfig, contents, messages),
@@ -43,33 +43,17 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         else delete body.generationConfig
         return body
       },
-      async *execute(_actualBody, serialized, control, execution): AsyncIterable<LLMStreamEvent> {
-        const request = { ...capturedRequest, ...control }
-        // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
-        // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
-        // TCP / TLS / proxy. Surface the cause chain instead.
+      transport: { label: 'gemini',
+        prepare(_actualBody, _serialized, control) {
         const geminiUrl = `${baseUrl}/v1beta/models/${encodeURIComponent(capturedConfig.model)}:streamGenerateContent?alt=sse`
-        let response: Response
-        execution.confirm(capturedConfig.executionIdentity)
-        try {
-          response = await fetch(geminiUrl, {
-            method: "POST",
+        return { url: geminiUrl, identity: capturedConfig.executionIdentity, state: undefined, init: {
             headers: mergeConfiguredHeaders(capturedConfig.headers, { "Content-Type": "application/json", "x-goog-api-key": capturedConfig.apiKey }),
-            body: serialized,
-            // M61: the caller's abort signal reaches the transport — cancel must
-            // kill a parked request, not wait for the first event.
-            ...(request.signal !== undefined ? { signal: request.signal } : {}),
-          })
-        } catch (error) {
-          yield { type: "error", error: await describeTransportError("gemini", geminiUrl, error) }
-          return
-        }
-        if (!response.ok || !response.body) {
-          yield { type: "error", error: await describeHttpError("gemini", response, request) }
-          return
-        }
-        reportStreamActivity(request, "response-start")
-        yield* decodeGeminiStream(response.body, request, capturedConfig)
+            signal: control.signal,
+        } }
+        },
+        async *read(response, _actualBody, control) {
+          yield* decodeGeminiStream(response.body!, { ...capturedRequest, ...control }, capturedConfig)
+        },
       },
     })
   })

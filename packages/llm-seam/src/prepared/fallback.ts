@@ -5,6 +5,7 @@ import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
 import { freezePreparedFacts, preparedControls, snapshotModelData, validateOutputCap } from "./wrappers.ts"
 import { createPreparedValidation } from './validation.ts'
 import { readPreparedTextOutput } from './text-output.ts'
+import { NO_GENERATION_RETRY, generationError } from './generation.ts'
 /** Compatible custom clients expose neutral-only coverage and unknown cap
  * support: a stream-only client cannot certify its protocol or applied cap. */
 export async function prepareModelRequest(client: ModelClient, request: LLMRequest): Promise<PreparedModelRequest> {
@@ -33,6 +34,7 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
   function derive(cap: number | undefined): PreparedModelRequest {
     validateOutputCap(cap)
     return Object.freeze({
+      retryPolicy: NO_GENERATION_RETRY,
       textOutput: readPreparedTextOutput({}),
       validation: createPreparedValidation({ version: 1, route: 'custom', contract: 'neutral-only-v1', status: 'partial', coverage: 'neutral-only', native: 'unverified', issues: [], gaps: ['custom-client'], omittedIssueCount: 0 }),
       measurement: freezePreparedFacts({
@@ -43,9 +45,13 @@ export async function prepareModelRequest(client: ModelClient, request: LLMReque
       withOutputCap: derive,
       stream: (control?: PreparedStreamControl) => {
         const actual = preparedControls(captured, control)
+        if (actual.generation) throw generationError('GENERATION_UNSUPPORTED')
         actual.validateBeforeTransport?.()
-        const { validateBeforeTransport: _guard, confirmExecution: _confirmation, ...executionControl } = actual
-        const { validateBeforeTransport: _capturedGuard, confirmExecution: _capturedConfirmation, maxOutputTokens: _previousCap, ...data } = snapshotModelData(captured)
+        // Explicit standalone opaque clients retain conservative invocation
+        // semantics. This is not durable physical evidence or a managed grant.
+        try { actual.onTransportIssue?.() } catch { /* Invocation observers do not alter execution. */ }
+        const { validateBeforeTransport: _guard, confirmExecution: _confirmation, onTransportIssue: _issue, ...executionControl } = actual
+        const { validateBeforeTransport: _capturedGuard, confirmExecution: _capturedConfirmation, onTransportIssue: _capturedIssue, maxOutputTokens: _previousCap, ...data } = snapshotModelData(captured)
         return client.stream({ ...data, ...(cap !== undefined ? { maxOutputTokens: cap } : {}), ...executionControl })
       },
     })

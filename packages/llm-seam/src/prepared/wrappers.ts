@@ -3,6 +3,9 @@ import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
 import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { prepareModelRequest } from "./fallback.ts"
 import { readPreparedTextOutput } from './text-output.ts'
+import { isGenerationControl, generationError, NO_GENERATION_RETRY, freezeGenerationRetry } from './generation.ts'
+import { assertOwnedPreparedTerminal } from './owned-terminal.ts'
+import { rememberModelSource } from './client-source.ts'
 /** Copy data without cloning abort signals, callbacks, transport functions or
  * the original affinity-scope identity. Buffer copies remain SDK bytes. */
 export function snapshotModelData<T>(value: T, exclude: readonly string[] = []): T {
@@ -13,7 +16,7 @@ export function snapshotModelData<T>(value: T, exclude: readonly string[] = []):
     const task = work.pop()!
     if ("leave" in task) { seen.delete(task.leave); continue }
     const item = "source" in task ? (task.source as Record<string, unknown>)[task.key] : task.value
-    if ("key" in task && task.key === "requestScope") { task.put(item); continue }
+    if ("key" in task && task.key === "requestScope" || isGenerationControl(item)) { task.put(item); continue }
     if (item instanceof Date) { task.put(new Date(item.getTime())); continue }
     if (item instanceof Uint8Array) { task.put(Buffer.from(item)); continue }
     if (!item || typeof item !== "object" || item instanceof AbortSignal) { task.put(item); continue }
@@ -41,40 +44,64 @@ function compose<T extends unknown[]>(a: ((...args: T) => void) | undefined, b: 
   return result
 }
 export function preparedControls(request: PreparedStreamControl, control?: PreparedStreamControl): PreparedStreamControl {
+  if (request.generation && control?.generation && request.generation !== control.generation) throw generationError('GENERATION_CONFLICT')
+  const generation = control?.generation ?? request.generation
+  if (generation && !isGenerationControl(generation)) throw generationError('GENERATION_UNSUPPORTED')
+  const signals = [...new Set([request.signal, control?.signal, generation?.signal].filter((signal): signal is AbortSignal => !!signal))]
   return {
+    ...(generation ? { generation } : {}),
+    onTransportIssue: compose(request.onTransportIssue, control?.onTransportIssue),
     validateBeforeTransport: compose(request.validateBeforeTransport, control?.validateBeforeTransport),
     confirmExecution: compose(request.confirmExecution, control?.confirmExecution),
-    signal: control?.signal ?? request.signal,
+    signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
     onStreamActivity: control?.onStreamActivity ?? request.onStreamActivity,
     onTerminalResponse: control?.onTerminalResponse ?? request.onTerminalResponse,
   }
 }
-export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control: PreparedStreamControl | undefined, measurement: PreparedRequestMeasurement) => AsyncIterable<LLMStreamEvent>): PreparedModelRequest {
-  return Object.freeze({
+export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control: PreparedStreamControl | undefined, measurement: PreparedRequestMeasurement) => AsyncIterable<LLMStreamEvent>, retryPolicy = prepared.retryPolicy ?? NO_GENERATION_RETRY): PreparedModelRequest {
+  const result: PreparedModelRequest = Object.freeze({
+    ...(prepared.localExecutionIdentity ? { localExecutionIdentity: prepared.localExecutionIdentity } : {}),
+    retryPolicy: freezeGenerationRetry(retryPolicy),
     measurement: prepared.measurement,
     textOutput: readPreparedTextOutput(prepared),
     ...(prepared.validation !== undefined ? { validation: prepared.validation } : {}),
-    withOutputCap: (cap: number | undefined) => wrapPreparedRequest(prepared.withOutputCap(cap), wrap),
-    stream: (control?: PreparedStreamControl) => wrap(next => prepared.stream(next), control, prepared.measurement),
+    withOutputCap: (cap: number | undefined) => wrapPreparedRequest(prepared.withOutputCap(cap), wrap, retryPolicy),
+    stream: (control?: PreparedStreamControl) => {
+      if (control?.generation) assertOwnedPreparedTerminal(result)
+      return wrap(next => prepared.stream(next), control, prepared.measurement)
+    },
   })
+  return result
 }
 /** Reuse an owner's existing execution wrapper against a frozen send capability.
  * Derivatives re-enter the owner; no inner raw stream can escape. */
-export function withPreparedRequests(client: ModelClient, wrap: (inner: ModelClient, measurement: PreparedRequestMeasurement) => ModelClient): ModelClient {
+export function withPreparedRequests(client: ModelClient, wrap: (inner: ModelClient, measurement: PreparedRequestMeasurement) => ModelClient, retryPolicy?: import('@i-harness/core-session').GenerationRetry): ModelClient {
   return preparedModelClient(async (request) => {
     const captured = snapshotModelData(request)
     const prepared = await prepareModelRequest(client, captured)
     captured.signal?.throwIfAborted()
     return wrapPreparedRequest(prepared, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
-      .stream({ ...captured, ...preparedControls(captured, control) }))
+      .stream({ ...captured, ...preparedControls(captured, control) }), retryPolicy ?? prepared.retryPolicy)
   })
 }
 export function mapModelRequest(client: ModelClient, map: (request: LLMRequest) => LLMRequest): ModelClient {
-  return {
+  const mapped: ModelClient = {
     get executionIdentity() { return client.executionIdentity },
     stream: request => client.stream(map(request)),
     prepare: request => prepareModelRequest(client, map(request)),
   }
+  rememberModelSource(mapped, () => client)
+  return mapped
+}
+/** Stable handle always prepares/streams through its selected source. */
+export function createStableModelClient(read: () => ModelClient): ModelClient {
+  const stable: ModelClient = {
+    get executionIdentity() { return read().executionIdentity },
+    stream: request => read().stream(request),
+    prepare: request => { const selected = read(); return prepareModelRequest(selected, request) },
+  }
+  rememberModelSource(stable, read)
+  return stable
 }
 /** Deep readonly facts only; transport Buffers remain private in closures. */
 export function freezePreparedFacts<T>(value: T): T {
