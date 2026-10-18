@@ -27,13 +27,15 @@ export function assertVersion(session: Session, expected: number): number {
   return session.formatVersion
 }
 
+const supportedVersion = (version: number) => Number.isSafeInteger(version) && version >= 1 && version <= CURRENT_FORMAT_VERSION
+
 export function fromJSONL(text: string): Session {
   if (text.trim().length === 0) {
     throw new Error("session log is empty")
   }
   const lines = text.split("\n")
   const header = JSON.parse(lines[0]!) as SessionHeader & { formatVersion?: number; sessionId?: string }
-  if (typeof header.formatVersion !== 'number' || ![1, 2, 3, 4, 5, 6, 7, CURRENT_FORMAT_VERSION].includes(header.formatVersion)) {
+  if (typeof header.formatVersion !== 'number' || !supportedVersion(header.formatVersion)) {
     throw new Error(`session format version ${header.formatVersion} not supported`)
   }
   if ([6, 7, 8, 9].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
@@ -50,7 +52,7 @@ export function migrate(session: Session, targetVersion: number): Session {
   if (targetVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error(`no migration path to format version ${targetVersion}`)
   }
-  if (![1, 2, 3, 4, 5, 6, 7, CURRENT_FORMAT_VERSION].includes(session.formatVersion)) throw new Error("unsupported source format version")
+  if (!supportedVersion(session.formatVersion)) throw new Error("unsupported source format version")
   validateConversationHistory(session.events, session.formatVersion, session.header)
   return { ...session, formatVersion: targetVersion }
 }

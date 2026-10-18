@@ -3,6 +3,7 @@ import type { ContextSnapshot } from '../contracts/snapshot.ts'
 
 /** Model-free policy. Concrete summary binding/configuration stays at composition. */
 export interface ReductionPolicy {
+  summaryIdentity?: string
   retainTokens?: number
   thresholdRatio?: number
   targetRatio?: number
@@ -13,6 +14,7 @@ export interface ReductionPolicy {
 export interface ReductionAttempts { count: number; staleRebuilds: number }
 export type ReductionBlockedReason = 'summary-unavailable' | 'source-unrepresentable' | 'opaque' | 'fixed-input' | 'capacity-unavailable'
   | 'no-eligible-source' | 'no-progress' | 'call-limit' | 'unstable-input' | 'summary-failed' | 'publication-unavailable'
+  | 'retention-policy' | 'call-policy' | 'binding' | 'shrink-limit'
   | 'publication-not-issued' | 'publication-recovery-required' | 'output-incompatible' | 'output-unknown' | 'output-floor' | 'retention-output' | 'checkpoint-format'
 export interface ReductionResult {
   compacted: boolean
@@ -46,7 +48,7 @@ export interface SummarySelection {
   current(): boolean
 }
 export type SummaryPort = (source: SummarySelection) => Promise<
-  { kind: 'complete'; text: string; groupIds: readonly string[] } | { kind: 'blocked'; reason: ReductionBlockedReason }>
+  { kind: 'complete'; text: string; groupIds: readonly string[] } | { kind: 'blocked'; reason: ReductionBlockedReason } | { kind: 'failed'; reason: ReductionBlockedReason }>
 export interface ReductionAssessment {
   readonly kind: 'assessed'
   readonly capacityFit: 'yes' | 'no' | 'unavailable'

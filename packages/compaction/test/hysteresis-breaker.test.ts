@@ -1,3 +1,4 @@
+import {summaryPolicyIdentity} from '../../core-agent/src/agent/context-reduction/summary-policy.ts'
 import {createAgentContext} from '../../core-agent/src/agent/context.ts'
 import {softWorkFacts} from '../../core-agent/src/agent/context-reduction/automatic.ts'
 import {resolveCompactSpec} from '../src/config.ts'
@@ -44,7 +45,7 @@ it('manual compaction remains available when the caller config disables automati
 it('binds the consumed after-key to its own installed rewrite while leaving observer-appended input eligible, live and cold', async()=>{
  const session=history(20,400),f=spyModel(),engine=createCompactionHarness({model:f.model,config:autoConfig,maxOutputTokens:autoCap})
  const context=createAgentContext({session,model:f.model,tools:{schemas:()=>[]} as never,systemPrompt:'',compact:autoConfig,maxOutputTokens:autoCap},'compaction-harness')
- const resolved=resolveCompactSpec(autoConfig),policy={retainTokens:resolved.retainTokens,thresholdRatio:resolved.thresholdRatio,targetRatio:resolved.targetRatio,cooldown:resolved.cooldown,reserveRatio:undefined,prune:resolved.prune}
+ const resolved=resolveCompactSpec(autoConfig),policy={summaryIdentity:summaryPolicyIdentity(resolved,context.captureCandidate().snapshot.surface,f.model),retainTokens:resolved.retainTokens,thresholdRatio:resolved.thresholdRatio,targetRatio:resolved.targetRatio,cooldown:resolved.cooldown,reserveRatio:undefined,prune:resolved.prune}
  let ownKey:string|undefined,lateKey:string|undefined
  const unsubscribe=subscribe(session,event=>{if(event.type==='context/soft-reduction'&&event.op==='terminal'&&event.publication==='committed'){
   ownKey=softWorkFacts(context.captureCandidate().snapshot,policy).workKey

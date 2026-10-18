@@ -6,8 +6,7 @@ import { pruneProposal } from './prune.ts'
 import { projectionFingerprint } from '@i-harness/token-meter'
 
 const initial = (): ReductionResult => ({ compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' })
-const block = (result: ReductionResult, blockedReason: ReductionBlockedReason): ReductionResult => ({ ...result, outcome: 'blocked', blockedReason,
-  ...(blockedReason === 'summary-failed' ? { reason: 'summarizer-failed' as const } : {}) })
+const block = (result: ReductionResult, blockedReason: ReductionBlockedReason): ReductionResult => ({ ...result, outcome: 'blocked', blockedReason })
 const stale = (attempts: ReductionAttempts) => ++attempts.staleRebuilds <= 3
 function captureSource(ports: ContextReductionPorts) {
   try { return { snapshot: ports.capture() } }
@@ -61,7 +60,7 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
           instructions, signal: options.signal, maxCalls: Math.min(8, options.maxSummaryCalls ?? 8), current: () => ports.current(source, run.groups) }) }
         catch (error) { if ((error as { code?: string }).code !== 'CONTEXT_INPUT_STALE') throw error; if (stale(attempts)) continue; return block(result, 'unstable-input') }
         if (!ports.current(source, run.groups)) { if (stale(attempts)) continue; return block(result, 'unstable-input') }
-        if (summary.kind === 'blocked') return { ...block(result, summary.reason), reason: 'summarizer-failed' }
+        if (summary.kind === 'blocked' || summary.kind === 'failed') return { ...block(result, summary.reason), ...(summary.kind === 'failed' ? { reason: 'summarizer-failed' as const } : {}) }
         if (summary.groupIds.join() !== run.groups.map(group => group.id).join()) return block(result, 'source-unrepresentable')
         accepted = { source, groups: run.groups, text: summary.text }
       }

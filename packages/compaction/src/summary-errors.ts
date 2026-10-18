@@ -8,6 +8,7 @@ export class SummaryNativeSourceError extends Error {}
 type SummaryBlock = "retention-policy" | "output-floor" | "fixed-input" | "call-limit" | "call-policy" | "shrink-limit" | "retention-output" | "binding" | "opaque" | 'source-unrepresentable' | "refused" | "truncated" | "incomplete" | "output-incompatible" | "output-unknown" | "checkpoint-format" | "tool-output"
 /** Closed engine-owned reasons; provider messages never become result data. */
 export class SummaryBlockedError extends Error {
+  readonly outcome: 'blocked' | 'failed'
   constructor(readonly kind: SummaryBlock, facts: { chars?: number; floor?: number; input?: number; output?: number; window?: number; limit?: number } = {}) {
     const numeric = (value: number | undefined) => Number.isSafeInteger(value) && value! >= 0 ? String(value) : "unknown"
     const reasons: Record<SummaryBlock, string> = {
@@ -30,5 +31,6 @@ export class SummaryBlockedError extends Error {
       incomplete: "compaction: incomplete summary stream; checkpoint was not committed",
     }
     super(reasons[kind])
+    this.outcome = ['retention-output', 'checkpoint-format', 'refused', 'truncated', 'incomplete', 'tool-output'].includes(kind) ? 'failed' : 'blocked'
   }
 }

@@ -22,7 +22,7 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
     rawHeader = JSON.parse(header.subarray(0, end).toString('utf8'))
   } finally { await source.close() }
   if (old.formatVersion === CURRENT_FORMAT_VERSION) return old
-  if (old.formatVersion !== expected || expected < 1 || expected > 7) throw new TypeError('Unexpected journal upgrade')
+  if (old.formatVersion !== expected || !Number.isSafeInteger(expected) || expected < 1 || expected >= CURRENT_FORMAT_VERSION) throw new TypeError('Unexpected journal upgrade')
   // Framed format6 already owns its exact legacy boundary and frame chain.
   // Only the header changes; never count frames as legacy event records.
   if ([6, 7, 8].includes(old.formatVersion)) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
