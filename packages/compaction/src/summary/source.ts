@@ -43,8 +43,11 @@ export function selectedSource(groups: readonly ReductionGroup[], portable: bool
   // Coverage always needs complete visible semantics, including on a native
   // adapter that could otherwise accept an opaque continuation by itself.
   const observations = portableSource(groups)
-  const messages = portable ? observations : renderConversation({ items: groups.flatMap(group => group.items) })
-  let cursor = 0
+  const selected = portable ? observations : renderConversation({ items: groups.flatMap(group => group.items) })
+  const opener: LLMMessage[] = selected[0]?.role !== 'user' ? [{ role: 'user', content: '[source-record framing: the following messages are recorded observations with provenance in the manifest]' }] : []
+  const messages = [...opener, ...selected]
+  // Final neutral request coordinates, after framing and before the directive.
+  let cursor = opener.length
   const manifest = groups.map(group => {
     const count = portable ? group.items.length : group.items.reduce((n, item) => n + item.messages.length, 0)
     const row = { group: group.id, messages: [cursor, cursor + count], sources: group.coverage,

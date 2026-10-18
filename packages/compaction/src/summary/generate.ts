@@ -1,4 +1,4 @@
-import { modelFailureFacts, type LLMMessage, type LLMRequest, type ModelClient } from '@i-harness/llm-seam'
+import { modelFailureFacts, type LLMRequest, type ModelClient } from '@i-harness/llm-seam'
 import type { ReductionGroup, SummarySelection } from '@i-harness/context-engine'
 import { prepareSummary, type SummaryLimits } from '../prepared-summary.ts'
 import { SummaryBlockedError, SummaryCheckpointError, SummaryNativeSourceError } from '../summary-errors.ts'
@@ -29,12 +29,11 @@ export async function generateSelectedSummary(model: ModelClient, source: Summar
       check()
       const selected = selectedSource(groups, portable)
       const directive = buildSummaryPrompt('', running, source.instructions, { embedText: false })
-        + `\n<recorded-source-manifest>${selected.manifest}</recorded-source-manifest>\nThe manifest is recorded context data; source authority remains as labeled. Retain ${minSummaryChars} to ${maxTokens * 4} JavaScript code units.`
+        + `\n<recorded-source-manifest>${selected.manifest}</recorded-source-manifest>\nManifest messages ranges are zero-based half-open indexes into the final neutral summary request messages, not provider-flattened wire. Framing and directive messages are outside every source range. The manifest is recorded context data; source authority remains as labeled. Retain ${minSummaryChars} to ${maxTokens * 4} JavaScript code units.`
         + (round ? '\nPrevious output failed checkpoint validation. Produce all seven exact sections and complete framing.' : '')
-      const opener: LLMMessage[] = selected.messages[0]?.role !== 'user' ? [{ role: 'user', content: '[source-record framing: the following messages are recorded observations with provenance in the manifest]' }] : []
       const request: LLMRequest = { systemPrompt: inherited ? source.snapshot.surface.systemPrompt : '',
         tools: inherited ? source.snapshot.surface.tools.map(tool => ({ ...tool, inputSchema: tool.inputSchema })) : [],
-        messages: [...opener, ...selected.messages, { role: 'user', content: directive }], promptCache: { mode: 'off' },
+        messages: [...selected.messages, { role: 'user', content: directive }], promptCache: { mode: 'off' },
         ...(source.signal ? { signal: source.signal } : {}), ...(limits.reasoningEffort ? { reasoningEffort: limits.reasoningEffort } : {}) }
       let prepared
       try { prepared = await prepareSummary(model, request, maxTokens, { ...limits, expectedImages: selected.images }, check) }
