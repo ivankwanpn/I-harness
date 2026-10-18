@@ -6,6 +6,7 @@ import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
 import { freezePreparedFacts, preparedControls, snapshotModelData, validateOutputCap } from "./wrappers.ts"
 import { createPreparedValidation, readPreparedValidation, sanitizePreparedValidation, type FinalValidator } from './validation.ts'
 import { finalValidationError } from './rejection.ts'
+import { normalizePreparedTextOutput, readPreparedTextOutput, type PreparedTextOutput } from './text-output.ts'
 /** The adapter retains the private payload; derivatives replace generation
  * fields only. HTTP execution sends the very string whose bytes were measured. */
 export function createPreparedPayload<T>(options: {
@@ -13,6 +14,7 @@ export function createPreparedPayload<T>(options: {
   request: LLMRequest
   kind?: "http-json-body" | "sdk-command-estimate"
   validate?: FinalValidator<T>
+  textOutput?: (actualBody: T) => PreparedTextOutput
   describe: (body: T, request: LLMRequest) => { input: ProjectedInputFacts; packet: Omit<PreparedRequestMeasurement["packet"], "bodyBytes" | "sdkCommandBytesEstimate"> }
   output: (body: T, request: LLMRequest) => PreparedRequestMeasurement["output"]
   cap: (body: T, cap: number | undefined) => T
@@ -49,6 +51,7 @@ export function createPreparedPayload<T>(options: {
     const validation = validated ?? readPreparedValidation({ measurement })
     return Object.freeze({
       measurement, validation,
+      textOutput: options.textOutput ? normalizePreparedTextOutput(options.textOutput(actualBody)) : readPreparedTextOutput({}),
       withOutputCap(cap: number | undefined) {
         if (options.validate && cap !== undefined && (!Number.isSafeInteger(cap) || cap < output.minimumCap))
           throw finalValidationError('output-limit', createPreparedValidation({ ...validation, status: 'invalid', issues: [{ rule: 'output-range', site: 'generation' }], omittedIssueCount: 0 }))

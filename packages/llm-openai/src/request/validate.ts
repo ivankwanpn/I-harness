@@ -1,3 +1,4 @@
+import { subscriptionFields, publicFields } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAIConfig } from '../types.ts'
 
@@ -68,7 +69,7 @@ function tools(value: unknown, check: Checks, subscription: boolean): void {
     else check.gap('extension-unchecked')
   }
 }
-const subscriptionFields = new Set(['model', 'instructions', 'input', 'tools', 'tool_choice', 'parallel_tool_calls', 'reasoning', 'store', 'stream', 'stream_options', 'include', 'service_tier', 'prompt_cache_key', 'text', 'client_metadata', 'access_programs'])
+
 function subscriptionBody(body: Record<string, unknown>, check: Checks): void {
   if (Object.keys(body).some(key => !subscriptionFields.has(key))) check.issue('unsupported-parameter', 'request', 'unsupported-parameter')
   if (body.store !== false || body.stream !== true) check.issue('unsupported-parameter', 'request', 'unsupported-parameter')
@@ -78,7 +79,7 @@ function subscriptionBody(body: Record<string, unknown>, check: Checks): void {
 // Explicit native alternatives are retained in place. Their authenticity and
 // backend lifecycle remain unverified; none opens an IH function obligation.
 const hosted = new Set(['web_search_call', 'file_search_call', 'computer_call', 'computer_call_output', 'code_interpreter_call', 'image_generation_call', 'local_shell_call', 'local_shell_call_output', 'shell_call', 'shell_call_output', 'apply_patch_call', 'apply_patch_call_output', 'mcp_call', 'mcp_list_tools', 'mcp_approval_request', 'mcp_approval_response', 'compaction'])
-const publicFields = new Set([...subscriptionFields, 'max_output_tokens', 'previous_response_id', 'conversation', 'prompt', 'temperature', 'top_p', 'truncation', 'metadata', 'user', 'safety_identifier', 'prompt_cache_retention', 'prompt_cache_options', 'background', 'max_tool_calls', 'top_logprobs'])
+
 function parameters(body: Record<string, unknown>, check: Checks): void {
   for (const key of ['reasoning', 'text', 'stream_options', 'prompt'] as const) {
     if (body[key] != null && !record(body[key])) check.issue('parameter-type', 'request')

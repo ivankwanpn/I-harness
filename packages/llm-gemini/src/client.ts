@@ -1,3 +1,4 @@
+import { observeTextOutput } from './request/text-output.ts'
 import { preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeHttpError, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import type { GeminiConfig } from "./types.ts"
 import { toGeminiContents } from "./request/messages.ts"
@@ -25,6 +26,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      textOutput: observeTextOutput,
       body: body, request, describe: body => describeContext(body, capturedConfig),
       validate: geminiValidator(capturedConfig, contents, messages),
       output: (body, request) => outputFacts(body, request, capturedConfig),

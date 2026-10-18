@@ -1,3 +1,4 @@
+import { generationFields } from './fields.ts'
 import { validationCollector } from '@i-harness/llm-seam'
 import { field, record, protocolKeys, int32, float32, enumValue } from './protojson.ts'
 import { geminiCapabilities } from './capabilities.ts'
@@ -8,7 +9,7 @@ type Checks = ReturnType<typeof validationCollector>
 export function validateGeminiGeneration(value: unknown, capability: ReturnType<typeof geminiCapabilities>, check: Checks): void {
   if (value === undefined) return
   if (!record(value)) { check.issue('parameter-type', 'generation'); return }
-  if (!protocolKeys(value, ['maxOutputTokens', 'thinkingConfig', 'temperature', 'topP', 'topK', 'candidateCount', 'stopSequences', 'responseMimeType', 'responseSchema', 'responseJsonSchema', 'seed', 'presencePenalty', 'frequencyPenalty'])) check.gap('extension-unchecked')
+  if (!protocolKeys(value, generationFields)) check.gap('extension-unchecked')
   const max = int32(field(value, 'maxOutputTokens'))
   if (max !== undefined && max < 1) check.issue('output-range', 'generation', 'output-limit')
   for (const key of ['candidateCount', 'topK', 'seed']) int32(field(value, key))

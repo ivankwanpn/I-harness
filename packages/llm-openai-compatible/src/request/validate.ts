@@ -1,9 +1,10 @@
+import { known } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { OpenAICompatibleConfig } from '../types.ts'
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 const text = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 type Checks = ReturnType<typeof validationCollector>
-const known = new Set(['model', 'messages', 'tools', 'tool_choice', 'parallel_tool_calls', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'temperature', 'top_p', 'n', 'stop', 'presence_penalty', 'frequency_penalty', 'logit_bias', 'logprobs', 'top_logprobs', 'response_format', 'seed', 'user', 'service_tier', 'reasoning_effort', 'prompt_cache_key', 'prompt_cache_retention', 'prompt_cache_options'])
+
 function extras(value: Record<string, unknown>, fields: readonly string[], check: Checks): void {
   if (Object.keys(value).some(key => !fields.includes(key))) check.gap('extension-unchecked')
 }

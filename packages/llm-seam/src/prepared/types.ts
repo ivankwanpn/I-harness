@@ -9,6 +9,7 @@ export interface PreparedStreamControl {
   onTerminalResponse?: LLMRequest['onTerminalResponse']
 }
 export interface PreparedModelRequest {
+  readonly textOutput?: import('./text-output.ts').PreparedTextOutput
   readonly measurement: PreparedRequestMeasurement
   readonly validation?: import('./validation.ts').PreparedValidation
   withOutputCap(cap: number | undefined): PreparedModelRequest

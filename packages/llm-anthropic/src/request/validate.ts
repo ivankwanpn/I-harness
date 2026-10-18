@@ -1,3 +1,4 @@
+import { known } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { AnthropicConfig } from '../types.ts'
 import { anthropicCapabilities, hasInterleavedBeta } from './capabilities.ts'
@@ -7,7 +8,7 @@ import type { LLMMessage } from '@i-harness/llm-seam'
 import type { CacheEvidence } from './cache-evidence.ts'
 import { ongoingAnthropicToolTurn } from './logical-turn.ts'
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
-const known = new Set(['model', 'system', 'messages', 'tools', 'stream', 'max_tokens', 'thinking', 'output_config', 'tool_choice', 'temperature', 'top_p', 'top_k', 'stop_sequences', 'metadata', 'service_tier', 'cache_control'])
+
 /** Pure final HTTP grammar, after raw precedence/cache edits and cap lowering. */
 export function anthropicValidator(config: AnthropicConfig, source: readonly LLMMessage[] = [], cache?: CacheEvidence): FinalValidator<unknown> {
   return body => {

@@ -1,3 +1,4 @@
+import { observeTextOutput } from './request/text-output.ts'
 import { invalidPreparedRequest, preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeHttpError, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import type { AnthropicConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -30,6 +31,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      textOutput: observeTextOutput,
       body: payload, request, describe: body => describeContext(body, capturedConfig, cacheEvidence),
       validate: anthropicValidator(capturedConfig, messages, cacheEvidence),
       output: (body, request) => outputFacts(body, request, capturedConfig),

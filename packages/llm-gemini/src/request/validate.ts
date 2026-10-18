@@ -1,3 +1,4 @@
+import { requestFields } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { GeminiConfig } from '../types.ts'
 import { field, record, protocolKeys, enumValue } from './protojson.ts'
@@ -14,7 +15,7 @@ export function geminiValidator(config: GeminiConfig, mapped: readonly unknown[]
     check.gap('limit-unverified')
     try {
       if (field(body, 'model') !== undefined && body.model !== config.model) check.issue('binding', 'model', 'binding')
-      if (!protocolKeys(body, ['contents', 'systemInstruction', 'tools', 'toolConfig', 'generationConfig', 'cachedContent', 'model', 'safetySettings', 'labels', 'continuationToken'])) check.gap('extension-unchecked')
+      if (!protocolKeys(body, requestFields)) check.gap('extension-unchecked')
       const cached = field(body, 'cachedContent'), labels = field(body, 'labels'), safety = field(body, 'safetySettings')
       if (cached !== undefined && typeof cached !== 'string') check.issue('shape', 'input')
       if (labels !== undefined) {

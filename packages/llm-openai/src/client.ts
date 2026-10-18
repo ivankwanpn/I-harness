@@ -1,3 +1,4 @@
+import { observeTextOutput } from './request/text-output.ts'
 import { preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, projectImagesForProvider, describeHttpError, describeTransportError, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import { systemFetch } from "@i-harness/http-transport"
 import { createSubscriptionAffinity } from "./affinity.ts"
@@ -36,6 +37,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      textOutput: observeTextOutput,
       validate: responsesValidator(capturedConfig, codexSubscription),
       body: body, request, describe: body => describeContext(body, capturedConfig, codexSubscription, generatedAffinity),
       output: (body, request) => outputFacts(body, request, capturedConfig, codexSubscription),

@@ -1,0 +1,1 @@
+export const requestFields = ['modelId', 'messages', 'system', 'toolConfig', 'inferenceConfig', 'additionalModelRequestFields', 'additionalModelResponseFieldPaths', 'requestMetadata', 'guardrailConfig', 'performanceConfig', 'promptVariables'] as const

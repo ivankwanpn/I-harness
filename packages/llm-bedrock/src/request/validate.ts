@@ -1,3 +1,4 @@
+import { requestFields } from './fields.ts'
 import { validationCollector, type FinalValidator } from '@i-harness/llm-seam'
 import type { BedrockConfig } from '../types.ts'
 import type { ConverseStreamCommandInput } from '@aws-sdk/client-bedrock-runtime'
@@ -14,7 +15,7 @@ export function bedrockValidator(config: BedrockConfig, official: boolean, sourc
     else if (body.modelId !== config.model) check.issue('binding', 'model', 'binding')
     const capabilities = bedrockCapabilities(config.model, official)
     check.gap('limit-unverified')
-    if (Object.keys(body).some(key => !['modelId', 'messages', 'system', 'toolConfig', 'inferenceConfig', 'additionalModelRequestFields', 'additionalModelResponseFieldPaths', 'requestMetadata', 'guardrailConfig', 'performanceConfig', 'promptVariables'].includes(key))) check.gap('extension-unchecked')
+    if (Object.keys(body).some(key => !requestFields.some(field => field === key))) check.gap('extension-unchecked')
     validateConverseMessages(body.messages, check, capabilities.status)
     if (body.system !== undefined && (!Array.isArray(body.system) || body.system.some(block => !record(block) || typeof block.text !== 'string'))) check.issue('shape', 'input')
     const inference = body.inferenceConfig

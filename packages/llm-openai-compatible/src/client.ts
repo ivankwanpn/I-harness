@@ -1,3 +1,4 @@
+import { observeTextOutput } from './request/text-output.ts'
 import { preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeHttpError, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "./types.ts"
 import { createRequestBody } from "./request/body.ts"
@@ -20,6 +21,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      textOutput: observeTextOutput,
       validate: chatValidator(capturedConfig),
       body: body, request, describe: body => describeContext(body, capturedConfig),
       output: (body, request) => outputFacts(body, request, capturedConfig),

@@ -1,3 +1,4 @@
+import { observeTextOutput } from './request/text-output.ts'
 import { invalidPreparedRequest, preparedModelClient, snapshotModelData, createPreparedPayload, reportStreamActivity, describeTransportError, projectImagesForProvider, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand, type ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockConfig, BedrockRuntimeFace } from "./types.ts"
@@ -37,6 +38,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     request.signal?.throwIfAborted()
     const capturedRequest = request
     return createPreparedPayload({
+      textOutput: observeTextOutput,
       body: body, request, kind: "sdk-command-estimate", describe: body => describeContext(body, capturedConfig),
       validate: bedrockValidator(capturedConfig, runtime === undefined, messages),
       output: (body, request) => outputFacts(body, request),

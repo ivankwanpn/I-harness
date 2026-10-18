@@ -2,6 +2,7 @@ import type { LLMRequest, LLMStreamEvent, ModelClient } from "../index.ts"
 import type { PreparedModelRequest, PreparedStreamControl } from "./types.ts"
 import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import { prepareModelRequest } from "./fallback.ts"
+import { readPreparedTextOutput } from './text-output.ts'
 /** Copy data without cloning abort signals, callbacks, transport functions or
  * the original affinity-scope identity. Buffer copies remain SDK bytes. */
 export function snapshotModelData<T>(value: T, exclude: readonly string[] = []): T {
@@ -51,6 +52,7 @@ export function preparedControls(request: PreparedStreamControl, control?: Prepa
 export function wrapPreparedRequest(prepared: PreparedModelRequest, wrap: (stream: (control?: PreparedStreamControl) => AsyncIterable<LLMStreamEvent>, control: PreparedStreamControl | undefined, measurement: PreparedRequestMeasurement) => AsyncIterable<LLMStreamEvent>): PreparedModelRequest {
   return Object.freeze({
     measurement: prepared.measurement,
+    textOutput: readPreparedTextOutput(prepared),
     ...(prepared.validation !== undefined ? { validation: prepared.validation } : {}),
     withOutputCap: (cap: number | undefined) => wrapPreparedRequest(prepared.withOutputCap(cap), wrap),
     stream: (control?: PreparedStreamControl) => wrap(next => prepared.stream(next), control, prepared.measurement),

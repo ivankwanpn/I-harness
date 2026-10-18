@@ -632,3 +632,4 @@ export { describeRouteBudgetCapability, type ModelBudgetBinding } from "./bindin
 
 export type { LiveExecutionIdentity, ExecutionConfirmation, ExecutionReceipt, PreparedExecutionContext } from "./prepared/execution.ts"
 export { sameExecutionIdentity, validExecutionIdentity } from "./prepared/execution.ts"
+export { readPreparedTextOutput, type PreparedTextOutput } from './prepared/text-output.ts'
