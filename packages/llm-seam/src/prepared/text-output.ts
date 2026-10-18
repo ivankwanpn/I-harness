@@ -10,6 +10,8 @@ const unknown = (reason: 'not-declared' | 'invalid-declaration'): PreparedTextOu
 export function normalizePreparedTextOutput(value: unknown): PreparedTextOutput {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return unknown('invalid-declaration')
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null) return unknown('invalid-declaration')
     const keys = Reflect.ownKeys(value)
     if (keys.length !== 2 || !keys.includes('status') || !keys.includes('reason')) return unknown('invalid-declaration')
     const status = Object.getOwnPropertyDescriptor(value, 'status'), reason = Object.getOwnPropertyDescriptor(value, 'reason')

@@ -27,5 +27,7 @@ it('reads only a closed owned data observation without invoking accessors', () =
   expect(readPreparedTextOutput({ textOutput: undefined })).toEqual({ status: 'unknown', reason: 'not-declared' })
   const proxy = Proxy.revocable({}, {}); proxy.revoke()
   expect(readPreparedTextOutput({ textOutput: proxy.proxy as PreparedTextOutput })).toEqual({ status: 'unknown', reason: 'invalid-declaration' })
+  const inheritedRaw = Object.assign(Object.create({ raw: 'private' }), { status: 'allowed', reason: 'ordinary-text' })
+  expect(readPreparedTextOutput({ textOutput: inheritedRaw })).toEqual({ status: 'unknown', reason: 'invalid-declaration' })
   expect(reads).toBe(0)
 })
