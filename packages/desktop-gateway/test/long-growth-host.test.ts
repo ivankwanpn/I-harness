@@ -95,9 +95,21 @@ it.each([[100000, "turns"], [150000, "turns"], [100000, "autonomous"]] as const)
     expect(crossing.admissionInputTokens).toBeLessThan(.8 * crossing.contextWindow!)
     expect(crossing.outputReserve).toBe(20000)
     expect(crossing.estimateSource).toBe("provider-anchor-plus-projection")
+    const beforeSamples=events.slice(0,rewriteIndex).filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='sample')
+    const afterSamples=events.slice(rewriteIndex+1).filter(event=>event.type==='context/usage'&&event.version===2&&event.op==='sample')
+    expect(beforeSamples.length).toBeGreaterThan(0);expect(afterSamples.length).toBeGreaterThan(0)
+    const lastBefore=beforeSamples.at(-1)!,firstAfter=afterSamples[0]!
+    if(lastBefore.type!=='context/usage'||lastBefore.version!==2||lastBefore.op!=='sample'||firstAfter.type!=='context/usage'||firstAfter.version!==2||firstAfter.op!=='sample')throw Error('accepted samples required')
+    expect(firstAfter.checkpoint.request.ownerSessionId).toBe(sessionId)
+    expect(firstAfter.checkpoint.request.snapshot.contextEpoch).not.toBe(lastBefore.checkpoint.request.snapshot.contextEpoch)
+    expect(events.slice(rewriteIndex+1)).toContainEqual(expect.objectContaining({type:'context/usage',version:2,op:'retire',anchorId:lastBefore.checkpoint.anchorId,reason:'context-rewritten'}))
+    expect(budget.some(snapshot=>snapshot.projectionRevision>0&&snapshot.estimateSource==='provider-anchor-plus-projection')).toBe(true)
     // Oversized candidates are assessed but never sent: hard admission may
     // bypass the ordinary hysteresis before rebuilding a smaller main request.
-    expect(requests.filter(r => r.kind === "main").every(r => r.input + r.cap! + Math.ceil(contextWindow * .1) <= contextWindow)).toBe(true)
+    const oversized=requests.filter(r=>r.kind==='main'&&r.input+r.cap!+Math.ceil(contextWindow*.1)>contextWindow)
+      .map(({input,cap})=>({input,cap,total:input+cap!+Math.ceil(contextWindow*.1),window:contextWindow,
+        admitted:budget.filter(snapshot=>snapshot.effectiveOutputCap===cap).map(snapshot=>({input:snapshot.admissionInputTokens,estimated:snapshot.estimatedInputTokens,reserve:snapshot.outputReserve,margin:snapshot.safetyMargin,source:snapshot.estimateSource,admission:snapshot.admission}))}))
+    expect(oversized).toEqual([])
     expect(requests.every(r => r.kind !== "main" || r.body.messages.some((m: any) => m.role === "system") && r.body.tools.length > 0)).toBe(true)
     await host.close(); host = undefined
     host = await createDesktopHost({ workspace, sessionDir: join(root, "sessions"), settingsPath, credentialsPath, onWrite: frame => frames.push(frame) })

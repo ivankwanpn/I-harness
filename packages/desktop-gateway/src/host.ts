@@ -194,6 +194,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         return { ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) }
     }
     const model: ModelClient = {
+      get executionIdentity() { return client.executionIdentity },
       stream: request => client.stream(mapRequest(request)),
       async prepare(request) {
         const captured = snapshotModelData(request)
