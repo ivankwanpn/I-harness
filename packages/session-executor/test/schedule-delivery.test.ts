@@ -1,3 +1,5 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
 // packages/session-executor/test/schedule-delivery.test.ts — Task 5: the HOST
 // mount (spec docs/superpowers/specs/2026-09-20-schedule-design.md
 // §4.2/§4.4/§4.6/§5; plan docs/superpowers/plans/2026-09-21-schedule-delivery.md).
@@ -38,11 +40,10 @@ import {
   type SessionView,
   decodeFactBatch, type BatchKey,
   type SessionEventView,
-  copyConversationData,
 } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
-import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { observeModelClient, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator, type SessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { mkdtemp } from 'node:fs/promises'
@@ -96,13 +97,7 @@ async function batchCoordinator(failFirstFlush = false): Promise<BatchCoordinato
 function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
   const cassette = createMockClient([...script])
-  return {
-    requests,
-    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-      requests.push(request)
-      yield* cassette.stream(request)
-    },
-  }
+  return Object.assign(observeModelClient(cassette, { start(request) { requests.push(request) }, finish() {} }), { requests })
 }
 
 const SESSION_ID = "sched-host"
@@ -161,7 +156,7 @@ async function mountHost(opts: {
   if(seed.events.length){await coordinator.append(SESSION_ID,seed.events);const events=(await coordinator.snapshot!(SESSION_ID)).session.events;coordinator.written.push(...events);coordinator.batches.push([...events])}
   const session=(await coordinator.openManagedDocument(SESSION_ID)).view
   const model = scriptedModel(opts.script ?? twoStepScript())
-  const assembly = await createSessionAssembly({
+  const assembly = await createSessionAssembly({ modelPolicy: "test-mock",
     workspace: process.cwd(),
     sessionId: SESSION_ID,
     session,
@@ -303,7 +298,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(host.coordinator.unknownKey).toBeDefined()
       await document.reconcile(host.coordinator.unknownKey!)
       await host.assembly.dispose()
-      const resumed=await createSessionAssembly({workspace:process.cwd(),coordinator:host.coordinator,sessionId:SESSION_ID,model:host.model})
+      const resumed=await createSessionAssembly({workspace:process.cwd(),coordinator:host.coordinator,sessionId:SESSION_ID,model:host.model,modelPolicy:"test-mock"})
       try{
         const executor=createSessionExecutor({session:resumed.session,agent:resumed.agent,inbox:resumed.inbox})
         executor.submit({tier:'send',text:'continue after reconciliation'});await executor.drain()
@@ -443,14 +438,12 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     expect(written.filter(isScheduleDispatch)).toHaveLength(1)
     expect(written.filter(isScheduleAdmission)).toHaveLength(1)
 
-    // Phase 2 — a NEW session seeded FROM that log, a new assembly, a new
-    // driver inside it. One step happens, so the tick DOES run.
-    const host = await mountHost({
-      seed: (session) => {
-        for (const ev of written) append(session, copyConversationData(ev))
-      },
-      script: [{ role: "assistant", text: "ok" }],
-    })
+    // Reopen the same actual journal after the first writer has closed.
+    // Operational pairs remain atomic and retain their original spent history.
+    const resumedModel = scriptedModel([{ role: 'assistant', text: 'ok' }])
+    const resumedAssembly = await createSessionAssembly({ workspace: process.cwd(), coordinator: delivered.coordinator, sessionId: SESSION_ID, model: resumedModel, modelPolicy: 'test-mock' })
+    const resumedExecutor = createSessionExecutor({ session: resumedAssembly.session, agent: resumedAssembly.agent, inbox: resumedAssembly.inbox })
+    const host: HostFixture = { assembly: resumedAssembly, session: resumedAssembly.session, coordinator: delivered.coordinator, model: resumedModel, async runTurn(text = 'hello') { resumedExecutor.submit({ tier: 'send', text }); await resumedExecutor.drain() } }
     try {
       await host.runTurn("continue")
       // The tick found nothing due: dispatch, admission and reminder counts are

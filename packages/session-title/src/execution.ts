@@ -3,6 +3,7 @@ import { createNondurableFactOwner, isNondurableSession, type ManagedAction, typ
 /** Host composition passes only the original title action's narrow surface.
  * The creator retains finish; no model/tool receives this capability. */
 export type TitleAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'assertOpen'> & {
+  readonly openGeneration?: import('@i-harness/llm-seam').TitleGenerationFactory
   readonly view: SessionView
   readonly facts: Pick<ManagedAction<ProducerFactOutcome>['facts'], 'metadata'>
 }

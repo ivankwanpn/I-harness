@@ -1,3 +1,4 @@
+import { controlledModel } from '../../../packages/session-executor/test/controlled-model.ts'
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -45,14 +46,14 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     const gate = new Promise<void>((r) => { release = r })
     let markStarted!: () => void
     const started = new Promise<void>((r) => { markStarted = r })
-    const model: ModelClient = {
+    const model: ModelClient = controlledModel(request => ({
       async *stream(_req: LLMRequest) {
         yield { type: "text/chunk", text: "working" }
         markStarted()
         await gate
         yield { type: "end" }
       },
-    }
+    } as import('@i-harness/llm-seam').ModelClient).stream(request))
     return { model, release, started }
   }
 
@@ -112,7 +113,7 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     backend.reconcileOwnedBatch = async (...args) => blocked && key ? { kind: 'unknown', key } : reconcile(...args)
     const running = runHeadless('Owned interrupted journal action', {
       workspace: root, sessionId: 's-abort-receipt', coordinator, signal: controller.signal,
-      model: { async *stream(request) { sends++; yield* gated.model.stream(request) } },
+      model: controlledModel(request => ({ async *stream(request) { sends++; yield* gated.model.stream(request) } } as import('@i-harness/llm-seam').ModelClient).stream(request)),
     })
     const settled = running.then(result => ({ kind: 'returned' as const, result }), error => ({ kind: 'failed' as const, error }))
     let cleanup: HeadlessCleanupError | undefined

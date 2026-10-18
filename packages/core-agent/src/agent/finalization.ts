@@ -8,7 +8,7 @@ import { acceptModelExchange } from "./exchange.ts"
 import { closeStepBoundary, closeTurnBoundary, failStepBoundary } from './boundaries.ts'
 import { savingFailure } from './saving-failure.ts'
 
-type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts'>
+type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts' | 'generationAction'>
 
 export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown): Promise<never> {
   // Preparation hooks and context getters can refuse before the provider

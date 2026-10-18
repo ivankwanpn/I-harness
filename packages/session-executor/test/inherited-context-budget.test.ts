@@ -1,3 +1,5 @@
+import { afterEach as afterFixture } from 'vitest'
+afterFixture(() => vi.unstubAllGlobals())
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
@@ -5,7 +7,7 @@ import { tmpdir } from "node:os"
 import { deriveContextBudget } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { wrapPreparedRequest, type ModelClient } from "@i-harness/llm-seam"
+import { type ModelClient } from "@i-harness/llm-seam"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { SettingsStore } from "@i-harness/settings"
 import { createProviderRuntime } from "../../provider-runtime/src/index.ts"
@@ -18,21 +20,22 @@ it.each([true, false])("inherited followups capture their own descriptor; declar
   await coordinator.create({ sessionId: "parent" })
   const calls: string[] = []
   const release = Promise.withResolvers<void>(), mainEntered = Promise.withResolvers<void>(), mainRelease = Promise.withResolvers<void>()
-  const client = (modelId: string): ModelClient => {
-    const actual = createAnthropicClient({ model: modelId, apiKey: "controlled" })
-    return { async *stream() { throw new Error("unprepared") }, async prepare(request) {
-      const prepared = await actual.prepare!(request)
-      return wrapPreparedRequest(prepared, (_stream, control) => (async function*() { control?.validateBeforeTransport?.(); calls.push(modelId); if (calls.length === 1) { mainEntered.resolve(); await mainRelease.promise }
-      else if (calls.length > 3) await release.promise; yield { type: "text/chunk", text: "done" } as const; yield { type: "end" } as const })())
-    } }
-  }
+  vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+    if (url !== 'https://inherited-binding.fixture.invalid/v1/messages') throw new Error('Unexpected network destination')
+    const modelId = JSON.parse(String(init.body)).model
+    calls.push(modelId)
+    if (calls.length === 1) { mainEntered.resolve(); await mainRelease.promise }
+    else if (calls.length > 3) await release.promise
+    return new Response('event: message_start\ndata: {"type":"message_start","message":{"id":"fixture","role":"assistant","content":[],"usage":{}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n')
+  })
+  const client = (modelId: string, executionIdentity: import('@i-harness/llm-seam').LiveExecutionIdentity | undefined): ModelClient => createAnthropicClient({ model: modelId, apiKey: 'fixture-only', baseUrl: 'https://inherited-binding.fixture.invalid', executionIdentity })
   const settings = new SettingsStore({ path: join(root, "settings.json") }); await settings.load()
   await settings.set({ llm: { providers: { route: { protocol: "anthropic-messages", apiKeyEnv: "R2A_SYNTHETIC", models: [{ id: "a", contextWindow: 200000, maxTokens: 2048 }, { id: "b", maxTokens: 2048 }, { id: "c", contextWindow: 60000, maxTokens: 2048 }] } }, defaultModel: { provider: "route", model: "a" } } })
   const registry = createProviderRegistry()
   registry.register({ name: "route", displayName: "Route", protocol: "anthropic-messages", contextWindow: 50000 })
   const runtime = createProviderRuntime({ settings, registry, credentials: createCredentialStore(join(root, "keys.json")),
     auth: { async resolve() { return { kind: "api-key", value: "controlled", source: "file" } }, async describe() { return { configured: true, source: "file", writable: true } } },
-    buildClient: (_profile, modelId) => { if (!modelId) throw new Error("fixture requires a model"); return client(modelId) } })
+    buildClient: (profile, modelId) => { if (!modelId) throw new Error("fixture requires a model"); return client(modelId, profile.executionIdentity) } })
   const resolve = async (model: string) => {
     const state = await runtime.resolveModel({ sessionSelection: { provider: "route", model } })
     if (state.status !== "ready") throw new Error(JSON.stringify(state))

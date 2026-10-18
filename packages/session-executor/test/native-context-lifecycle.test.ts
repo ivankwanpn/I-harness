@@ -1,4 +1,5 @@
-import {prepareTextFixture,checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
+import { controlledModel, restoreControlledTransport } from "./controlled-model.ts"
+import {checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
@@ -22,14 +23,14 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
   await coordinator.create({sessionId:'s'})
   let context=createContextOutputService({root:nativeRoot,workspaceId:'w',config:{enabled:true}})
   const requests:LLMRequest[]=[];let step=0
-  const model:ModelClient={async *stream(request){
+  const model:ModelClient=controlledModel(async function* (request) {
     requests.push(structuredClone(request));step++
     if(step===1)yield{type:'tool_call',call:{id:'direct-native',name:'fixture_long',args:{}}}
     else if(step===2)yield{type:'tool_call',call:{id:'code-native',name:'code_exec',args:{code:'text("x".repeat(20000)+"CODE_MIDDLE"+"y".repeat(20000));',max_output_tokens:16}}}
     else yield{type:'text/chunk',text:'Finished native capture.'}
     yield{type:'end'}
-  }}
-  const summarizer:ModelClient={prepare:prepareTextFixture,async *stream(){yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}}
+  })
+  const summarizer:ModelClient=controlledModel(async function* () {yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}})
   const options={workspace:root,sandbox:'danger-full-access' as const,approveAll:true,model,contextWindow:100000,codeMode:{mode:'mixed' as const},compact:{auto:false,summarizationModel:summarizer,minSummaryChars:1},additionalTools:[{name:'fixture_long',description:'fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=> 'a'.repeat(20000)+'DIRECT_MIDDLE'+'b'.repeat(20000)}]}
   let service=createSessionService({...options,coordinator,sessionFor:createDurableSessionLoader(coordinator),contextOutput:context})
   try {
@@ -68,6 +69,7 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     expect(bedrockBlocks.filter((item:any)=>item.toolResult)).toHaveLength(2)
     expect(bedrockBlocks.filter((item:any)=>item.toolResult).map((item:any)=>item.toolResult.toolUseId)).toEqual(bedrockBlocks.filter((item:any)=>item.toolUse).map((item:any)=>item.toolUse.toolUseId))
     for(const body of bodyRequests){expect(JSON.stringify(body)).toContain(refs[0]!.id);expect(JSON.stringify(body)).toContain(refs[1]!.id);expect(JSON.stringify(body)).not.toContain('context/result-ref')}
+    restoreControlledTransport()
     expect((await assembly.compactNow()).compacted).toBe(true)
     await service.submit('s','continue after compaction',new AbortController().signal)
     expect(requests.at(-1)!.systemPrompt).toContain(refs[0]!.id)

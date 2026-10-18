@@ -8,6 +8,9 @@ import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent } from '../src/index.ts'
+import { createMockClient } from '@i-harness/llm-mock'
+import { observeModelClient } from '@i-harness/llm-seam'
+import { localTestGeneration } from './fixtures/generation.ts'
 
 it.each(['truncated','refused','empty'] as const)('retains the original %s step closure and its remaining turn closure exactly once after unknown',async kind=>{
   const root=await mkdtemp(join(tmpdir(),'ih-f1-closure-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
@@ -17,7 +20,8 @@ it.each(['truncated','refused','empty'] as const)('retains the original %s step 
   const actual=backend.appendOwnedBatch!,reconcile=backend.reconcileOwnedBatch!
   backend.appendOwnedBatch=async(...args)=>{const out=await actual(...args);if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='step/end')){key=args[3].key;return{kind:'unknown',key}}return out}
   backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
-  const agent=createAgent(ctx,{session:document.view,factOwner:document,sessionId:id,tools,systemPrompt:'',model:{async *stream(){sends++;yield{type:'end',...(kind==='empty'?{}:{[kind]:true})}}}})
+  const model = observeModelClient(createMockClient([{ role: 'assistant', ...(kind === 'empty' ? {} : { [kind]: true }) }]), { start() { sends++ }, finish() {} })
+  const agent=createAgent(ctx,{session:document.view,factOwner:document,generationFactory:localTestGeneration(document,id,model),sessionId:id,tools,systemPrompt:'',model})
   try{
     await expect(agent.run('finish this boundary')).rejects.toThrow()
     expect(key).toBeDefined();expect(sends).toBe(1);expect(hooks).toBe(0)

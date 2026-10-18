@@ -69,7 +69,8 @@ it("rebuilds an inherited summary retargeted during actual subscription auth wit
   for (let i = 0; i < 10; i++) append(session, { type: "user/message", text: "old work ".repeat(50) })
   let hooks = 0, claims = 0, oldTransports = 0, summaries = 0
   ctx.on("agent/pre-step", () => { hooks++ })
-  vi.mocked(systemFetch).mockImplementation(async () => {
+  vi.mocked(systemFetch).mockImplementation(async (_url, _init, prepare) => {
+    const issue = await prepare?.(); issue?.()
     oldTransports++
     return new Response([{ type: "response.output_text.delta", delta: checkpoint }, { type: "response.completed", response: { status: "completed", output: [] } }].map(event => `data: ${JSON.stringify(event)}\n\n`).join(""))
   })

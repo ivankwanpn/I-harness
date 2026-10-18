@@ -10,12 +10,15 @@ import { createSessionCoordinator } from '../../session-persistence/src/index.ts
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { decodeFactBatch } from '@i-harness/core-session'
 import { registerCodeMode } from '../../code-mode/src/register.ts'
+import { createMockClient } from '@i-harness/llm-mock'
+import { observeModelClient } from '@i-harness/llm-seam'
+import { localTestGeneration } from './fixtures/generation.ts'
 
 it('uses the actual managed input, acceptance and dispatch receipts before exactly one tool effect', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-agent-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  await document.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId: 'u', text: 'request', delivery: 'queue', intent: 'user' })
+  await document.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId: 'u', text: 'request', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture.input' } })
   const ctx = createContext(), tools = createToolRegistry(ctx), frames: string[][] = []
   const actual = backend.appendOwnedBatch!
   backend.appendOwnedBatch = async (...args) => { frames.push(decodeFactBatch(args[3].bytes).events.map(event => event.type)); return actual(...args) }
@@ -28,15 +31,12 @@ it('uses the actual managed input, acceptance and dispatch receipts before exact
     effects++; return { content: 'done' }
   } })
   try {
-    const agent = createAgent(ctx, { session: document.view as any, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
-      if (!effects) yield { type: 'tool_call', call: { id: 'c', name: 'write', args: {} } }
-      else yield { type: 'text/chunk', text: 'done' }
-      yield { type: 'end' }
-    } } })
+    const model = createMockClient([{ role: 'assistant', toolCalls: [{ id: 'c', name: 'write', args: {} }] }, { role: 'assistant', text: 'done' }])
+    const agent = createAgent(ctx, { session: document.view, factOwner: document, generationFactory: localTestGeneration(document, id, model), tools, sessionId: id, systemPrompt: '', model })
     expect((await agent.run('request', undefined, undefined, 'u')).finalText).toBe('done')
     expect(effects).toBe(1)
     expect(frames.filter(frame => frame.includes('model/exchange-accepted'))).toEqual([
-      ['assistant/message', 'model/exchange-accepted'], ['assistant/message', 'model/exchange-accepted'],
+      ['assistant/message', 'model/exchange-accepted', 'context/action'], ['assistant/message', 'model/exchange-accepted', 'context/action'],
     ])
     expect((await backend.read(id)).events.filter(event => event.type === 'agent/input/promoted')).toHaveLength(1)
   } finally { await coordinator.close().catch(() => {}) }
@@ -51,10 +51,11 @@ it('rechecks the actual action recovery latch before model preparation after a p
   action.finish()
   let preparations = 0, transports = 0
   ctx.on('agent/pre-step', () => { source.requireRecovery() })
-  const agent = createAgent(ctx, { session: document.view, factOwner: document, sessionId: id, tools, systemPrompt: '', model: {
+  const model = {
     async prepare() { preparations++; throw new Error('Preparation must be fenced') },
-    async *stream() { transports++; yield { type: 'end' } },
-  } })
+    async *stream() { transports++; yield { type: 'end' as const } },
+  }
+  const agent = createAgent(ctx, { session: document.view, factOwner: document, generationFactory: localTestGeneration(document, id, model), sessionId: id, tools, systemPrompt: '', model })
   try {
     await expect(agent.run('received task')).rejects.toThrow()
     expect(preparations).toBe(0)
@@ -78,11 +79,8 @@ it('preserves the actual outer Agent tool result when a completed Code Mode stor
     if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/store')) { key = args[3].key; return { kind: 'unknown', key } }
     return outcome
   }
-  const agent = createAgent(ctx, { session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
-    sends++
-    yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'store("key", await tools.probe({})); text("actual output")', yield_time_ms: 5000 } } }
-    yield { type: 'end' }
-  } } })
+  const model = observeModelClient(createMockClient([{ role: 'assistant', toolCalls: [{ id: 'outer', name: 'code_exec', args: { code: 'store("key", await tools.probe({})); text("actual output")', yield_time_ms: 5000 } }] }]), { start() { sends++ }, finish() {} })
+  const agent = createAgent(ctx, { session: document.view, factOwner: document, generationFactory: localTestGeneration(document, id, model), tools, sessionId: id, systemPrompt: '', model })
   try {
     await mount.ready!()
     await expect(agent.run('execute the original cell')).rejects.toThrow()

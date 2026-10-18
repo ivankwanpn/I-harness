@@ -11,7 +11,7 @@ export function createTaskDelivery(
   teamId: string,
   state: TeamFoldState,
   deps: Pick<TeamDeps, "parentSession" | "parentNotify" | "factOwner">,
-  sub: Pick<TeamSubagentDeps, "childSessions" | "table" | "agents" | "jobs" | "ensureResident">,
+  sub: Pick<TeamSubagentDeps, "childSessions" | "table" | "agents" | "jobs" | "ensureResident" | "followupGeneration">,
   teamJobs: JobRegistry,
   activity: Pick<ReturnType<typeof createActivity>, "notify">,
   isUnmounted: () => boolean,
@@ -74,7 +74,7 @@ export function createTaskDelivery(
       // even when the gate above did not rebuild (e.g. a waiting entry whose
       // registry entry was dropped). Without the seam this is the unchanged
       // sub object (structural FollowupDeps).
-      const wakeDeps: FollowupDeps = { ...sub, jobs: teamJobs, ...(sub.ensureResident ? { rebuild: (e: ChildAgentEntry) => sub.ensureResident!(e) } : {}) }
+      const wakeDeps: FollowupDeps = { ...sub, jobs: teamJobs, openGeneration: sub.followupGeneration, ...(sub.ensureResident ? { rebuild: (e: ChildAgentEntry, controller: AbortController) => sub.ensureResident!(e, controller) } : {}) }
       const chain = driveFollowups(wakeDeps, entry, entry.sessionId)
       // M19 Ruling 26: the followup drain flips the child's status
       // (waiting→running→waiting); a wait_agent waiter must wake on that

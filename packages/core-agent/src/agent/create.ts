@@ -1,4 +1,4 @@
-import { ensureWritableContext } from "./context-readiness.ts"
+import { runManualCompaction } from './manual-compaction.ts'
 import type { PluginContext } from "@i-harness/core-plugin"
 import { randomUUID } from "node:crypto"
 import type { Agent, AgentConfig, AgentDeps } from "./types.ts"
@@ -7,6 +7,7 @@ import { createTurnRunner } from "./turn.ts"
 import { createNondurableFactOwner, isNondurableSession, isManagedFactOwner } from '@i-harness/core-session'
 import { trackSettlementSource } from './settlement-source.ts'
 import { savingFailure } from './saving-failure.ts'
+import { borrowApprovalGeneration } from './tool-generation.ts'
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
   // Preserve host live getters (notably reasoning/model bindings) while the
@@ -15,6 +16,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   const factOwner = deps.factOwner ?? (isNondurableSession(deps.session) ? createNondurableFactOwner(deps.session) : undefined)
   if (!factOwner || factOwner.view !== deps.session) throw Object.assign(new Error('Managed Agent requires matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
   if (!isNondurableSession(deps.session) && !isManagedFactOwner(deps.session, factOwner)) throw Object.assign(new Error('Managed Agent requires actual document ownership'), { code: 'FACT_OWNER_UNSUPPORTED' })
+  deps.sharedBudget = borrowApprovalGeneration(deps.sharedGeneration, factOwner.view)
+  if (deps.sharedBudget && deps.generationFactory) throw Object.assign(new Error('Conflicting generation ownership'), { code: 'GENERATION_CONFLICT' })
+  if (!isNondurableSession(factOwner.view) && !deps.generationFactory && !deps.sharedBudget) throw Object.assign(new Error('Managed Agent requires generation lifecycle composition'), { code: 'GENERATION_UNSUPPORTED' })
   // Standalone agents without persisted IDs still own separate conversations.
   const requestSessionId = deps.sessionId ?? randomUUID()
   let activeOperations = 0
@@ -34,9 +38,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   const runTurn = createTurnRunner(ctx, deps, context, requestSessionId, maxTurns, maxParallel)
   const withFactAction = async <T>(signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     const action = factOwner.beginAction(signal ?? deps.signal)
+    deps.generationAction = undefined
+    deps.generationLifecycle = deps.generationFactory?.(action)
+    deps.inputPreparation = deps.inputPreparationFactory?.(action)
     deps.facts = action.facts
     deps.assertFactOpen = action.assertOpen
     deps.captureContextReduction = action.captureContextReduction?.bind(action)
+    deps.captureInputPromotion = action.captureInputPromotion.bind(action)
     const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
     let running: Promise<T>
     deps.sourceFacts = action.registerSettlementSource(async () => {
@@ -62,6 +70,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     let value!: T, failure: unknown, failed = false
     try { value = await running }
     catch (error) { failure = error; failed = true }
+    try { await deps.inputPreparation?.close(); await deps.generationLifecycle?.drain() }
+    catch (settlement) {
+      if (failed) failure = savingFailure(failure, [settlement], 'Generation settlement requires recovery')
+      else { failure = settlement; failed = true }
+    }
     action.finish()
     try { await sourceFacts.close() }
     catch (settlement) {
@@ -81,10 +94,6 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     },
     run: (task, signal, images, inputId, options) => track(() => startTurn(task, signal, images, inputId, options, "agent.run")),
     followup: (message, signal, options) => track(() => startTurn(message, signal, undefined, undefined, options, "agent.followup")),
-    compact: (instructions, options) => track(() => withFactAction(options?.signal, async signal => {
-      await ensureWritableContext(deps)
-      context.refreshBinding()
-      return context.compactor ? context.compactor.compact(deps.session, instructions, { ...options, signal }) : { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' }
-    })),
+    compact: (instructions, options) => track(() => withFactAction(options?.signal, signal => runManualCompaction(deps, context, instructions, { ...options, signal }))),
   }
 }

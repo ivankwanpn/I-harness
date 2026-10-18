@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -7,7 +7,10 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { registerCodeMode, type CodeModeFactory } from "@i-harness/code-mode"
+import { controlledModel } from "./controlled-model.ts"
 import { inspect } from 'node:util'
+
+afterEach(() => vi.unstubAllGlobals())
 
 it("ordinary and Team children keep role-local Code Mode through followup and resident reconstruction", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-children-"))
@@ -19,13 +22,13 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     parallelLimits.push(mountOptions.maxParallel)
     return registerCodeMode(ctx, tools, mountOptions)
   }
-  const child: ModelClient = { async *stream(request) {
+  const child = controlledModel(async function* (request) {
     requests.push(request)
     const last = request.messages.at(-1)
     if (last?.role === "user") yield { type: "tool_call", call: { name: "code_exec", args: { code: 'text(ALL_TOOLS.map(t=>t.name)); text(await tools.list_dir({path:"."})); store("turn",(load("turn")??0)+1); text(load("turn"));' } } }
     else yield { type: "text/chunk", text: "child complete" }
     yield { type: "end" }
-  } }
+  })
   const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } } }
   const options = {
     workspace: root, model: parent, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "only" as const },

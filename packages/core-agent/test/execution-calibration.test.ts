@@ -46,7 +46,7 @@ function fixture(session = createSession(), retry = false) {
       async *execute(_b, _s, control, execution) { if (usageBeforeConfirm) yield { type: 'usage', usage }; if (control.confirmExecution) confirmers.push(control.confirmExecution); confirms++; execution.confirm(epochs.length ? epochs.shift() : identity); sends++; if (failNext) { failNext = false; throw Object.assign(Error('failed transport'), { code: 'SERVER' }) }; yield { type: 'usage', usage }; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } },
     })
   } }
-  const sending = retry ? Object.assign(createRetryingClient(model, resolveRetryPolicy({ mode: 'always', backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } })), { executionIdentity: E }) : model
+  const sending = retry ? createRetryingClient(model, resolveRetryPolicy({ mode: 'always', backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } })) : model
   const agent = createAgentWithSummary(ctx, { session, sessionId: 'owner', model: sending, tools, systemPrompt: '', budget: { contextWindow: 20000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
   return { agent, session, confirmers, preUsage: () => { usageBeforeConfirm = true }, usage: (value: LLMUsage) => { usage = value }, fail: () => { failNext = true }, set: (epoch: string | undefined) => { identity = epoch ? { ...E, authEpoch: epoch } : undefined }, epochs, counts: () => ({ confirms, sends, hooks, claims }) }
 }

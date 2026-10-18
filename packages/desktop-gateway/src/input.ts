@@ -3,7 +3,7 @@ import type { AsyncInbox, ImageInput, SessionEventView } from "@i-harness/core-s
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
-import { readInbox, validateImages } from "@i-harness/core-session"
+import { isManagedFactOwner, readInbox, validateImages } from "@i-harness/core-session"
 import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 
 /** Exact producer-owned document identity for permanent session cleanup. */
@@ -41,7 +41,9 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     options.onStatus?.(id, true)
     const controller = new AbortController()
     controllers.add(controller)
-    const job = service.submit(id, text, controller.signal, { admittedInputId: inputId })
+    const job = service.submit(id, text, controller.signal, { admittedInputId: inputId,
+      ...(options.prepare ? { prepareInput: (_assembly, raw) => options.prepare!(id, raw) } : {}),
+    })
       .then(() => { options.onStatus?.(id, service.queueState(id).running) }, (error) => {
         const message = error instanceof Error ? error.message : String(error)
         const facts = modelFailureFacts(error)
@@ -59,13 +61,19 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
   }
   async function acknowledgeExisting(id: string, existing: Extract<SessionEventView, { type: "agent/input/admitted" }>, shouldStart: boolean) {
     if (closed) throw new Error("Input service closed")
-    if (!coordinator.snapshot) throw new Error("Durable input snapshots unavailable")
-    const persisted = (await coordinator.snapshot(id)).session.events.find((event) => event.type === "agent/input/admitted" && event.inputId === existing.inputId)
+    const document = await coordinator.openManagedDocument(id)
+    if (!isManagedFactOwner(document.view, document)) throw new Error('Durable input owner unavailable')
+    // The actual managed view installs a received input only after its receipt.
+    // An unrelated in-flight reservation need not recreate an admission or
+    // block acknowledgement of this already-committed input.
+    const persisted = document.view.events.find((event) => event.type === "agent/input/admitted" && event.inputId === existing.inputId)
     if (persisted?.type !== "agent/input/admitted" || persisted.text !== existing.text || persisted.delivery !== existing.delivery) throw new Error("Input admission is not durable")
     if (closed) throw new Error("Input service closed")
     // A failed earlier barrier never reached scheduling. Pending inputs may
     // now start; promoted/completed/cancelled inputs are absent from pending.
-    if (shouldStart && persisted.delivery === "queue") schedulePending(id, await service.receivedInputFor(id))
+    let ready = true
+    try { document.assertReady() } catch { ready = false }
+    if (shouldStart && ready && persisted.delivery === "queue") schedulePending(id, await service.receivedInputFor(id))
     return { accepted: true as const, inputId: persisted.inputId, delivery: persisted.delivery }
   }
   return {
@@ -99,11 +107,10 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           const existing = (await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
           if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false)
         }
-        const assembly = raw.start === false ? undefined : await service.assemblyFor(id)
-        const session = assembly?.session ?? await ownSession(id)
+        const session = await ownSession(id)
         const inbox = await service.receivedInputFor(id)
         let blocked = false
-        try { assembly?.managedDocument?.assertReady() } catch { blocked = true }
+        try { (await coordinator.openManagedDocument(id)).assertReady() } catch { blocked = true }
         let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
         // recovery can use a deterministic new generation; pending/promoted
@@ -116,10 +123,9 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           if (duplicate.text !== raw.text || duplicate.delivery !== raw.delivery) throw new Error("Recovered input does not match its durable admission")
           return acknowledgeExisting(id, duplicate, raw.start !== false)
         }
-        const prepared = raw.start === false || blocked ? raw.text : await options.prepare?.(id, raw.text) ?? raw.text
-        const text = raw.context ? `${prepared}\n\n${raw.context}` : prepared
         const delivery = raw.delivery === "steer" && !service.queueState(id).running ? "queue" : raw.delivery
-        await inbox.admit({ inputId, text, delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" }, ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
+        await inbox.admit({ inputId, text: raw.text, preparationPolicy: 'human-host', delivery, intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "desktop.input" },
+          ...(raw.context ? { supplementalContext: raw.context } : {}), ...(raw.images?.length ? { images: raw.images } : {}), ...(raw.clientToken ? { clientToken: raw.clientToken } : {}) })
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && !blocked && delivery === "queue") {
           schedulePending(id, inbox)
@@ -150,9 +156,9 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     resume(id: string) {
       return serial(id, async () => {
         if (closed) throw new Error("Input service closed")
-        const assembly = await service.assemblyFor(id)
-        assembly.managedDocument?.assertReady()
-        for (const input of assembly.inbox.pending()) start(id, input.inputId, input.text)
+        await ownSession(id)
+        ;(await coordinator.openManagedDocument(id)).assertReady()
+        for (const input of (await service.receivedInputFor(id)).pending()) start(id, input.inputId, input.text)
         return { resumed: true }
       })
     },

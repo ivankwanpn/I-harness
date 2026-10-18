@@ -7,7 +7,7 @@ import type { BatchCancellation } from "./cancel.ts"
 // Return the registry promise directly; dispatch owns the original await site.
 export function prepareCall(tools: ToolRegistry, call: BatchCall, signal: AbortSignal, opts: ExecuteToolCallsOptions, session: Session) {
   return tools.prepare({ name: call.name, args: call.args }, signal,
-    { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource })
+    { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource, modelGeneration: opts.modelGeneration?.(call, signal) })
 }
 
 export function recordPreparationFailure(index: number, call: BatchCall, error: unknown, records: BatchRecords, cancellation: BatchCancellation): void {

@@ -1,6 +1,6 @@
 import type { SessionView as Session, MetadataFactSource } from "@i-harness/core-session"
-import { committedFactSeqs, metadataFactsFor, deriveSessionTitle } from "@i-harness/core-session"
-import { clampOutputCap } from "@i-harness/llm-seam"
+import { committedFactSeqs, metadataFactsFor, deriveSessionTitle, isNondurableSession } from "@i-harness/core-session"
+import { clampOutputCap, prepareModelRequest, generationError } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -8,6 +8,7 @@ import { resolveTitleAction, type TitleAction } from './execution.ts'
 
 export const TITLE_MAX_BYTES = 120
 export const TITLE_MAX_WORDS = 8
+const TITLE_GENERATION_TIMEOUT_MS = 30_000
 
 const SYSTEM_TITLE_PROMPT =
   "You produce ONLY a short session title. Reply with at most 8 words that capture the user's goal " +
@@ -67,15 +68,20 @@ export async function suggestTitle(deps: {
 }): Promise<{ title: string; source: "provider" | "fallback" }> {
   const execution = resolveTitleAction(deps.session, deps.action, deps.signal)
   const action = execution.context
+  let generation: import('@i-harness/llm-seam').AuxiliaryGenerationAction | undefined
   try {
     const inputs = eligibleUserTexts(deps.session)
     const first = inputs[0]?.text ?? ""
     try {
+      const timeoutMs = deps.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS
+      if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) throw generationError('GENERATION_UNSUPPORTED')
+      if (action.openGeneration && inputs[0]) generation = await action.openGeneration(inputs[0].seq, timeoutMs)
+      else if (!isNondurableSession(deps.session)) throw generationError('GENERATION_UNSUPPORTED')
       const messages: LLMMessage[] = [{ role: "user", content: inputs.map((i) => i.text).join("\n\n").slice(0, 4000) || "(no messages)" }]
       const requestedCap = deps.titleMaxOutputTokens === undefined
         ? deps.maxOutputTokens
         : Math.min(deps.maxOutputTokens ?? deps.titleMaxOutputTokens, deps.titleMaxOutputTokens)
-      const controller = deps.timeoutMs === undefined ? undefined : new AbortController()
+      const controller = new AbortController()
       const request: LLMRequest = {
         messages,
         tools: [],
@@ -88,7 +94,7 @@ export async function suggestTitle(deps: {
         ...(requestedCap !== undefined
           ? { maxOutputTokens: clampOutputCap(requestedCap, deps.contextWindow, estimateContent(messages)) }
           : {}),
-        signal: controller ? AbortSignal.any([action.signal, controller.signal]) : action.signal,
+        signal: AbortSignal.any([action.signal, controller.signal, ...(generation ? [generation.signal] : [])]),
         validateBeforeTransport: action.assertOpen,
       }
       const readTitle = async (): Promise<{ out: string; refused: boolean }> => {
@@ -96,7 +102,9 @@ export async function suggestTitle(deps: {
         let refused = false
         action.signal.throwIfAborted()
         action.assertOpen()
-        for await (const ev of deps.model.stream(request)) {
+        const prepared = await prepareModelRequest(deps.model, request)
+        await generation?.bind(prepared)
+        for await (const ev of prepared.stream({ generation: generation?.control })) {
           if (ev.type === "text/chunk") out += ev.text
           if (ev.type === "error") throw ev.error
           if (ev.type === "end" && ev.refused === true) refused = true
@@ -106,15 +114,15 @@ export async function suggestTitle(deps: {
       let timer: ReturnType<typeof setTimeout> | undefined
       let result: { out: string; refused: boolean }
       try {
-        result = deps.timeoutMs === undefined
+        result = generation
           ? await readTitle()
           : await Promise.race([
               readTitle(),
               new Promise<never>((_resolve, reject) => {
                 timer = setTimeout(() => {
-                  controller?.abort()
+                  controller.abort()
                   reject(new Error("title request timed out"))
-                }, Math.max(1, deps.timeoutMs!))
+                }, timeoutMs)
               }),
             ])
       } finally {
@@ -127,8 +135,10 @@ export async function suggestTitle(deps: {
       // lines down, so the text is a message for a reader of the source (and for
       // whatever catches it if that ever changes), not for an operator today.
       if (title.length === 0) throw new Error(refused ? "provider refused to produce a title" : "empty provider title")
+      await generation?.close('completed')
       return { title, source: "provider" }
     } catch {
+      await generation?.close(action.signal.aborted ? 'stopped' : 'failed')
       action.assertOpen()
       action.signal.throwIfAborted()
       return { title: fallbackTitle(first, deps.maxWords), source: "fallback" }

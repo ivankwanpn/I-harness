@@ -1,3 +1,7 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { createGenerationLifecycle } from "../src/lifecycle/generation-actions.ts"
+import { controlledModel } from "./controlled-model.ts"
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -56,9 +60,9 @@ it.each([true,false])('retains the actual after-next output and exact reference 
     if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
     return outcome
   }
-  const agent = createAgent(ctx, { session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
+  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(document.view, id, action), session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: controlledModel(async function* () {
     sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'long_text', args: {} } }; yield { type: 'end' }
-  } } })
+  }) })
   try {
     await expect(agent.run('read the real output')).rejects.toThrow()
     expect([bodies, captures, finalizations, sends]).toEqual([1, 1, holdReconcile?0:1, 1])
@@ -101,9 +105,9 @@ it('retains a real emitted-text observation through reference uncertainty and St
     if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
     return outcome
   }
-  const agent = createAgent(ctx, { session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: { async *stream() {
+  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(document.view, id, action), session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: controlledModel(async function* () {
     sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("original emitted window ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } }; yield { type: 'end' }
-  } } })
+  }) })
   try {
     await expect(agent.run('emit the original window')).rejects.toThrow()
     expect([captures, finalizations, sends]).toEqual([1, 0, 1]); expect(key).toBeDefined()
@@ -138,9 +142,9 @@ it('keeps actor and parent emitted-text reference dispositions independent throu
     if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { keys.set(args[0], args[3].key); return { kind: 'unknown', key: args[3].key } }
     return outcome
   }
-  const agent = createAgent(ctx, { session: parent.view, factOwner: parent, tools, sessionId: parentId, systemPrompt: '', model: { async *stream() {
+  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(parent.view, parentId, action), session: parent.view, factOwner: parent, tools, sessionId: parentId, systemPrompt: '', model: controlledModel(async function* () {
     sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("same emitted original ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } }; yield { type: 'end' }
-  } } })
+  }) })
   try {
     await expect(agent.run('emit once for both documents')).rejects.toThrow()
     expect(keys.has(actorId)).toBe(true); expect(keys.has(parentId)).toBe(false)

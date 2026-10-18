@@ -11,5 +11,6 @@ export interface Queued {
   done: ReturnType<typeof Promise.withResolvers<void>>
   hasOutput: boolean; bodyOutput?: unknown; finalizing?: Promise<ToolResult>
   prepared?: PreparedCall; retained?: RetainedToolOutcome; recoveryCause?: unknown; completion?: Promise<unknown>
+  generation?: import('@i-harness/core-tools').CodeGenerationScope
   result?: CapturedSettlementFact<ProducerFactOutcome>
 }

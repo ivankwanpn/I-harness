@@ -12,6 +12,7 @@ export interface BatchCall {
 }
 
 export interface ExecuteToolCallsOptions {
+  modelGeneration?: (call: BatchCall, signal: AbortSignal) => import('@i-harness/llm-seam').ToolModelGeneration
   facts?: ToolFacts<ProducerFactOutcome>
   sourceFacts?: SettlementFacts<ProducerFactOutcome>['tools']
   settlementSource?: SettlementFacts<ProducerFactOutcome>

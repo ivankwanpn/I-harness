@@ -1,7 +1,7 @@
 import type { GuardianRequest } from "@i-harness/core-tools"
-import type { SessionView as Session } from "@i-harness/core-session"
+import { isNondurableSession, type SessionView as Session } from "@i-harness/core-session"
 import { createHash } from "node:crypto"
-import { clampOutputCap, type LLMMessage } from "@i-harness/llm-seam"
+import { clampOutputCap, prepareModelRequest, generationError, type AuxiliaryGenerationAction, type LLMMessage } from "@i-harness/llm-seam"
 import { parseGuardianAssessment, GUARDIAN_JSON_CONTRACT } from "./verdict.ts"
 import { BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, renderGuardianMessage, renderRecentContext, type GuardianReviewDeps, type GuardianReviewVerdict } from "./reviewer.ts"
 import { createIsolatedReviewerPool, type IsolatedReviewerPool, type ReviewerContextLease } from "./reviewer-pool.ts"
@@ -32,7 +32,14 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
   if (request.signal?.aborted) cancel()
   let abortListener: (() => void) | undefined
   let lease: ReviewerContextLease | undefined
+  let generation: AuxiliaryGenerationAction | undefined, completed = false
+  let selectedModel = deps.model ?? deps.parentModel
+  const expire = () => controller.abort(generation?.signal.reason)
   try {
+    if (!isNondurableSession(deps.parentSession) && !request.generation) throw generationError('GENERATION_UNSUPPORTED')
+    generation = await request.generation?.({ timeoutMs: deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS, selectedClient: () => selectedModel })
+    generation?.signal.addEventListener('abort', expire, { once: true })
+    if (generation?.signal.aborted) expire()
     const work = async (): Promise<GuardianReviewVerdict> => {
       controller.signal.throwIfAborted()
       const args = typeof request.args === "string" ? request.args : JSON.stringify(request.args ?? null)
@@ -63,6 +70,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
         reasoningEffort = resolved.binding.reasoningEffort
       }
       controller.signal.throwIfAborted()
+      selectedModel = model
       identity ??= deps.isolated?.identity ? await deps.isolated.identity(selection) : { ...selection }
       controller.signal.throwIfAborted()
       if (reasoningEffort === undefined && ["off", "low", "medium", "high", "xhigh", "max"].includes(identity.reasoningEffort ?? "")) {
@@ -87,11 +95,13 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       onModel?.(identity, history.length > 0)
       let text = ""
       let ended = false
-      for await (const event of model.stream({
+      const prepared = await prepareModelRequest(model, {
         systemPrompt, messages: [...history, { role: "user", content: prompt }] as LLMMessage[], tools: [],
         maxOutputTokens: clampOutputCap(Math.min(maxOutputTokens ?? 2048, 2048), contextWindow, inputEstimate),
         ...(reasoningEffort !== undefined ? { reasoningEffort } : {}), signal: controller.signal,
-      })) {
+      })
+      await generation?.bind(prepared)
+      for await (const event of prepared.stream(generation ? { generation: generation.control } : undefined)) {
         controller.signal.throwIfAborted()
         if (event.type === "text/chunk") {
           text += event.text
@@ -109,12 +119,14 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       return verdict ? { outcome: verdict.outcome, rationale: verdict.rationale }
         : { outcome: "deny", rationale: "Reviewer produced malformed output", cause: "malformed" }
     }
-    const aborted = new Promise<never>((_, reject) => {
+    const aborted = generation ? undefined : new Promise<never>((_, reject) => {
       abortListener = () => reject(controller.signal.reason ?? new Error("guardian aborted"))
       controller.signal.addEventListener("abort", abortListener, { once: true })
       if (controller.signal.aborted) abortListener()
     })
-    return await Promise.race([work(), aborted])
+    const result = await (generation ? work() : Promise.race([work(), aborted!]))
+    completed = result.cause === undefined
+    return result
   } catch (error) {
     if (request.signal?.aborted) throw error
     return { outcome: "deny", rationale: error instanceof Error ? error.message : String(error), cause: controller.signal.aborted ? "timeout" : "operational" }
@@ -123,5 +135,7 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
     clearTimeout(timeout)
     request.signal?.removeEventListener("abort", cancel)
     if (abortListener) controller.signal.removeEventListener("abort", abortListener)
+    generation?.signal.removeEventListener('abort', expire)
+    await generation?.close(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed')
   }
 }

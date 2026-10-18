@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from '../../subagent/test/generation-fixture.ts'
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -26,7 +27,7 @@ it.each(['pending','unknown'] as const)('preserves exact initial-input evidence 
     }
     return actual(...args)
   }
-  const out=await spawnChild({taskName:'proof',message:'exact initial prompt',parentPath:'lead',parentCtx:ctx,parentSession:createSession(),parentRegistry:tools,role:{name:'fixture',description:'',systemPrompt:'',tools:[]},parentModel:{async *stream(){await modelRelease.promise;yield{type:'end'}}},resolveModel:async()=>({status:'unconfigured',reason:'unused'}),table,jobs,agents,childSessions:{coordinator,parentSessionId:'parent'}})
+  const out=await spawnChild({ generationFactoryFor: fixtureGenerationFor,taskName:'proof',message:'exact initial prompt',parentPath:'lead',parentCtx:ctx,parentSession:createSession(),parentRegistry:tools,role:{name:'fixture',description:'',systemPrompt:'',tools:[]},parentModel:controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {await modelRelease.promise;yield{type:'end'}}),resolveModel:async()=>({status:'unconfigured',reason:'unused'}),table,jobs,agents,childSessions:{coordinator,parentSessionId:'parent'}})
   const entry=table.get(out.path)!,probe=createDurabilityProbes({table,childSessions:{coordinator,parentSessionId:'parent'}})
   try{
     await entered.promise
@@ -54,8 +55,8 @@ it('refuses an actual unrelated admission or foreign receipt as the private init
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-wrong-initial-proof-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const ctx = createContext(), tools = createToolRegistry(ctx), table = createAgentTable()
-  const out = await spawnChild({ taskName: 'proof', message: 'actual initial input', parentPath: 'lead', parentCtx: ctx, parentSession: createSession(), parentRegistry: tools,
-    role: { name: 'fixture', description: '', systemPrompt: '', tools: [] }, parentModel: { async *stream() { yield { type: 'end' } } },
+  const out = await spawnChild({ generationFactoryFor: fixtureGenerationFor, taskName: 'proof', message: 'actual initial input', parentPath: 'lead', parentCtx: ctx, parentSession: createSession(), parentRegistry: tools,
+    role: { name: 'fixture', description: '', systemPrompt: '', tools: [] }, parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: 'end' } }),
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), table, jobs: createJobRegistry(), agents: createAgentRegistry(), childSessions: { coordinator, parentSessionId: 'parent' },
   })
   const entry = table.get(out.path)!, probe = createDurabilityProbes({ table, childSessions: { coordinator, parentSessionId: 'parent' } })

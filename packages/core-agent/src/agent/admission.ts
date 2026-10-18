@@ -10,6 +10,8 @@ export function stalePreparedInput(): Error { return Object.assign(new Error("Mo
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
 export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>, recovery: ReturnType<typeof createRecovery>) {
   return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } & CandidateExecutionState = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }) {
+    if (deps.generationAction) abort = abort ? AbortSignal.any([abort, deps.generationAction.signal]) : deps.generationAction.signal
+    if (deps.sharedBudget) abort = abort ? AbortSignal.any([abort, deps.sharedBudget.signal]) : deps.sharedBudget.signal
     const attempts = state.reductionAttempts ??= { count: 0, staleRebuilds: state.staleRebuilds }
     context.bindReductionScope(attempts, scope)
     while (true) {
@@ -24,6 +26,8 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.ownedBudget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized, selectOutputCap)
       const assessed = assess()
+      await deps.generationAction?.bind(assessed.prepared)
+      await deps.sharedBudget?.bind(assessed.prepared)
       const recoveryAdmission = await recovery.admit(assessed.prepared.measurement, state, abort)
       if (recoveryAdmission === "rebuild") { state.compacted = true; continue }
       if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }

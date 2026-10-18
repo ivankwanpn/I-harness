@@ -1,3 +1,4 @@
+
 import { createSummaryPort } from '../../compaction/src/index.ts'
 import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
@@ -99,7 +100,7 @@ it("disposing a child stops its queued followups from starting fresh turns", asy
   const roles = createRoleRegistry(); roles.register(f.role)
   f.deps.table.add(entry.path, entry)
   try {
-    expect(await ensureResidentAgent({ ...f.deps, summaryFactory: createSummaryPort, parentModel: model, roles }, entry)).toBe(true)
+    expect(await ensureResidentAgent({ ...f.deps, summaryFactory: createSummaryPort, parentModel: model, roles }, entry, new AbortController())).toBe(true)
     append(entry.session, { type: "subagent/inbox", messageId: "one", message: "one" })
     append(entry.session, { type: "subagent/inbox", messageId: "two", message: "two" })
     void driveFollowups(f.deps, entry, entry.sessionId!)
@@ -115,7 +116,7 @@ it("a restored resident mounts a fresh role-local runtime and closes its produce
   const roles = createRoleRegistry(); roles.register(f.role)
   f.deps.table.add(entry.path, entry)
   try {
-    expect(await ensureResidentAgent({ ...f.deps, roles } as SubagentToolDeps, entry)).toBe(true)
+    expect(await ensureResidentAgent({ ...f.deps, roles } as SubagentToolDeps, entry, new AbortController())).toBe(true)
     await f.deps.agents.get("restored")!.run("read")
     expect(entry.session.events.some(event => event.type === "code/call" && event.name === "allowed")).toBe(true)
     expect(f.deps.parentSession.events.some(event => event.type === "code/dispatch")).toBe(false)
@@ -155,7 +156,7 @@ it.each(["followup", "resume"] as const)("interrupt_agent drains live code and a
   const tools = createSubagentTools(deps)
   const execute = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute(args, {})
   try {
-    expect(await ensureResidentAgent(deps, entry)).toBe(true)
+    expect(await ensureResidentAgent(deps, entry, new AbortController())).toBe(true)
     await f.deps.agents.get("live")!.run("seed")
     await execute("followup_task", { target: entry.path, message: "hold" })
     await vi.waitFor(() => expect(entered).toBe(true))

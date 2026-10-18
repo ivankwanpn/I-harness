@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it } from "vitest"
 import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createSessionService } from "@i-harness/session-executor"
@@ -23,7 +24,7 @@ it.each(["stop", "flush"])("refreshes an internally submitted parent result afte
   backend.appendOwnedBatch=async(...args)=>{if(decodeFactBatch(args[3].bytes).events.some(event=>event.type==='turn/end')){entered.release();await stop.promise}return actual(...args)}
   const service = createSessionService({ workspace: process.cwd(), session,
     ...(delay === "flush" ? {coordinator} : {}),
-    model: { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } } })
+    model: controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   let renderedRunning = false
   const snapshots: boolean[] = []
   const executionStates: { running: boolean; queued: number }[] = []
@@ -39,7 +40,7 @@ it.each(["stop", "flush"])("refreshes an internally submitted parent result afte
   try {
     const assembly = await service.assemblyFor("parent")
     if (delay === "stop") assembly.ctx.on("agent/stop", async () => { entered.release(); await stop.promise })
-    await assembly.inbox.admit({ inputId: "parent-notify-fixture", text: "child result", delivery: "steer", intent: "system",
+    await assembly.inbox.admit({ inputId: "parent-notify-fixture", text: "child result", delivery: "steer", intent: "system", provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "session.notification" },
       synthetic: { description: "fixture", scope: "turn" } })
     const execution = service.submit("parent", "child result", new AbortController().signal, { admittedInputId: "parent-notify-fixture" })
     await entered.promise
@@ -58,7 +59,7 @@ it.each(["stop", "flush"])("refreshes an internally submitted parent result afte
 })
 
 it("forwards future service changes once and detaches on SDK close", async () => {
-  const service = createSessionService({ workspace: process.cwd(), session: createSession(), model: { async *stream() { yield { type: "end" } } } })
+  const service = createSessionService({ workspace: process.cwd(), session: createSession(), model: controlledModel(request => ({ async *stream() { yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const received: unknown[] = []
   const server = createSdkServer(service, { onNotify(message) { if (message.method === "session/execution-state") received.push(message.params) } })
   try {
@@ -78,7 +79,7 @@ it("forwards future service changes once and detaches on SDK close", async () =>
 })
 
 it("accepts a legacy service without the optional subscription", async () => {
-  const service = createSessionService({ workspace: process.cwd(), session: createSession(), model: { async *stream() { yield { type: "end" } } } })
+  const service = createSessionService({ workspace: process.cwd(), session: createSession(), model: controlledModel(request => ({ async *stream() { yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const server = createSdkServer({ ...service, onExecutionState: undefined })
   try { await service.submit("s", "legacy", new AbortController().signal) }
   finally { await server.close(); await service.close() }

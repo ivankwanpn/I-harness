@@ -16,12 +16,14 @@ import { inspectWslRuntime } from "@i-harness/sandbox-local"
 import { derivePlanMode, AsyncInbox, subscribe, committedFactSeqs, captureLegacyFact, isManagedFactOwner, type SessionView as Session, type FactOwner, type MetadataFactSource } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { actionMetadataFacts, actionFeedbackFacts } from './lifecycle/action-facts.ts'
+import { createGenerationLifecycle } from './lifecycle/generation-actions.ts'
+import { createSteerPreparationFactory } from './lifecycle/steer-preparation.ts'
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
-import { createMockClient, type MockStep } from "@i-harness/llm-mock"
-import { prepareModelRequest, type ModelClient } from "@i-harness/llm-seam"
+import { createMockClient, createCyclicMockClient, type MockStep } from "@i-harness/llm-mock"
+import { createStableModelClient, type ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator, ManagedDocument } from "@i-harness/session-persistence"
 import { agentShellPrompt, registerShell, resolveWslAgentShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
@@ -137,18 +139,10 @@ type RoleModelSelection = {
   reasoningEffort?: string
 }
 
-// The m26 mock client is destructive (one script step per turn, exhausted →
-// error). For the web path (repeated turns on ONE assembly with the default
-// mock) wrap it so every stream() call serves a fresh copy of the cycle.
-function cyclicMockClient(script: MockStep[]): ModelClient {
-  return {
-    async *stream(request: import("@i-harness/llm-seam").LLMRequest) {
-      yield* createMockClient(script.slice()).stream(request)
-    },
-  }
-}
-
 export interface AssemblyOptions {
+  prepareHumanInput?: (text: string) => Promise<string>
+  modelActionTimeoutMs?: number
+  modelActionMaxAttempts?: number
   videoAudioAnalyzer?: VideoAudioAnalyzer
   codeMode?: CodeModeConfig | (() => CodeModeConfig)
   codeModeFactory?: CodeModeFactory
@@ -371,6 +365,7 @@ export interface SessionAssembly {
   session: Session // the live session — the source of truth
   sessionId?: string
   model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle the six handle-reachable holders share (the two CONFIGURED holders win over it; the service's memoised binding is a reporter). Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:697).
+  selectedModel(): ModelClient
   /** Swap the client this assembly's handle forwards to. Every HANDLE-REACHABLE
    * holder follows — they all hold this same object. It is deliberately NOT the
    * whole model surface: a CONFIGURED `summarizationModel` and a configured
@@ -428,7 +423,7 @@ export interface SessionAssembly {
    * (no engine configured → { compacted: false } fallback). `instructions` are
    * forwarded to the summarizer prompt ("User instructions" section; absent →
    * pre-M33 prompt). */
-  compactNow(instructions?: string): Promise<CompactionResult>
+  compactNow(instructions?: string, execution?: { generation: import('@i-harness/core-agent').AgentGenerationAction; signal: AbortSignal }): Promise<CompactionResult>
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
   /** Per-role outcome of the plugin subagent roles (role name → registered).
@@ -539,7 +534,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let currentModel: ModelClient = opts.model ?? (() => {
     if (opts.modelPolicy !== "test-mock") throw new ModelUnavailableError()
     return opts.mockScript === undefined && opts.mockCycles === true
-      ? cyclicMockClient([{ role: "assistant", text: "ok" }])
+      ? createCyclicMockClient([{ role: "assistant", text: "ok" }])
       : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
   })()
   // The SECOND cell of the live model surface (Task 4 review F-1): the resolved
@@ -552,14 +547,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // request; a getter is all it takes to make that read live (see the deps
   // literal below).
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
-  const model: ModelClient = {
-    get executionIdentity() { return currentModel.executionIdentity },
-    stream: (request) => currentModel.stream(request),
-    prepare: (request) => {
-      const selected = currentModel
-      return prepareModelRequest(selected, request)
-    },
-  }
+  const model = createStableModelClient(() => currentModel)
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx)
 
@@ -1238,7 +1226,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       status: "unconfigured" as const,
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
+    const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => action =>
+      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient })
     const subagent = registerSubagent(ctx, tools, {
+      generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       factOwner,
       reportPolicy: SHIPPING_REPORT_POLICY,
       codeMode, codeModeFactory,
@@ -1433,6 +1424,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           reportPolicy: SHIPPING_REPORT_POLICY,
+          generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           retainResults: subagent.retainResults,
           codeMode, codeModeFactory,
           ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
@@ -1462,6 +1454,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }
               : undefined,
           ensureResident: subagent.ensureResident,
+          followupGeneration: subagent.followupGeneration,
         },
         parentModel: model,
       } satisfies TeamDeps, opts.team))
@@ -1546,6 +1539,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
+      ...(managedDocument ? { generationFactory: action => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }) } : {}),
+      modelActionTimeoutMs: opts.modelActionTimeoutMs,
+      modelActionMaxAttempts: opts.modelActionMaxAttempts,
       summaryFactory,
       modelBindingIdentity: () => currentModel,
       ...(opts.coordinator && opts.sessionId ? { ensureWritableContext: ownedContextReadiness(opts.coordinator, opts.sessionId, session) } : {}),
@@ -1575,7 +1572,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // reaches the wire without core-agent knowing a cell exists.
       get reasoningEffort() { return currentReasoningEffort },
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
-      stepInputs: { claimAtStepBoundary: facts => inbox.claimAtStepBoundary(facts) },
+      stepInputs: { claimAtStepBoundary: (facts, prepare, claim) => inbox.claimAtStepBoundary(facts, prepare, claim) },
     })
     budgetRead = () => agent.contextBudget!()
 
@@ -1595,6 +1592,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       revokeNewWork() { managedDocument?.revokeNewWork() },
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
+      selectedModel: () => currentModel,
       // R-B1: the model surface's mutations — TWO of them, and they are a PAIR
       // (F-1 added the second). Nothing in these types ties the two together, so
       // what keeps them paired is this description. The handle above keeps its
@@ -1708,8 +1706,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         if (id.startsWith("workflow-")) return workflowMount!.executor.killJob(id)
         return subagent.jobs.kill(id)
       },
-      compactNow: async (instructions?: string) =>
-        agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' },
+      compactNow: async (instructions, execution) =>
+        agent.compact?.(instructions, execution ? { generation: execution.generation, signal: execution.signal } : undefined) ?? { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' },
       pluginMcpResults,
       pluginAgentResults,
       updatePluginCapabilities: async (options) => {

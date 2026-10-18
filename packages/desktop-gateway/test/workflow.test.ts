@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -41,7 +42,7 @@ it.each(["refused", "empty"] as const)("pauses an autonomous Goal after a provid
   await coordinator.create({ sessionId: "s" })
   let calls = 0
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
-    model: { async *stream() { calls++; yield { type: "end", ...(kind === "refused" ? { refused: true as const } : {}) } } } })
+    model: controlledModel(request => ({ async *stream() { calls++; yield { type: "end", ...(kind === "refused" ? { refused: true as const } : {}) } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const workflow = createDesktopWorkflow(coordinator, service)
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
   try {
@@ -56,7 +57,7 @@ it("contains background recovery persistence failures and reports them to the UI
   await coordinator.create({ sessionId: "s" })
   const put = coordinator.putDocument.bind(coordinator)
   vi.spyOn(coordinator, "putDocument").mockImplementation(async (key, value) => { if (key.startsWith("desktop-goal-")) throw new Error("disk unavailable"); await put(key, value) })
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: { async *stream() { throw new Error("provider unavailable") } } })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: controlledModel(request => ({ async *stream() { throw new Error("provider unavailable") } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const errors: string[] = []
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, running, error) => { if (!running && error) errors.push(error) } })
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
@@ -98,12 +99,12 @@ it("restarts a paused Goal while the old aborted provider request is still settl
   const states: boolean[] = []
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator),
     additionalTools: createDesktopGoalTools((id) => service.liveSession(id), () => {},id=>service.liveAssembly(id)?.metadataFacts),
-    model: { async *stream(request) {
+    model: controlledModel(request => ({ async *stream(request) {
       if (++calls === 1) { await old; request.signal?.throwIfAborted() }
       else if (calls === 2) { const goal = foldGoal(service.liveSession("s")!.events)!; yield { type: "tool_call", call: { name: "goal_complete", args: { id: goal.id, revision: goal.revision } } } }
       else yield { type: "text/chunk", text: "Verified done" }
       yield { type: "end" }
-    } } })
+    } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const workflow = createDesktopWorkflow(coordinator, service, { onRunningChanged: (_id, value) => states.push(value) })
   try {
     const first = await workflow.mutate("s", { action: "goal", operation: "create", request: { objective: "Verify done" }, start: true })

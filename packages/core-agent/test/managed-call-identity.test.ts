@@ -8,6 +8,9 @@ import { createToolRegistry } from '@i-harness/core-tools'
 import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createAgent } from '../src/index.ts'
+import { createMockClient } from '@i-harness/llm-mock'
+import { observeModelClient } from '@i-harness/llm-seam'
+import { localTestGeneration } from './fixtures/generation.ts'
 
 it.each([true, false])('dispatches the actual committed call graph after producer mutation (managed=%s)', async managed => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-call-identity-'))
@@ -17,10 +20,10 @@ it.each([true, false])('dispatches the actual committed call graph after produce
   const args = { value: 'original' }, call = { id: 'original-call', name: 'effect', args }
   let sends = 0, bodies = 0, observed: unknown
   tools.register({ name: 'effect', description: '', inputSchema: { type: 'object' }, execute: async input => { bodies++; observed = input; return 'one original effect' } })
-  const agent = createAgent(ctx, { session, ...(managed ? { factOwner: document } : {}), sessionId: id, tools, systemPrompt: '', model: { async *stream() {
-    if (++sends === 1) { yield { type: 'tool_call', call }; args.value = 'changed after call receipt'; call.name = 'changed-name'; yield { type: 'end' } }
-    else { yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } }
-  } } })
+  const model = observeModelClient(createMockClient([{ role: 'assistant', toolCalls: [call] }, { role: 'assistant', text: 'done' }]), {
+    start() { sends++ }, event(_state, event) { if (sends === 1 && event.type === 'end') { args.value = 'changed after call receipt'; call.name = 'changed-name' } }, finish() {},
+  })
+  const agent = createAgent(ctx, { session, ...(managed ? { factOwner: document, generationFactory: localTestGeneration(document, id, model) } : {}), sessionId: id, tools, systemPrompt: '', model })
   try {
     expect((await agent.run('perform original operation')).finalText).toBe('done')
     const recorded = session.events.find(event => event.type === 'tool/call')!

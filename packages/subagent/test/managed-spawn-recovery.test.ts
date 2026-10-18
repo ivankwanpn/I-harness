@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -25,15 +26,15 @@ async function fixture() {
   roles.register({ name: 'probe', description: '', systemPrompt: 'probe', tools: [] })
   const entered = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>()
   let childSends = 0, bodies = 0
-  const spawn = createSpawnTool({
+  const spawn = createSpawnTool({ generationFactoryFor: fixtureGenerationFor,
     table, tasks, roles, jobs: createJobRegistry(), parentCtx: ctx, parentRegistry: tools,
     parentSession: document.view, factOwner: document, agents: createAgentRegistry(),
     childSessions: { coordinator, parentSessionId: id }, exec: {} as import('@i-harness/exec').ExecService,
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }),
-    parentModel: { async *stream() {
+    parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
       childSends++; entered.resolve(); await finish.promise
       yield { type: 'text/chunk', text: 'original child result' }; yield { type: 'end' }
-    } },
+    }),
   })
   tools.register({ ...spawn, execute: async (args, exec) => { bodies++; return spawn.execute(args, exec) } })
   return {
@@ -55,12 +56,12 @@ it.each([true, false])('actual parent dispatch retains a published child across 
   let parentSends = 0, finalized = 0
   f.ctx.on('tools/post-execute', event => { if ((event as { name: string }).name === 'spawn_agent') finalized++ })
   const agent = createAgent(f.ctx, {
-    session: f.document.view, factOwner: f.document, tools: f.tools, sessionId: f.id, systemPrompt: '',
-    model: { async *stream() {
+    generationFactory: action => fixtureGenerationFor(f.document, f.id, () => undefined)(action), session: f.document.view, factOwner: f.document, tools: f.tools, sessionId: f.id, systemPrompt: '',
+    model: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
       parentSends++
       yield { type: 'tool_call', call: { id: 'original-spawn', name: 'spawn_agent', args: { message: 'work', task_name: 'one', agent_type: 'probe', background } } }
       yield { type: 'end' }
-    } },
+    }),
   })
   try {
     const failure = await agent.run('launch once').then(() => { throw new Error('Expected original bookkeeping recovery') }, error => error)
@@ -139,7 +140,7 @@ it('checks the original launch fence after a held child admission and preserves 
   let childId = ''
   f.backend.appendOwnedBatch = async (...args) => {
     if (args[0].startsWith('child-') && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'agent/input/admitted')) {
-      childId = args[0]; entered.resolve(); await release.promise
+      childId = args[0]; const outcome = await actual(...args); entered.resolve(); await release.promise; return outcome
     }
     return actual(...args)
   }

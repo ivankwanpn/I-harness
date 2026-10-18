@@ -1,3 +1,6 @@
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach as afterFixture } from "vitest"
+afterFixture(() => vi.unstubAllGlobals())
 import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -547,13 +550,11 @@ describe("createSessionService", () => {
     const root=mkdtempSync(join(tmpdir(),'ih-f1-service-resume-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
     await coordinator.create({sessionId:'durable'});await coordinator.append('durable',restored.events)
     const requests: LLMRequest[] = []
-    const model: ModelClient = { prepare: prepareTextFixture,
-      async *stream(request) {
+    const model: ModelClient = controlledModel(async function* (request) {
         requests.push(request)
         yield { type: "text/chunk", text: "continued" }
         yield { type: "end" }
-      },
-    }
+      })
     const service = createSessionService({
       workspace: process.cwd(),
       approveAll: true,

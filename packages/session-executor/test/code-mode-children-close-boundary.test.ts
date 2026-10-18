@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { subscribe } from '@i-harness/core-session'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -20,14 +23,14 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     parallelLimits.push(mountOptions.maxParallel)
     return registerCodeMode(ctx, tools, mountOptions)
   }
-  const child: ModelClient = { async *stream(request) {
+  const child: ModelClient = controlledModel(async function* (request) {
     requests.push(request)
     const last = request.messages.at(-1)
     if (last?.role === "user") yield { type: "tool_call", call: { name: "code_exec", args: { code: 'text(ALL_TOOLS.map(t=>t.name)); text(await tools.list_dir({path:"."})); store("turn",(load("turn")??0)+1); text(load("turn"));' } } }
     else yield { type: "text/chunk", text: "child complete" }
     yield { type: "end" }
-  } }
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } } }
+  })
+  const parent: ModelClient = controlledModel(async function* () { yield { type: "text/chunk", text: "parent" }; yield { type: "end" } })
   const options = {
     workspace: root, model: parent, coordinator, sessionFor: createDurableSessionLoader(coordinator), codeMode: { mode: "only" as const },
     codeModeFactory: factory, maxParallelToolCalls: 1,

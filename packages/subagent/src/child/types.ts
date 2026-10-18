@@ -10,6 +10,9 @@ import type { SubagentRole } from "../roles.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./model-binding.ts"
 
 export interface SpawnOptions extends RoleModelHost {
+  /** Parent-owned approval exception, never normal child allowance. */
+  sharedGeneration?: import('@i-harness/llm-seam').ApprovalGenerationAction
+  signal?: AbortSignal
   taskName: string
   message: string
   parentPath: string

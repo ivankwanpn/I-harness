@@ -1,6 +1,7 @@
-import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
+import { controlledModel } from "./controlled-model.ts"
+import { completeCheckpoint } from '../../compaction/test/fixtures/checkpoint.ts'
 import { recordFixture } from "./helpers.ts"
-import { expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,7 +9,7 @@ import { deriveMessages } from "@i-harness/core-session"
 import { createCompactionHarness } from '../../compaction/test/fixtures/engine.ts'
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
-import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import type { LLMRequest } from "@i-harness/llm-seam"
 import { createSessionService } from "../src/service.ts"
 import { createDurableSessionLoader } from "../src/durable-session.ts"
 
@@ -16,8 +17,8 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
   const root = await mkdtemp(join(tmpdir(), "ih-todo-context-"))
   const store = join(root, "sessions")
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
-  const summarizer: ModelClient = { prepare: prepareTextFixture, async *stream() { yield { type: "text/chunk", text: completeCheckpoint() }; yield { type: "end" } } }
+  const model = controlledModel(async function* (request) { requests.push(request); yield { type: "text/chunk", text: "ok" }; yield { type: "end" } })
+  const summarizer = controlledModel(async function* () { yield { type: "text/chunk", text: completeCheckpoint() }; yield { type: "end" } })
   let coordinator = createSessionCoordinator(createJsonlBackend(store), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   let service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model, contextWindow: 100_000, compact: { auto: false, summarizationModel: summarizer, minSummaryChars: 1 } })
@@ -70,3 +71,5 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
     expect((await coordinator.snapshot!("s")).session.events.filter((event) => event.type === "todo/write")).toHaveLength(4)
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+afterEach(() => vi.unstubAllGlobals())

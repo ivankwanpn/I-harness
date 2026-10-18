@@ -22,7 +22,7 @@ describe("CLI input tiers", () => {
       { role: "assistant", text: "initial answer" },
     ])
     const result = await runHeadless("one", {
-      workspace: dir,
+      workspace: dir, modelPolicy: "test-mock",
       model,
       sessionId: "sess-tiers",
       coordinator,
@@ -39,7 +39,7 @@ describe("CLI input tiers", () => {
     const coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true } })
     const { id } = await coordinator.create({ sessionId: "sess-recover" })
     coordinator.enqueue(id, [
-      { type: "agent/input/admitted", version: 1, inputId: "old", text: "stale queued", delivery: "queue", intent: "user" },
+      { type: "agent/input/admitted", version: 1, inputId: "old", text: "stale queued", delivery: "queue", intent: "user", provenance: { kind: "human", authority: "request", scope: "turn", producer: "cli.prompt" } },
     ])
     await coordinator.flush(id)
     const model = createMockClient([
@@ -47,7 +47,7 @@ describe("CLI input tiers", () => {
       { role: "assistant", text: "new done" },
     ])
     const result = await runHeadless("new task", {
-      workspace: dir, model,
+      workspace: dir, modelPolicy: "test-mock", model,
       resumeSessionId: id, coordinator,
     })
     expect(result.exitCode).toBe(0)

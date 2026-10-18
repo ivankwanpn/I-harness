@@ -1,5 +1,5 @@
 import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -24,6 +24,8 @@ import { approxTokens } from "@i-harness/compaction"
 import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
 import type { SubagentRole } from "@i-harness/subagent"
 import { createSessionAssembly, ModelUnavailableError, type AssemblyOptions } from "../src/assembly.ts"
+import { controlledModel } from "./controlled-model.ts"
+afterEach(() => vi.unstubAllGlobals())
 
 function textMock(script: MockStep[]) { return Object.assign(createMockClient(script), { prepare: prepareTextFixture }) }
 
@@ -177,7 +179,8 @@ describe("createSessionAssembly", () => {
       workspace: process.cwd(),
       contextWindow: 200_000,
       compact: { contextWindow: 200_000 },
-      model: textMock([{ role: "assistant", text: "ok" }]),
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      modelPolicy: "test-mock",
     })
     try {
       const deps = agentCalls.deps.at(-1)!
@@ -410,7 +413,8 @@ describe("createSessionAssembly", () => {
       sessionId,
       detachedSession:session,
       coordinator,
-      model: textMock([{ role: "assistant", text: "ok" }]),
+      model: createMockClient([{ role: "assistant", text: "ok" }]),
+      modelPolicy: "test-mock",
     })
     try {
       await assembly.agent.run("hello")
@@ -741,9 +745,10 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
    * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
    * the two existing pieces are joined, because these holders are driven by
    * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
-  function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
+  function scriptedModel(script: MockStep[], managed = false): ModelClient & { requests: LLMRequest[] } {
     const requests: LLMRequest[] = []
     const cassette = textMock(script)
+    if (managed) return Object.assign(controlledModel(async function* (request) { requests.push(request); yield* cassette.stream({ ...request, generation: undefined, confirmExecution: undefined }) }), { requests })
     return { prepare: prepareTextFixture,
       requests,
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
@@ -897,7 +902,7 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
       { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
       { role: "assistant", text: "teammate finished" }, // the teammate's own turn
       { role: "assistant", text: "lead finished" }, // the lead's continuation
-    ])
+    ], true)
     const assembly = await createSessionAssembly({
       workspace: process.cwd(),
       model: first,
@@ -1708,13 +1713,7 @@ describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
       { role: "assistant", text: "teammate finished" },
       { role: "assistant", text: "lead finished" },
     ])
-    return { prepare: prepareTextFixture,
-      requests,
-      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-        requests.push(request)
-        yield* cassette.stream(request)
-      },
-    }
+    return Object.assign(controlledModel(async function* (request) { requests.push(request); yield* cassette.stream({ ...request, generation: undefined, confirmExecution: undefined }) }), { requests })
   }
 
   // hop 1 (`assembly.ts:1146`) + hop 4 (`reviewer.ts:178`, the gate's TRUE arm):

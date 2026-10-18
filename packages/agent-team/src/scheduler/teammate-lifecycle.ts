@@ -33,6 +33,7 @@ export function createTeammateSpawner(
     else if (opts?.forkTurns === undefined || opts.forkTurns === "all") forkTurns = "all"
     else forkTurns = opts.forkTurns
     return spawnChild({
+      generationFactoryFor: sub.generationFactoryFor, modelActionTimeoutMs: sub.modelActionTimeoutMs, modelActionMaxAttempts: sub.modelActionMaxAttempts,
       codeMode: sub.codeMode, codeModeFactory: sub.codeModeFactory,
       taskName: name,
       message: prompt,

@@ -10,18 +10,21 @@ import type { CodeModeMount } from "@i-harness/code-mode"
 import type { ChildAgentEntry } from "../agent-table.ts"
 import type { SpawnOptions } from "./types.ts"
 import { retainInitialInput } from './initial-input.ts'
+import type { InitialChildInput } from './generation.ts'
 
 export async function publishChild(
   opts: SpawnOptions, childCtx: PluginContext, childSession: SessionView, factOwner: FactOwner, document: ManagedDocument | undefined,
   sessionId: string | undefined, childPath: string, childReg: ToolRegistry,
   codeModeMount: CodeModeMount | undefined, controller: AbortController, agent: Agent, modelLabel: string | undefined,
+  initial?: InitialChildInput,
+  selectedModel: () => import('@i-harness/llm-seam').ModelClient = () => opts.parentModel,
 ): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
-  const inputId = randomUUID(), admission = factOwner.beginAction(controller.signal)
+  const inputId = initial?.inputId ?? randomUUID(), admission = initial ? undefined : factOwner.beginAction(controller.signal)
   let initialOutcome:import('@i-harness/core-session').ProducerFactOutcome
   try {
-    initialOutcome=await admission.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: opts.message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
+    initialOutcome=initial?.outcome ?? await admission!.facts.inputs.admit({ type: 'agent/input/admitted', version: 1, inputId, text: opts.message, delivery: 'queue', intent: 'user', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) } })
     committedFactSeqs(initialOutcome)
-  } finally { admission.finish() }
+  } finally { admission?.finish() }
   opts.validateBeforeLaunch?.()
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
@@ -35,6 +38,7 @@ export async function publishChild(
     startedAt: Date.now(),
     session: childSession,
     factOwner,
+    executionModel: selectedModel,
     controller,
     mailbox: [],
     jobId,
@@ -67,7 +71,8 @@ export async function publishChild(
   opts.table.add(childPath, entry)
   opts.onPublished?.({ path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) })
   // Defer transport until the entry and its retained lifecycle are published.
-  const initialRun = Promise.resolve().then(() => agent.runAdmitted!(opts.message, controller.signal, undefined, inputId))
+  const initialRun = Promise.resolve().then(() => agent.runAdmitted!(opts.message, controller.signal, undefined, inputId, initial?.generation && initial.delegatedOrigin
+    ? { provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.initial', ...(opts.childSessions?.parentSessionId ? { originSessionId: opts.childSessions.parentSessionId } : {}) }, generation: initial.generation, delegatedOrigin: initial.delegatedOrigin } : undefined))
 
   const completion = initialRun.then(
     async (result) => {
@@ -86,8 +91,8 @@ export async function publishChild(
       await opts.onSettled?.({ error: err instanceof Error ? err.message : String(err), aborted })
     },
   )
-  entry.followupChain = completion
-  void completion.catch(() => {})
+  entry.followupChain = completion.finally(() => initial?.close())
+  void entry.followupChain.catch(() => {})
 
   return { path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) }
 }

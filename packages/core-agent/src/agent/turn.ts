@@ -1,37 +1,47 @@
+import { createResponseRunner } from './response.ts'
 import { agentFacts, committedFactSeqs } from "./facts.ts"
 import { ensureWritableContext } from "./context-readiness.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { type ImageInput } from "@i-harness/core-session"
+import { isNondurableSession, type ImageInput } from "@i-harness/core-session"
 import { randomUUID } from "node:crypto"
 import { executeToolCalls } from "../execute-tool-calls.ts"
 import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle, AgentInputOptions } from "./types.ts"
 import type { AgentContext } from "./context.ts"
-import { createStepInput, startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
+import { startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
-import { failTurn, acceptCompletedModelStep, reportModelUsage, closeStep, finishTurn } from "./finalization.ts"
-import { createAdmission, stalePreparedInput } from "./admission.ts"
-import { createRecovery } from "./recovery.ts"
-import { closeStepBoundary, openStepBoundary } from './boundaries.ts'
-import { modelFailureFacts } from "@i-harness/llm-seam"
+import { failTurn, closeStep, finishTurn } from "./finalization.ts"
 import { ensureConversationSemantics } from "./exchange.ts"
 import { prepareTurnInput } from "./input.ts"
 import { savingFailure } from './saving-failure.ts'
+import { toolGenerationFactory } from './tool-generation.ts'
+import { promoteTurnInput } from './input-promotion.ts'
+import { openDirectInput } from './direct-input.ts'
 
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
   let steps = 0
   const getSteps = () => steps
   const modelLoop = createModelLoop(deps)
-  const prepareRequest = createStepInput(deps, context)
-  const recovery = createRecovery(deps, context)
-  const admit = createAdmission(deps, context, prepareRequest, recovery)
+  const respond = createResponseRunner(deps, context, modelLoop, getSteps)
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions, producer = "agent.run"): Promise<AgentResult> {
+    const start = { wall: Date.now(), monotonic: performance.now() }, abort = signal ?? deps.signal
+    const direct = !isNondurableSession(deps.session) && !options?.generation && !deps.sharedBudget
+      ? await openDirectInput(deps, { message, images, inputId, options, producer }, abort, start) : undefined
+    if (direct) inputId = direct.inputId
     await ensureWritableContext(deps)
     const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
-    const abort = signal ?? deps.signal
     const input = prepareTurnInput(deps.session, { message, images, inputId, options, producer })
+    if (options?.generation) {
+      if (!abort) throw Object.assign(new Error('Missing original generation signal'), { code: 'GENERATION_STALE' })
+      if (options.delegatedOrigin) options.generation.adoptDelegated(deps.session, options.delegatedOrigin, abort)
+      else {
+        if (!inputId || !options.preparation) throw Object.assign(new Error('Missing original input preparation'), { code: 'GENERATION_STALE' })
+        options.generation.adopt(deps.session, inputId, options.preparation.preparationId, abort)
+      }
+    }
     await ensureConversationSemantics(deps)
-    committedFactSeqs(await agentFacts(deps).inputs.start(inputId ? { type: 'agent/input/promoted', version: 1, inputId } : undefined, input))
+    const inputSeqs = committedFactSeqs(await promoteTurnInput(deps, { kind: 'input-start', ...(inputId ? { promoted: { type: 'agent/input/promoted', version: 1, inputId } } : {}), turn: { type: 'turn/start' }, message: input, ...(options?.preparation ? { preparation: options.preparation } : {}) }, lifecycle, () => { abort?.throwIfAborted(); (options?.generation ?? direct?.generation)?.assertOpen(); deps.sharedBudget?.signal.throwIfAborted() }))
+    let generationOrigin: import('@i-harness/core-session').GenerationOrigin = { kind: 'input', seq: inputSeqs.at(-1)! }
     lifecycle.turnOpen = true
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
@@ -40,86 +50,25 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
     let needsContinuation = true
     let stopContinuations = 0
     let promptSubmitted = false
+    let firstGeneration = options?.generation ?? direct?.generation
     while (needsContinuation) {
       if (abort?.aborted) throw new Error("agent aborted")
       steps += 1
       if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
+      deps.generationAction = firstGeneration ?? await deps.generationLifecycle?.open('main', generationOrigin, { signal: abort, timeoutMs: deps.modelActionTimeoutMs, maxAttempts: deps.modelActionMaxAttempts })
+      firstGeneration = undefined
       const stepStartSeq = await startStep(deps, lifecycle)
-      let physicalStepStartSeq = stepStartSeq
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       await drainHookContext(ctx, deps)
-      const candidateState: import("./execution.ts").CandidateExecutionState & import('./recovery.ts').RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, reductionAttempts: { count: 0, staleRebuilds: 0 }, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
-      let candidate: Awaited<ReturnType<typeof admit>>
-      let streamStep: ReturnType<typeof modelLoop.start>
-      while (true) {
-        candidate = await admit(abort, requestScope, getSteps, candidateState)
-        streamStep = modelLoop.start(lifecycle, physicalStepStartSeq, abort, getSteps)
-        const activeCandidate = candidate, activeStep = streamStep
-        let physicalAttempts = 0, observed = false, rebuild = false
-        let attemptFailure: unknown, failed = false
-        let streamFailure: unknown, streamFailed = false
-        try {
-          try {
-            for await (const ev of candidate.prepared.stream({ confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: () => { activeCandidate.validateBeforeTransport(); physicalAttempts++; candidateState.hasStartedSend = true } })) {
-              if (ev.type !== "activity" && ev.type !== "retry") { observed = true; candidateState.hasObservedOutput = true }
-              await streamStep.accept(ev)
-            }
-          } catch (error) {
-            streamFailure = error; streamFailed = true
-            const failure = modelFailureFacts(error)
-            if (["AUTH", "INVALID_API_KEY"].includes(failure?.code ?? (error as { code?: string })?.code ?? "")) context.ownedBudget.retire("execution-identity-changed")
-            const handoff = candidate.execution.handoff()
-            if ((error as { code?: string })?.code === "EXECUTION_IDENTITY_CHANGED" && handoff && !candidateState.hasStartedSend && !candidateState.hasObservedOutput && candidateState.epochRebuilds++ === 0) {
-              candidateState.handoff = handoff
-              rebuild = true
-            } else if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
-              if (++candidateState.reductionAttempts!.staleRebuilds > 3) await streamStep.fail(stalePreparedInput())
-              rebuild = true
-            } else if (!streamStep.result().providerEnded && failure?.code === "CONTEXT_WINDOW_EXCEEDED" && failure.reason === "context-limit") {
-              await streamStep.discard()
-              await closeStepBoundary(deps,lifecycle,{type:'step/end'})
-              await recovery.require(error, candidate.prepared.measurement, stepStartSeq, abort)
-              // Reopen only the physical model boundary. Hooks, admitted inputs
-              // and prior accepted tool effects belong to the logical step.
-              const failedStart = deps.session.events[streamStep.result().identity.stepStartSeq]
-              physicalStepStartSeq = committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "step/start", actionId: failedStart?.type === "step/start" ? failedStart.actionId : randomUUID(), attemptId: randomUUID() }))[0]!
-              openStepBoundary(lifecycle)
-              rebuild = true
-            } else await streamStep.fail(error)
-          }
-          } catch (error) {
-          const alreadyRetained = error instanceof AggregateError && Object.getOwnPropertyDescriptor(error, 'cause')?.value === streamFailure
-          attemptFailure = streamFailed && error !== streamFailure && !alreadyRetained
-            ? savingFailure(streamFailure, [error], 'model attempt saving failed') : error
-          failed = true
-          throw attemptFailure
-        } finally {
-          candidate.execution.close()
-          try { await streamStep.settle() }
-          catch (saving) {
-            if (failed) throw savingFailure(attemptFailure, [saving], 'model step settlement failed')
-            throw saving
-          }
-        }
-        if (!rebuild) break
-      }
-      const { prepared } = candidate
-      const step = streamStep.result()
-      if (!step.providerEnded) await streamStep.fail(Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" }))
-      if (step.truncatedThisStep || step.refusedThisStep) {
-        reportModelUsage(deps, step)
-        await streamStep.discard()
-        await closeStep(deps, lifecycle, getSteps, step)
-        throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
-      }
-      await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt))
-      await recovery.resolve(prepared.measurement, abort)
+      const { step, acceptedSeq } = await respond(lifecycle, stepStartSeq, abort, requestScope)
+      if (acceptedSeq !== undefined) generationOrigin = { kind: 'predecessor', seq: acceptedSeq }
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
         await executeToolCalls(ctx, deps.session, deps.tools, batch, {
           maxParallel, signal: abort, sessionId: deps.sessionId,
           facts: agentFacts(deps).tools, registerFactSource: deps.registerFactSource, assertFactOpen: deps.assertFactOpen,
+          modelGeneration: toolGenerationFactory(deps),
           ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
           ...(deps.flush ? { flush: deps.flush } : {}),
         })
@@ -160,6 +109,11 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
   return async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions, producer?: string): Promise<AgentResult> {
     const lifecycle: TurnLifecycle = { turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false }
     try { return await executeTurn(lifecycle, message, signal, images, inputId, options, producer) }
-    catch (error) { return failTurn(deps, lifecycle, error) }
+    catch (error) {
+      let failure = error
+      try { await deps.generationAction?.close(signal?.aborted ? 'stopped' : 'failed') }
+      catch (settlement) { failure = savingFailure(error, [settlement], 'Generation disposition requires recovery') }
+      return failTurn(deps, lifecycle, failure)
+    }
   }
 }

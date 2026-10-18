@@ -1,8 +1,10 @@
-import { expect, it } from 'vitest'
+import { createTitleGenerationContext } from '../../session-executor/src/lifecycle/title-generation.ts'
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSession, type BatchKey } from '@i-harness/core-session'
+import { createSession, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { maybeAutoTitle } from '../src/index.ts'
@@ -26,24 +28,28 @@ it.each(['unknown', 'source-fault', 'revoked', 'missing-action', 'wrong-view'] a
   } finally { action.finish(); if (key) await document.reconcile(key); await coordinator.close().catch(() => {}) }
 })
 
-it('carries the original title signal and immediate send assertion across actual model preparation', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-f1-title-prepare-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+it('carries the original title signal through held actual reservation with zero sends after Stop', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f4-title-prepare-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  await document.inputs.start(undefined, { type: 'user/message', text: 'Original prompt' })
+  await document.inputs.start(undefined, { type: 'user/message', text: 'Original prompt', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } })
   const controller = new AbortController(), action = document.beginAction(controller.signal), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let sends = 0
-  const running = maybeAutoTitle({ session: document.view, metadata: action.facts.metadata, action: { view: document.view, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata } }, model: { async *stream(request) {
-    entered.resolve(); await release.promise
-    request.signal?.throwIfAborted(); request.validateBeforeTransport?.()
-    sends++; yield { type: 'text/chunk', text: 'Unexpected late title' }; yield { type: 'end' }
-  } } })
+  vi.stubGlobal('fetch', async () => { sends++; throw new Error('Unexpected network destination') })
+  const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'title', baseUrl: 'https://title.fixture.invalid' })
+  const generation = createTitleGenerationContext(document, id, action, { selectedClient: () => model })
+  const append = backend.appendOwnedBatch!
+  backend.appendOwnedBatch = async (...args) => {
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/attempt' && event.op === 'reserve')) { entered.resolve(); await release.promise }
+    return append(...args)
+  }
+  const running = maybeAutoTitle({ session: document.view, metadata: action.facts.metadata, action: { view: document.view, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata }, openGeneration: generation.open }, model })
   void running.catch(() => {})
   try {
     await entered.promise
-    controller.abort(new Error('Stop during title preparation'))
+    controller.abort(new Error('Stop during title reservation'))
     release.resolve()
     await expect(running).rejects.toThrow()
     expect(sends).toBe(0)
     expect(document.view.events.some(event => event.type === 'session/title')).toBe(false)
-  } finally { release.resolve(); await running.catch(() => {}); action.finish(); await coordinator.close() }
+  } finally { release.resolve(); await running.catch(() => {}); await generation.drain(); action.finish(); await coordinator.close(); vi.unstubAllGlobals() }
 })

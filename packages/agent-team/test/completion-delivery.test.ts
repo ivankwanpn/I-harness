@@ -1,3 +1,4 @@
+import { controlledModel } from '../../subagent/test/generation-fixture.ts'
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -30,7 +31,7 @@ async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: Par
 async function assertColdDoesNotWake(root: string, marker: string) {
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const seen: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Unexpected wake" }; yield { type: "end" } } }
+  const model: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Unexpected wake" }; yield { type: "end" } })
   const service = createSessionService({ workspace: root, model, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true })
   try {
     const assembly = await service.assemblyFor("lead")
@@ -42,9 +43,9 @@ async function assertColdDoesNotWake(root: string, marker: string) {
 
 it("delivers initial and followup teammate finals exactly once to an idle Lead using real service admission", async () => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received result" }; yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Lead received result" }; yield { type: "end" } })
   let childTurns = 0
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: ++childTurns === 1 ? "TEAMMATE_INITIAL_OK" : "TEAMMATE_FOLLOWUP_OK" }; yield { type: "end" } } }
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: ++childTurns === 1 ? "TEAMMATE_INITIAL_OK" : "TEAMMATE_FOLLOWUP_OK" }; yield { type: "end" } })
   const f = await fixture(lead, child)
   try {
     await f.execute("spawn_teammate", { name: "helper", description: "local fixture", prompt: "first", context: "fresh" })
@@ -77,8 +78,8 @@ it("delivers initial and followup teammate finals exactly once to an idle Lead u
 
 it("shipping teammate completion waits for strict owned retention and bounds its framed model notice", async () => {
   const output = "TEAM_BARRIER " + '中文🙂"\n'.repeat(12000)
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: output }; yield { type: "end" } } }
-  const lead: ModelClient = { async *stream() { yield { type: "text/chunk", text: "received" }; yield { type: "end" } } }
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: output }; yield { type: "end" } })
+  const lead: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: "received" }; yield { type: "end" } })
   const notices: string[] = []
   const f = await fixture(lead, child, { admit: async input => { notices.push(input.text) }, wake: () => {} })
   let release!: () => void
@@ -104,8 +105,8 @@ it("shipping teammate completion waits for strict owned retention and bounds its
 
 it("shipping teammate retention failure keeps the real completed result inspectable and suppresses admission", async () => {
   let turns = 0, admissions = 0
-  const child: ModelClient = { async *stream() { turns++; yield { type: "text/chunk", text: "TEAM_RETENTION_FAILED completed effect" }; yield { type: "end" } } }
-  const lead: ModelClient = { async *stream() { yield { type: "end" } } }
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { turns++; yield { type: "text/chunk", text: "TEAM_RETENTION_FAILED completed effect" }; yield { type: "end" } })
+  const lead: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "end" } })
   const f = await fixture(lead, child, { admit: async () => { admissions++ }, wake: () => {} })
   const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
   f.coordinator.putDocumentStrict = async (key, data) => {
@@ -124,8 +125,8 @@ it("shipping teammate retention failure keeps the real completed result inspecta
 
 it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized UTF-8 result summary and retains the full job output (%#)", async (output) => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received summary" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: output }; yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Lead received summary" }; yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: output }; yield { type: "end" } })
   const f = await fixture(lead, child)
   try {
     await f.execute("spawn_teammate", { name: "helper", description: "large result", prompt: "first", context: "fresh" })
@@ -153,8 +154,8 @@ it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized
 
 it("retries durable Lead messages after publishing the cold assembly and does not deliver them twice", async () => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Recovered Lead message" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { throw new Error("recovery must not start a child"); yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Recovered Lead message" }; yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { throw new Error("recovery must not start a child"); yield { type: "end" } })
   const f = await fixture(lead, child, undefined, [{ type: "team/message/queued", version: 1, seq: 0, teamId: "lead-cold", message: { id: "msg-cold", senderId: "child-old", senderName: "helper", targetId: "lead-cold", delivery: "quiet", content: "COLD_TEAM_RESULT" } }])
   try {
     await vi.waitFor(() => expect(seen).toHaveLength(1))
@@ -173,8 +174,8 @@ it("retries durable Lead messages after publishing the cold assembly and does no
 })
 
 it("preserves an explicitly supplied parent admission adapter", async () => {
-  const lead: ModelClient = { async *stream() { throw new Error("explicit adapter owns waking"); yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: "EXPLICIT_RESULT" }; yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { throw new Error("explicit adapter owns waking"); yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: "EXPLICIT_RESULT" }; yield { type: "end" } })
   const parentNotify = { admit: vi.fn(async () => {}), wake: vi.fn() }
   const f = await fixture(lead, child, parentNotify)
   try {
@@ -188,15 +189,15 @@ it("preserves an explicitly supplied parent admission adapter", async () => {
 
 it("keeps a teammate error readable using its actual job error", async () => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received error" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { throw new Error("provider disconnected"); yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Lead received error" }; yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { throw new Error("provider disconnected"); yield { type: "end" } })
   const f = await fixture(lead, child)
   try {
     await f.execute("spawn_teammate", { name: "helper", description: "error fixture", prompt: "first", context: "fresh" })
     await vi.waitFor(() => expect(seen).toHaveLength(1))
     await vi.waitFor(() => expect(f.service.queueState("lead")).toEqual({ running: false, queued: 0 }))
     expect(f.assembly.session.events.find((event) => event.type === "user/message" && event.text.includes("provider disconnected"))).toMatchObject({
-      input: { synthetic: { display: { kind: "team-result", title: "Team reply error: helper", body: "provider disconnected" } } },
+      input: { synthetic: { display: { kind: "team-result", title: "Team reply error: helper", body: "model stream error: provider disconnected" } } },
     })
     expect(JSON.stringify(seen[0]!.messages)).toContain("provider disconnected")
   } finally { await f.close() }
@@ -204,8 +205,8 @@ it("keeps a teammate error readable using its actual job error", async () => {
 
 it("restores a queued result presentation without sending presentation fields to the model", async () => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { throw new Error("must not wake child"); yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "Received" }; yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { throw new Error("must not wake child"); yield { type: "end" } })
   const seed = [{ type: "team/message/queued", version: 1, seq: 0, teamId: "lead-cold", message: {
     id: "msg-result", senderId: "child-old", senderName: "helper", targetId: "lead-cold", delivery: "quiet", content: "COLD_RAW_RESULT",
     display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" },
@@ -228,8 +229,8 @@ it("does not reawaken a disposed Lead when a child finishes during service close
   let release!: () => void
   const held = new Promise<void>((done) => { release = done })
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "unexpected wake" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream() { await held; yield { type: "text/chunk", text: "AFTER_CLOSE" }; yield { type: "end" } } }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { seen.push(request); yield { type: "text/chunk", text: "unexpected wake" }; yield { type: "end" } })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { await held; yield { type: "text/chunk", text: "AFTER_CLOSE" }; yield { type: "end" } })
   const f = await fixture(lead, child)
   try {
     await f.execute("spawn_teammate", { name: "helper", description: "close fixture", prompt: "first", context: "fresh" })
@@ -245,7 +246,7 @@ it("feeds a busy Lead at its next step and suppresses late completions after can
   let releaseLead!: () => void
   const holdLead = new Promise<void>((done) => { releaseLead = done })
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) {
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
     seen.push(request)
     if (seen.length === 1) { await holdLead; yield { type: "tool_call", call: { id: "next", name: "continue", args: {} } } }
     else {
@@ -253,11 +254,11 @@ it("feeds a busy Lead at its next step and suppresses late completions after can
       yield { type: "text/chunk", text: "Lead received result" }
     }
     yield { type: "end" }
-  } }
+  })
   let releaseChild!: () => void
   const holdChild = new Promise<void>((done) => { releaseChild = done })
   let turns = 0
-  const child: ModelClient = { async *stream() { if (++turns > 1) await holdChild; yield { type: "text/chunk", text: turns === 1 ? "BUSY_RESULT_OK" : "CANCELLED_LATE_RESULT" }; yield { type: "end" } } }
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { if (++turns > 1) await holdChild; yield { type: "text/chunk", text: turns === 1 ? "BUSY_RESULT_OK" : "CANCELLED_LATE_RESULT" }; yield { type: "end" } })
   const f = await fixture(lead, child)
   try {
     const run = f.service.submit("lead", "lead task", new AbortController().signal)
@@ -290,12 +291,12 @@ it("feeds a busy Lead at its next step and suppresses late completions after can
 
 it("cancels an admitted notification if Stop arrives during its persistence flush and prevents restart delivery", async () => {
   const seen: LLMRequest[] = []
-  const lead: ModelClient = { async *stream(request) {
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
     seen.push(request)
     await new Promise<void>((done) => { if (request.signal?.aborted) done(); else request.signal?.addEventListener("abort", () => done(), { once: true }) })
     yield { type: "end" }
-  } }
-  const child: ModelClient = { async *stream() { yield { type: "text/chunk", text: "STOP_DURING_FLUSH" }; yield { type: "end" } } }
+  })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: "STOP_DURING_FLUSH" }; yield { type: "end" } })
   const f = await fixture(lead, child)
   let release!: () => void
   const held = new Promise<void>((done) => { release = done })

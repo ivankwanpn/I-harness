@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -30,14 +31,14 @@ it('cancels the actual Gateway title action while its original profile lookup is
   try {
     host = await createDesktopHost({ workspace, sessionDir: join(root, 'sessions'), settingsPath, credentialsPath, onWrite: frame => frames.push(frame), buildProviderClient: profile => {
       expect(profile.apiKey === 'controlled').toBe(true)
-      return { async *stream(request) {
+      return controlledModel(request => ({ async *stream(request) {
         request.signal?.throwIfAborted()
         request.validateBeforeTransport?.()
         if (request.systemPrompt.includes('You produce ONLY a short session title')) titles++
         else main++
         yield { type: 'text/chunk', text: 'controlled answer' }
         yield { type: 'end' }
-      } }
+      } } as import('@i-harness/llm-seam').ModelClient).stream(request))
     } })
     const request = (id: number, method: string, params: unknown) => host!.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     await request(1, 'initialize', {})

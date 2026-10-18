@@ -8,6 +8,7 @@ export {
 } from "./assembly.ts"
 export { createDurableSessionLoader } from "./durable-session.ts"
 export { openExecutorDocument } from './lifecycle/managed-document.ts'
+export { createTitleGenerationContext } from './lifecycle/title-generation.ts'
 export { actionMetadataFacts } from './lifecycle/action-facts.ts'
 export { withRewindFacts } from './lifecycle/rewind-facts.ts'
 export {
@@ -24,3 +25,5 @@ export type { AgentTaskStatus, AgentTaskView } from "@i-harness/subagent"
 // @i-harness/core-agent (group-2 reconciles with llm-seam's ReasoningEffort at
 // the T2 merge).
 export type { ReasoningEffort } from "@i-harness/core-agent"
+
+export { openLiteralInputExecution } from './lifecycle/literal-input.ts'

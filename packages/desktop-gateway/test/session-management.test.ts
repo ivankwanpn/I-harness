@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -23,7 +24,7 @@ it('forks actual managed replacement history through Gateway management with no 
   const root = await mkdtemp(join(tmpdir(), 'ih-f2-management-')); roots.push(root)
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   let sends = 0
-  const service = createSessionService({ workspace: root, coordinator, model: { async *stream() { sends++; yield { type: 'end' } } } })
+  const service = createSessionService({ workspace: root, coordinator, model: controlledModel(request => ({ async *stream() { sends++; yield { type: 'end' } } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   const { id } = await coordinator.create({ sessionId: 'parent' }), document = await coordinator.openManagedDocument(id)
   const inherited = { kind: 'inherited' as const, authority: 'observation' as const, scope: 'turn' as const, producer: 'session.seed' }
   const events: SessionEvent[] = [

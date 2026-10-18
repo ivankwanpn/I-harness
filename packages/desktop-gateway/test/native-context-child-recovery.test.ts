@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import {expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
@@ -21,7 +22,7 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
   }})
   let runtime=await makeRuntime();await runtime.contextOutput.configure({enabled:true})
   const requests:LLMRequest[]=[];let first=true,childSession:Session|undefined,waits=0,effects=0
-  const model:ModelClient={async *stream(request){requests.push(structuredClone(request))
+  const model:ModelClient=controlledModel(request => ({async *stream(request){requests.push(structuredClone(request))
     // A zero observation window makes the valid asynchronous return explicit.
     // Continue the same owned cell instead of assuming the first read settled.
     if(first){first=false;yield{type:'tool_call',call:mode==='off'?{name:'fixture_long',args:{}}:{name:'code_exec',args:{code:'await tools.fixture_long({});text("c".repeat(20000)+"EMITTED_MARKER"+"d".repeat(20000));',yield_time_ms:0,max_output_tokens:16}}}}
@@ -37,8 +38,8 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
       }else yield{type:'text/chunk',text:'Child finished.'}
     }
     yield{type:'end'}
-  }}
-  const summarizer:ModelClient={prepare:prepareTextFixture,async *stream(){yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}}
+  }} as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const summarizer:ModelClient=controlledModel(request => ({prepare:prepareTextFixture,async *stream(){yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}} as import('@i-harness/llm-seam').ModelClient).stream(request))
   const options={workspace:root,sessionId:'parent',model,sandbox:'danger-full-access' as const,approveAll:true,codeMode:{mode},additionalTools:[{name:'fixture_long',description:'long fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=>{effects++;return 'a'.repeat(20000)+'DIRECT_MARKER'+'b'.repeat(20000)}}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
   let assembly=await createSessionAssembly({...options,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
   const observe=()=>assembly.ctx.on('agent/post-tool',payload=>{const event=payload as {name:string;session:Session};if(event.name==='fixture_long'||event.name==='code_exec')childSession=event.session})

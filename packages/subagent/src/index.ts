@@ -42,6 +42,7 @@ import { createRoleRegistry, builtinRoles, type RoleRegistry } from "./roles.ts"
 import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent-table.ts"
 import { projectAgentTasks, type AgentTaskView } from "./projection.ts"
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
+import { followupDepsWithRebuild } from './followup/resident.ts'
 import type { SubagentToolDeps } from "./tools.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
@@ -107,7 +108,8 @@ export interface RegisterSubagentResult {
   // SubagentToolDeps. registerSubagent encapsulates the deps object, so hosts
   // (run.ts → mountAgentTeams) wire this into the agent-team deliver gate to
   // fix the post-resume wakeup no-op without duplicating the deps shape.
-  ensureResident: (entry: ChildAgentEntry) => Promise<boolean>
+  ensureResident: (entry: ChildAgentEntry, controller?: AbortController) => Promise<boolean>
+  followupGeneration: import('./followup/drive.ts').FollowupDeps['openGeneration']
   // M24a (G1a/G4): resolves when the post-restore async steps complete — the
   // G1a hooked-mirror rebuild (each restored child's durable log loaded into
   // a live mirror session) followed by the G4 pending-inbox sweep. Hosts MUST
@@ -177,6 +179,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
     reportPolicy: opts.reportPolicy,
     table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
@@ -260,7 +263,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       return "durable"
     },
     roles, jobs, table, agents,
-    ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
+    ensureResident: (entry: ChildAgentEntry, controller?: AbortController) => ensureResidentAgent(subagentDeps, entry, controller),
+    followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
     ready, tasks,
     async dispose() {
       const entries = [...table.entries().values()]

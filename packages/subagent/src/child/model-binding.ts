@@ -23,6 +23,9 @@ export interface RoleModelSelection {
  * and `RegisterSubagentOptions` all carry this shape, so it is written here
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
+  generationFactoryFor?: import('@i-harness/core-agent').DocumentGenerationFactory
+  modelActionTimeoutMs?: number
+  modelActionMaxAttempts?: number
   summaryFactory?: import('@i-harness/core-agent').AgentDeps['summaryFactory']
   inheritedBindingForStep?: () => import("@i-harness/core-agent").ModelContextBindingDescriptor
   codeMode?: CodeModeConfig

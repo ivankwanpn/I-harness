@@ -18,7 +18,7 @@ export interface CodeModeConfig {
   defaultOutputTokens?: number
 }
 export interface CodeModeToolDefinition { name: string; description: string; inputSchema: unknown; outputSchema?: unknown }
-export type CodeModeOrigin = Pick<ToolExec, "sessionId" | "callId" | "callEventSeq" | "abortSignal">
+export type CodeModeOrigin = Pick<ToolExec, "sessionId" | "callId" | "callEventSeq" | "abortSignal"> & { generationLineage?: import('@i-harness/core-tools').CodeGenerationLineage }
 export interface CodeModeInvocation { cellId: string; invocationId: string; name: string; args: unknown; origin: CodeModeOrigin; signal: AbortSignal }
 export type CodeModeItem = { type: "text"; text: string } | { type: "image"; image: ImageInput } | { type: "audio"; audioUrl: string }
 export type CodeModeStatus = "running" | "completed" | "failed" | "terminated"

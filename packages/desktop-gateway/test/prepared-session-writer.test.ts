@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it } from "vitest"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -17,7 +18,7 @@ async function fixture(phase: "prepared" | "mounting", ready = false, failFirstM
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let attempts = 0
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "Owned continuation" }; yield { type: "end" } } }
+  const model: ModelClient = controlledModel(request => ({ async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "Owned continuation" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const loader = createDurableSessionLoader(coordinator)
   const service = createSessionService({ workspace: root, coordinator, sessionFor: loader, sandbox: "read-only", model, modelPolicy: "test-mock",
     ...(ready ? { modelBindingFor: async () => ({ status: "ready" as const, binding: { model, providerId: "owned", modelId: "owned", label: "Owned" } }) } : {}),

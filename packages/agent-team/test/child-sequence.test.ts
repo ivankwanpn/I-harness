@@ -1,3 +1,4 @@
+import { controlledModel } from '../../subagent/test/generation-fixture.ts'
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,13 +19,13 @@ it("keeps concurrent normal and teammate child logs positional through live chec
   let release!: () => void
   const firstTurns = new Promise<void>((done) => { release = done })
   let calls = 0
-  const child: ModelClient = { async *stream() {
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
     const turn = ++calls
     if (turn <= 2) await firstTurns
     yield { type: "text/chunk", text: `child result ${turn}` }
     yield { type: "end" }
-  } }
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "lead" }; yield { type: "end" } } }
+  })
+  const parent: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: "lead" }; yield { type: "end" } })
   const coordinator = createSessionCoordinator(createJsonlBackend(root), {lock:{enabled:true}})
   await coordinator.create({ sessionId: "lead" })
   const createService = (store: SessionCoordinator, restoredState?: SubagentStateSnapshot) => createSessionService({
@@ -54,7 +55,8 @@ it("keeps concurrent normal and teammate child logs positional through live chec
     for (const id of ids) {
       await coordinator.flush(id)
       const { session } = await coordinator.snapshot!(id)
-      expect(session.events.map((event) => event.type)).toEqual(['agent/input/admitted',"conversation/semantics",'agent/input/promoted', "turn/start", "user/message", "step/start", "context/budget"])
+      expect(session.events.map((event) => event.type)).toEqual(['agent/input/admitted','context/action',"conversation/semantics",'agent/input/promoted', "turn/start", "user/message", "step/start",'context/action', "context/budget",'context/attempt'])
+      expect(session.events.filter(event => event.type === 'context/attempt' && event.op === 'reserve')).toHaveLength(1)
       expectDense(session.events)
     }
     release()

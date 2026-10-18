@@ -6,6 +6,7 @@ import type { SubagentToolDeps } from "../tools/types.ts"
 import type { FollowupDeps } from "./drive.ts"
 import { composeSubagentPrompt, declaredRoleModel, estimateChildOverhead, modelLabelOf, resolveRoleTools, subagentModelSelectionGated } from "../child.ts"
 import { childFactOwner } from '../child/document.ts'
+import { openFollowupGeneration } from './generation.ts'
 
 // M23 (Minor 4): lazy resident rebuild, extracted verbatim from resume_agent's
 // rebuild body (M19). On resume the subagent Agent registry is fresh-empty
@@ -16,7 +17,7 @@ import { childFactOwner } from '../child/document.ts'
 //   - returns false when it cannot rebuild (unknown role / unknown provider) —
 //     the CALLER decides the fail behavior (resume_agent throws; the wakeup
 //     paths just drop the drive like before)
-export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAgentEntry): Promise<boolean> {
+export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAgentEntry, executionController?: AbortController): Promise<boolean> {
   if (entry.sessionId) {
     const resident = deps.agents.get(entry.sessionId)
     if (resident) return true
@@ -33,8 +34,14 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // from the same helper spawnChild throws.
   const declared = declaredRoleModel(role, deps)
   if (subagentModelSelectionGated(deps, declared)) return false
+  // Lookup/admission is a pure eligibility probe. Only the actual serialized
+  // inbox executor supplies a controller after opening its durable origin.
+  if (!executionController) return true
+  executionController.signal.throwIfAborted()
   const factOwner = await childFactOwner(entry, deps.childSessions?.coordinator)
   const childCtx = deps.parentCtx.scope.mount()
+  let installed = false, codeModeMount: import('@i-harness/code-mode').CodeModeMount | undefined
+  try {
   const childReg = createToolRegistry(childCtx)
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
@@ -63,9 +70,9 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     contextMetadata = state.binding.contextMetadata
   }
   if (entry.closing || deps.table.get(entry.path) !== entry) {
-    await childCtx.scope.unmount()
     return false
   }
+  executionController.signal.throwIfAborted()
   // The label records what the child runs on NOW, and a rebuild can move it
   // EITHER way: a settings entry added while the toggle is on moves an
   // inheriting entry to labeled, and one removed moves it back. Assigning only
@@ -76,7 +83,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
   const childCoordinator = deps.childSessions?.coordinator
   const childSessionId = entry.sessionId
-  const codeModeMount = role.tools.length === 0 ? undefined : deps.codeModeFactory?.(childCtx, childReg, {
+  codeModeMount = role.tools.length === 0 ? undefined : deps.codeModeFactory?.(childCtx, childReg, {
     session: entry.session, factOwner, sessionId: childSessionId, config: deps.codeMode,
   })
   await codeModeMount?.ready?.()
@@ -98,8 +105,10 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ? undefined
     : estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
   const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
-  const controller = new AbortController()
+  const controller = executionController
   const agent = createAgent(childCtx, {
+    ...(entry.sessionId && deps.generationFactoryFor ? { generationFactory: deps.generationFactoryFor(factOwner, entry.sessionId, () => model) } : {}),
+    modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
     summaryFactory: deps.summaryFactory,
     ...(declared === undefined && deps.inheritedBindingForStep ? { bindingForStep: deps.inheritedBindingForStep } : {}),
     isSubagent: true,
@@ -138,10 +147,11 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }
   if (entry.sessionId) deps.agents.register(entry.sessionId, agent)
   deps.table.update(entry.path, entry, {
+    executionModel: () => model,
     status: "waiting", closing: false, controller, toolRegistry: childReg, modelLabel,
     factoryTools: [...(codeModeMount ? ["code_exec", "code_wait"] : []), "get_context_remaining"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }),
     unmount: () => childCtx.scope.unmount(),
-    cancel: codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined,
+    cancel: codeModeMount ? (reason) => codeModeMount!.cancel(reason) : undefined,
     dispose: async () => {
       deps.table.update(entry.path, entry, { closing: true })
       if (childSessionId) childCoordinator?.revokeManagedDocumentNewWork(childSessionId)
@@ -153,12 +163,19 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
       await childCtx.scope.unmount()
     },
   })
+  installed = true
   return true
+  } finally {
+    if (!installed) {
+      try { await codeModeMount?.cancel('Child rebuild failed'); await codeModeMount?.dispose() }
+      finally { await childCtx.scope.unmount() }
+    }
+  }
 }
 
 // M23 (Minor 4): the FollowupDeps passed to driveFollowups from the subagent
 // tools carries the lazy rebuild so a wakeup for a restored (fresh-registry)
 // entry recovers the resident agent instead of silently dropping the drive.
 export function followupDepsWithRebuild(deps: SubagentToolDeps): FollowupDeps {
-  return { agents: deps.agents, table: deps.table, jobs: deps.jobs, rebuild: (entry) => ensureResidentAgent(deps, entry) }
+  return { agents: deps.agents, table: deps.table, jobs: deps.jobs, rebuild: (entry, controller) => ensureResidentAgent(deps, entry, controller), openGeneration: (entry, input, controller) => openFollowupGeneration(deps, entry, input, controller) }
 }

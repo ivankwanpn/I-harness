@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach, vi, expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -11,9 +12,9 @@ it('keeps the original service action fenced while the post-turn binding await y
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-title-binding-')), coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), controller = new AbortController()
   let titleSends = 0, callbacks = 0, opened = 0
-  const service = createSessionService({ workspace: root, coordinator, model: { async *stream() { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } }, afterSuccessfulSubmit: async (_id, assembly, _limits, action) => {
+  const service = createSessionService({ workspace: root, coordinator, model: controlledModel(async function* () { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } }), afterSuccessfulSubmit: async (_id, assembly, _limits, action) => {
     callbacks++
-    await maybeAutoTitle({ session: assembly.session, action, model: { async *stream() { titleSends++; yield { type: 'text/chunk', text: 'title' }; yield { type: 'end' } } } })
+    await maybeAutoTitle({ session: assembly.session, action, model: controlledModel(async function* () { titleSends++; yield { type: 'text/chunk', text: 'title' }; yield { type: 'end' } }) })
   } })
   try {
     const assembly = await service.assemblyFor(id), begin = assembly.factOwner.beginAction.bind(assembly.factOwner)
@@ -33,12 +34,12 @@ it('passes the same original service title action across a held real profile loo
   const { id } = await coordinator.create(), controller = new AbortController(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   const profile = coordinator.profile.bind(coordinator)
   let titleSends = 0, callbacks = 0
-  const service = createSessionService({ workspace: root, coordinator, model: { async *stream() { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } }, afterSuccessfulSubmit: async (_id, assembly, _limits, action) => {
+  const service = createSessionService({ workspace: root, coordinator, model: controlledModel(async function* () { yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } }), afterSuccessfulSubmit: async (_id, assembly, _limits, action) => {
     callbacks++
     expect(action.view).toBe(assembly.session)
     const pending = profile(id).then(async result => { entered.resolve(); await release.promise; return result })
     await pending
-    await maybeAutoTitle({ session: assembly.session, action, model: { async *stream() { titleSends++; yield { type: 'text/chunk', text: 'late title' }; yield { type: 'end' } } } })
+    await maybeAutoTitle({ session: assembly.session, action, model: controlledModel(async function* () { titleSends++; yield { type: 'text/chunk', text: 'late title' }; yield { type: 'end' } }) })
   } })
   const running = service.submit(id, 'original prompt', controller.signal)
   void running.catch(() => {})
@@ -58,7 +59,7 @@ it('keeps only the actual post-turn row cancellable and clears its phase after b
   let callbacks = 0, sends = 0
   let original: Parameters<NonNullable<import('../src/service.ts').SessionServiceOptions['afterSuccessfulSubmit']>>[3] | undefined
   let completed: typeof original
-  const service = createSessionService({ workspace: root, coordinator, model: { async *stream() { sends++; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } }, afterSuccessfulSubmit: async (_id, _assembly, _limits, action) => {
+  const service = createSessionService({ workspace: root, coordinator, model: controlledModel(async function* () { sends++; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } }), afterSuccessfulSubmit: async (_id, _assembly, _limits, action) => {
     if (++callbacks === 1) { original = action; entered.resolve(); await release.promise; action.assertOpen() }
     else completed = action
   } })
@@ -82,3 +83,5 @@ it('keeps only the actual post-turn row cancellable and clears its phase after b
     expect(service.cancelRunning!(id)).toEqual({ cancelled: false })
   } finally { release.resolve(); await Promise.allSettled([first, ...(second ? [second] : [])]); await service.close(); await coordinator.close() }
 })
+
+afterEach(() => vi.unstubAllGlobals())

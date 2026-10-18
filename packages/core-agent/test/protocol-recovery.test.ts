@@ -50,7 +50,7 @@ function setup(variant: Variant, mode: "success" | "repeat" | "stop" | "storage"
       : new Response(output.map(event => `data: ${JSON.stringify(event)}\n\n`).join("") + (variant === "chat" ? "data: [DONE]\n\n" : ""), { headers: { "content-type": "text/event-stream" } })
   }
   const fetcher = async (_url: unknown, init: RequestInit) => dispatch(JSON.parse(String(init.body))) as Promise<Response>
-  vi.stubGlobal("fetch", fetcher); vi.mocked(systemFetch).mockImplementation(fetcher as typeof systemFetch)
+  vi.stubGlobal("fetch", fetcher); vi.mocked(systemFetch).mockImplementation(async (url, init, prepare) => { const issue = await prepare?.(); issue?.(); return fetcher(url, init!) })
   const config = { model: "fixture", apiKey: "controlled", providerId: "fixture" }
   const actual = variant === "chat" ? createOpenAICompatibleClient(config)
     : variant === "responses" || variant === "subscription" ? createOpenAIClient({ ...config, ...(variant === "subscription" ? { codexSubscription: true, resolveCodexAuth: async () => ({ accessToken: "controlled", accountId: "synthetic" }) } : {}) })

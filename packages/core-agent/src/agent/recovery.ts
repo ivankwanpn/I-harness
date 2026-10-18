@@ -26,8 +26,10 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
     const { version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
       inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint,
       identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint } = previous
-    committedFactSeqs(await agentFacts(deps).metadata.admit({ type: "context/recovery", version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
-      inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint, identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint, state, ...extra }))
+    const event = { type: 'context/recovery' as const, version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
+      inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint, identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint, state, ...extra }
+    if (state === 'retry-started' && deps.generationAction) await deps.generationAction.phase(event)
+    else committedFactSeqs(await agentFacts(deps).metadata.admit(event))
   }
   const blocked = async (previous: ContextRecoveryFacts, reason: string, signal?: AbortSignal): Promise<never> => {
     await fact(previous, "blocked", { reason }); await flush(signal)

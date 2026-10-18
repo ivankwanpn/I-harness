@@ -60,7 +60,7 @@ export interface SessionExecutor {
    * is generated (pre-M49 behavior). */
   submit(input: InputSubmit, inputId?: string): { inputId: string; admitted: Promise<void> }
   /** Execute exactly one durable pending input; no duplicate admission. */
-  runAdmitted(inputId: string, signal?: AbortSignal): Promise<void>
+  runAdmitted(inputId: string, signal?: AbortSignal, options?: Pick<AgentInputOptions, 'generation' | 'preparation' | 'delegatedOrigin'>): Promise<void>
   cancel(inputId: string): Promise<{ cancelled: boolean }>
   cancelCurrent?(): { cancelled: boolean }
   pending(): PendingInput[]
@@ -120,6 +120,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   let lastError: SessionExecutorFailure | undefined
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
+  const turnOptions = new Map<string, Pick<AgentInputOptions, 'generation' | 'preparation' | 'delegatedOrigin'>>()
   const admissions = new Map<string, { admitted: Promise<void>; controller: AbortController }>()
 
   function pump(onlyId?: string): Promise<void> {
@@ -148,7 +149,9 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
           const run = deps.agent.runAdmitted ?? deps.agent.run
-          await run.call(deps.agent, next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, ...(next.provenance ? [{ provenance: next.provenance }] : []))
+          const prepared = turnOptions.get(next.inputId)
+          turnOptions.delete(next.inputId)
+          await run.call(deps.agent, next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId, next.provenance ? { provenance: next.provenance, ...prepared } : undefined)
           lastError = undefined
         } catch (err) {
           lastError = withPendingCount(err, deps.inbox.pending().length)
@@ -169,10 +172,11 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   }
 
   return {
-    runAdmitted(inputId, signal) {
+    runAdmitted(inputId, signal, options) {
       if (disposed) return Promise.reject(new Error("session executor disposed"))
       if (!deps.inbox.isPending(inputId)) return Promise.reject(new Error("Input is no longer pending"))
       if (signal) turnSignals.set(inputId, signal)
+      if (options) turnOptions.set(inputId, options)
       return pump(inputId).then(() => { if (lastError !== undefined) throw lastError })
     },
     submit(input: InputSubmit, inputId?: string) {

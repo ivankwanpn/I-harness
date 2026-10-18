@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { describe, expect, it, vi } from "vitest"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -17,20 +20,20 @@ describe("live approval modes", () => {
     const seen: { model: string; tools: number; effort?: string }[] = []
     let selected = "cheap-one"
     let mainCalls = 0
-    const parent: ModelClient = { async *stream() {
+    const parent: ModelClient = controlledModel(async function* () {
       if (mainCalls++ % 2 === 0) yield { type: "tool_call", call: { name: "list_dir", args: { path: "." } } }
       else yield { type: "text/chunk", text: "done" }
       yield { type: "end" }
-    } }
+    })
     const service = createSessionService({
       workspace: process.cwd(), model: parent, coordinator, approvalMode: "delegate", allowSubagentModelSelection: false,
       guardian: { execution: "isolated", allowModelSelection: true },
       roleSelectionFor: (name) => name === "reviewer" ? { provider: "p", model: selected, reasoningEffort: "low" } : undefined,
-      resolveRoleModel: async (selection) => ({ status: "ready", binding: { reasoningEffort: "low", contextWindow: 100000, maxOutputTokens: 8192, client: { async *stream(request) {
+      resolveRoleModel: async (selection) => ({ status: "ready", binding: { reasoningEffort: "low", contextWindow: 100000, maxOutputTokens: 8192, client: controlledModel(async function* (request) {
         seen.push({ model: selection.model, tools: request.tools.length, effort: request.reasoningEffort })
         yield { type: "text/chunk", text: '{"outcome":"approve","rationale":"safe","risk_level":"none"}' }
         yield { type: "end" }
-      } } } }),
+      }) } }),
     })
     try {
       await service.submit("s", "first", new AbortController().signal)
@@ -45,8 +48,7 @@ describe("live approval modes", () => {
     let mainCalls = 0
     let reviewerCalls = 0
     let manualCalls = 0
-    const model: ModelClient = {
-      async *stream(request) {
+    const model: ModelClient = controlledModel(async function* (request) {
         if (String(request.systemPrompt).includes("approval guardian")) {
           reviewerCalls++
           yield { type: "text/chunk", text: '{"outcome":"approve","rationale":"read only","risk_level":"none"}' }
@@ -56,8 +58,7 @@ describe("live approval modes", () => {
           yield { type: "text/chunk", text: "done" }
         }
         yield { type: "end" }
-      },
-    }
+      })
     const service = createSessionService({ workspace: process.cwd(), model, approvalMode: () => mode, guardian: { enabled: () => mode === "delegate" } })
     const off = service.onAssembly((assembly) => registerApprovalAnswerer(assembly.ctx, async () => { manualCalls++; return { approved: true } }))
     try {

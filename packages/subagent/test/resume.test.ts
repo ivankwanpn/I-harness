@@ -1,3 +1,4 @@
+import { fixtureGenerationFor } from './generation-fixture.ts'
 import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtemp } from 'node:fs/promises'
@@ -77,7 +78,7 @@ describe("ensureResidentAgent", () => {
     deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context one" }
     table.add(entry.path, entry)
     try {
-      expect(await ensureResidentAgent(deps, entry)).toBe(true)
+      expect(await ensureResidentAgent(deps, entry, new AbortController())).toBe(true)
       const resident = agents.get(entry.sessionId!)!
       await resident.followup("first")
       deps.inheritedSystemContext = (session) => { sessions.push(session!); return "restored context two" }
@@ -101,7 +102,7 @@ describe("ensureResidentAgent", () => {
     table.add(original.path, original)
     const changes: unknown[] = []
     table.subscribe(change => changes.push(change.kind))
-    const rebuilding = ensureResidentAgent(deps, original)
+    const rebuilding = ensureResidentAgent(deps, original, new AbortController())
     try {
       table.add(original.path, replacement)
       release.resolve()
@@ -122,7 +123,7 @@ describe("ensureResidentAgent", () => {
     table.add(entry.path, entry)
     expect(agents.get("child-1")).toBeUndefined() // fresh registry (post-resume)
 
-    const ok = await ensureResidentAgent(deps, entry)
+    const ok = await ensureResidentAgent(deps, entry, new AbortController())
     expect(ok).toBe(true)
     const rebuilt = agents.get("child-1")
     expect(rebuilt).toBeDefined()
@@ -143,7 +144,7 @@ describe("ensureResidentAgent", () => {
     const fakeAgent: Agent = { run: vi.fn(), followup: vi.fn() }
     agents.register("child-1", fakeAgent)
 
-    const ok = await ensureResidentAgent(deps, entry)
+    const ok = await ensureResidentAgent(deps, entry, new AbortController())
     expect(ok).toBe(true)
     expect(agents.get("child-1")).toBe(fakeAgent) // NOT rebuilt
     // resident short-circuit: the entry is untouched
@@ -156,7 +157,7 @@ describe("ensureResidentAgent", () => {
     const entry = restoredEntry("child-1", "nope")
     table.add(entry.path, entry)
 
-    const ok = await ensureResidentAgent(deps, entry)
+    const ok = await ensureResidentAgent(deps, entry, new AbortController())
     expect(ok).toBe(false)
     expect(agents.get("child-1")).toBeUndefined() // nothing registered
     expect(entry.status).toBe("error") // untouched
@@ -178,7 +179,7 @@ describe("ensureResidentAgent", () => {
     const entry = restoredEntry("child-1", "modelled")
     table.add(entry.path, entry)
 
-    expect(await ensureResidentAgent(gated, entry)).toBe(false)
+    expect(await ensureResidentAgent(gated, entry, new AbortController())).toBe(false)
     expect(called).toBe(0) // refused before the resolver, not after
     expect(agents.get("child-1")).toBeUndefined()
     expect(entry.unmount).toBeUndefined() // no scope was mounted
@@ -196,7 +197,7 @@ describe("ensureResidentAgent", () => {
     const entry = restoredEntry("child-1", "general")
     table.add(entry.path, entry)
 
-    expect(await ensureResidentAgent(declared, entry)).toBe(false) // resolver answered "no route"
+    expect(await ensureResidentAgent(declared, entry, new AbortController())).toBe(false) // resolver answered "no route"
     expect(calls).toEqual([{ provider: "gw", model: "from-settings" }])
   }, 10_000)
 
@@ -218,7 +219,7 @@ describe("ensureResidentAgent", () => {
       resolveModel: async () => ({ status: "ready" as const, binding: { client: model } }),
     }
 
-    expect(await ensureResidentAgent(reResolved, entry)).toBe(true)
+    expect(await ensureResidentAgent(reResolved, entry, new AbortController())).toBe(true)
     // the row says what the child runs on NOW, not what it ran on at spawn
     expect(entry.modelLabel).toBe("gw:big")
   }, 10_000)
@@ -250,7 +251,7 @@ describe("ensureResidentAgent", () => {
       }),
     }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     expect(requests).toHaveLength(1)
     expect(requests[0]!.reasoningEffort).toBe("high")
@@ -281,7 +282,7 @@ describe("ensureResidentAgent", () => {
       }),
     }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     expect(requests).toHaveLength(1)
     // 200k window vs a small request ⇒ the clamp is a no-op and the resolved
@@ -309,7 +310,7 @@ describe("ensureResidentAgent", () => {
     // the recording client stands in for it.
     const rebuilt: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: roleClient }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     const role = deps.roles.get("general")!
     expect(requests).toHaveLength(1)
@@ -356,7 +357,7 @@ describe("ensureResidentAgent", () => {
       }),
     }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     expect(requests).toHaveLength(1)
     const req = requests[0]!
@@ -389,7 +390,7 @@ describe("ensureResidentAgent", () => {
       contextWindow: 1_000, maxOutputTokens: 4_242,
     }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     expect(requests).toHaveLength(1)
     const req = requests[0]!
@@ -435,7 +436,7 @@ describe("ensureResidentAgent", () => {
     // real over-window pressure by increasing restored history with the window.
     const rebuilt: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: client, contextWindow: 16_000 }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     // the drive CONTINUED — without a compactor this catch landed as
     // `prompt_too_long: context budget exceeded (…)` on `entry.error`
@@ -481,7 +482,7 @@ describe("ensureResidentAgent", () => {
       }),
     }
 
-    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+    await driveFollowups({ ...rebuilt, rebuild: (e, controller) => ensureResidentAgent(rebuilt, e, controller) }, entry, "child-1")
 
     expect(requests).toHaveLength(1)
     expect(requests[0]!.maxOutputTokens).toBe(50_000)
@@ -498,7 +499,7 @@ describe("ensureResidentAgent", () => {
       roleSelectionFor: () => undefined, // the settings entry was removed
     }
 
-    expect(await ensureResidentAgent(inheritsNow, entry)).toBe(true)
+    expect(await ensureResidentAgent(inheritsNow, entry, new AbortController())).toBe(true)
     // it runs on the parent's client now — a label left behind would name a
     // model the child is no longer running on
     expect(entry.modelLabel).toBeUndefined()
@@ -515,7 +516,7 @@ describe("driveFollowups rebuild injection (M23 wakeup no-op fix)", () => {
 
     const model = createMockClient([{ role: "assistant", text: "driven" }])
     const wakeDeps: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: model }
-    await driveFollowups({ ...wakeDeps, rebuild: (e) => ensureResidentAgent(wakeDeps, e) }, entry, "child-1")
+    await driveFollowups({ ...wakeDeps, rebuild: (e, controller) => ensureResidentAgent(wakeDeps, e, controller) }, entry, "child-1")
 
     // the drive was NOT dropped: agent rebuilt + inbox turned
     expect(agents.get("child-1")).toBeDefined()
@@ -557,8 +558,8 @@ describe("resume_agent semantics preserved", () => {
     const resume = tools.find((t) => t.name === "resume_agent")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect(out).toEqual({ resumed: true })
-    expect(agents.get("child-1")).toBeDefined()
     await entry.followupChain
+    expect(agents.get("child-1")).toBeDefined()
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("queued handled")
   }, 10_000)
@@ -614,7 +615,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
   function registerWith(coordinator: SessionCoordinator, restoredState: SubagentStateSnapshot) {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
-    return registerSubagent(ctx, parentReg, {
+    return registerSubagent(ctx, parentReg, { generationFactoryFor: fixtureGenerationFor,
       resolveModel: noRoleModel,
       exec: registerExec(createContext()),
       summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
@@ -709,8 +710,8 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
 
     await sweepPendingInbox(deps, table)
     // the sweep rebuilt the resident agent and initiated the serialized drive
-    expect(agents.get("child-1")).toBeDefined()
     await entry.followupChain // the drive is fire-and-forget; the chain serializes it
+    expect(agents.get("child-1")).toBeDefined()
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("child done")
     expect(entry.lastInboxSeq).toBe(2) // cursor advanced past the swept event

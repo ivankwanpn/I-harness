@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { describe, expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
@@ -23,11 +26,11 @@ function deferred() {
 function modelFixture(script: MockStep[]) {
   const requests: LLMRequest[] = [], next = deferred()
   const mock = createMockClient(script)
-  const model: ModelClient = { async *stream(request) {
+  const model: ModelClient = controlledModel(async function* (request) {
     requests.push(request)
     if (requests.length === 2) next.resolve()
     yield* mock.stream(request)
-  } }
+  })
   return { model, requests, next, script }
 }
 
@@ -59,11 +62,11 @@ describe("real assembly: steering releases observation and preserves the produce
     await coordinator.create({ sessionId: "parent" })
     const started = deferred(), release = deferred()
     let childCalls = 0, childFinished = 0, aborts = 0
-    const child: ModelClient = { async *stream(request) {
+    const child: ModelClient = controlledModel(async function* (request) {
       childCalls++; request.signal?.addEventListener("abort", () => { aborts++ }, { once: true })
       started.resolve(); await release.promise; childFinished++
       yield { type: "text/chunk", text: "original child result" }; yield { type: "end" }
-    } }
+    })
     const fixture = modelFixture([])
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", coordinator, model: fixture.model,
       approveAll: true, sandbox: "danger-full-access", pluginAgents: [{ name: "probe", description: "Controlled child", systemPrompt: "Complete the fixture", tools: [] }],
@@ -168,10 +171,10 @@ describe("real assembly: steering releases observation and preserves the produce
   it("closing the real child releases a long target observation and retains its original task result", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-steer-child-close-")), release = deferred()
     let childCalls = 0, aborts = 0
-    const child: ModelClient = { async *stream(request) {
+    const child: ModelClient = controlledModel(async function* (request) {
       childCalls++; request.signal?.addEventListener("abort", () => { aborts++; release.resolve() }, { once: true })
       await release.promise; yield { type: "text/chunk", text: "closed producer" }; yield { type: "end" }
-    } }
+    })
     const fixture = modelFixture([{ role: "assistant", toolCalls: [{ name: "wait_agent", args: { target: "root/held", timeout_ms: 300_000 } }] }, { role: "assistant", text: "closed child observed" }])
     const assembly = await createSessionAssembly({ workspace: root, sessionId: "parent", model: fixture.model, sandbox: "danger-full-access", approveAll: true,
       allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),

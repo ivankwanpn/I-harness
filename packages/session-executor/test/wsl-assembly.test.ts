@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import { resolve } from "node:path"
 import { expect, it, vi } from "vitest"
@@ -37,7 +40,7 @@ it("runs registered Bash and Code Mode shell through captured WSL service option
   const root = directory()
   let selected = { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }
   const requests: LLMRequest[] = []
-  const model: ModelClient = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: "fixture" }; yield { type: "end" } } }
+  const model: ModelClient = controlledModel(async function* (request) { requests.push(request); yield { type: "text/chunk", text: "fixture" }; yield { type: "end" } })
   const service = createSessionService({ workspace: root, model, approveAll: true, sandbox: "workspace-write", windowsSandboxBackendFor: () => "wsl",
     wslExecutionFor: () => selected, codeMode: { mode: "mixed" },
     executionAuthorityFor: async () => () => ({ kind: "unbound", revision: "fixture", workspaceRoot: root, references: [resolve(root, "../reference")] }),
@@ -62,12 +65,12 @@ it("inherits the captured Linux workspace and exec owner through a real child Co
   const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const requests: LLMRequest[] = []
-  const child: ModelClient = { async *stream(request) {
+  const child: ModelClient = controlledModel(async function* (request) {
     requests.push(request)
     if (request.messages.at(-1)?.role === "user") yield { type: "tool_call", call: { name: "code_exec", args: { code: 'text(await tools.shell({command:"uname -s"}));' } } }
     else yield { type: "text/chunk", text: "child complete" }
     yield { type: "end" }
-  } }
+  })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator), approveAll: true,
     sandbox: "workspace-write", windowsSandboxBackend: "wsl", wslExecution: { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }, codeMode: { mode: "only" },
     pluginAgents: [{ name: "linux-probe", description: "Controlled child", systemPrompt: "Use Linux Bash", tools: ["shell", "code_exec", "code_wait"] }],

@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from '../../subagent/test/generation-fixture.ts'
 // TDD: mountAgentTeams lifecycle (M19 Task 10) — REAL wiring test.
 //
 // Binding corrections (controller, Rulings 17-22): the plan's test cast
@@ -32,7 +33,7 @@ const TEAM_TOOL_NAMES = [
 ]
 
 function model(): ModelClient {
-  return { stream: async function* () { yield { type: "end" } as const } }
+  return controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "end" } as const })
 }
 
 // Base fixture: real registries + real bridges (no override seams). Tests that
@@ -264,7 +265,7 @@ describe("mountAgentTeams lifecycle", () => {
       ? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' } : actualAppend(...args)
     const deps = makeDeps({
       parentSession,
-      subagents: {
+      subagents: { generationFactoryFor: fixtureGenerationFor,
         table,
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
@@ -335,7 +336,7 @@ describe("mountAgentTeams lifecycle", () => {
     const deps = makeDeps({
       parentSession,
       factOwner: owned.document,
-      subagents: {
+      subagents: { generationFactoryFor: fixtureGenerationFor,
         table: createAgentTable(),
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
@@ -460,18 +461,16 @@ describe("mountAgentTeams lifecycle", () => {
     // not after it finished).
     let releaseTurn!: () => void
     const turnGate = new Promise<void>((resolve) => { releaseTurn = resolve })
-    const gatedModel: ModelClient = {
-      async *stream() {
+    const gatedModel: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
         await turnGate
         yield { type: "text/chunk", text: "child turn done" }
         yield { type: "end" }
-      },
-    }
+      })
 
     const handle = await mountAgentTeams(ctx, tools, makeDeps({
       parentSession,
       parentModel: gatedModel,
-      subagents: {
+      subagents: { generationFactoryFor: fixtureGenerationFor,
         table: createAgentTable(),
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
@@ -625,7 +624,7 @@ describe("mountAgentTeams lifecycle", () => {
     const calls: Array<{ provider: string; model: string }> = []
     const handle = await mountAgentTeams(ctx, tools, makeDeps({
       childSessionHoldsPrompt: async () => true,
-      subagents: {
+      subagents: { generationFactoryFor: fixtureGenerationFor,
         ...makeDeps().subagents,
         childSessions: { coordinator, parentSessionId: "sess-parent" },
         allowSubagentModelSelection: true,

@@ -1,3 +1,7 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { createGenerationLifecycle } from "../src/lifecycle/generation-actions.ts"
+import { controlledModel } from "./controlled-model.ts"
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -28,9 +32,9 @@ it('retains actual after-next output/ref across a held then rejected grant, bloc
     throw new Error('controlled grant outcome unavailable')
   }
   const service = createSessionService({ workspace: root, coordinator, approveAll: true, sandbox: 'danger-full-access',
-    model: { async *stream() {
+    model: controlledModel(async function* () {
       sends++; yield { type: 'tool_call', call: { id: 'original', name: 'long_body', args: {} } }; yield { type: 'end' }
-    } },
+    }),
     additionalTools: [{ name: 'long_body', description: '', inputSchema: {}, isReadOnly: true, execute: async () => { bodies++; return raw } }],
   })
   try {
@@ -87,9 +91,9 @@ it.each(['capture-failed', 'second-grant-failed'] as const)('retains the real em
   const mount = registerCodeMode(ctx, tools, { session: actor.view, sessionId: actorId, factOwner: actor, config: { mode: 'mixed' },
     retainText: createNativeCodeTextRetention({ service: output, session: actor.view, sessionId: hostId, parent: { sessionId: parentId, session: parent.view, factOwner: parent } }),
   })
-  const agent = createAgent(ctx, { session: actor.view, factOwner: actor, tools, sessionId: actorId, systemPrompt: '', model: { async *stream() {
+  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(actor.view, actorId, action), session: actor.view, factOwner: actor, tools, sessionId: actorId, systemPrompt: '', model: controlledModel(async function* () {
     sends++; yield { type: 'tool_call', call: { id: 'original-cell', name: 'code_exec', args: { code: 'text("original retained emitted 中文 ".repeat(2000))', max_output_tokens: 16, yield_time_ms: 5000 } } }; yield { type: 'end' }
-  } } })
+  }) })
   try {
     await expect(agent.run('emit the original window')).rejects.toThrow()
     expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])

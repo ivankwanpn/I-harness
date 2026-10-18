@@ -92,7 +92,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await runtime.exec(args as CodeModeExecInput, { ...exec, sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID() }, { userSteer: userSteerForTool(exec), retained })
+      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage }, { userSteer: userSteerForTool(exec), retained })
       return observationOutput(out)
     },
   }

@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -32,20 +33,21 @@ it('successfully spawns with committed inherited seed and initial input before i
   parentCtx.on('session/inherited', async payload => {
     const { sessionId, session } = payload as { sessionId: string; session: import('@i-harness/core-session').SessionView }
     expect((await backend.read(sessionId)).events).toEqual(session.events)
-    expect(session.events.map(event => event.type)).toEqual(['turn/start', 'user/message', 'turn/end'])
+    expect(session.events.slice(0, 3).map(event => event.type)).toEqual(['turn/start', 'user/message', 'turn/end'])
+    expect(session.events.some(event => event.type === 'context/action' && event.op === 'open')).toBe(true)
     inherited = true
   })
-  const spawning = spawnChild({
+  const spawning = spawnChild({ generationFactoryFor: fixtureGenerationFor,
     taskName: 'managed', message: 'initial instruction', parentPath: 'root', parentCtx, parentSession, parentRegistry,
     role: { name: 'probe', description: '', systemPrompt: 'probe', tools: [] },
-    parentModel: { async *stream() {
+    parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
       requests++
       const entry = table.get('root/managed')!
       const facts = (await backend.read(entry.sessionId!)).events
       expect(facts.find(event => event.type === 'agent/input/admitted')).toMatchObject({ text: 'initial instruction', provenance: { kind: 'inherited', authority: 'observation', producer: 'subagent.initial' } })
       expect(facts.map(event => event.type)).toContain('agent/input/promoted')
       yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' }
-    } },
+    }),
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), table, jobs, agents, forkTurns: 'all',
     childSessions: { coordinator, parentSessionId: 'parent' },
   }).then(result => { spawned = true; return result })
@@ -53,11 +55,12 @@ it('successfully spawns with committed inherited seed and initial input before i
   void spawning.catch(() => {})
   try {
     await Promise.race([admissionEntered.promise, spawning])
-    expect(inherited).toBe(true)
+    expect(inherited).toBe(false)
     expect(spawned).toBe(false)
     expect(requests).toBe(0)
     admissionRelease.resolve()
     const result = await spawning, entry = table.get(result.path)!
+    expect(inherited).toBe(true)
     expect(result.sessionId).toMatch(/^child-/)
     await entry.followupChain
     expect(entry.status).toBe('waiting')
@@ -65,7 +68,7 @@ it('successfully spawns with committed inherited seed and initial input before i
     expect(jobs.read(result.jobId).status).toBe('completed')
     expect(requests).toBe(1)
     expect(entry.session).toBe((await coordinator.openManagedDocument(result.sessionId!)).view)
-    const followup = createFollowupTool({ table, agents, jobs, childSessions: { coordinator, parentSessionId: 'parent' } } as import('../src/tools/types.ts').SubagentToolDeps)
+    const followup = createFollowupTool({ generationFactoryFor: fixtureGenerationFor, table, agents, jobs, childSessions: { coordinator, parentSessionId: 'parent' } } as import('../src/tools/types.ts').SubagentToolDeps)
     expect(await followup.execute({ target: result.path, message: 'another instruction' }, { abortSignal: new AbortController().signal })).toEqual({ delivered: true })
     await entry.followupChain
     expect(requests).toBe(2)
@@ -79,14 +82,14 @@ it('cold-resumes the exact owned child view and commits a pending inbox followup
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create({ sessionId: 'child-cold', parentSession: 'parent', delegationDepth: 1 })
   const original = await coordinator.openManagedDocument(id)
-  await original.delivery.record({ type: 'subagent/inbox', messageId: 'message', message: 'saved followup' })
+  await original.delivery.record({ type: 'subagent/inbox', messageId: 'message', message: 'saved followup', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.followup', originSessionId: 'parent' } })
   await original.close()
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let requests = 0
-  const mounted = registerSubagent(ctx, tools, {
+  const mounted = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor,
     parentSession: createSession(), exec: {} as import('@i-harness/exec').ExecService,
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }),
-    parentModel: { async *stream() { requests++; yield { type: 'text/chunk', text: 'restored result' }; yield { type: 'end' } } },
+    parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { requests++; yield { type: 'text/chunk', text: 'restored result' }; yield { type: 'end' } }),
     persist: { coordinator, stateId: 'subagent-state', parentSessionId: 'parent' },
     restoredState: { formatVersion: 1, jobs: [], roles: [{ name: 'probe', description: '', systemPrompt: 'probe', tools: [] }], agentTable: [{ path: 'root/cold', status: 'waiting', mailbox: [], roleName: 'probe', sessionId: id }] },
   })

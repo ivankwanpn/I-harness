@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -33,15 +34,15 @@ it.each(["code-reviewer", "explore"] as const)("installs official plugin snapsho
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")))
   await coordinator.create({ sessionId: "lead" })
   const requests: LLMRequest[] = [], diagnostics: string[] = []
-  const parent: ModelClient = { async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } }
-  const child: ModelClient = { async *stream(request) {
+  const parent: ModelClient = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const child: ModelClient = controlledModel(request => ({ async *stream(request) {
     requests.push(request)
     if (requests.length === 1) yield { type: "tool_call", call: { id: "official-read", name: "read", args: { path: "fixture.txt" } } }
     else if (requests.length === 2) yield { type: "tool_call", call: { id: "official-glob", name: "glob", args: { pattern: "fixture.txt" } } }
     else if (requests.length === 3) yield { type: "tool_call", call: { id: "official-grep", name: "grep", args: { pattern: "Official reviewer read fixture", mode: "literal", path: "fixture.txt" } } }
     else yield { type: "text/chunk", text: "Official role completed" }
     yield { type: "end" }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, model: parent, coordinator, sandbox: "read-only", approveAll: true,
     extensionsFor: async id => pluginExtensions(inputs, configDir, id, rows => { diagnostics.push(...rows) }),
     roleSelectionFor: name => name === role ? { provider: "local", model: "scripted-reviewer" } : undefined,

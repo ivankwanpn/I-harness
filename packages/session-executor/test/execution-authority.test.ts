@@ -1,4 +1,4 @@
-import { expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { createSessionAssembly } from "../src/assembly.ts"
 import { createSessionService } from "../src/service.ts"
 import type { AuthorityState } from "@i-harness/sandbox"
@@ -9,6 +9,9 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { ExecutionReceipt } from "@i-harness/sandbox"
+
+beforeEach(() => vi.stubGlobal("fetch", async () => { throw new Error("Unexpected network destination") }))
+afterEach(() => vi.unstubAllGlobals())
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 async function waitForFile(path: string) {
@@ -87,7 +90,7 @@ it("binds durable child and nested Code Mode receipts and permits only trusted p
     { role: "assistant", toolCalls: [{ name: "code_exec", args: { code: "text(await tools.owner_probe({}))", yield_time_ms: 1000 } }] },
     { role: "assistant", text: "done" },
   ])
-  const assembly = await createSessionAssembly({ sessionId: "main", coordinator, workspace: root, model, approveAll: true,
+  const assembly = await createSessionAssembly({ sessionId: "main", coordinator, workspace: root, model, modelPolicy: "test-mock", approveAll: true,
     sandbox: "danger-full-access", codeMode: { mode: "mixed" }, additionalTools: [probe],
     pluginAgents: [{ name: "owner-worker", description: "worker", systemPrompt: "work", tools: ["owner_probe", "code_exec", "code_wait"] }] })
   exec = assembly.ctx.services.get<ExecService>("exec/service")

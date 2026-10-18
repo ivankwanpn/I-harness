@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime, type FileProviderRuntimeOptions } from "@i-harness/provider-runtime/file"
 import { buildModelClient } from "@i-harness/provider"
-import { prepareModelRequest, wrapPreparedRequest, preparedControls, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
+import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
@@ -199,8 +199,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       async prepare(request) {
         const captured = snapshotModelData(request)
         const prepared = await prepareModelRequest(client, mapRequest(captured))
-        return wrapPreparedRequest(prepared, (stream, control) =>
-          stream(mapRequest({ ...captured, ...preparedControls(captured, control) })))
+        return withPreparedSignal(prepared, () => compactionSignals.get(sessionId))
       },
     }
     return { status: "ready", binding: { ...binding, model } }
@@ -435,14 +434,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     memory,
     compact: (sessionId, instructions, signal) => fence.run(sessionId, async () => {
       signal.throwIfAborted()
-      await coordinator.profile(sessionId)
       const state = service.queueState(sessionId)
       if (state.running || state.queued > 0) throw new Error("session is busy")
       compactionSignals.set(sessionId, signal)
       try {
-        const assembly = await service.assemblyFor(sessionId)
-        signal.throwIfAborted()
-        const result = await assembly.compactNow(instructions)
+        const result = await service.compact(sessionId, instructions, signal)
         await coordinator.flush(sessionId)
         return result
       } finally { compactionSignals.delete(sessionId) }

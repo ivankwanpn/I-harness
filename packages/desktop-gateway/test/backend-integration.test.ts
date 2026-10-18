@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { expect, it } from "vitest"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -38,7 +39,7 @@ it("refuses busy management before draining a held model turn and fences actual 
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   const fence = createSessionManagementFence()
   const service = createSessionService({ workspace: root, sessionOperation: fence, coordinator, sessionFor: createDurableSessionLoader(coordinator),
-    model: { async *stream() { entered.resolve(); await release.promise; yield { type: "text/chunk" as const, text: "fixture" }; yield { type: "end" as const } } }, sandbox: "read-only" })
+    model: controlledModel(request => ({ async *stream() { entered.resolve(); await release.promise; yield { type: "text/chunk" as const, text: "fixture" }; yield { type: "end" as const } } } as import('@i-harness/llm-seam').ModelClient).stream(request)), sandbox: "read-only" })
   const manager = createSessionManagement(coordinator, service, undefined, { fence, workspace: root, sessionDir: root, pendingInteractions: async () => [], drainSession: id => service.closeSession(id) })
   const submit = service.submit("busy", "fixture", new AbortController().signal)
   try {

@@ -8,6 +8,8 @@ export interface ChildAgentEntry {
   session: SessionView
   /** Process-local capability for this exact child view, never serialized. */
   factOwner?: FactOwner
+  /** Exact live model source, installed only by real child composition. */
+  executionModel?: () => import('@i-harness/llm-seam').ModelClient
   controller: AbortController
   finalText?: string
   error?: string

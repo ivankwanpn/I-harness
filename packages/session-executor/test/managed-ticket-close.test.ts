@@ -1,4 +1,5 @@
-import { expect, it, vi } from 'vitest'
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach, vi, expect, it } from 'vitest'
 import { mkdtemp, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,7 +25,7 @@ it('retains the real completed tool and service attachment at ticket65 through u
       effects++; bodyEntered.resolve(); await bodyRelease.promise
       return { toJSON() { conversions++; captured.resolve(); return { value: 'the original completed outcome' } } }
     } }],
-    model: { async *stream() { sends++; yield { type: 'tool_call', call: { id: 'c', name: 'completed', args: {} } }; yield { type: 'end' } } },
+    model: controlledModel(async function* () { sends++; yield { type: 'tool_call', call: { id: 'c', name: 'completed', args: {} } }; yield { type: 'end' } }),
   })
   const native = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
   vi.mocked(open).mockImplementation(async (...args) => {
@@ -85,3 +86,5 @@ it('retains the real completed tool and service attachment at ticket65 through u
     await service.close().catch(() => {}); await coordinator.close().catch(() => {})
   }
 }, 3000)
+
+afterEach(() => vi.unstubAllGlobals())

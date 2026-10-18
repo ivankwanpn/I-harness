@@ -1,3 +1,5 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
+import { observeModelClient } from '@i-harness/llm-seam'
 import { captureRequestCandidate } from "../../core-agent/src/agent/request-snapshot.ts"
 import { expect, it, vi } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
@@ -59,7 +61,6 @@ it.each([false, true])("child context reader preserves its owner and current par
   const root = await mkdtemp(join(tmpdir(), "admitted-child-context-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
-  const actual = createAnthropicClient({ model: "controlled", apiKey: "fixture" })
   const measurements: PreparedModelRequest["measurement"][] = []
   let enterParent!: () => void
   let releaseParent!: () => void
@@ -68,24 +69,18 @@ it.each([false, true])("child context reader preserves its owner and current par
   let liveChildState: unknown
   let liveChildWire: unknown
   const service = createSessionService({ workspace: root, coordinator, approveAll: true, contextWindow: 100000, compact: { auto: false }, autoCompactionEnabled: () => false, pluginAgents: [{ name: "context-inspector", description: "Context inspector", systemPrompt: "Inspect your own prepared context", tools: ["get_context_remaining"] }],
-    model: { async *stream() { throw new Error("unprepared") }, async prepare(request) {
-      const prepared = await actual.prepare!(request)
-      measurements.push(prepared.measurement)
+    model: observeModelClient(controlledModel(async function* (request) {
       const first = measurements.length === 1
-      return wrapPreparedRequest(prepared, (_stream, control) => (async function* () {
-        control?.validateBeforeTransport?.()
-        if (request.sessionId === "parent") { enterParent(); await parentGate }
-        if (first) {
-          liveChildState = await service.contextState(request.sessionId!)
-          liveChildWire = decodeFrame((await childServer.handleLine(encodeFrame(makeRequest(2, "session/context", { sessionId: request.sessionId }))))!)
-          expect(measurements).toHaveLength(1)
-          if (revoked) service.liveAssembly("parent")!.tools.unregister("get_context_remaining")
-          yield { type: "tool_call", call: { name: "get_context_remaining", args: {} } } as const
-        }
-        else yield { type: "text/chunk", text: "done" } as const
-        yield { type: "end" } as const
-      })())
-    } } })
+      if (request.sessionId === 'parent') { enterParent(); await parentGate }
+      if (first) {
+        liveChildState = await service.contextState(request.sessionId!)
+        liveChildWire = decodeFrame((await childServer.handleLine(encodeFrame(makeRequest(2, 'session/context', { sessionId: request.sessionId }))))!)
+        expect(measurements).toHaveLength(1)
+        if (revoked) service.liveAssembly('parent')!.tools.unregister('get_context_remaining')
+        yield { type: 'tool_call', call: { name: 'get_context_remaining', args: {} } }
+      } else yield { type: 'text/chunk', text: 'done' }
+      yield { type: 'end' }
+    }), { start(_request, measurement) { measurements.push(measurement) }, finish() {} }) })
   const childServer = createSdkServer(service)
   await childServer.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
   try {

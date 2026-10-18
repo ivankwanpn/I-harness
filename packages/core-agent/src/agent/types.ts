@@ -17,6 +17,8 @@ export interface AgentBudgetConfig {
 }
 
 export interface AgentConfig {
+  modelActionTimeoutMs?: number
+  modelActionMaxAttempts?: number
   /** Prompt for every request. A STRING is fixed for the session. A FUNCTION is
    * resolved at the start of each step, for prompts that carry a fact the
    * session can change while the agent runs (the sandbox policy: see
@@ -36,8 +38,17 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  inputPreparationFactory?: (action: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>) => import('./generation.ts').AgentInputPreparation
+  inputPreparation?: import('./generation.ts').AgentInputPreparation
+  sharedGeneration?: object
+  /** Installed only by createAgent after the opaque exact-child check. */
+  sharedBudget?: import('@i-harness/llm-seam').AuxiliaryGenerationAction
+  generationFactory?: import('./generation.ts').AgentGenerationFactory
+  generationLifecycle?: import('./generation.ts').AgentGenerationLifecycle
+  generationAction?: import('./generation.ts').AgentGenerationAction
   summaryFactory?: import('@i-harness/compaction').SummaryFactory
   captureContextReduction?: NonNullable<import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureContextReduction']>
+  captureInputPromotion?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureInputPromotion']
   factOwner?: FactOwner
   facts?: FactPorts<ProducerFactOutcome>
   sourceFacts?: SettlementFacts<ProducerFactOutcome>
@@ -82,7 +93,7 @@ export interface AgentDeps {
   // the log before the model sees this step's messages. The seam itself appends
   // the promoted user/messages to the session (inbox.claimAtStepBoundary).
   // Absent → byte-identical pre-R-A1 behavior.
-  stepInputs?: { claimAtStepBoundary(facts?: import('@i-harness/core-session').InputFacts<ProducerFactOutcome>): void | Promise<void> }
+  stepInputs?: { claimAtStepBoundary(facts?: import('@i-harness/core-session').InputFacts<ProducerFactOutcome>, prepare?: (input: import('@i-harness/core-session').PendingInput) => Promise<import('@i-harness/core-session').PreparedInputResult | undefined>, claim?: import('@i-harness/core-session').InputFacts<ProducerFactOutcome>['claim']): void | Promise<void> }
   // M32 T3: per-session reasoning effort — copied VERBATIM onto every
   // LLMRequest of this agent (the adapter owns the wire translation; see
   // translateReasoning in the llm-* adapters). Absent → the request never
@@ -123,10 +134,15 @@ export interface Agent {
   // compact config, `createAgent` still returns a `compact` that no-ops.
   // M33 §5: optional `instructions` are threaded to the summarizer (the
   // session-compact command surface).
-  compact?(instructions?: string, options?: CompactionRunOptions): Promise<CompactionResult>
+  compact?(instructions?: string, options?: CompactionRunOptions & { generation?: import('./generation.ts').AgentGenerationAction }): Promise<CompactionResult>
   updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number; contextMetadata?: ContextBindingMetadata; budgetBinding?: import("@i-harness/llm-seam").ModelBudgetBinding }): void
 }
-export interface AgentInputOptions { provenance: InputProvenance }
+export interface AgentInputOptions {
+  provenance: InputProvenance
+  generation?: import('./generation.ts').AgentGenerationAction
+  preparation?: import('@i-harness/core-session').PreparedInputResult
+  delegatedOrigin?: Extract<import('@i-harness/core-session').GenerationOrigin, { kind: 'delegated-input' }>
+}
 
 export interface AgentRegistry {
   register(sessionId: string, agent: Agent): void

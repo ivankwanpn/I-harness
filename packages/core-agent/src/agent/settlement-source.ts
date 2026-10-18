@@ -25,6 +25,8 @@ export function trackSettlementSource(parent: SettlementFacts<ProducerFactOutcom
         },
     });
     return delegateFactSettlementSource(parent, {
+        inputPreparation: { capture(event) { assertOpen(); return captured(parent.inputPreparation.capture(event)); } },
+        generation: { capture(event) { assertOpen(); return captured(parent.generation.capture(event)); } },
         assertHeld: assertOpen,
         retention: {
             capture(event) {

@@ -1,3 +1,4 @@
+import { controlledModel } from '../../../packages/session-executor/test/controlled-model.ts'
 import { expect, it } from 'vitest'
 import { mkdtemp, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -14,7 +15,7 @@ it('threads the original CLI action signal through auto-title preparation and re
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
   const { id } = await coordinator.create(), controller = new AbortController(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let main = 0, titleSends = 0
-  const running = runHeadless('original CLI prompt', { workspace: root, sessionId: id, coordinator, signal: controller.signal, model: { async *stream(request) {
+  const running = runHeadless('original CLI prompt', { workspace: root, sessionId: id, coordinator, signal: controller.signal, model: controlledModel(request => ({ async *stream(request) {
     if (request.systemPrompt.includes('You produce ONLY a short session title')) {
       entered.resolve(); await release.promise
       request.signal?.throwIfAborted(); request.validateBeforeTransport?.()
@@ -22,7 +23,7 @@ it('threads the original CLI action signal through auto-title preparation and re
       yield { type: 'text/chunk', text: 'late title' }
     } else { main++; yield { type: 'text/chunk', text: 'original answer' } }
     yield { type: 'end' }
-  } } })
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request)) })
   void running.catch(() => {})
   try {
     await Promise.race([entered.promise, running.then(() => { throw new Error('CLI completed without actual title preparation') })])

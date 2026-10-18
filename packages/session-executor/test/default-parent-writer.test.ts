@@ -1,10 +1,10 @@
-import { expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { controlledModel } from "./controlled-model.ts"
 import { createSessionService } from "../src/service.ts"
 import { append } from '@i-harness/core-session'
 
@@ -13,11 +13,11 @@ it("keeps a coordinator-only parent fresh while mirroring dispatch before the ac
   await coordinator.create({ sessionId: "parent" })
   let parentLoads = 0, calls = 0, bodySawDurableDispatch = false
   const observed = { ...coordinator, async loadOwned() { parentLoads++; throw new Error("Fresh parent must not be loaded or recovered") } }
-  const model: ModelClient = { async *stream() {
+  const model = controlledModel(async function* () {
     if (++calls === 1) yield { type: "tool_call", call: { name: "owned_dispatch_probe", args: {} } }
     else yield { type: "text/chunk", text: "Owned completion" }
     yield { type: "end" }
-  } }
+  })
   const service = createSessionService({ workspace: root, coordinator: observed, model, codeMode: { mode: "off" }, sandbox: "read-only",
     additionalTools: [{ name: "owned_dispatch_probe", description: "Inspect this fixture's actual durable dispatch", inputSchema: { type: "object", properties: {} }, isReadOnly: true,
       execute: async () => {
@@ -42,3 +42,5 @@ it("keeps a coordinator-only parent fresh while mirroring dispatch before the ac
     expect(durable.at(-1)?.type).toBe("turn/end")
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+afterEach(() => vi.unstubAllGlobals())

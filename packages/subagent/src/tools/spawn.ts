@@ -124,6 +124,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         await deps.tasks.flushPersistence()
         await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
         const executed = await spawnChild({
+          signal: exec.abortSignal,
+          generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
           taskName: args.task_name,
           message: args.message,
           parentPath: "root",

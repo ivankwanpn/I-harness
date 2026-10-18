@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 import { expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -14,9 +15,9 @@ it('retains actual job transition facts through unknown and drains a real comple
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  const mounted = registerSubagent(ctx, tools, {
+  const mounted = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor,
     parentSession: document.view, factOwner: document, exec: {} as import('@i-harness/exec').ExecService,
-    parentModel: { async *stream() { throw new Error('No transport is expected'); yield { type: 'end' } } },
+    parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { throw new Error('No transport is expected'); yield { type: 'end' } }),
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }),
     persist: { coordinator, stateId: 'jobs', parentSessionId: id, parentSession: document.view, factOwner: document },
   })
@@ -63,12 +64,12 @@ it('awaits parent subagent-start before child transport and preserves the actual
     return actual(...args)
   }
   let transports = 0
-  const mounted = registerSubagent(ctx, tools, {
+  const mounted = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor,
     parentSession: document.view, factOwner: document, exec: {} as import('@i-harness/exec').ExecService,
-    parentModel: { async *stream() {
+    parentModel: controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
       transports++; transportEntered.resolve(); await finish.promise
       yield { type: 'text/chunk', text: 'real child outcome' }; yield { type: 'end' }
-    } },
+    }),
     resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }),
     persist: { coordinator, stateId: 'subagents', parentSessionId: id },
   })

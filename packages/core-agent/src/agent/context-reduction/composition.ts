@@ -45,6 +45,8 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
       const configuration = resolveCompactSpec({ ...config, contextWindow: surface.contextWindow ?? config.contextWindow }, selected.metadata?.providerId, selected.metadata?.modelId)
       const model = deps.sessionId === undefined ? selected.model : mapModelRequest(selected.model, request => ({ ...request, sessionId: request.sessionId ?? deps.sessionId }))
       return deps.summaryFactory!({ model, config: configuration.summarizationModel === selected.model ? { ...configuration, summarizationModel: model } : configuration,
+        generation: deps.sharedBudget?.control ?? deps.generationAction?.control('summary'),
+        bindGeneration: deps.sharedBudget ? prepared => deps.sharedBudget!.bind(prepared, 'summary') : deps.generationAction ? prepared => deps.generationAction!.bind(prepared, 'summary') : undefined,
         contextMetadata: selected.metadata, budgetBinding: surface.budgetBinding, maxOutputTokens: surface.maxOutputTokens, reasoningEffort: surface.reasoningEffort,
         flush: deps.flush, telemetry: deps.telemetry ? { close() {}, emit(event) { deps.telemetry!.emit({ ...event, data: { ...event.data, sessionId: deps.sessionId } }) } } : undefined })(source)
     } : undefined

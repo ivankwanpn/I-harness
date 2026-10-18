@@ -84,6 +84,7 @@ function drive(server: SdkServer): {
 function makeStubService(): SessionService {
   return {
     submit: vi.fn(async () => {}),
+    compact: vi.fn(async () => { throw new Error("unused manual generation capability in sdk ownership test") }),
     refreshExtensions: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
     receivedInputFor: vi.fn(async () => { throw new Error('unused received-input capability in sdk ownership test') }),

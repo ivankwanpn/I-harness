@@ -36,6 +36,8 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
   function retireCell(id: string) { const cell = cells.get(id); cells.delete(id); cell?.stop.abort(); void pump() }
   const track = (job: Promise<void>) => { jobs.add(job); void job.then(() => { jobs.delete(job); void pump() }, () => { jobs.delete(job); void pump() }) }
   async function release(item: Queued) {
+    try { await item.generation?.close() }
+    catch (error) { item.source.requireRecovery(); item.recoveryCause = error }
     item.done.resolve(); item.action.finish()
     try { await item.source.close(); unsettled.delete(item) }
     catch (cause) { if (!item.finished) records.settle(item, { error: recovery(cause) }) }
@@ -47,7 +49,9 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
       let prepared
       try {
-        prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source })
+        item.generation = item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
+          current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
+        prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
       } catch (error) { throw error instanceof ToolArgsError ? error : fatal(error) }
       item.action.assertOpen()
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")

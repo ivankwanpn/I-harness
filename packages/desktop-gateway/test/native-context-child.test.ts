@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import {expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm} from 'node:fs/promises'
 import {join,resolve} from 'node:path'
@@ -17,12 +18,12 @@ it('live enabling lets a real explore child capture and search native refs throu
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let calls=0;const requests:LLMRequest[]=[]
-  const model:ModelClient={async *stream(request){requests.push(request);calls++
+  const model:ModelClient=controlledModel(request => ({async *stream(request){requests.push(request);calls++
     if(calls===1)yield{type:'tool_call',call:{name:'code_exec',args:{code:'text(ALL_TOOLS.map(t=>t.name));text("a".repeat(20000)+"CHILD_RETAINED"+"b".repeat(20000));',max_output_tokens:16}}}
     else if(calls===2)yield{type:'tool_call',call:{name:'code_exec',args:{code:'const found=await tools.context_output_search({query:"CHILD_RETAINED"});text(await tools.context_output_read({refId:found.hits[0].ref.id,offset:found.hits[0].offset,maxBytes:1024}));'}}}
     else yield{type:'text/chunk',text:'Child finished.'}
     yield{type:'end'}
-  }}
+  }} as import('@i-harness/llm-seam').ModelClient).stream(request))
   service=createSessionService({workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),model,sandbox:'danger-full-access',approveAll:true,codeMode:{mode:'only'},contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,additionalTools:createCodeRetrievalTools(runtime.codeRetrieval)})
   try {
     const assembly=await service.assemblyFor('parent')
@@ -51,7 +52,7 @@ it.each(['release','reject'] as const)('persists the trusted fork seed before gr
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let transports=0
-  const model:ModelClient={async *stream(){transports++;yield{type:'text/chunk',text:'child complete'};yield{type:'end'}}}
+  const model:ModelClient=controlledModel(request => ({async *stream(){transports++;yield{type:'text/chunk',text:'child complete'};yield{type:'end'}}} as import('@i-harness/llm-seam').ModelClient).stream(request))
   service=createSessionService({workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),model,sandbox:'danger-full-access',approveAll:true,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
   const grant=vi.spyOn(runtime.contextOutput,'grant'),actualAppend=backend.appendOwnedBatch!
   let release!:()=>void,entered!:()=>void
@@ -95,11 +96,11 @@ it.each([false,true])('a real child owns its inherited native references before 
   const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let calls=0,refId=''
-  const model:ModelClient={async *stream(){calls++
+  const model:ModelClient=controlledModel(request => ({async *stream(){calls++
     if(calls===1){await runtime.contextOutput.clear('parent');await runtime.contextOutput.configure({enabled:true});yield{type:'tool_call',call:{name:'context_output_read',args:{refId}}}}
     else yield{type:'text/chunk',text:'Seed read completed.'}
     yield{type:'end'}
-  }}
+  }} as import('@i-harness/llm-seam').ModelClient).stream(request))
   service=createSessionService({workspace:root,coordinator,sessionFor:createDurableSessionLoader(coordinator),model,sandbox:'danger-full-access',approveAll:true,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor,additionalTools:createCodeRetrievalTools(runtime.codeRetrieval)})
   try{
     await runtime.contextOutput.configure({enabled:true})

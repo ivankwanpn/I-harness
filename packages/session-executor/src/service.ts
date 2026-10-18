@@ -23,6 +23,9 @@
 import { createHash, randomUUID } from "node:crypto"
 import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
+import { prepareInputExecution } from './lifecycle/input-preparation.ts'
+import { runManualGeneration } from './lifecycle/manual-generation.ts'
+import { createTitleGenerationContext } from './lifecycle/title-generation.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
@@ -103,6 +106,7 @@ type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
 type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'assertOpen'> & {
+  readonly openGeneration?: import('@i-harness/llm-seam').TitleGenerationFactory
   readonly view: Session
   readonly facts: Pick<ManagedAction<ProducerFactOutcome>['facts'], 'metadata'>
 }
@@ -178,14 +182,20 @@ export interface SessionServiceOptions extends AssemblyOptions {
   outputSpill?: OutputSpillGuardConfig
 }
 
+interface SessionSubmitOptions {
+  context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string
+  /** Trusted host preparation callback; never comes from model or wire data. */
+  prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
+}
 export interface SessionService {
+  compact(sessionId: string, instructions?: string, signal?: AbortSignal): Promise<import('@i-harness/compaction').CompactionResult>
   /** Update plugin-owned capabilities without replacing sessions or agents. */
   refreshExtensions(): Promise<void>
   /** One prompt for one session (tier send). Serialized per session;
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
@@ -574,6 +584,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           }
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
+            prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
@@ -615,6 +626,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             : opts.reasoningEffortFor(sessionId, meta)
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
+            prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
@@ -704,10 +716,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
     return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options)) : submitUnfenced(sessionId, prompt, signal, options)
   }
-  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
+  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -785,8 +797,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         settle() // the queued turn never starts; the chain keeps moving
         return
       }
-      getOrCreate(sessionId).then(async (assembly) => {
+      let preparedInput: Awaited<ReturnType<typeof prepareInputExecution>> | undefined
+      const assemblyReady = opts.coordinator ? prepareInputExecution({
+        ownerSessionId: sessionId,
+        acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
+        assemble: () => getOrCreate(sessionId),
+        input: { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
+          ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) },
+        alreadyAdmitted: !!options?.admittedInputId, signal: controller.signal,
+        modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
+        localTestEnabled: opts.modelPolicy === 'test-mock',
+        prepare: options?.prepareInput ?? opts.transformPrompt,
+      }).then(prepared => { preparedInput = prepared; return prepared.assembly }) : getOrCreate(sessionId)
+      assemblyReady.then(async (assembly) => {
         if (controller.signal.aborted || closed) {
+          await preparedInput?.close()
           settle()
           return
         }
@@ -794,7 +819,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         let execution: Promise<void>
         try {
           await extensionRefreshes.get(sessionId)?.catch(() => undefined)
-          const prepared = !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
+          const prepared = !preparedInput && !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
           if (controller.signal.aborted || closed) { settle(); return }
           // M41b: the submit signal now rides INTO the lane — the agent's
           // run() gets it and aborts at step boundaries/yields (in-flight
@@ -802,7 +827,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
           const text = context ? `${prepared}\n\n${context}` : prepared
-          if (options?.admittedInputId) {
+          if (preparedInput) {
+            execution = lane.runAdmitted(id, controller.signal, { generation: preparedInput.generation, preparation: preparedInput.preparation })
+          } else if (options?.admittedInputId) {
             const pending = assembly.inbox.pending().find((input) => input.inputId === id)
             if (!pending) { settle(); return }
             if (pending.text !== text) throw new Error("Admitted input does not match submitted text")
@@ -813,6 +840,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           }
           record.state = "queued"
         } catch (error) {
+          try { await preparedInput?.close() } catch (saving) { error = new AggregateError([error, saving], 'Input execution settlement requires recovery', { cause: error }) }
           // A synchronous lane failure still settles this turn.
           if (!closed) telemetry?.emit({
             type: "session/error",
@@ -829,21 +857,25 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
               record.postTurn = true
               let action: ManagedAction<ProducerFactOutcome> | undefined
+              let titleGeneration: ReturnType<typeof createTitleGenerationContext> | undefined
               try {
                 if (assembly.factOwner.view !== assembly.session) throw Object.assign(new Error('Post-turn action requires its actual Session view'), { code: 'FACT_OWNER_UNSUPPORTED' })
                 action = assembly.factOwner.beginAction(controller.signal)
+                titleGeneration = createTitleGenerationContext(assembly.factOwner, sessionId, action, { localTestEnabled: opts.modelPolicy === 'test-mock', selectedClient: assembly.selectedModel })
                 const state = await bindingFor(sessionId)
                 action.assertOpen()
                 await opts.afterSuccessfulSubmit(sessionId, assembly, state.status === "ready"
                   ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
-                  : {}, { view: assembly.session, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata } })
+                  : {}, { view: assembly.session, signal: action.signal, assertOpen: action.assertOpen, facts: { metadata: action.facts.metadata }, openGeneration: titleGeneration.open })
               } catch (error) {
                 d.warn(`[i-harness] post-turn host callback failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
-              } finally { delete record.postTurn; action?.finish() }
+              } finally { delete record.postTurn; try { await titleGeneration?.drain() } finally { action?.finish() } }
             }
-            settle()
+            try { await preparedInput?.close(); settle() }
+            catch (error) { settleError(error) }
           },
-          (error: unknown) => {
+          async (error: unknown) => {
+            try { await preparedInput?.close() } catch (saving) { error = new AggregateError([error, saving], 'Input execution settlement requires recovery', { cause: error }) }
             if (!signal.aborted && !closed) {
               telemetry?.emit({
                 type: "session/error",
@@ -1114,6 +1146,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (errors.length) throw new AggregateError(errors.map((result) => result.reason), "Some live plugin updates failed")
     },
     submit,
+    compact(sessionId, instructions, signal = new AbortController().signal) {
+      const run = async () => {
+        assertWritableOpen(sessionId)
+        signal.throwIfAborted()
+        const state = queueState(sessionId)
+        if (state.running || state.queued > 0) throw new Error('session is busy')
+        if (!opts.coordinator) return (await getOrCreate(sessionId)).compactNow(instructions)
+        return runManualGeneration({ ownerSessionId: sessionId, signal, instructions, timeoutMs: opts.modelActionTimeoutMs,
+          localTestEnabled: opts.modelPolicy === 'test-mock',
+          acquire: async () => {
+            await opts.coordinator!.profile(sessionId)
+            return openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) })
+          }, assemble: () => getOrCreate(sessionId),
+        })
+      }
+      return opts.sessionOperation ? opts.sessionOperation.run(sessionId, run) : run()
+    },
     assemblyFor: getOrCreate,
     modelState,
     contextState,

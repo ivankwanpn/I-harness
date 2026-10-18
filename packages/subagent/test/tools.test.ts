@@ -1,3 +1,4 @@
+
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
@@ -421,6 +422,7 @@ describe("subagent control tools", () => {
     const entry = table.get("root/helper")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect(out).toEqual({ resumed: true })
+    await entry.followupChain
     const rebuilt = agents.get("child-abc")
     expect(rebuilt).toBeDefined()
     expect(entry.session).toBe(loadedSession) // rebuilt on the persisted session, not a fresh one
@@ -607,9 +609,11 @@ describe("subagent control tools", () => {
 
     // Hold the retry in flight: list_agents must stop reporting the old turn's
     // error as soon as a new turn begins, not only after it succeeds.
+    const retryEntered = Promise.withResolvers<void>()
     let finishRetry!: (result: { finalText: string; turns: number; reasoning: string[] }) => void
-    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve }))
+    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve; retryEntered.resolve() }))
     await follow.execute({ target: "root/helper", message: "retry" }, {})
+    await retryEntered.promise
     try {
       const listed = await all.find((tool) => tool.name === "list_agents")!.execute({}, {}) as { agents: { status: string; error?: string }[] }
       expect(listed.agents[0]?.status).toBe("running")

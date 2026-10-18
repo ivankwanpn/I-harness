@@ -25,11 +25,12 @@ export function createAdmission(
   const exec: CodeModeRuntime['exec'] = async (input,providedOrigin = {},observation) => {
     // Cell authority belongs to the metadata admitted here, even if a caller
     // reuses or later mutates its own origin object. Only the signal is shared.
-    const origin: CodeModeOrigin = Object.freeze({
+    let origin: CodeModeOrigin = Object.freeze({
       sessionId: providedOrigin.sessionId,
       callId: providedOrigin.callId,
       callEventSeq: providedOrigin.callEventSeq,
       abortSignal: providedOrigin.abortSignal,
+      generationLineage: providedOrigin.generationLineage,
     })
     if (retirement.isDisposed()) throw new Error('Code Mode runtime is disposed')
     if (retirement.isCancelling()) throw new Error('Code Mode runtime is cancelling active cells')
@@ -64,6 +65,7 @@ export function createAdmission(
     // indefinitely. Their IDs subsequently report the same truthful retirement.
     state.prune(config.maxActiveCells * 4)
     const id = randomUUID()
+    if (origin.generationLineage) origin = Object.freeze({ ...origin, generationLineage: origin.generationLineage.bindCell(id) })
     const epoch = retirement.epoch()
     admissions++
     try {

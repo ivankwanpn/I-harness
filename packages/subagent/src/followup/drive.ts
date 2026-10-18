@@ -1,7 +1,8 @@
-import type { SessionEventView } from "@i-harness/core-session"
+import { isNondurableSession, type SessionEventView } from "@i-harness/core-session"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { AgentTable, ChildAgentEntry } from "../agent-table.ts"
 import type { JobRegistry } from "../jobs.ts"
+import type { FollowupGeneration } from './generation.ts'
 
 // Drain all unconsumed durable inbox events as serialized turns on the child.
 // Turns are chained through entry.followupChain (one at a time, per child), a
@@ -18,27 +19,19 @@ export interface FollowupDeps {
   // missing (e.g. a restored entry after resume) so the wakeup drive recovers
   // it instead of silently no-oping. Backward-compatible: absent (the default,
   // e.g. the agent-team scheduler without the seam) keeps the old no-op.
-  rebuild?: (entry: ChildAgentEntry) => Promise<boolean>
+  rebuild?: (entry: ChildAgentEntry, controller: AbortController) => Promise<boolean>
+  openGeneration?: (entry: ChildAgentEntry, input: Extract<SessionEventView, { type: 'subagent/inbox' }>, controller: AbortController) => Promise<FollowupGeneration>
 }
 export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessionId: string, signal?: AbortSignal): Promise<void> {
   const prev = entry.followupChain ?? Promise.resolve()
   const next = prev.then(async () => {
     if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return
-    let agent = deps.agents.get(sessionId)
-    if (!agent) {
-      if (!deps.rebuild) return // no rebuild ability → keep the old no-op
-      const ok = await deps.rebuild(entry)
-      if (!ok) return
-      agent = deps.agents.get(sessionId)
-      if (!agent) return
-    }
     const pending = entry.session.events.filter(
       (e): e is Extract<SessionEventView, { type: "subagent/inbox" }> =>
         e.type === "subagent/inbox" && (e.seq ?? 0) > (entry.lastInboxSeq ?? -1),
     )
     for (const ev of pending) {
       if (signal?.aborted || entry.closing || deps.table.get(entry.path) !== entry) return // closed/replaced mid-drain → stop
-      entry.lastInboxSeq = ev.seq ?? 0
       // Errors belong to the previous turn; a new attempt has no failure yet.
       // W11: a re-drive starts a NEW run, so the start stamp moves with the
       // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp
@@ -49,8 +42,24 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         ...(entry.retention !== undefined || entry.retentionError !== undefined ? { retention: undefined, retentionError: undefined } : {}),
       })
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
+      let generation: FollowupGeneration | undefined
+      const controller = entry.controller, cancel = () => controller.abort(signal?.reason)
+      signal?.addEventListener('abort', cancel, { once: true })
       try {
-        const result = await agent.followup(ev.message, entry.controller.signal, { provenance: ev.provenance ?? { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox", ...(entry.session.header?.parentSession ? { originSessionId: entry.session.header.parentSession } : {}) } })
+        if (signal?.aborted) cancel()
+        if (!isNondurableSession(entry.session) && !deps.openGeneration) throw Object.assign(new Error('Managed child wake requires its generation owner'), { code: 'GENERATION_UNSUPPORTED' })
+        if (deps.openGeneration) generation = await deps.openGeneration(entry, ev, entry.controller)
+        let agent = deps.agents.get(sessionId)
+        if (!agent && deps.rebuild && await deps.rebuild(entry, entry.controller)) agent = deps.agents.get(sessionId)
+        if (!agent) { deps.table.update(entry.path, entry, { status: 'waiting' }); return }
+        if (entry.closing || deps.table.get(entry.path) !== entry || entry.controller !== controller) return
+        controller.signal.throwIfAborted()
+        // Rebuild publishes a waiting resident. This same already-open inbox
+        // execution now owns the running fence; its original clock is retained.
+        if (entry.status !== 'running') deps.table.update(entry.path, entry, { status: 'running' })
+        signal?.removeEventListener('abort', cancel)
+        entry.lastInboxSeq = ev.seq ?? 0
+        const result = await agent.followup(ev.message, entry.controller.signal, generation?.options ?? { provenance: ev.provenance ?? { kind: "inherited", authority: "observation", scope: "turn", producer: "subagent.inbox", ...(entry.session.header?.parentSession ? { originSessionId: entry.session.header.parentSession } : {}) } })
         // Clear a stale error (e.g. "aborted" from an earlier interrupted
         // turn) once a followup succeeds — otherwise a misleading error would
         // persist into the M6 snapshot.
@@ -60,7 +69,7 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         const aborted = entry.controller.signal.aborted
         deps.table.update(entry.path, entry, { status: "waiting", error: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
         if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: aborted ? "killed" : "error", output: aborted ? "aborted" : (err instanceof Error ? err.message : String(err)) })
-      }
+      } finally { signal?.removeEventListener('abort', cancel); await generation?.close() }
     }
   })
   // Defensive hardening: the body fully try/catches, but a future throwing

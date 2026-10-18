@@ -1,4 +1,5 @@
-import { expect, it } from 'vitest'
+import { controlledModel } from "./controlled-model.ts"
+import { afterEach, vi, expect, it } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -44,11 +45,11 @@ it('revokes the running action before close joins its turn and writes its requir
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), entered = Promise.withResolvers<void>()
   let aborted = false
-  const service = createSessionService({ workspace: root, coordinator, codeMode: { mode: 'off' }, model: { async *stream(request) {
+  const service = createSessionService({ workspace: root, coordinator, codeMode: { mode: 'off' }, model: controlledModel(async function* (request) {
     entered.resolve()
     await new Promise<void>((_, reject) => request.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('closed')) }, { once: true }))
     yield { type: 'end' }
-  } } })
+  }) })
   const run = service.submit(id, 'work', new AbortController().signal)
   void run.catch(() => {})
   try {
@@ -66,7 +67,7 @@ it('saves received human input through a source-local recovery fault while refus
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create()
   let requests = 0
-  const service = createSessionService({ workspace: root, coordinator, codeMode: { mode: 'off' }, model: { async *stream() { requests++; yield { type: 'end' } } } })
+  const service = createSessionService({ workspace: root, coordinator, codeMode: { mode: 'off' }, model: controlledModel(async function* () { requests++; yield { type: 'end' } }) })
   try {
     const assembly = await service.assemblyFor(id), document = await coordinator.openManagedDocument(id)
     const action = document.beginAction()
@@ -151,3 +152,5 @@ it('releases a completed assembly metadata action instead of retaining its abort
     expect(document.view.events.at(-1)).toMatchObject({ type: 'sandbox/mode', mode: 'workspace-write' })
   } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
 })
+
+afterEach(() => vi.unstubAllGlobals())

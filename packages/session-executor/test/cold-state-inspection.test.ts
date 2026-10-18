@@ -1,3 +1,5 @@
+import { afterEach as afterFixture } from 'vitest'
+afterFixture(() => vi.unstubAllGlobals())
 import { expect, it, vi } from "vitest"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -26,7 +28,8 @@ it.each([
   const metadata = { version: 1 as const, providerId: "fixture", modelId: "model-b", protocol: "openai-compatible", contextWindow: 100_000,
     maxOutputTokens: 2000, identityCoverage: "complete" as const, bindingConfigFingerprint: "b".repeat(64) }
   const transport = vi.fn(async () => new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "B accepted" }, finish_reason: "stop" }], usage: { prompt_tokens: 100, completion_tokens: 7 } })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } }))
-  const actual = createOpenAICompatibleClient({ apiKey: "controlled", executionIdentity: { version: 1, runtimeId: "fixture-runtime", bindingLifetimeId: "fixture-binding", authEpoch: "fixture-E", scope: "binding-credential", coldCompatible: false }, model: "model-b", fetch: transport })
+  vi.stubGlobal('fetch', async (url: string) => { if (url !== 'https://cold-state.fixture.invalid/v1/chat/completions') throw new Error('Unexpected network destination'); return transport() })
+  const actual = createOpenAICompatibleClient({ apiKey: "controlled", executionIdentity: { version: 1, runtimeId: "fixture-runtime", bindingLifetimeId: "fixture-binding", authEpoch: "fixture-E", scope: "binding-credential", coldCompatible: false }, model: "model-b", baseUrl: "https://cold-state.fixture.invalid" })
   const prepare = vi.fn(actual.prepare!.bind(actual)), authenticate = vi.fn()
   const model = { ...actual, prepare }
   const resolve = vi.fn(async () => { authenticate(); return { status: "ready" as const, binding: { model, ...metadata, contextMetadata: metadata, label: "B" } } })

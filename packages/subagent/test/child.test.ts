@@ -1,3 +1,4 @@
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtempSync } from 'node:fs'
@@ -271,10 +272,10 @@ describe("spawnChild durable child sessions (M8)", () => {
       await release.promise
       order.push("owned")
     })
-    const opts: SpawnOptions = {
+    const opts: SpawnOptions = { generationFactoryFor: fixtureGenerationFor,
       taskName: "ordering", message: "initial", parentPath: "root", parentCtx, parentRegistry, parentSession,
       role: { name: "probe", description: "probe", systemPrompt: "role prompt", tools: ["read"] },
-      summaryFactory: createSummaryPort, parentModel: { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } },
+      summaryFactory: createSummaryPort, parentModel: controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } }),
       resolveModel: noRoleModel, table, agents, jobs, forkTurns: "all",
       childSessions: { coordinator, parentSessionId: "parent" },
       inheritedSystemContext: () => { throw new Error("callback must be read after inherited ownership") },
@@ -329,7 +330,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const agents = createAgentRegistry()
     const requests: import("@i-harness/llm-seam").LLMRequest[] = []
 
-    const { path, sessionId } = await spawnChild({
+    const { path, sessionId } = await spawnChild({ generationFactoryFor: fixtureGenerationFor,
       taskName: "helper",
       message: "hi",
       parentPath: "root",
@@ -337,7 +338,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentSession,
       parentCtx: ctx,
       role: roles.get("general")!,
-      summaryFactory: createSummaryPort, parentModel: { stream(request) { requests.push(request); return mock.stream(request) } },
+      summaryFactory: createSummaryPort, parentModel: controlledModel(request => ({ stream(request: import("@i-harness/llm-seam").LLMRequest) { requests.push(request); return mock.stream(request) } }).stream(request)),
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -399,7 +400,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     let settled: (() => void) | undefined
     const runDone = new Promise<void>((resolve) => { settled = resolve })
 
-    const { sessionId } = await spawnChild({
+    const { sessionId } = await spawnChild({ generationFactoryFor: fixtureGenerationFor,
       taskName: "checkpointed",
       message: "read something",
       parentPath: "root",
@@ -448,7 +449,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     parentSession.events.push({ type: "turn/start" }, { type: "user/message", text: "a" }, { type: "assistant/message", text: "b" }, { type: "turn/end" })
     const mock = createMockClient([{ role: "assistant", text: "ok" }])
 
-    const { sessionId } = await spawnChild({
+    const { sessionId } = await spawnChild({ generationFactoryFor: fixtureGenerationFor,
       taskName: "grandchild",
       message: "hi",
       parentPath: "root/helper",
@@ -493,33 +494,20 @@ describe("spawnChild durable child sessions (M8)", () => {
 
 // ── M76 (design §1.2 + §1.3): the seed's bound ──────────────────────────────
 // Two changes, one order and one line of visibility. The ORDER: the declared
-// role's model resolves BEFORE the durable child session exists, so a spawn
-// whose binding is not ready leaves no orphan `child-<uuid>` log (the defect
-// this closes: `coordinator.create` + the seeded log used to run first, and the
-// throw left both behind with no dispose path anywhere). The LINE: a seed whose
-// own projection already prices at or over the window warns — because the child
-// will have to summarise its inherited context before its first request.
-// Neither half is a policy: the seed is not trimmed and the spawn is not
-// refused (design §1.3 — after M75 a divisible over-window seed IS summarised
-// by the child's own compactor, so trimming would drop, silently, what the
-// summary keeps; and refusing would close the feature's primary use case, a
-// child spawned FROM a large session).
-describe("M76: the seed's bound — the model resolves first, and an over-window seed is visible", () => {
-  it("a spawn whose binding does not resolve leaves NO durable child session behind", async () => {
+// F4 opens the child-owned delegation before asynchronous model resolution.
+// Failed binding retains the original admission and closed failed action;
+// tools, model transport, publication and job registration still do not run.
+describe("M76: the seed's bound — early child ownership and an over-window seed are visible", () => {
+  it("a spawn whose binding fails retains its original child admission and failed action without publication", async () => {
     const f = spawnFixture()
     const coordinator = ownedCoordinatorFixture()
-    // Seed content that is real, so "nothing was written" is a claim about
-    // something that could have been. MEASURED against the old order (the
-    // resolver moved back below the seeding arm): `created` 1, `enqueued` 4 —
-    // one durable `child-<uuid>` session and its four seed events, left behind
-    // by the throw.
     append(f.parentSession, { type: "turn/start" })
     append(f.parentSession, { type: "user/message", text: "inherited question" })
     append(f.parentSession, { type: "assistant/message", text: "inherited answer" })
     append(f.parentSession, { type: "turn/end" })
     const resolveModel = async () => ({ status: "invalid" as const, reason: 'Unknown provider "gw"' })
 
-    await expect(spawnChild({
+    await expect(spawnChild({ generationFactoryFor: fixtureGenerationFor,
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
@@ -529,14 +517,13 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
       childSessions: { coordinator, parentSessionId: "sess-main" },
     })).rejects.toThrow(/Unknown provider "gw"/) // the refusal's shape, unchanged
 
-    // THE observation point is the DURABLE side, and these two are the
-    // assertions that discriminate: `created` is what `coordinator.create`
-    // recorded (the `child-<uuid>` session itself) and `enqueued` is the
-    // write-behind the seed paste feeds. The two below them pin the rest of the
-    // claim — they read empty under BOTH orders, because the table and the job
-    // are registered after the resolver either way.
-    expect(coordinator.created).toHaveLength(0)
-    expect(coordinator.enqueued).toHaveLength(0)
+    expect(coordinator.created).toHaveLength(1)
+    const failed = await coordinator.openManagedDocument(coordinator.created[0]!.sessionId!)
+    const events = failed.view.events
+    expect(events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ text: 'do the thing' })])
+    expect(events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
+    expect(events.filter(event => event.type === 'context/action' && event.op === 'close')).toEqual([expect.objectContaining({ disposition: 'failed' })])
+    expect(events.some(event => event.type === 'context/attempt' || event.type === 'tool/dispatch' || event.type === 'model/exchange-accepted')).toBe(false)
     expect(f.table.entries().size).toBe(0)
     expect(f.jobs.listAll()).toHaveLength(0)
   })

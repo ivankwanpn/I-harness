@@ -1,3 +1,4 @@
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -19,16 +20,16 @@ it("real service pushes one committed child result after its actual receipt, wit
   const resultEntered = Promise.withResolvers<void>(), releaseResult = Promise.withResolvers<void>()
   const childSecondRequest = Promise.withResolvers<void>(), releaseChild = Promise.withResolvers<void>()
   let childRequests = 0, parentRequests = 0, resultFrames = 0, finalizations = 0
-  const child: NonNullable<SessionServiceOptions['model']> = { async *stream() {
+  const child: NonNullable<SessionServiceOptions['model']> = controlledModel(request => ({ async *stream() {
     if (++childRequests === 1) yield { type: 'tool_call', call: { id: 'child-list', name: 'list_dir', args: { path: '.' } } }
     else { childSecondRequest.resolve(); await releaseChild.promise; yield { type: 'text/chunk', text: 'original child final' } }
     yield { type: 'end' }
-  } }
-  const parent: NonNullable<SessionServiceOptions['model']> = { async *stream() {
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
+  const parent: NonNullable<SessionServiceOptions['model']> = controlledModel(request => ({ async *stream() {
     if (++parentRequests === 1) yield { type: 'tool_call', call: { name: 'wait_agent', args: { target: 'root/actual', timeout_ms: 300_000 } } }
     else yield { type: 'text/chunk', text: 'parent finished' }
     yield { type: 'end' }
-  } }
+  } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: 'danger-full-access',
     allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }), resolveRoleModel: async () => ({ status: 'ready', binding: { client: child } }),
   })
@@ -504,9 +505,9 @@ it("refuses a child path replaced during the final lineage read instead of contr
 
 it("drives normal and teammate followups through their real owning tools without assembling a child as a main chat", async () => {
   const f = await fixture()
-  const parent: NonNullable<SessionServiceOptions["model"]> = { async *stream() { yield { type: "text/chunk", text: "parent done" }; yield { type: "end" } } }
+  const parent: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "parent done" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   let turns = 0
-  const child: NonNullable<SessionServiceOptions["model"]> = { async *stream() { yield { type: "text/chunk", text: `child-final-${++turns}` }; yield { type: "end" } } }
+  const child: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: `child-final-${++turns}` }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model: parent, team: {}, concurrentSessionTeams: true, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "local", model: "fixture" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }) })
   const catalog = createDesktopSubagents(f.coordinator, service)
   try {
@@ -548,7 +549,7 @@ it("drives normal and teammate followups through their real owning tools without
 
 it("restores a completed closed child's actual model from its JSONL task document and exposes it in the cold catalog", async () => {
   const f = await fixture()
-  const model: NonNullable<SessionServiceOptions["model"]> = { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+  const model: NonNullable<SessionServiceOptions["model"]> = controlledModel(request => ({ async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } } as import('@i-harness/llm-seam').ModelClient).stream(request))
   const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "deepseek", model: "deepseek-flash" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: model } }) })
   let reader: ReturnType<typeof createSessionCoordinator> | undefined
   try {

@@ -31,6 +31,9 @@ import { createTeamTools } from "./tools.ts"
 import { AgentPath } from "./agent-path.ts"
 
 export interface TeamSubagentDeps {
+  generationFactoryFor?: SpawnOptions['generationFactoryFor']
+  modelActionTimeoutMs?: number
+  modelActionMaxAttempts?: number
   reportPolicy?: import("@i-harness/subagent").ReportPolicy
   retainResults?: () => Promise<"durable" | "memory">
   table: AgentTable
@@ -80,7 +83,8 @@ export interface TeamSubagentDeps {
   // teammate (restoreState maps running/waiting → "error" and the Agent
   // registry is fresh-empty) instead of dropping the drive; absent keeps the
   // conservative behavior (message stays queued).
-  ensureResident?: (entry: ChildAgentEntry) => Promise<boolean>
+  ensureResident?: (entry: ChildAgentEntry, controller?: AbortController) => Promise<boolean>
+  followupGeneration?: import('@i-harness/subagent').FollowupDeps['openGeneration']
 }
 
 export interface TeamDeps {

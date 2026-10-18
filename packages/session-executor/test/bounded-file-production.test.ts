@@ -1,3 +1,6 @@
+import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
+afterFixture(() => fixtureVi.unstubAllGlobals())
+import { controlledModel } from "./controlled-model.ts"
 import { expect, it } from "vitest"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -14,7 +17,7 @@ it("production main and actual child read reconstruct source-backed multilingual
   const text = '中🙂"\n'.repeat(13000), path = join(root, "large.txt")
   await writeFile(path, text)
   let childFull = "", childOffset = 0, childDigest: string | undefined, childPages = 0
-  const child: ModelClient = { async *stream(request) {
+  const child: ModelClient = controlledModel(async function* (request) {
     const previous = request.messages.filter(m => m.role === "tool").at(-1)
     if (previous?.role === "tool") {
       if (typeof previous.content !== "string") throw new Error("Expected text file result")
@@ -29,8 +32,8 @@ it("production main and actual child read reconstruct source-backed multilingual
     }
     yield { type: "tool_call", call: { id: `page-${childPages}`, name: "read", args: { path, ...(childPages ? { offset_bytes: childOffset, digest: childDigest } : {}) } } }
     yield { type: "end" }
-  } }
-  const main: ModelClient = { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+  })
+  const main: ModelClient = controlledModel(async function* () { yield { type: "text/chunk", text: "done" }; yield { type: "end" } })
   const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "parent", model: main,
     roleSelectionFor: role => role === "explore" ? { provider: "local", model: "child" } : undefined,
     allowSubagentModelSelection: true, resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
