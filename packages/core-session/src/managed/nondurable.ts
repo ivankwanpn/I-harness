@@ -1,7 +1,7 @@
 import type { Session } from '../events/types.ts'
 import { append } from '../events/append.ts'
 import { managedSessions } from '../events/state.ts'
-import { captureFactGroup, resolveFactGroup } from './groups.ts'
+import { captureFactGroup, resolveFactGroup, validInputPromotionDraft } from './groups.ts'
 import type { FactGroupDraft } from './groups.ts'
 import { createFactPorts } from './ports-factory.ts'
 import { isStrictFactData } from './capture.ts'
@@ -10,6 +10,10 @@ import { captureMemoryFact, rejectedMemoryCapture } from './memory-capture.ts'
 import type { FactOwner, NondurableFactOutcome, MetadataFacts, ProducerFactOutcome, AgentFacts, MetadataFactSource, FeedbackFactSource } from './ports.ts'
 import type { SessionView } from './types.ts'
 import { captureMemoryReduction } from './memory-reduction.ts'
+import { validGenerationEvent } from '../events/generation.ts'
+import { validInputPreparationEvent } from '../events/input-preparation.ts'
+import { validContextEvent } from '../events/context.ts'
+import { installMemoryGroup } from './memory-group.ts'
 
 /** Explicit standalone memory adapter. It has no receipt and makes no durable
  * recovery promise. A managed/frozen Session can never silently enter it. */
@@ -45,8 +49,7 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         let events
         try { events = resolveFactGroup(capture.group, session, session.events.length) }
         catch { return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' } }
-        const seqs = events.map(event => event.seq!)
-        for (const event of events) append(session, event)
+        const seqs = installMemoryGroup(session, events).map(event => event.seq!)
         return { kind: 'memory-committed', durability: 'nondurable', seqs }
       }
       const facts = createFactPorts(draft => admit(draft))
@@ -57,6 +60,31 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         return { kind: 'memory-committed', durability: 'nondurable', seqs: [seq] }
       }
       return {
+        captureInputPromotion(draft, checkCurrent) {
+          if (!validInputPromotionDraft(draft)) return rejectedMemoryCapture()
+          return captureMemoryFact(session, draft, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
+        },
+        captureGenerationRecovery(recovery, phase, checkCurrent) {
+          if (!isStrictFactData(recovery) || !isStrictFactData(phase) || recovery.type !== 'context/recovery' || recovery.state !== 'retry-started' || !validContextEvent(recovery) || !validGenerationEvent({ ...phase, recoverySeq: 0 })) return rejectedMemoryCapture()
+          return captureMemoryFact(session, { kind: 'generation-recovery', recovery, phase }, () => {
+            assertOpen()
+            if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' })
+          })
+        },
+        captureInputPreparation(event, checkCurrent) {
+          if (!validInputPreparationEvent(event) || event.op !== 'started') return rejectedMemoryCapture()
+          return captureMemoryFact(session, { kind: 'input-preparation', event }, () => {
+            assertOpen()
+            if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' })
+          })
+        },
+        captureGeneration(events, checkCurrent) {
+          if (!isStrictFactData(events) || !Array.isArray(events) || !events.length || !events.every(validGenerationEvent)) return rejectedMemoryCapture()
+          return captureMemoryFact(session, { kind: 'generation', events }, () => {
+            assertOpen()
+            if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' })
+          })
+        },
         facts, signal, assertOpen, stop() { stopped = true; cancel.abort() }, finish() { stopped = true },
         captureContextReduction: (draft, checkCurrent) => captureMemoryReduction(session, draft, assertOpen, checkCurrent),
         captureCodeStore(event) {

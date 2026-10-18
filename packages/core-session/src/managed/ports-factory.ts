@@ -9,14 +9,14 @@ export function createFactPorts<Outcome>(admit: (draft: FactGroupDraft) => Promi
       scheduled: (dispatches, admitted) => admit({ kind: 'scheduled-input', dispatches, admitted }),
       admit: admitted => admit({ kind: 'input-admission', admitted }),
       cancel: cancelled => admit({ kind: 'input-cancellation', cancelled }),
-      start: (promoted, message) => admit({ kind: 'input-start', promoted, turn: { type: 'turn/start' }, message }),
-      claim: (promoted, message) => admit({ kind: 'steer-claim', promoted, message }),
+      start: (promoted, message, preparation) => admit({ kind: 'input-start', promoted, turn: { type: 'turn/start' }, message, ...(preparation ? { preparation } : {}) }),
+      claim: (promoted, message, preparation) => admit({ kind: 'steer-claim', promoted, message, ...(preparation ? { preparation } : {}) }),
     },
     agent: {
       auditAssistant: assistant => admit({ kind: 'assistant-audit', assistant }),
       feedback: message => admit({ kind: 'plugin-feedback', message }),
       lifecycle: event => admit({ kind: 'lifecycle', event }),
-      accept: (assistant, accepted) => admit({ kind: 'exchange-acceptance', assistant, accepted }),
+      accept: (assistant, accepted, generation) => admit({ kind: 'exchange-acceptance', assistant, accepted, ...(generation ? { generation } : {}) }),
       usage: event => admit({ kind: 'usage', event }),
     },
     tools: {

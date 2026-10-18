@@ -48,7 +48,7 @@ type Pending = {
 export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void): ManagedDocument & {
     assertObservable(): void;
 } {
-    const state = createManagedSessionState(source), incarnation = randomUUID();
+    const state = createManagedSessionState(source, { sessionId: id }), incarnation = randomUUID();
     const formatVersion = source.formatVersion;
     const owner = Object.freeze({ sessionId: id, incarnation });
     const maxPendingGroups = options?.maxPendingGroups ?? 64, targetBytes = options?.coalesceTargetBytes ?? 262144;
@@ -58,6 +58,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     }>();
     const inputSources = new Set<ReturnType<typeof createReceivedInputSource>>();
     const actionControllers = new Set<AbortController>();
+    const ownedActions = new WeakSet<object>();
     const sourceDispositions = new WeakMap<CapturedFactGroup, FactOutcome>();
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let pump: Promise<void> = Promise.resolve();
@@ -292,7 +293,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const action: Action = { signal: signal ? AbortSignal.any([signal, cancel.signal]) : cancel.signal, stopped: false, cancel }, authorization = { action, required: false };
             assertAuthorized(authorization);
             actionControllers.add(cancel);
-            return {
+            const capability: import('@i-harness/core-session').ManagedAction<FactOutcome> = {
                 signal: action.signal!,
                 facts: createFactPorts(draft => admit(draft, authorization)),
                 ...createActionCaptures({
@@ -337,7 +338,11 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     return source;
                 },
             };
+            Object.defineProperty(capability, 'owner', { value: owner, enumerable: true, writable: false, configurable: false });
+            ownedActions.add(capability);
+            return capability;
         },
+        ownsAction: action => ownedActions.has(action),
         assertObservable() {
             if (pending || quarantined)
                 throw new FactRecoveryRequiredError();

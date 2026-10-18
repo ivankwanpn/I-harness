@@ -8,8 +8,8 @@ import type { JournalMetadata } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
 
 export function toJSONL(session: import('../managed/types.ts').SessionView): string {
-  if (session.formatVersion === 6 || session.formatVersion === 7) {
-    validateConversationHistory(session.events, session.formatVersion)
+  if ([6, 7, 8].includes(session.formatVersion)) {
+    validateConversationHistory(session.events, session.formatVersion, session.header)
     const journal: JournalMetadata = { version: 1, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 }
     const { journal: _sourceJournal, formatVersion: _sourceFormat, ...metadata } = session.header as (SessionHeader & { formatVersion?: number }) ?? {}
     const header = stringifyJsonData({ formatVersion: session.formatVersion, ...metadata, journal })! + '\n'
@@ -32,15 +32,15 @@ export function fromJSONL(text: string): Session {
     throw new Error("session log is empty")
   }
   const lines = text.split("\n")
-  const header = JSON.parse(lines[0]!) as { formatVersion?: number; journal?: JournalMetadata }
-  if (typeof header.formatVersion !== 'number' || ![1, 2, 3, 4, 5, 6, CURRENT_FORMAT_VERSION].includes(header.formatVersion)) {
+  const header = JSON.parse(lines[0]!) as SessionHeader & { formatVersion?: number; sessionId?: string }
+  if (typeof header.formatVersion !== 'number' || ![1, 2, 3, 4, 5, 6, 7, CURRENT_FORMAT_VERSION].includes(header.formatVersion)) {
     throw new Error(`session format version ${header.formatVersion} not supported`)
   }
-  if ([6, 7].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
-  const events = [6, 7].includes(header.formatVersion)
-    ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion).events
+  if ([6, 7, 8].includes(header.formatVersion) && !validJournalMetadata(header.journal)) throw new TypeError('Invalid fact journal header')
+  const events = [6, 7, 8].includes(header.formatVersion)
+    ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events
     : lines.slice(1).filter(line => line.trim()).map((l) => JSON.parse(l) as SessionEvent)
-  validateConversationHistory(events, header.formatVersion)
+  validateConversationHistory(events, header.formatVersion, header)
   for (const event of events) if (isContextEventType(event.type) && (header.formatVersion < 2 || !validContextEvent(event))) throw new Error("unsupported operational context payload or format")
   const { formatVersion: _format, ...metadata } = header
   return { formatVersion: CURRENT_FORMAT_VERSION, events, ...(Object.keys(metadata).length ? { header: metadata } : {}) }
@@ -50,7 +50,7 @@ export function migrate(session: Session, targetVersion: number): Session {
   if (targetVersion !== CURRENT_FORMAT_VERSION) {
     throw new Error(`no migration path to format version ${targetVersion}`)
   }
-  if (![1, 2, 3, 4, 5, 6, CURRENT_FORMAT_VERSION].includes(session.formatVersion)) throw new Error("unsupported source format version")
-  validateConversationHistory(session.events, session.formatVersion)
+  if (![1, 2, 3, 4, 5, 6, 7, CURRENT_FORMAT_VERSION].includes(session.formatVersion)) throw new Error("unsupported source format version")
+  validateConversationHistory(session.events, session.formatVersion, session.header)
   return { ...session, formatVersion: targetVersion }
 }

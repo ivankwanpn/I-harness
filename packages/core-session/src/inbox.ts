@@ -24,6 +24,9 @@ export interface UserMessageInput {
 }
 
 export interface AdmittedInput {
+  /** Explicit new human-ingress opt-in. Absence is literal, including old logs. */
+  preparationPolicy?: 'human-host'
+  supplementalContext?: string
   provenance?: InputProvenance
   inputId: string
   text: string
@@ -66,6 +69,8 @@ export class Inbox {
       version: 1,
       inputId: input.inputId,
       text: input.text,
+      ...(input.preparationPolicy ? { preparationPolicy: input.preparationPolicy } : {}),
+      ...(input.supplementalContext !== undefined ? { supplementalContext: input.supplementalContext } : {}),
       ...(input.provenance ? { provenance: input.provenance } : {}),
       delivery: input.delivery,
       intent: input.intent,

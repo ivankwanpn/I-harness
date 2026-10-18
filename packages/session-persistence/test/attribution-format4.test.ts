@@ -30,7 +30,7 @@ it('makes backend3 durably current before the owned view can append v2 and cold-
   const calls = vi.spyOn(backend, 'upgradeSessionFormat')
   const document=await coordinator.openManagedDocument('s')
   await ownedContextReadiness(coordinator, 's', document.view)()
-  expect((await backend.profile('s')).meta.formatVersion).toBe(7); expect(calls).toHaveBeenCalledTimes(1)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(8); expect(calls).toHaveBeenCalledTimes(1)
   await document.agent.lifecycle({type:'conversation/semantics',version:1,mode:'accepted-exchange-v1'})
   await document.agent.lifecycle({type:'step/start',actionId:'action',attemptId:'attempt'})
   const accepted=session.events[3]!
@@ -80,8 +80,8 @@ it('detaches a cached format3 alias while its owned current view admits actual a
   const document=await coordinator.openManagedDocument('s')
   await ownedContextReadiness(coordinator, 's', document.view)()
   expect(session.formatVersion).toBe(3)
-  expect(document.view.formatVersion).toBe(7)
-  expect((await backend.profile('s')).meta.formatVersion).toBe(7)
+  expect(document.view.formatVersion).toBe(8)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(8)
   expect(conversationIndexes.get(session)).toBe(cached)
   await document.agent.lifecycle({type:'step/start',actionId:'action',attemptId:'attempt'})
   const accepted=prepared.session.events[3]!

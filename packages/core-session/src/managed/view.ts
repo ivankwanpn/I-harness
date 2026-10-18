@@ -7,11 +7,11 @@ import { prepareSessionEvent } from '../events/intake.ts'
 
 /** Composition capability, never attached to the public readonly Session. The
  * private array and structural index are installed together without yielding. */
-export function createManagedSessionState(source: Session) {
+export function createManagedSessionState(source: Session, scope?: { sessionId: string }) {
   const captured = captureLegacyFact(source)
   if (captured.kind !== 'captured') throw new TypeError('FACT_CAPTURE_FAILED')
   const events: SessionEvent[] = [...captured.value.events] as SessionEvent[]
-  const index = createConversationIndex(events, position => events[position], source.formatVersion)
+  const index = createConversationIndex(events, position => events[position], source.formatVersion, { ...source.header, ...scope })
   const pendingInputs = new Set<string>()
   for (const event of events) {
     if (event.type === 'agent/input/admitted') pendingInputs.add(event.inputId)

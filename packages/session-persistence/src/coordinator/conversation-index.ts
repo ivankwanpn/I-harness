@@ -15,7 +15,7 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
       const loaded = await ensureWritableFormatUnlocked(backend, id)
       let suffix = events
       if (!index || index.formatVersion !== CURRENT_FORMAT_VERSION || index.eventCount !== loaded.events.length) {
-        index = createConversationValidationIndex(loaded.events, { formatVersion: CURRENT_FORMAT_VERSION })
+        index = createConversationValidationIndex(loaded.events, { formatVersion: CURRENT_FORMAT_VERSION, header: loaded.meta })
         indexes.set(id, index)
         // A retained write-behind batch may already be durable after an uncertain
         // append. Compare actual persisted records once on reload; never cache bodies.

@@ -8,7 +8,7 @@ export function assertUpgradeCapability(backend: Pick<PersistenceBackend, "id" |
 /** Gate is already held. Never calls coordinator flush/updateMeta (non-reentrant). */
 export async function ensureWritableFormatUnlocked(backend: Pick<PersistenceBackend, "read" | "id" | "upgradeSessionFormat">, id: string, validateHistory = true) {
   const peeked = await backend.read(id)
-  if (validateHistory) preflightSessionFormat(peeked.version, peeked.events)
+  if (validateHistory) preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
   else assertVersionSupported(peeked.version)
   assertUpgradeCapability(backend, peeked.version)
   if (peeked.version < CURRENT_FORMAT_VERSION) {

@@ -1,4 +1,4 @@
-import { append } from '../events/append.ts'
+import { installMemoryGroup } from './memory-group.ts'
 import type { Session } from '../events/types.ts'
 import { captureFactGroup, resolveFactGroup, type FactGroupDraft } from './groups.ts'
 import type { NondurableFactOutcome } from './ports.ts'
@@ -11,8 +11,7 @@ export function captureMemoryFact(session: Session, draft: FactGroupDraft, asser
     assertHeld()
     return result ??= (async () => {
       if (capture.kind !== 'captured') return capture
-      const events = resolveFactGroup(capture.group, session, session.events.length)
-      for (const item of events) append(session, item)
+      const events = installMemoryGroup(session, resolveFactGroup(capture.group, session, session.events.length))
       return { kind: 'memory-committed' as const, durability: 'nondurable' as const, seqs: events.map(item => item.seq!) }
     })()
   }

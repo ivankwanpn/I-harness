@@ -64,7 +64,7 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
 
 /** Decodes complete frames only. A torn final envelope is a private suffix;
  * corrupt complete frames fail closed rather than shortening valid history. */
-export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion = 6) {
+export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion = 6, header?: import('../conversation/generation.ts').GenerationHistoryScope) {
   if (!validJournalMetadata(metadata)) fail()
   const buffer = Buffer.from(body), legacy = buffer.subarray(0, metadata.legacyBodyBytes)
   if (legacy.length !== metadata.legacyBodyBytes || legacyPrefixDigest(metadata.legacyEventCount, legacy) !== metadata.legacyPrefixDigest) fail()
@@ -85,6 +85,6 @@ export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, for
     prefixDigest = frame.prefixDigest
     offset = end + 1
   }
-  validateConversationHistory(events, formatVersion)
+  validateConversationHistory(events, formatVersion, header)
   return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length }
 }

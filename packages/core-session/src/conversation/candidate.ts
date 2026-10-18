@@ -52,7 +52,7 @@ export function projectConversationCandidate(source: SessionView, rewrites: read
   const candidateId = options.candidateId
   if (typeof candidateId !== 'string' || !candidateId.length || candidateId.length > 256) throw new TypeError('Invalid conversation candidate id')
   const base = eventArchive(source.events), suffix = captureRewrites(rewrites, base.length)
-  const index = createConversationValidationIndex(source.events, { formatVersion: source.formatVersion })
+  const index = createConversationValidationIndex(source.events, { formatVersion: source.formatVersion, header: source.header })
   const stage = index.stage(suffix)
   const projection = renderConversationItems(extendedEventArchive(base, suffix), stage.history(), {
     ownerSessionId: options.ownerSessionId, capturePayload: options.capturePayload, header: source.header,

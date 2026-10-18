@@ -10,6 +10,7 @@ import { createGeminiClient } from '../../llm-gemini/src/index.ts'
 import { createContext } from '../../core-plugin/src/index.ts'
 import { createToolRegistry } from '../../core-tools/src/index.ts'
 import { createAgent } from '../../core-agent/src/index.ts'
+import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
 afterEach(()=>vi.unstubAllGlobals())
 
 it('preserves actual signed numeric/source-order/deep Gemini call data through managed write and cold prepared replay', async()=>{
@@ -34,7 +35,7 @@ it('preserves actual signed numeric/source-order/deep Gemini call data through m
     expect(cursor).toBe(1);return'real result'
   }})
   try{
-    const agent=createAgent(ctx,{session:document.view,factOwner:document,sessionId:id,tools,systemPrompt:'',model:client})
+    const agent=createAgent(ctx,{session:document.view,factOwner:document,generationFactory:action=>createGenerationLifecycle(document.view,id,action),sessionId:id,tools,systemPrompt:'',model:client})
     expect((await agent.run('preserve the signed call')).finalText).toBe('done')
     await document.close()
     const cold=await coordinator.openManagedDocument(id)

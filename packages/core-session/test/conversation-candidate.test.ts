@@ -231,7 +231,7 @@ describe('candidate refusal and isolation', () => {
     source.formatVersion = 6
     expect(() => core.projectConversationCandidate(source, [rewrite], { candidateId: 'old' })).toThrowError(expect.objectContaining({ reason: 'format' }))
     expect(source.formatVersion).toBe(6)
-    source.formatVersion = 7
+    source.formatVersion = core.CURRENT_FORMAT_VERSION
     source.events.push({ ...rewrite, seq: 3, coverage: [] })
     expect(() => core.projectConversationCandidate(source, [{ type: 'compaction/reset', removedSeqs: [] }], { candidateId: 'malformed' })).toThrowError(expect.objectContaining({ code: 'SESSION_CONTEXT_REPLACEMENT_FORMAT' }))
     source.events.pop()

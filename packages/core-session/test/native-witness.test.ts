@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { append, createSession, toJSONL, fromJSONL, migrate } from '../src/index.ts'
+import { append, createSession, toJSONL, fromJSONL, migrate, CURRENT_FORMAT_VERSION } from '../src/index.ts'
 const hash = 'a'.repeat(64)
 const witness = { version: 1, thinkingConfigId: hash, effortConfigId: hash, interleavedBeta: false, mode: 'absent', interleaving: 'unknown' }
 const event = { type: 'assistant/message', text: '', providerContinuation: { kind: 'anthropic', model: 'fixture', producerWitness: witness } } as any
@@ -9,7 +9,7 @@ it('version fences witnesses before append and roundtrips current native metadat
   const current = createSession()
   append(current, event)
   expect(fromJSONL(toJSONL(current)).events[0]).toMatchObject(event)
-  expect(migrate({ formatVersion: 4, events: [] }, 7).formatVersion).toBe(7)
+  expect(migrate({ formatVersion: 4, events: [] }, CURRENT_FORMAT_VERSION).formatVersion).toBe(CURRENT_FORMAT_VERSION)
 })
 it.each([{ ...witness, version: 2 }, { ...witness, thinkingConfigId: 'bad' }, { ...witness, extra: true }, { ...witness, budgetTokens: 1.5 }])('rejects malformed closed witness fields on append and load', producerWitness => {
   const malformed = { ...event, providerContinuation: { ...event.providerContinuation, producerWitness } }

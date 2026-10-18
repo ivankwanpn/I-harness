@@ -46,7 +46,7 @@ it('commits, structurally exports, cold-loads and forks replacement history unde
   } finally { await coordinator.close() }
 })
 
-it('upgrades6 to7 by changing only the header and preserves journal metadata and exact body bytes', async () => {
+it('upgrades6 to8 by changing only the header and preserves journal metadata and exact body bytes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f2-upgrade-')), path = join(root, 's.jsonl')
   const legacy = Buffer.from(' { "type":"user/message", "seq":0, "text":"中文😀" }\r\n')
   const journal = { ...emptyJournal(), legacyBodyBytes: legacy.length, legacyEventCount: 1, legacyPrefixDigest: legacyPrefixDigest(1, legacy) }
@@ -57,9 +57,9 @@ it('upgrades6 to7 by changing only the header and preserves journal metadata and
   try {
     const document = await coordinator.openManagedDocument('s')
     const upgraded = await readFile(path), end = upgraded.indexOf(0x0a)
-    expect(JSON.parse(upgraded.subarray(0, end).toString())).toMatchObject({ formatVersion: 7, journal, extension: { keep: true } })
+    expect(JSON.parse(upgraded.subarray(0, end).toString())).toMatchObject({ formatVersion: 8, journal, extension: { keep: true } })
     expect(upgraded.subarray(end + 1)).toEqual(body)
-    expect(document.view.formatVersion).toBe(7)
+    expect(document.view.formatVersion).toBe(8)
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [2] })
   } finally { await coordinator.close() }
 })
@@ -85,7 +85,7 @@ it('refuses a replacement batch if the actual owned file header was changed back
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const path = join(root, `${id}.jsonl`)
   try {
-    const raw = await readFile(path, 'utf8'), changed = raw.replace('"formatVersion":7', '"formatVersion":6')
+    const raw = await readFile(path, 'utf8'), changed = raw.replace('"formatVersion":8', '"formatVersion":6')
     expect(changed).not.toBe(raw); await writeFile(path, changed)
     expect((await document.importSeed(events())).kind).not.toBe('committed')
     expect(document.view.events).toEqual([])

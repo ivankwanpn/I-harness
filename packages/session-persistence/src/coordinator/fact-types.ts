@@ -21,6 +21,7 @@ export interface ManagedDocument extends FactPorts {
   importSeed(events: readonly import('@i-harness/core-session').SessionEvent[]): Promise<import('@i-harness/core-session').FactOutcome>
   assertReady(): void
   readonly view: SessionView
+  ownsAction(action: object): boolean
   registerReceivedInputSource(drain: () => Promise<void>): import('@i-harness/core-session').ReceivedInputSource<import('@i-harness/core-session').FactOutcome>
   beginAction(signal?: AbortSignal): ManagedAction
   revokeNewWork(): void

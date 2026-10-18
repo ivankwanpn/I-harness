@@ -126,3 +126,44 @@ visibility. In-memory append stages structural metadata, pushes the event, commi
 metadata, then publishes observations; a throwing observer cannot erase that fact.
 Recorded descriptors follow the matched admission, and inherited admissions never
 establish child-local human request authority.
+
+## Format 8 generation ownership
+
+Format 8 adds closed `context/action`, `context/attempt` and `agent/input/preparation`
+families to the existing fact journal. Action/attempt records contain only bounded
+scalar identities, counters, timestamps and references. They contain no request
+body, credentials, audio, prompt text or provider response. A successful attribution
+callback is synchronous evidence about a particular candidate; durable reservation
+is a separate awaited operation before physical handoff.
+
+A main response freezes its final selected retry descriptor before any automatic
+summary. For `r` retries its total allowance is `2 * (r + 1) + 8`: original and
+changed-input lanes each allow `r + 1`, and all summary pieces share eight. There is
+one changed-input phase. Manual compaction has its own summary-only eight. Approval
+and title each use their own selected client's `r + 1`; direct video audio allows
+one. Explicit lower caps and earlier deadlines persist monotonically, retain past
+spend, and cannot be raised by later settings or cold reopen. A lower summary
+client retry count limits that client's wrapper without shrinking the main pool.
+
+Origins are validated against the actual own-document suffix and closed causal
+references: a real input admission, a settled accepted predecessor, manual command,
+accepted/dispatch tool or code source, a new child delegation/inbox item, or a genuine
+system wake admission. Inherited seed records import no operational grant. An
+unresolved physical reservation or local invocation blocks further execution until
+its real disposition is known. Known-unsent rebinding requires private live proof,
+keeps its ordinal, invalidates the old ticket and allows at most three rebinds in
+total for the action. Serialized owner IDs cannot reconstruct that proof.
+
+The explicitly selected built-in mock uses a separate `local-test` execution domain.
+Its committed local invocations consume the same finite lane/deadline policy, but
+are never physical network attempts. Acceptance links the exact completed local
+invocation; it has no fabricated payload, send or B2 request attribution. Full,
+staged, candidate and cold validation reject mixed or forged operational links.
+
+Input preparation retains exact original admission text/images/provenance. Changed
+host preparation and supplemental context are separate framed lower-authority
+observations, dormant until one atomic raw-input promotion. The closed preparation
+identity links its original admission, started effect, completed content and eventual
+promotion. Images remain once-owned by the raw admission. Seeds retain only remapped
+semantic raw/derived linkage inside the compiler-owned prefix, never preparation or
+action lifecycle authority.

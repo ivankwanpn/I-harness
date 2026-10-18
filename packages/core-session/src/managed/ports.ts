@@ -1,6 +1,8 @@
 import type { SessionEvent } from '../events/types.ts'
 import type { FactOutcome, SeqRef } from './types.ts'
-import type { AcceptedDraft, LifecycleFact, MetadataFact, UsageDraft, TeamFact } from './groups.ts'
+import type { AcceptedDraft, LifecycleFact, MetadataFact, UsageDraft, TeamFact, GenerationAcceptanceDraft, GenerationRecoveryDraft } from './groups.ts'
+import type { GenerationEvent, GenerationAttemptEvent, GenerationActionEvent } from '../events/generation.ts'
+import type { InputPreparationEvent, PreparedInputResult } from '../events/input-preparation.ts'
 
 type Event<K extends SessionEvent['type']> = Extract<SessionEvent, { type: K }>
 export type CodeSettlementFact = Event<'code/result' | 'code/output'>
@@ -9,14 +11,14 @@ export interface InputFacts<Outcome = FactOutcome> {
   scheduled(dispatches: readonly Event<'schedule/change'>[], admitted: Event<'agent/input/admitted'>): Promise<Outcome>
   admit(event: Event<'agent/input/admitted'>): Promise<Outcome>
   cancel(event: Event<'agent/input/cancelled'>): Promise<Outcome>
-  start(promoted: Event<'agent/input/promoted'> | undefined, message: Event<'user/message'>): Promise<Outcome>
-  claim(promoted: Event<'agent/input/promoted'>, message: Event<'user/message'>): Promise<Outcome>
+  start(promoted: Event<'agent/input/promoted'> | undefined, message: Event<'user/message'>, preparation?: PreparedInputResult): Promise<Outcome>
+  claim(promoted: Event<'agent/input/promoted'>, message: Event<'user/message'>, preparation?: PreparedInputResult): Promise<Outcome>
 }
 export interface AgentFacts<Outcome = FactOutcome> {
   auditAssistant(event: Event<'assistant/message'>): Promise<Outcome>
   feedback(event: Event<'user/message'> & { source: { kind: 'plugin'; plugin: string } }): Promise<Outcome>
   lifecycle(event: LifecycleFact): Promise<Outcome>
-  accept(assistant: Event<'assistant/message'>, accepted: AcceptedDraft): Promise<Outcome>
+  accept(assistant: Event<'assistant/message'>, accepted: AcceptedDraft, generation?: GenerationAcceptanceDraft): Promise<Outcome>
   usage(event: UsageDraft): Promise<Outcome>
 }
 export interface ToolFacts<Outcome = FactOutcome> {
@@ -46,6 +48,8 @@ export interface FactPorts<Outcome = FactOutcome> {
   delivery: DeliveryFacts<Outcome>; metadata: MetadataFacts<Outcome>; compaction: LegacyCompactionFacts<Outcome>
 }
 export interface SettlementFacts<Outcome = FactOutcome> {
+  inputPreparation: { capture(event: Extract<InputPreparationEvent, { op: 'completed' | 'failed' }>): CapturedSettlementFact<Outcome> }
+  generation: { capture(event: Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>): CapturedSettlementFact<Outcome> }
   assertHeld(): void
   close(): Promise<void>
   /** The registered real source retains an outcome it cannot finalize/capture.
@@ -76,6 +80,12 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
+  /** Frozen diagnostics from the real writer; these scalars grant no authority. */
+  readonly owner?: Readonly<import('./types.ts').OwnerToken>
+  captureInputPromotion(draft: import('./groups.ts').InputPromotionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
+  captureGenerationRecovery(recovery: Event<'context/recovery'>, phase: GenerationRecoveryDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
+  captureInputPreparation(event: Extract<InputPreparationEvent, { op: 'started' }>, checkCurrent: () => boolean): CapturedActionFact<Outcome>
+  captureGeneration(events: readonly GenerationEvent[], checkCurrent: () => boolean): CapturedActionFact<Outcome>
   readonly signal: AbortSignal
   readonly facts: FactPorts<Outcome>
   captureContextReduction?(draft: import('./groups.ts').ContextReductionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
@@ -92,6 +102,8 @@ export type NondurableFactOutcome = { kind: "memory-committed"; durability: "non
 export type ProducerFactOutcome = FactOutcome | NondurableFactOutcome
 export interface FactOwner<Outcome = ProducerFactOutcome> {
   readonly view: import("./types.ts").SessionView
+  /** Read-only exact live owner/action identity; scalar owner IDs confer none. */
+  ownsAction?(action: object): boolean
   beginAction(signal?: AbortSignal): ManagedAction<Outcome>
   registerReceivedInputSource(drain: () => Promise<void>): ReceivedInputSource<Outcome>
   drain?(): Promise<void>

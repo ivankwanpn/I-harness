@@ -24,14 +24,15 @@ export class AsyncInbox {
     committedFactSeqs(outcome)
     return true
   }
-  async claimAtStepBoundary(facts?: InputFacts<ProducerFactOutcome>): Promise<void> {
+  async claimAtStepBoundary(facts?: InputFacts<ProducerFactOutcome>, prepare?: (input: PendingInput) => Promise<import('../events/input-preparation.ts').PreparedInputResult | undefined>, claim?: InputFacts<ProducerFactOutcome>['claim']): Promise<void> {
     for (const input of this.pending().filter(candidate => candidate.delivery === 'steer')) {
-      committedFactSeqs(await (facts ?? this.inputFacts()).claim({ type: 'agent/input/promoted', version: 1, inputId: input.inputId }, {
+      const preparation = await prepare?.(input)
+      committedFactSeqs(await (claim ?? (facts ?? this.inputFacts()).claim)({ type: 'agent/input/promoted', version: 1, inputId: input.inputId }, {
         type: 'user/message', text: input.text, ...(input.provenance ? { provenance: input.provenance } : {}),
         input: { inputId: input.inputId, intent: input.intent, ...(input.provenance ? { provenance: input.provenance } : {}), ...(input.synthetic ? { synthetic: input.synthetic } : {}) },
         ...(input.images?.length ? { imageInputId: input.inputId } : {}),
         ...(input.intent === 'system' ? { source: { kind: 'plugin', plugin: SYSTEM_INPUT_PLUGIN } as const } : {}),
-      }))
+      }, preparation))
     }
   }
 }

@@ -96,9 +96,9 @@ function remapSeedCoordinates(input: SessionEventView, index: number, renumbered
 }
 
 /** Batch semantics must precede coordinate remapping. An isolated event cannot recover a sliced fence. */
-export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number }): SessionEvent[] {
+export function remapConversationSeed(input: { source: readonly SessionEventView[]; retained: readonly SessionEventView[]; sourceFormat: number; sourceHeader?: import('@i-harness/core-session').SessionView['header'] }): SessionEvent[] {
   const { source, retained } = input
-  const sourceIndex = createConversationValidationIndex(source, { formatVersion: input.sourceFormat })
+  const sourceIndex = createConversationValidationIndex(source, { formatVersion: input.sourceFormat, header: input.sourceHeader })
   const replacements = source.some(event => event.type === 'compaction/replacement')
   if (replacements) requireReplacementSeedProof(source, retained, sourceIndex)
   const retainedSeqs = new Set(retained.map(event => event.seq))
@@ -119,7 +119,7 @@ export function remapConversationSeed(input: { source: readonly SessionEventView
   const seed: SessionEventView[] = []
   let fenced = false
   for (const event of retained) {
-    if (event.type === "conversation/semantics" || isContextEventType(event.type)) continue
+    if (event.type === "conversation/semantics" || isContextEventType(event.type) || event.type === 'agent/input/preparation') continue
     if (!fenced && originalFence >= 0 && (sourcePositions.get(event.seq) ?? -1) > originalFence) {
       seed.push({ ...source[originalFence]! }); fenced = true
     }
@@ -134,11 +134,18 @@ export function remapConversationSeed(input: { source: readonly SessionEventView
     let mapped = remapSeedCoordinates(event, index, renumbered)
     if (mapped.type === "step/start" && mapped.actionId && mapped.attemptId) mapped = { ...mapped, actionId: seedNamespace("action", mapped.actionId), attemptId: seedNamespace("attempt", mapped.attemptId) }
     if (mapped.type === "model/exchange-accepted") mapped = { ...mapped, actionId: seedNamespace("action", mapped.actionId), attemptId: seedNamespace("attempt", mapped.attemptId), exchangeId: seedNamespace("exchange", mapped.exchangeId) }
-    if (mapped.type === "agent/input/admitted" || mapped.type === "subagent/inbox") mapped = { ...mapped, provenance: inherit(mapped.provenance) }
-    if (mapped.type === "user/message") mapped = { ...mapped, provenance: inherit(mapped.provenance), ...(mapped.input ? { input: { ...mapped.input, provenance: inherit(mapped.input.provenance) } } : {}) }
+    if (mapped.type === 'agent/input/admitted') { const { preparationPolicy: _policy, ...content } = mapped; mapped = { ...content, provenance: inherit(mapped.provenance) } }
+    if (mapped.type === 'subagent/inbox') mapped = { ...mapped, provenance: inherit(mapped.provenance) }
+    if (mapped.type === "user/message") {
+      const { inputPreparation, seedInputContext, ...content } = mapped
+      const raw = inputPreparation && 'rawMessageSeq' in inputPreparation ? inputPreparation.rawMessageSeq : seedInputContext?.rawMessageSeq
+      const rawMessageSeq = raw === undefined ? undefined : renumbered.get(raw)
+      if (raw !== undefined && rawMessageSeq === undefined) throw new SessionForkUnavailableError('seed drops raw source of prepared observation')
+      mapped = { ...content, ...(rawMessageSeq === undefined ? {} : { seedInputContext: { rawMessageSeq } }), provenance: inherit(mapped.provenance), ...(mapped.input ? { input: { ...mapped.input, provenance: inherit(mapped.input.provenance) } } : {}) }
+    }
     return mapped
   })
-  try { validateConversationHistory(result, CURRENT_FORMAT_VERSION) }
+  try { validateConversationHistory(result, CURRENT_FORMAT_VERSION, { parentSession: 'seed', seedLength: result.length }) }
   catch (cause) { throw new SessionForkUnavailableError("retained seed cannot preserve conversation semantics", { cause }) }
   if (replacements) compareReplacementSeedView(sourceIndex, result, retained, renumbered)
   return result
@@ -182,7 +189,7 @@ function requireReplacementSeedProof(source: readonly SessionEventView[], retain
 function compareReplacementSeedView(source: ConversationValidationIndex, result: SessionEvent[], retained: readonly SessionEventView[], remap: ReadonlyMap<number, number>): void {
   const end = retained.reduce((last, event) => Math.max(last, event.seq ?? -1), -1)
   const parent = source.history(end).items.filter(item => remap.has(item.establishment.seq!))
-  const child = createConversationValidationIndex(result, { formatVersion: CURRENT_FORMAT_VERSION }).history().items
+  const child = createConversationValidationIndex(result, { formatVersion: CURRENT_FORMAT_VERSION, header: { parentSession: 'seed', seedLength: result.length } }).history().items
   const identity = (item: typeof parent[number], map: (seq: number) => number | undefined) => [item.kind, map(item.establishment.seq!), item.establishment.part,
     [...new Set([...item.sources, ...item.provenance.evidence].map(at => JSON.stringify([map(at.seq!), at.part])))].sort()]
   if (JSON.stringify(parent.map(item => identity(item, seq => remap.get(seq)))) !== JSON.stringify(child.map(item => identity(item, seq => seq)))) throw new SessionForkUnavailableError('seed cannot preserve ordered active source view')

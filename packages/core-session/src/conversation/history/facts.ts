@@ -10,6 +10,7 @@ export interface HistoryFact {
   readonly actionId?: string; readonly attemptId?: string; readonly exchangeId?: string
   readonly stepStartSeq?: number; readonly assistantSeq?: number; readonly callSeqs?: readonly number[]
   readonly inputId?: string; readonly imageInputId?: string; readonly images?: boolean; readonly sessionScope?: boolean
+  readonly preparedRawMessageSeq?: number
   readonly error?: boolean; readonly disposition?: 'unknown' | 'not-dispatched'
   readonly shadowedSeqs?: readonly number[]; readonly removedSeqs?: readonly number[]; readonly anchorSeq?: number
   readonly replacementId?: string; readonly coverage?: readonly ConversationCoverage[]; readonly insertBefore?: ConversationItemRef
@@ -31,6 +32,8 @@ export function historyFact(event: SessionEventView, index: number): HistoryFact
           : event.isError && (code === 'TOOL_ABORTED_BEFORE_DISPATCH' || code === 'TOOL_CANCELLED_BY_SIBLING') ? { disposition: 'not-dispatched' as const } : {}) }
     }
     case 'user/message': return { ...base, inputId: event.input?.inputId, imageInputId: event.imageInputId,
+      ...(event.inputPreparation && 'rawMessageSeq' in event.inputPreparation ? { preparedRawMessageSeq: event.inputPreparation.rawMessageSeq } : {}),
+      ...(event.seedInputContext ? { preparedRawMessageSeq: event.seedInputContext.rawMessageSeq } : {}),
       images: Array.isArray(outcomeField(event, 'images')) && event.images!.length > 0,
       sessionScope: (event.provenance ?? event.input?.provenance)?.scope === 'session' || event.input?.synthetic?.scope === 'session' }
     case 'agent/input/admitted': return { ...base, inputId: event.inputId, images: !!event.images?.length, sessionScope: event.provenance?.scope === 'session' || event.synthetic?.scope === 'session' }

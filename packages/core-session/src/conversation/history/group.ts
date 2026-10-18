@@ -85,6 +85,7 @@ class HistoryGrouping {
       const images = event.imageInputId === undefined ? event.images : imageAdmission?.type === "agent/input/admitted" ? imageAdmission.images : undefined
       if (event.imageInputId !== undefined && !images) throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
       const item = this.makeItem("input", index, "message", admissionIndex, imageAdmissionIndex)
+      if (event.preparedRawMessageSeq !== undefined) addItemSource(item, this.sources.ref(event.preparedRawMessageSeq, 'message'))
       if (imageAdmissionIndex !== undefined && imageAdmissionIndex !== admissionIndex) addItemSource(item, this.sources.ref(imageAdmissionIndex, 'admission'))
       if (event.images && event.imageInputId === undefined) addItemSource(item, this.sources.ref(index, 'image'))
       item.recipes.push({ kind: "input", index })

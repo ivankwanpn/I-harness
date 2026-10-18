@@ -30,7 +30,7 @@ export async function forkSession(
   const source = await coordinator.openManagedDocument(sourceSessionId)
   source.assertReady()
   const session = source.view
-  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion)
+  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion, session.header)
   const title = options.title ?? profile.meta.title
   const workspaceId = options.workspaceId ?? profile.meta.workspaceId
   const { id } = await coordinator.create({
@@ -54,6 +54,7 @@ export function completedTurnPrefix(
   sourceSessionId: string,
   atSeq: number | undefined,
   sourceFormat = CURRENT_FORMAT_VERSION,
+  sourceHeader?: import('@i-harness/core-session').SessionView['header'],
 ): SessionEvent[] {
   let boundaryIndex = -1
   if (atSeq === undefined) {
@@ -94,7 +95,7 @@ export function completedTurnPrefix(
   const prefix = events.slice(0, cut)
   // Positional replacements require their historical proof and cuts intact.
   // The central compiler refuses missing/out-of-boundary dependencies.
-  if (events.some(event => event.type === 'compaction/replacement')) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
+  if (events.some(event => event.type === 'compaction/replacement')) return remapConversationSeed({ sourceFormat, sourceHeader, source: events, retained: prefix })
 
   // M54 A3 (research G5): apply the SAME hidden-region semantics deriveMessages
   // uses on the source (core-session `rewindCuts`): a rewind/point marker hides
@@ -131,7 +132,7 @@ export function completedTurnPrefix(
   // into the dropped region disappear with the events they named.
   const cuts = rewindCuts({ formatVersion: CURRENT_FORMAT_VERSION, events: [...events] })
   const carriesMarker = prefix.some((event) => event.type === "rewind/point")
-  if (cuts.length === 0 && !carriesMarker) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
+  if (cuts.length === 0 && !carriesMarker) return remapConversationSeed({ sourceFormat, sourceHeader, source: events, retained: prefix })
   const hidden = new Set<number>()
   for (const window of cuts) {
     let from = window.cutFrom
@@ -151,6 +152,6 @@ export function completedTurnPrefix(
     event.type !== "rewind/point"
     && !isContextEventType(event.type)
     && (isCompactionMarker(event.type) || event.seq === undefined || !hidden.has(event.seq)))
-  if (kept.length === prefix.length) return remapConversationSeed({ sourceFormat, source: events, retained: prefix })
-  return remapConversationSeed({ sourceFormat, source: events, retained: kept })
+  if (kept.length === prefix.length) return remapConversationSeed({ sourceFormat, sourceHeader, source: events, retained: prefix })
+  return remapConversationSeed({ sourceFormat, sourceHeader, source: events, retained: kept })
 }

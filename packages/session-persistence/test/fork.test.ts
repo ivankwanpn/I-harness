@@ -57,7 +57,9 @@ describe("forkSession", () => {
         insertBefore: { kind: 'exchange', at: { seq: 3, part: 'message' } } })
       expect(deriveMessages(child.view).map(message => message.content)).toEqual(['H', 'S'])
       expect(await child.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [8], receipt: { owner: { sessionId: forked.sessionId } } })
-      expect(await readFile(path, 'utf8')).toBe(original)
+      const upgraded = await readFile(path, 'utf8')
+      expect(JSON.parse(upgraded.split('\n')[0]!).formatVersion).toBe(8)
+      expect(upgraded.split('\n').slice(1).join('\n')).toBe(original.split('\n').slice(1).join('\n'))
     } finally { await cleanup() }
   })
   it("keeps an image admission with its retained user turn", async () => {

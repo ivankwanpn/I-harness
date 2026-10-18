@@ -96,7 +96,7 @@ it.each(['metadata', 'prefix', 'future'] as const)('refuses changed %s evidence 
     const prior = await stat(path)
     const changed = mode === 'metadata'
       ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, journal: { ...journal, legacyPrefixDigest: '0'.repeat(64) } }) + '\n'), frame.bytes])
-      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: 8 }) + '\n'), frame.bytes])
+      : mode === 'future' ? Buffer.concat([Buffer.from(JSON.stringify({ ...header, formatVersion: 9 }) + '\n'), frame.bytes])
         : Buffer.from(original.toString('utf8').replace('ORIGINAL_MARKER', 'CORRUPT__MARKER'))
     await writeFile(path, changed)
     // Exercise a changed observed revision explicitly; NTFS can report the
@@ -106,5 +106,29 @@ it.each(['metadata', 'prefix', 'future'] as const)('refuses changed %s evidence 
     await expect(query.search('ORIGINAL_MARKER')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })
     await expect(query.search('ORIGINAL_MARKER')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })
     expect(await readFile(path)).toEqual(changed)
+  } finally { closeSessionQueries() }
+})
+
+
+it.each([false, true])('reads format8 operational frames with exact own header and refuses foreign owner=%s without changing bytes', async foreign => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f4-query-')), path = join(root, 's.jsonl'), journal = metadata()
+  const facts = [
+    { type: 'user/message', seq: 0, text: 'FORMAT8_RAW_REQUEST', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } },
+    { type: 'context/action', version: 1, seq: 1, op: 'open', ownerSessionId: foreign ? 'foreign' : 's', actionId: 'original', purpose: 'main', origin: { kind: 'input', seq: 0 }, startedAt: 100, expiresAt: 200, trustedAt: 100 },
+    { type: 'context/action', version: 1, seq: 2, op: 'close', ownerSessionId: foreign ? 'foreign' : 's', actionId: 'original', disposition: 'failed', trustedAt: 101 },
+  ] as import('@i-harness/core-session').SessionEvent[]
+  const frame = encodeFactBatch('query8', journal.legacyPrefixDigest, facts)
+  const raw = Buffer.concat([Buffer.from(JSON.stringify({ formatVersion: 8, sessionId: 's', createdAt: 'literal', journal }) + '\n'), frame.bytes])
+  await writeFile(path, raw)
+  const query = createFileBackedSessionQuery({ storeRoot: root })
+  try {
+    if (foreign) {
+      expect(() => parseLinePrefix(raw)).toThrow()
+      await expect(query.search('FORMAT8_RAW_REQUEST')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })
+    } else {
+      expect(parseLinePrefix(raw).events).toEqual(facts)
+      expect(await query.search('FORMAT8_RAW_REQUEST')).toEqual([expect.objectContaining({ seq: 0, eventType: 'user/message' })])
+    }
+    expect(await readFile(path)).toEqual(raw)
   } finally { closeSessionQueries() }
 })

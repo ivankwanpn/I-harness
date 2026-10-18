@@ -40,7 +40,7 @@ export type SessionEvent =
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
-    | { type: "user/message"; provenance?: InputProvenance; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
+    | { type: "user/message"; seedInputContext?: { rawMessageSeq: number }; inputPreparation?: import('./input-preparation.ts').InputPreparationLink; provenance?: InputProvenance; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -137,7 +137,7 @@ export type SessionEvent =
     // All three are log-only (never model-visible; the text enters the model
     // surface only through the promoted user/message). version 1 (M19/M21
     // convention for structured new event slots).
-    | { type: "agent/input/admitted"; provenance?: InputProvenance; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string; seq?: number }
+    | { type: "agent/input/admitted"; preparationPolicy?: 'human-host'; supplementalContext?: string; provenance?: InputProvenance; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string; seq?: number }
     | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
     | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
     // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).
@@ -195,6 +195,8 @@ export type SessionEvent =
     // (unindexed). Additive; format version stays 1.
     | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "session" | "mount" | "shutdown"; error?: string; seq?: number }
     | import("./context.ts").ContextEvent
+    | import("./generation.ts").GenerationEvent
+    | import('./input-preparation.ts').InputPreparationEvent
     | import("./conversation.ts").ConversationSemanticsEvent
     | import("./conversation.ts").ExchangeAcceptedEvent
     | import("./replacement.ts").ContextReplacementRecordV1
@@ -249,4 +251,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 7
+export const CURRENT_FORMAT_VERSION = 8

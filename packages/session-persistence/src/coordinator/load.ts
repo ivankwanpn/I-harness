@@ -23,10 +23,10 @@ export function createLoads(
   return {
     async snapshot(sessionId: string) {
       const { version, events, meta } = await read(sessionId)
-      preflightSessionFormat(version, events)
+      preflightSessionFormat(version, events, meta)
       return { session: {
         formatVersion: CURRENT_FORMAT_VERSION,
-        events: await migrate(version, guardIgnorable(events)),
+        events: await migrate(version, guardIgnorable(events), meta),
         ...(meta === undefined ? {} : { header: meta }),
       } }
     },
@@ -34,22 +34,22 @@ export function createLoads(
       return withSessionOperation(sessionId, async () => {
         invalidateConversation(sessionId)
         const peeked = await read(sessionId)
-        preflightSessionFormat(peeked.version, peeked.events)
-        await migrate(peeked.version, guardIgnorable(peeked.events, true))
+        preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
+        await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
         const borrowed = await borrowOwnership(sessionId)
         let repaired: { version: number; events: SessionEvent[]; meta?: SessionMeta }
         try {
           const owned = await read(sessionId)
-          preflightSessionFormat(owned.version, owned.events)
-          await migrate(owned.version, guardIgnorable(owned.events, true))
+          preflightSessionFormat(owned.version, owned.events, owned.meta)
+          await migrate(owned.version, guardIgnorable(owned.events, true), owned.meta)
           repaired = await backend.repair(sessionId)
         } finally {
           if (borrowed) await releaseOwnershipUnlocked(sessionId)
         }
         const { version, events, meta } = repaired
-        preflightSessionFormat(version, events)
+        preflightSessionFormat(version, events, meta)
         const guarded = guardIgnorable(events)
-        const migrated = await migrate(version, guarded)
+        const migrated = await migrate(version, guarded, meta)
         const repairedTail = repairTurnTail(migrated, { appendOnly: meta?.journal !== undefined })
         // M51 B5: canonicalize UNDEFINED seqs to their array index (in-memory
         // only — load() stays read-only) so load() agrees with loadOwned() for
@@ -83,7 +83,7 @@ export function createLoads(
           syntheticCount += 1
           return { ...event, seq }
         })
-        preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical)
+        preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, meta)
         return { session: buildSession(meta, canonical) }
       })
     },
@@ -96,17 +96,17 @@ export function createLoads(
         const acquired = await borrowOwnership(sessionId)
         try {
           const peeked = await read(sessionId)
-          preflightSessionFormat(peeked.version, peeked.events)
+          preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
           assertUpgradeCapability(backend, peeked.version)
           if (backend.replaceEvents === undefined && !peeked.events.some(event => event.type === "conversation/semantics") && repairTurnTail(peeked.events).some((event, index) => event.seq !== index || JSON.stringify(event) !== JSON.stringify(peeked.events[index]))) throw new Error(`session backend '${backend.id}' cannot persist owned recovery for ${sessionId}`)
           const checked = await read(sessionId)
-          preflightSessionFormat(checked.version, checked.events)
-          await migrate(checked.version, guardIgnorable(checked.events, true))
+          preflightSessionFormat(checked.version, checked.events, checked.meta)
+          await migrate(checked.version, guardIgnorable(checked.events, true), checked.meta)
           assertUpgradeCapability(backend, checked.version)
           const repaired = await backend.repair(sessionId)
-          preflightSessionFormat(repaired.version, repaired.events)
+          preflightSessionFormat(repaired.version, repaired.events, repaired.meta)
           const guarded = guardIgnorable(repaired.events, true)
-          const migrated = await migrate(repaired.version, guarded)
+          const migrated = await migrate(repaired.version, guarded, repaired.meta)
           const semantic = repairTurnTail(migrated, { appendOnly: repaired.meta?.journal !== undefined })
           const canonical = semantic.map((event, index): SessionEvent => {
             if (event.seq !== undefined && event.seq !== index) {
@@ -116,7 +116,7 @@ export function createLoads(
           })
           const needsRewrite = canonical.length !== repaired.events.length
             || canonical.some((event, index) => stringifyJsonData(event) !== stringifyJsonData(repaired.events[index]))
-          preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical)
+          preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, repaired.meta)
           if (needsRewrite) {
             const fenced = repaired.meta?.journal !== undefined || repaired.events.some(event => event.type === "conversation/semantics")
             const unchangedPrefix = canonical.slice(0, repaired.events.length).every((event, index) => stringifyJsonData(event) === stringifyJsonData(repaired.events[index]))

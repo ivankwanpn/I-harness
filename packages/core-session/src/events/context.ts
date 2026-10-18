@@ -1,4 +1,5 @@
 import { validContextUsageV2, type ContextUsageEventV2 } from "./attribution.ts"
+import { isGenerationEventType, validGenerationEvent } from './generation.ts'
 /** Owned scalar facts only. Protocol payloads and prefix unit vectors are ephemeral. */
 export interface ContextBindingMetadata {
   version: 1; providerId?: string; modelId: string; protocol: string
@@ -70,8 +71,9 @@ export function validBudgetSnapshot(value: unknown): value is RequestBudgetSnaps
   { providerId: string, bindingConfigFingerprint: digest, contextWindow: integer, effectiveOutputCap: integer, remainingInputBudget: integer, reason: string,
     requestContext: v => fields(v, { version: one, semanticRevision: digest, protectionRevision: digest, branchId: digest, contextEpoch: digest, surfaceRevision: digest }), postResponseContextRevision: digest })
 }
-export function isContextEventType(type: string): boolean { return ["context/budget", "context/usage", "context/recovery"].includes(type) }
+export function isContextEventType(type: string): boolean { return isGenerationEventType(type) || ["context/budget", "context/usage", "context/recovery"].includes(type) }
 export function validContextEvent(value: unknown): value is ContextEvent {
+  if (value && typeof value === 'object' && isGenerationEventType(Object.getOwnPropertyDescriptor(value, 'type')?.value)) return validGenerationEvent(value)
   if (!object(value) || new TextEncoder().encode(JSON.stringify(value)).byteLength > 4096) return false
   if (value.type === "context/usage" && value.version === 2) return validContextUsageV2(value)
   const envelope = { version: one, seq: integer }

@@ -1,4 +1,4 @@
-import { validSettlementEvent, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts } from '@i-harness/core-session'
+import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts } from '@i-harness/core-session'
 import { retainSettlementCapture } from './settlement-fact.ts'
 import { createSourceFacts } from './source-facts.ts'
 
@@ -45,6 +45,18 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     return pending
   }
   return {
+    inputPreparation: { capture(event) {
+      assertHeld()
+      return validInputPreparationEvent(event) && (event.op === 'completed' || event.op === 'failed')
+        ? records.capture({ kind: 'input-preparation', event })
+        : records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, retained))
+    } },
+    generation: { capture(event) {
+      assertHeld()
+      return validGenerationEvent(event) && (event.type === 'context/attempt' && event.op === 'settle' || event.type === 'context/action' && (event.op === 'close' || event.op === 'local-settle'))
+        ? records.capture({ kind: 'generation', events: [event] })
+        : records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, retained))
+    } },
     assertHeld,
     close,
     requireRecovery() { assertHeld(); operations.quarantineCapture() },

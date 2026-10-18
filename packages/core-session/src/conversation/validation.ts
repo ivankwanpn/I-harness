@@ -4,12 +4,15 @@ import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
 import type { projectHistory } from './history/replacements.ts'
 import { createHistoryIndex } from './history/index.ts'
+import { createGenerationIndex, type GenerationHistoryScope } from './generation.ts'
+import { createInputPreparationIndex } from './input-preparation.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
 
 interface StageOptions { readCurrentEvent?: (index: number) => SessionEvent | undefined }
 interface Step { failed: boolean; accepted: boolean; calls: number }
 export interface ConversationValidationIndex {
+  readonly generationScope: string
   readonly formatVersion: number
   readonly eventCount: number
   readonly semanticsStartSeq: number | undefined
@@ -19,12 +22,12 @@ export interface ConversationValidationIndex {
 }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
-export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number } = { formatVersion: CURRENT_FORMAT_VERSION }): ConversationValidationIndex {
-  return createConversationIndex(events, undefined, options.formatVersion)
+export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number; header?: GenerationHistoryScope } = { formatVersion: CURRENT_FORMAT_VERSION }): ConversationValidationIndex {
+  return createConversationIndex(events, undefined, options.formatVersion, options.header)
 }
 
 /** Internal append-owner port: re-read referenced structural fields, without retaining a second archive. */
-export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = CURRENT_FORMAT_VERSION): ConversationValidationIndex {
+export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = CURRENT_FORMAT_VERSION, header: GenerationHistoryScope = {}): ConversationValidationIndex {
   const acceptances = new Map<number, AcceptanceFact>()
   const completions = new Map<number, string>()
   const anchors = new Map<string, UsageAnchorFact>()
@@ -35,6 +38,9 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   const acceptedCalls = new Set<number>()
   const callsById = new Map<string, number | null>()
   const history = createHistoryIndex(formatVersion)
+  const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength })
+  const generation = createGenerationIndex(scope)
+  const preparations = createInputPreparationIndex(scope)
   let count = 0, revision = 0
   let fence: number | undefined, activeStep: number | undefined
   const verify = (seq: number, target: Address, readCurrent = read) => {
@@ -45,6 +51,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       || actual.type === "tool/call" && actual.callId !== target.callId) fail("referenced structure was mutated")
   }
   const index: ConversationValidationIndex = {
+    generationScope: JSON.stringify([scope.sessionId, scope.parentSession, scope.seedLength]),
     get formatVersion() { return formatVersion },
     get eventCount() { return count },
     get semanticsStartSeq() { return fence },
@@ -53,6 +60,8 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
     stage(suffix, options) {
       const readCurrent = options?.readCurrentEvent ?? read
       const stagedHistory = history.stage(readCurrent)
+      const stagedGeneration = generation.stage()
+      const stagedPreparations = preparations.stage(seq => seq >= count ? suffix[seq - count] : readCurrent?.(seq) ?? events[seq], stagedGeneration.action)
       const newAcceptances = new Map<number, AcceptanceFact>()
       const newCompletions = new Map<number, string>()
       const newAnchors = new Map<string, UsageAnchorFact>()
@@ -69,6 +78,8 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       }
       for (const [offset, event] of suffix.entries()) {
         validateConversationEventShape(event, formatVersion)
+        stagedGeneration.advance(event)
+        stagedPreparations.advance(event)
         stagedHistory.advance(event)
         if ((event.type === "conversation/semantics" || event.type === "model/exchange-accepted") && !conversationSeq(event.seq)) fail("unaddressable explicit record")
         const position = count + offset
@@ -164,6 +175,8 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         } else if (nextFence !== undefined) fail("unaddressable explicit event")
         if (event.type === "step/end" || event.type === "turn/start" || event.type === "turn/end") nextStep = undefined
       }
+      stagedGeneration.validate()
+      stagedPreparations.validate()
       let committed = false
       const assertCurrent = () => {
         if (committed) fail("consumed staged suffix")
@@ -182,6 +195,8 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         for (const [key, value] of newSteps) steps.set(key, value)
         for (const [key, value] of newCalls) callsById.set(key, value)
         stagedHistory.commit()
+        stagedGeneration.commit()
+        stagedPreparations.commit()
         for (const id of newExchanges) exchanges.add(id)
         for (const id of newAttempts) attempts.add(id)
         for (const seq of newAccepted) acceptedCalls.add(seq)
@@ -193,7 +208,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   return index
 }
 
-export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number): void {
+export function validateConversationHistory(events: readonly SessionEvent[], formatVersion: number, header?: GenerationHistoryScope): void {
   for (const event of events) validateConversationEventShape(event, formatVersion)
-  createConversationValidationIndex(events, { formatVersion })
+  createConversationValidationIndex(events, { formatVersion, header })
 }

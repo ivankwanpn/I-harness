@@ -2,7 +2,7 @@ import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validate
 import type { SessionMeta } from "../coordinator/types.ts"
 import { upgrades, isKnownEventType, SessionFormatUnsupportedError } from "./registry.ts"
 
-export async function migrate(version: number, events: SessionEvent[]): Promise<SessionEvent[]> {
+export async function migrate(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength'>): Promise<SessionEvent[]> {
   let v = version
   let result = events
   while (v < CURRENT_FORMAT_VERSION) {
@@ -14,7 +14,7 @@ export async function migrate(version: number, events: SessionEvent[]): Promise<
   if (v > CURRENT_FORMAT_VERSION) {
     throw new SessionFormatUnsupportedError(`format version ${v} is newer than this build (upgrade the harness)`)
   }
-  preflightSessionFormat(CURRENT_FORMAT_VERSION, result)
+  preflightSessionFormat(CURRENT_FORMAT_VERSION, result, header)
   return result
 }
 
@@ -37,9 +37,9 @@ export function assertVersionSupported(version: number): void {
 }
 
 /** Validate the committed prefix before any structural repair, and again under ownership. */
-export function preflightSessionFormat(version: number, events: SessionEvent[]): void {
+export function preflightSessionFormat(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength'>): void {
   preflightBatchShape(version, events)
-  try { validateConversationHistory(events, version) }
+  try { validateConversationHistory(events, version, header) }
   catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation history", { cause }) }
 }
 

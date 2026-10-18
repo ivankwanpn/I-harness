@@ -1,5 +1,9 @@
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
 import { validateReplacementShape } from './replacement.ts'
+import { isGenerationEventType, validGenerationEvent } from './generation.ts'
+import { validInputPreparationEvent, validInputPreparationLink } from './input-preparation.ts'
+import { scalarFields } from './attribution.ts'
+import { isStrictFactData } from '../managed/capture.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 
 export interface InputProvenance {
@@ -33,6 +37,24 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
+  if (event.type === 'user/message' && event.seedInputContext !== undefined && (formatVersion < 8 || !isStrictFactData(event.seedInputContext)
+    || !scalarFields(event.seedInputContext, { rawMessageSeq: conversationSeq }) || event.inputPreparation || !event.internal
+    || event.provenance?.kind !== 'inherited' || event.provenance.authority !== 'observation' || event.provenance.producer !== 'host.input-preparation'
+    || event.source?.kind !== 'plugin' || !['host-preparation', 'supplemental-context'].includes(event.source.plugin)
+    || event.input || event.images || event.imageInputId)) conversationFormatError('invalid seeded input context')
+  if (event.type === 'agent/input/admitted' && event.preparationPolicy !== undefined && (formatVersion < 8 || event.preparationPolicy !== 'human-host'
+    || event.intent !== 'user' || event.synthetic !== undefined || event.provenance?.kind !== 'human' || event.provenance.authority !== 'request'
+    || !['session.prompt', 'desktop.input'].includes(event.provenance.producer))) conversationFormatError('invalid human preparation policy')
+  if (event.type === 'agent/input/admitted' && event.supplementalContext !== undefined && (formatVersion < 8 || typeof event.supplementalContext !== 'string')) conversationFormatError('invalid supplemental input context')
+  if (event.type === 'agent/input/preparation') {
+    if (formatVersion < 8 || !validInputPreparationEvent(event)) conversationFormatError('invalid input preparation or format')
+    return
+  }
+  if (event.type === 'user/message' && event.inputPreparation !== undefined && (formatVersion < 8 || !validInputPreparationLink(event.inputPreparation))) conversationFormatError('invalid prepared input linkage')
+  if (isGenerationEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)) {
+    if (formatVersion < 8 || !validGenerationEvent(event)) conversationFormatError('invalid generation fact or format')
+    return
+  }
   if (event.type === 'compaction/replacement') validateReplacementShape(event, formatVersion)
   validateNativeWitness(event, formatVersion)
   const e = event as SessionEvent & { provenance?: unknown; actionId?: unknown; attemptId?: unknown }

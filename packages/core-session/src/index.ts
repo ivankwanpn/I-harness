@@ -5,6 +5,14 @@ export { AsyncInbox } from './managed/inbox.ts'
 export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic, InputDisplay, UserMessageInput } from "./inbox.ts"
 
 export { CURRENT_FORMAT_VERSION } from "./events/types.ts"
+export type { GenerationAcceptanceDraft } from './managed/groups.ts'
+export { validInputPromotionDraft } from './managed/groups.ts'
+export type { InputPromotionDraft } from './managed/groups.ts'
+export { validInputPreparationEvent, inputObservationText } from './events/input-preparation.ts'
+export type { InputPreparationEvent, PreparedInputResult, PreparedInputObservation } from './events/input-preparation.ts'
+export type { GenerationPurpose, GenerationLane, GenerationOrigin, GenerationRetry, GenerationLimits, GenerationCandidate, GenerationEvent, GenerationActionEvent, GenerationAttemptEvent } from './events/generation.ts'
+export { generationLimits, isGenerationEventType, validGenerationEvent, validGenerationRetry } from './events/generation.ts'
+export { readGenerationActions, type GenerationActionState } from './conversation/generation.ts'
 export type { ConversationAddress, ConversationItemRef, ConversationCoverage, ContextReplacementRecordV1 } from './events/replacement.ts'
 export type { InputProvenance, ConversationSemanticsEvent, ExchangeAcceptedEvent } from "./events/conversation.ts"
 export { validateConversationEventShape } from "./events/conversation.ts"
