@@ -4,10 +4,11 @@ import { createConversationIndex } from '../conversation/validation.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 import { captureFactGroup, resolveFactGroup, type ContextReductionDraft } from './groups.ts'
 import type { NondurableFactOutcome } from './ports.ts'
+import { validContextReductionDraft } from './reduction.ts'
 
 /** Explicit memory owner stages the full group and installs before observers. */
 export function captureMemoryReduction(session: Session, draft: ContextReductionDraft, assertOpen: () => void, current: () => boolean) {
-  const capture = captureFactGroup(draft)
+  const capture = validContextReductionDraft(draft) ? captureFactGroup(draft) : { kind: 'not-issued' as const, code: 'FACT_INVALID_GROUP' as const }
   let latest: NondurableFactOutcome | undefined
   const commit = async (): Promise<NondurableFactOutcome> => {
     if (latest) return latest

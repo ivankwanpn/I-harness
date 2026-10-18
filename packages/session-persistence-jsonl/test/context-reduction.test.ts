@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createJsonlBackend } from '../src/index.ts'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { captureContextSnapshot, reductionGroups, reductionSourceCurrent, replacementProposal } from '../../context-engine/src/index.ts'
-import { deriveMessages, type SessionEvent, type SessionView } from '@i-harness/core-session'
+import { deriveMessages, subscribe, type SessionEvent, type SessionView } from '@i-harness/core-session'
 
 const seed: SessionEvent[] = [
   { type: 'turn/start', seq: 0 }, { type: 'user/message', seq: 1, text: 'H' },
@@ -24,6 +24,37 @@ async function fixture() {
   const document = await coordinator.openManagedDocument(id)
   return { directory, backend, coordinator, id, document }
 }
+it.each(['metadata','legacy-rewrite','wrong-event','extra-seq','missing-field','bad-reset','bad-prune','kind-getter','events-getter','proxy','null'] as const)('dedicated durable capture rejects %s before allocation, installation or observer notification',async kind=>{
+  const f=await fixture(),action=f.document.beginAction(),before=await readFile(join(f.directory,`${f.id}.jsonl`),'utf8'),beforeEvents=f.document.view.events.slice(),seen:unknown[]=[]
+  let getters=0,guards=0,writes=0
+  const actual=f.backend.appendOwnedBatch!;f.backend.appendOwnedBatch=async(...args)=>{writes++;return actual(...args)}
+  const reset={type:'compaction/reset',removedSeqs:[1]}
+  const draft:unknown=kind==='metadata'?{kind:'metadata',event:{type:'plan/mode',mode:'on'}}
+    :kind==='legacy-rewrite'?{kind:'legacy-compaction',events:[reset]}
+    :kind==='wrong-event'?{kind:'context-reduction',events:[{type:'plan/mode',mode:'on'}]}
+    :kind==='extra-seq'?{kind:'context-reduction',events:[{...reset,seq:seed.length}]}
+    :kind==='missing-field'?{kind:'context-reduction',events:[{type:'compaction/reset'}]}
+    :kind==='bad-reset'?{kind:'context-reduction',events:[{type:'compaction/reset',removedSeqs:'invalid'}]}
+    :kind==='bad-prune'?{kind:'context-reduction',events:[{type:'compaction/prune',version:1,pruned:[{callId:'c',head:'h',tail:'t',removedBytes:'invalid'}]}]}
+    :kind==='kind-getter'?{get kind(){getters++;return 'metadata'},event:{type:'plan/mode',mode:'on'}}
+    :kind==='events-getter'?{kind:'context-reduction',get events(){getters++;return [reset]}}
+    :kind==='proxy'?new Proxy({kind:'metadata',event:{type:'plan/mode',mode:'on'}},{get(){getters++;throw Error('proxy read')}}):null
+  const descriptors=draft&&Object.getOwnPropertyDescriptors(draft),unsubscribe=subscribe(f.document.view,event=>seen.push(event))
+  try{
+    const capture=action.captureContextReduction!(draft as never,()=>{guards++;return true})
+    expect(await capture.admit()).toEqual({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+    expect(await capture.reconcile()).toEqual({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+    expect(await capture.observe()).toEqual({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+    expect(getters).toBe(0);expect(guards).toBe(0);expect(writes).toBe(0);expect(seen).toEqual([])
+    expect(f.document.view.events).toEqual(beforeEvents)
+    expect(await readFile(join(f.directory,`${f.id}.jsonl`),'utf8')).toBe(before)
+    if(draft)expect(Object.getOwnPropertyDescriptors(draft)).toEqual(descriptors)
+    expect(()=>f.document.assertReady()).not.toThrow()
+    expect(await action.facts.metadata.admit({type:'plan/mode',mode:'on'})).toMatchObject({kind:'committed',seqs:[beforeEvents.length]})
+    action.stop()
+    expect(await action.captureContextReduction!({kind:'context-reduction',events:[{type:'compaction/reset',removedSeqs:[1]}]},()=>true).admit()).toEqual({kind:'not-issued',code:'FACT_CANCELLED'})
+  }finally{unsubscribe();action.finish();await f.coordinator.close()}
+})
 it('runs a final source fence after backend awaits with no issued batch or visible rewrite', async () => {
   const f = await fixture(), action = f.document.beginAction(), source = snapshot(f.document.view)
   const groups = reductionGroups(source).filter(group => group.items.some(item => item.messages.some(message => message.content === 'E1')))

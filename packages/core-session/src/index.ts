@@ -68,6 +68,7 @@ export { validSettlementEvent, type SettlementEventKind } from './managed/settle
 export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts'
 export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
 export { captureFactGroup, resolveFactGroup } from './managed/groups.ts'
+export { validContextReductionDraft } from './managed/reduction.ts'
 export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, LifecycleFact } from './managed/groups.ts'
 export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
 export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'
