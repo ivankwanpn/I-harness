@@ -9,8 +9,9 @@ import { createReductionBridge } from './bridge.ts'
 import { automaticReductionPolicy } from './automatic.ts'
 import type { ContextSnapshot } from '@i-harness/context-engine'
 import { randomUUID } from 'node:crypto'
+import { projectionFingerprint } from '@i-harness/token-meter'
 import { beginSoftSequence } from './sequence.ts'
-import { summaryPolicyIdentity } from './summary-policy.ts'
+import { reductionPolicyFacts } from './summary-policy.ts'
 
 export function createContextReduction(deps: AgentDeps & AgentConfig, config: CompactionConfig | undefined, capture: () => RequestEvidence, budget: ReturnType<typeof createOwnedBudget>, bindingCurrent: () => boolean, refresh = () => {}, scope: (attempts?: import('@i-harness/context-engine').ReductionAttempts) => import('@i-harness/llm-seam').LLMRequest['requestScope'] = () => undefined): CompactionEngine | undefined {
   if (!config) return undefined
@@ -26,11 +27,12 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
       throw error
     }
     const metadata = evidence.metadata, resolved = resolveCompactSpec(config, metadata?.providerId, metadata?.modelId)
-    const summaryState = (snapshot: ContextSnapshot) => {
+    const policyState = (snapshot: ContextSnapshot) => {
       const selected = resolveCompactSpec(config, snapshot.surface.binding?.providerId, snapshot.surface.binding?.modelId)
-      return { model: selected.summarizationModel, identity: summaryPolicyIdentity(selected, snapshot.surface, evidence.model) }
+      const facts = reductionPolicyFacts(selected, snapshot.surface, evidence.model, deps.budget?.reserveRatio)
+      return { model: selected.summarizationModel, identity: projectionFingerprint(facts), policy: facts }
     }
-    const policy = { summaryIdentity: summaryState(evidence.snapshot).identity, retainTokens: resolved.retainTokens, thresholdRatio: resolved.thresholdRatio, targetRatio: resolved.targetRatio, cooldown: resolved.cooldown, reserveRatio: deps.budget?.reserveRatio, prune: resolved.prune }
+    const policy = policyState(evidence.snapshot).policy
     const automatic = automaticReductionPolicy(deps.session, resolved.cooldown)
     const skipped = { compacted: false, shadowedSeqs: [], outcome: 'unchanged' as const, publication: 'none' as const }
     let sequence: Awaited<ReturnType<typeof beginSoftSequence>> | undefined
@@ -46,12 +48,12 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
     }
     const ports = createReductionBridge(deps, capture, budget, bindingCurrent, policy, options?.signal ?? deps.signal, refresh, !resolved.summarizationModel || resolved.summarizationModel === evidence.model, scope(options?.attempts), sequence?.start, async () => { await sequence?.settle('canceled') })
     const sourceCapture = ports.capture
-    const sourceCurrent = ports.current, summaryOwners = new WeakMap<ContextSnapshot, { model: typeof resolved.summarizationModel; identity: string }>()
-    ports.current = (snapshot, groups) => { const prior = summaryOwners.get(snapshot), now = summaryState(snapshot); return sourceCurrent(snapshot, groups) && !!prior && prior.model === now.model && prior.identity === now.identity }
+    const sourceCurrent = ports.current, policyOwners = new WeakMap<ContextSnapshot, { model: typeof resolved.summarizationModel; identity: string }>()
+    ports.current = (snapshot, groups) => { const prior = policyOwners.get(snapshot), now = policyState(snapshot); return sourceCurrent(snapshot, groups) && !!prior && prior.model === now.model && prior.identity === now.identity }
     ports.capture = () => {
-      const snapshot = sourceCapture(), selected = resolveCompactSpec(config, snapshot.surface.binding?.providerId, snapshot.surface.binding?.modelId)
-      Object.assign(policy, { summaryIdentity: summaryState(snapshot).identity, retainTokens: selected.retainTokens, thresholdRatio: selected.thresholdRatio, targetRatio: selected.targetRatio, cooldown: selected.cooldown, prune: selected.prune })
-      summaryOwners.set(snapshot, summaryState(snapshot))
+      const snapshot = sourceCapture(), selected = policyState(snapshot)
+      Object.assign(policy, selected.policy)
+      policyOwners.set(snapshot, selected)
       return snapshot
     }
     ports.summary = deps.summaryFactory ? source => {

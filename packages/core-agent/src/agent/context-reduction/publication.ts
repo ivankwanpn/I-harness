@@ -19,7 +19,9 @@ export function createReductionPublication(deps: Pick<AgentDeps, 'captureContext
     const reconcile = async () => {
       latest = await capture.reconcile()
       if (latest.kind === 'unknown' || latest.kind === 'conflict' || latest.kind === 'recovery-required') throw Object.assign(new Error('Context reduction requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
-      if (latest.kind === 'absent' || latest.kind === 'not-issued') await absent?.()
+      // A local stale precondition never issued a batch; C3 may recapture in
+      // the same sequence. Backend-proven absence still cancels original work.
+      if (latest.kind === 'absent' || latest.kind === 'not-issued' && latest.code !== 'FACT_PRECONDITION_STALE') await absent?.()
     }
     // This drain may only reconcile the optional capture. Registering it grants no new-work authority.
     const settlement = deps.registerFactSource?.(reconcile)

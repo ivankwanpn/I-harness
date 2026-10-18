@@ -14,3 +14,10 @@ export function summaryPolicyIdentity(config:ResolvedCompactionConfig,surface:Co
   reasoningEffort:inherited?surface.reasoningEffort:config.summaryReasoningEffort,
   outputPreference:config.summaryMaxOutputTokens,explicitOutput:config.summaryOutputCapExplicit,retainedTokens:config.maxTokens,minimumChars:config.minSummaryChars})
 }
+
+/** Capture the same resolved facts used by assessment, soft keys and freshness. */
+export function reductionPolicyFacts(config:ResolvedCompactionConfig,surface:ContextSnapshot['surface'],main:ModelClient,reserveRatio=.9) {
+ return {summaryIdentity:summaryPolicyIdentity(config,surface,main),retainTokens:config.retainTokens,
+  thresholdRatio:config.thresholdRatio,targetRatio:config.targetRatio,cooldown:{...config.cooldown},
+  reserveRatio,prune:{...config.prune}}
+}
