@@ -1,54 +1,68 @@
-# Compaction ownership
+# Compaction summary capability
 
-`src/index.ts` is the sole public entry (`@i-harness/compaction`). Its engine
-signature, result types, existing reexports and package export stay stable.
-The factory resolves configuration first, defines the live overhead read, then
-captures the context window. Configuration and window values stay captured;
-context, overhead, model, request shape, output cap and telemetry property reads
-retain their original call boundaries and method receivers.
+`@i-harness/compaction` owns configuration, token compatibility helpers and the
+concrete `createSummaryPort` factory. The connected transaction is owned by
+`@i-harness/context-engine`; core-agent composes its private preparation and
+publication bridge. The retired `createCompactionEngine` and prefix/slices
+implementation are no longer production APIs.
 
-| Module | Responsibility and owner |
-| --- | --- |
-| `src/engine/admission.ts` | Auto gate sequence and the module-level, per-Session failure/sticky WeakMaps shared by all engine instances; manual success releases the same state. |
-| `src/engine/commit.ts` | One pass, one summary await, projection marker append order, outcome telemetry and fail-soft diagnostics. |
-| `src/engine/prune.ts` | Existing prune plan and visible surface estimate; no event mutation. |
-| `src/engine/summary.ts` | Model/prefix/previous-summary preparation before the error envelope, then the original model request promise; cap/overhead reads remain inside the envelope. |
-| `src/engine/contracts.ts` | Private callback and dependency views; the original dependency object is retained for live getters and receivers. |
-| `src/projection/shadowed.ts` | Text/image replay and previous-summary lookup; prune substitutes take priority over an event's image descriptor. |
-| `src/projection/window.ts` | Append-only reset with the existing tool-boundary walk and defensive analytics meter. |
+| Owner | Responsibility |
+|---|---|
+| `src/config.ts` | Existing defaults and provider/model overlays; explicit alternate summary limits and effort. |
+| `src/prepared-summary.ts` | C1 final prepared output eligibility, one output-cap derivative, full final source/image checks and source-native eligibility. |
+| `src/summary/source.ts` | Exact selected native bundles and provenance manifest; complete portable observations, preserving images and ordinary reasoning. |
+| `src/summary/generate.ts` | Whole-group partition and rolling checkpoints; two quality rounds per checkpoint within one shared eight-stream tracker. |
+| `src/summary/port.ts` | Unbound model/configuration composition, closed blocked outcomes and summary-only usage observations. |
+| `src/summary/checkpoint.ts`, `stream.ts` | Complete seven-section checkpoint validation and bounded stream acceptance. |
 
-Existing `config.ts`, `region.ts`, `slices.ts`, `summarizer.ts` and `tokens.ts`
-retain their independent policies, boundary rules, request slicing/retry and
-metering responsibilities. No new lifecycle or shutdown work is introduced.
+A native summary source is first prepared by the selected actual adapter. A
+local native-replay rejection, or a selected-final `native=unverified` report
+with selected native payload, permits one portable construction under the same
+binding and raw options. The native candidate is never sent in that case.
+Portable source is recorded observation; signature/encrypted bytes are not
+ordinary text. Opaque-only or incomplete visible source blocks before generation.
+A provider HTTP error does not authorize stripping source or request options.
 
-Auto admission checks pressure, sticky, re-fire, hysteresis and breaker, in that
-order. Fresh content releases the current pause without clearing the failure
-count. Successful auto or manual compaction clears that count; manual compaction
-remains ungated. Reset retains its own append-only marker behavior.
+Standalone `createAgent` callers configuring compaction must inject the unbound
+`summaryFactory: createSummaryPort`. Executor, fresh child, resident child,
+guardian and teammate composition supply it through their actual option carriers.
+Missing generation capability returns `summary-unavailable`; missing managed
+publication capability returns `publication-unavailable`, with no memory fallback.
+Explicit standalone nondurable owners report `nondurable` and have no fact receipt.
 
-A pass measures entry tokens, selects the shadow region, plans pruning and may
-finish with a prune-only marker on the auto path. Manual compaction summarizes
-even when pruning alone would resolve pressure. A summary pass appends any prune
-marker before rendering and folding its prefix, preserving the same post-prune
-fold bytes as the main request. It prepares model/shape/previous-summary before
-entering the summary catch, and reads cap/overhead inside that catch.
+`CompactionResult` keeps `compacted`, compatibility `shadowedSeqs`, `summary`,
+`pruned`, `reset` and `reason`, and requires `outcome` and `publication`.
+`compacted` means a proven applied rewrite. It does not mean target readiness or
+permission to send. Callers must inspect `outcome` (`unchanged`, `ready`,
+`reduced-over-target`, `blocked`) and `publication` (`none`, `committed`,
+`nondurable`, `recovery-required`). Exact ordered replacement coverage is the
+structural authority; `shadowedSeqs` is only a compatibility source union.
 
-The commit owner awaits the original summarizer promise directly. Success
-appends `compaction/start`, `compaction/summary`, `compaction/end`, then emits the
-attempt outcome. Failure warns before emitting its outcome, leaves already
-appended prune markers durable, and returns `reason: "summarizer-failed"`.
-Repeated failed manual passes still append repeated prune markers; this existing
-behavior is preserved. Usage telemetry reads the live telemetry dependency as
-usage arrives. Reset and replay preserve undefined seq handling and image/tool
-boundaries; they never truncate the durable log.
+The engine selects whole source/evidence groups, protects current human/steer
+inputs and unsettled effects, and retains the newest complete exchange. A prune
+can publish alone only if the full main candidate is target-ready and improves
+input. Otherwise prune and complete summary replacement publish atomically,
+or neither publishes. Explicit reset uses the same whole groups/protection and
+never trims the archive. A fresh ordinary main admission is required afterward.
 
-Verification (run sequentially from the repository root):
+Private-workspace barrel aliases retired with their sole production consumers:
+`ResolvedPruneConfig`, `SummaryFactoryInput`, `resolveContextWindow`,
+context-engine `ReductionPublication`, core-session `deriveMessagesUpTo` and
+`LegacyCompactionFacts`, and provider `resolveModelContext`. Internally used type
+definitions and the real historical prefix-reader/model-context owners remain;
+internal tests import their actual owners directly. Callers of those aliases must
+migrate imports; no fake consumer or reachability baseline exception is provided.
+
+Focused verification from the repository root:
 
 ```powershell
-pnpm --filter @i-harness/compaction exec vitest run --maxWorkers=2 --minWorkers=1
+pnpm --filter @i-harness/compaction test
 pnpm --filter @i-harness/compaction typecheck
-pnpm --filter @i-harness/core-agent exec vitest run test/overflow.test.ts test/prefix-continuity.test.ts test/projection-rewrite.test.ts --maxWorkers=2 --minWorkers=1
-pnpm --filter @i-harness/core-agent typecheck
+node node_modules/vitest/vitest.mjs run e2e/context-reduction-source.e2e.ts e2e/context-corpus.e2e.ts --config e2e/vitest.config.ts
 node scripts/audit/check-reachability.mjs --self-test
 node scripts/audit/check-reachability.mjs --gate
 ```
+
+These controls qualify local connected reduction. Physical retry reservations,
+additive capacity policy, semantic seed/retention redesign, full main-summary
+authority enforcement and streaming cold recovery remain separate obligations.

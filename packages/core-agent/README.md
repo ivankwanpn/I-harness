@@ -6,6 +6,18 @@ executor exports retain their public signatures. `src/execute-tool-calls.ts`
 also remains a compatible batch entry. `src/executor.ts` is an independent,
 unchanged owner of admission and executor failure handling.
 
+Configured compaction now uses one ContextEngine transaction through
+`agent/context-reduction/`. Standalone callers must inject the unbound
+`summaryFactory` capability; executor and child composition supply it using the
+selected owner's live binding. No concrete summary client is imported behind
+this seam. Compact results require typed `outcome` and `publication` fields;
+applied progress alone does not authorize a main send. The bridge retains
+private request/proof handles, uses the actual turn request scope for automatic
+and recovery probes, and issues rewrites only through the narrow guarded
+`captureContextReduction` action capability. Manual probes have no future turn
+scope. Ordinary agents without configured compaction retain their existing
+preparation path. See the compaction package README for the internal API migration.
+
 ## Agent ownership and lifetime
 
 | Module | Responsibility and state lifetime |
