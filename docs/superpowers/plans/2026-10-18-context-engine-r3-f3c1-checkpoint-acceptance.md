@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. One GPT6.1Sol/high implementer followed by a fresh task reviewer; no recursive agents. Steps use checkbox (`- [ ]`) syntax.
 
-**Status:** Executable rebase on reviewed F3b product468fb626 and pause checkpoint95b79734. User resumed the approved whole redesign on2026-10-18. Exact documentation BASE is supplied at dispatch.
+**Status:** COMPLETE from exact BASE40e5d9364e0a7f92a74f1a0a15ef5bbeea23f6bb throughc2c00851c8215b2e307e0afe7771543fb4620e94. Fresh full-range review and original-reviewer I1 fix approval are recorded in the [verification](../../research/2026-10-18-context-engine-r3-f3c1-verification.md). This is the bounded summary acceptance gate; connected reduction/publication remains next.
 
 **Goal:** Make the actual summary caller require a known text-compatible final request and a complete bounded checkpoint, preserving protocol ownership and observed failed-attempt usage.
 
@@ -71,13 +71,13 @@ export function readSummaryStream(
 
 The reader accepts only own ordinary data fields `status` and `reason` with one valid pair; no extra raw data, inherited/accessor properties or symbol keys. Missing observation becomes not-declared, malformed observation invalid-declaration; getters must not run. Return an owned frozen DTO. Normalize callback output at the prepared-payload owner and read at the summary boundary; wrappers retain sanitized data. Callback execution must be pure, on the actual serialized/lowered body already used by describe/output/validate. Every cap derivative recomputes its own observation; never copy A's observation onto B.
 
-- [ ] **Step 1: Bind BASE and record baseline consumers before edits.**
+- [x] **Step 1: Bind BASE and record baseline consumers before edits.**
 
 Record supplied BASE, clean product/index and actual preparation/wrapper/summary call sites. Inspect the named leaves, not unrelated subsystems. The existing `prepareSummary` selects one final derivative and the existing engine already selects `config.summarizationModel ?? deps.model`; use that existing explicit choice. Do not retry with another binding after an incompatible result.
 
 Run current compaction full and the affected core-agent and executor scopes from Step8 before fixture migration. Preserve actual exits and assertion summaries. Existing F3a failures are recorded separately in `docs/research/2026-10-17-context-engine-f3a-baseline-gaps.md`; compare exact BASE where a covering failure occurs, never skip or silently rewrite it. Baseline fixture shortcomings do not license production fallback.
 
-- [ ] **Step 2: Write actual-carrier and checkpoint RED cases.**
+- [x] **Step 2: Write actual-carrier and checkpoint RED cases.**
 
 Use actual adapter preparation and selected derivatives. At least one length-valid malformed checkpoint must reach the old summary caller and be incorrectly accepted before product edits; at least one JSON/forced-mode request currently streams and must become a zero-send refusal. Bind tests to independently literal output, not the product parser/template constants.
 
@@ -98,7 +98,7 @@ expect(inspectCheckpoint('```\n' + complete + '\n```').kind).toBe('invalid');
 
 Also write final-derivative A-allowed/B-blocked and A-blocked/B-allowed controls with the actual `createPreparedPayload` observer; the selected B decides eligibility. Missing/custom/malformed observations must be unknown, not admitted by a generic final-validation partial status. Capture RED command/output before changes, using sequential focused Vitest commands with `--maxWorkers=2 --minWorkers=1`.
 
-- [ ] **Step 3: Implement the observation carrier and route-local interpretation.**
+- [x] **Step 3: Implement the observation carrier and route-local interpretation.**
 
 Add the optional prepared fact, final-body callback, safe data normalization, and read function. `createPreparedPayload` always records either its observer result or not-declared; generic stream-only fallback records not-declared. `wrapPreparedRequest` preserves the observation recursively through cap derivatives and retry/recording wrappers. Do not normalize a custom client by marking it allowed merely because it has stream/prepare.
 
@@ -116,7 +116,7 @@ Known positive reasoning fields do not confer model capability or bypass final v
 
 Known incompatibility takes precedence over unrelated unknown fields for diagnostic classification; both refuse summary. Malformed final request still follows the existing final validator first. No raw options/body/signature/API key enters the observation or errors.
 
-- [ ] **Step 4: Connect the actual summary preparation boundary.**
+- [x] **Step 4: Connect the actual summary preparation boundary.**
 
 Keep current preparation, single derivative selection, exact final measurement, floor checks and explicit summary-binding choice. Immediately after validating the selected final candidate, call `readPreparedTextOutput(candidate)`: blocked throws `SummaryBlockedError('output-incompatible')`, unknown throws `SummaryBlockedError('output-unknown')`; only allowed can reach measurement notification, flush/pretransport and stream. These new errors carry only closed kind/message, never provider options.
 
@@ -124,7 +124,7 @@ Add a readonly `kind` to SummaryBlockedError with its existing closed reasons pl
 
 Tests must distinguish zero sends/zero attempt increments for incompatible preparation, one explicit compatible summary client used when configured, and no opportunistic fallback. Preserve actual final cap assertions and raw body bytes through ordinary main prepared.stream controls.
 
-- [ ] **Step 5: Extract prompt/parser and enforce the complete checkpoint.**
+- [x] **Step 5: Extract prompt/parser and enforce the complete checkpoint.**
 
 Move buildSummaryPrompt to `summary/prompt.ts`; update actual imports and test imports. Do not retain a test-only compatibility re-export in summarizer. Keep seven ordered sections and framing, with the same exact headings: Objective, Important Details, Work State, Next Move, Relevant Files, Sensitive Instructions, Tool Work Summary.
 
@@ -148,7 +148,7 @@ if (!parsed || parsed.kind !== 'complete') {
 
 The retry directive must describe complete structure and retained bounds, not always request a shorter answer when the prior output was too short or malformed. Preserve two quality rounds per piece and the transaction-local maximum. The final rolling checkpoint must still satisfy the same parser/retained bounds. No lossy slicing to make malformed output pass; no intermediate publication.
 
-- [ ] **Step 6: Extract bounded stream collection without losing observations.**
+- [x] **Step 6: Extract bounded stream collection without losing observations.**
 
 Move the real stream loop into `summary/stream.ts`; reuse summaryPieceCollector and the actual prepared.stream control. Preserve abort and validate-before-transport behavior, duplicate-identical-end handling, conflicting ends and content-after-end refusal. Any tool_call, including one before end, blocks the checkpoint without executing it. Continue collecting its terminal/usage observations until ordinary stream completion/cancellation; do not persist its text as a valid summary.
 
@@ -158,7 +158,7 @@ Always deliver observed usage once per attempted stream, including refusal, trun
 
 Keep unchanged piece splitting and old source construction outside this task. Extract small local orchestrator helpers if needed to keep changed functions within120lines, but do not redesign source selection or add a second summary implementation.
 
-- [ ] **Step 7: Migrate truthful fixtures and add boundary tests.**
+- [x] **Step 7: Migrate truthful fixtures and add boundary tests.**
 
 Old custom mocks often return sectionless text or omit prepare capability. Positive summary fixtures must now explicitly implement a declared text prepare contract and return a complete literal checkpoint. A test helper may delegate neutral preparation and recursively decorate its own prepared derivatives with an explicit test-only ordinary-text fact; negative custom/malformed cases must keep the true absence. Never add a production bypass or global test mock that converts all unknown clients to allowed.
 
@@ -166,7 +166,7 @@ Do not fake a successful full checkpoint under a retained ceiling smaller than i
 
 Required controls: each missing/duplicate/reordered/empty section; whitespace/CRLF; framing/code fences/JSON; min and max exact code-unit boundaries; oversized chunks bounded even if later end/usage exists; valid small text surrounded by long whitespace; a pre-end tool_call followed by otherwise valid text/end; refused/truncated/missing/conflicting ends; cancellation and provider throw after usage; callback failure preserves the original failure; invalid first/valid second and two invalid rounds; shared tracker exhaustion; accepted-piece callback only for complete checkpoints. Prompt tests must show tool-like imperative replay appears once as replay and is not prefilled as human instruction. Manual instructions cannot waive structure. Real alternate summary binding and all-six actual prepared mode controls must remain covered.
 
-- [ ] **Step 8: Qualify final source sequentially and report.**
+- [x] **Step 8: Qualify final source sequentially and report.**
 
 Use existing pnpm scripts and `--maxWorkers=2 --minWorkers=1`, one suite at a time. During iteration run focused tests; after final source run each applicable suite once, repeating only for actual changes/failures:
 
