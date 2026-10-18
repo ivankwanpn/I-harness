@@ -1,5 +1,7 @@
 # R2E — shared admission and durable pressure policy implementation plan
 
+**Accepted2026-10-18:** connected task through9fb933f69627b015c086472bd2533e7ff7c8e0f2 after fresh full-range review and two original-reviewer scoped correction rounds. See [verification and retained limits](../../research/2026-10-18-context-engine-r2e-verification.md). R4/R5/R6 and release remain pending.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use subagent-driven-development for one implementation writer and a fresh task review. Steps use checkbox syntax. No product work before root's executable-contract self-review is recorded.
 
 **Goal:** Replace the remaining main/summary/auxiliary budget calculations with one actual final-candidate decision and durable automatic-reduction policy, preserving protocol-specific validation and F4 execution ownership.
@@ -10,7 +12,7 @@
 
 **Spec:** [redesign](../specs/2026-10-15-context-engine-redesign.md), [framework](../specs/2026-10-15-context-engine-framework.md), [approved policy](../specs/2026-10-18-context-engine-admission-policy.md), [actual-owner rebase](../../research/2026-10-18-context-engine-r2e-post-c3-rebase.md).
 
-**Starting state:** accepted F4 producte82a26b0 and documentation checkpoint80fea9a86721e81e113f5b285c7725a9f29bc36b. This plan is not implementation completion. GitHub synchronization of80fea9 is pending two connection failures; local work can proceed. Record the exact plan-commit BASE before dispatch.
+**Starting state:** accepted F4 producte82a26b0 and documentation checkpoint80fea9a86721e81e113f5b285c7725a9f29bc36b. Task1 was dispatched from plan commit221051b2630de429038fe04900122e757f55711d. That commit was pushed and independently confirmed by remote ref after the earlier connection failures. This plan is not implementation completion.
 
 ## Global constraints
 
@@ -21,6 +23,8 @@
 - F4 bounds, origin, selected-client/terminal provenance, original clocks, exact captures and conservative unknown settlement remain unchanged. Pure assessment spends0attempts and performs0auth/network/tools.
 - Original human input, accepted exchanges and executed tools remain truthful. Reduction cannot replay effects or discard the protected current input/open exchange.
 - Usually150–400line product leaves and<=120line functions; use actual public package boundaries. Tests/scripts are not decomposition targets. No fake consumer, audit baseline reseed or allowlist change.
+- E-DEP-01: direct workspace:* dependencies on the existing ContextEngine public owner are permitted for guard-approval, session-title and provider-runtime. Keep the graph acyclic and update only necessary tracked lockfile importer rows; no new external package, unrelated resolution change or façade introduced merely to hide a real dependency. The task brief's generic dependency prohibition is narrowed by this ruling.
+- E-INDEX-01: a measured new long-growth regression may be repaired by reusing the existing private structural index for its exact registered managed Session view. Existing stage/install commits owned events and index synchronously. The lookup remains internal, candidate staging remains noncommitting, and raw/mutable/copied/wrapped views retain full source validation. Preserve payload capture, atomic visibility and final freshness checks. This is E regression repair, not broad R6 scaling completion; the original30s growth controls must pass without timeout inflation.
 - Preserve source-timed failures/warnings, renderer failure and dynamic-TS limitations. F4-M1 repeated history scans stays R6; general detached semantic import bootstrap stays R4B.
 
 ## One connected task and actual file ownership
@@ -33,11 +37,11 @@ This activation is one task: its pure formulas, real callers, private derivative
 | Shared pure assessment | context-engine/src/contracts/assessment.ts and admission/assess.ts | contracts/policy.ts; admission/capacity.ts, pressure.ts, output-selection.ts, observation.ts. |
 | Actual final validation/derivative | llm-seam/src/prepared/payload.ts, validation.ts, wrappers.ts; real adapter request validators/context producers | Narrow private provisional-cap state beside prepared owner, only if required by a genuine validator upper bound. |
 | Main calibration/observation facade | core-agent/src/agent/budget.ts, admission.ts, context.ts and request-snapshot.ts | Retain narrow calibration/freshness owner; remove its duplicate decision math. |
-| Summary and exact reduction | compaction/src/prepared-summary.ts, config.ts, summary/port.ts; core-agent/context-reduction/composition.ts and bridge.ts; context-engine/reduction/contracts.ts and proposal.ts | Shared decision adapter plus pure progress/soft-policy leaves, without another reducer. |
-| Soft policy facts and current index | core-session/events and conversation validation/index; existing persistence F1 capture/group owners | events/soft-reduction.ts, conversation/soft-reduction.ts and narrow closed capture family. |
-| Versioned observation | core-session/events/context.ts, context-state.ts, projection/context.ts and public exports; actual SDK/Gateway safe readers; desktop/main/runtime-diagnostics.ts | Browser-safe scalar admission DTO/codec leaf, distinct from Node execution authority. |
-| Auxiliary purposes | guard-approval/guardian/isolated-reviewer.ts and reviewer composition; session-title/execution.ts; provider-runtime/video-audio.ts | Purpose adapters to the same assessor, preserving existing result parsing and F4 owners. |
-| Actual versioned readers | core/session serialization, persistence format/journal/upgrade/seed, session-query/file-backed/inspection.ts and index-refresh.ts | Extend existing format registry and explicit readers, no second format detector. |
+| Summary and exact reduction | compaction/src/prepared-summary.ts, config.ts, summary/port.ts; core-agent/src/agent/context-reduction/composition.ts and bridge.ts; context-engine/src/reduction/contracts.ts and proposal.ts | Shared decision adapter plus pure progress/soft-policy leaves, without another reducer. |
+| Soft policy facts and current index | core-session/src/events and conversation validation/index; existing persistence F1 capture/group owners | events/soft-reduction.ts, conversation/soft-reduction.ts and narrow closed capture family. |
+| Versioned observation | core-session/src/events/context.ts, context-state.ts, projection/context.ts and public exports; actual SDK/Gateway safe readers; desktop/src/main/runtime-diagnostics.ts | Browser-safe scalar admission DTO/codec leaf, distinct from Node execution authority. |
+| Auxiliary purposes | guard-approval/src/guardian/isolated-reviewer.ts and reviewer composition; session-title/src/index.ts and execution.ts; provider-runtime/src/video-audio.ts | Purpose adapters to the same assessor, preserving existing result parsing and F4 owners. |
+| Actual versioned readers | core-session/src serialization, session-persistence/src format/journal/upgrade/seed, session-query/src/file-backed/inspection.ts and index-refresh.ts | Extend existing format registry and explicit readers, no second format detector. |
 
 Paths in the table are under packages/. Read actual files before editing; names are responsibility boundaries, not permission to create empty exports. Retire an old owner when its consumer switches.
 
