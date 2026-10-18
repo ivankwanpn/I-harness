@@ -1,0 +1,21 @@
+{
+  "output": "1206CEBFD4E499AA19C5319161985927F957BA572D8996DBC6C0E9E15B98BF4A",
+  "label": "226-safe-handoff-cold-reader-checkpoint",
+  "cwd": "D:/I-harness-main/packages/desktop-gateway",
+  "args": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/session-subagents.test.ts",
+    "test/retained-catalog-io.test.ts",
+    "test/retained-result-publication-proof.test.ts",
+    "--maxWorkers=2",
+    "--minWorkers=1"
+  ],
+  "sourceRoot": "D:/I-harness-main",
+  "before": "7C50BD8806BCC1AC2EED94CE274690C073B5286AD91E1E5F11F979C36EA947F4",
+  "ended": "2026-10-18T23:06:54.1053669Z",
+  "node": "C:/Program Files/nodejs/node.exe",
+  "exitCode": 0,
+  "started": "2026-10-18T23:06:44.1377981Z",
+  "after": "7C50BD8806BCC1AC2EED94CE274690C073B5286AD91E1E5F11F979C36EA947F4"
+}
