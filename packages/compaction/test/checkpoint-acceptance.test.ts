@@ -4,8 +4,35 @@ import { summarizeWithModel } from '../src/summarizer.ts'
 import { checkpointOfLength } from './fixtures/checkpoint.ts'
 import { createPreparedPayload, type ModelClient, type PreparedTextOutput } from '@i-harness/llm-seam'
 import { ProjectionCounter } from '@i-harness/token-meter'
+import { append, createSession } from '@i-harness/core-session'
+import { createCompactionEngine } from '../src/index.ts'
 
 afterEach(() => vi.unstubAllGlobals())
+it.each([[' ', '## Unknown'], ['  ', '## Unknown'], ['   ', '## Unknown'], [' ', '## Objective'], ['  ', '## Objective'], ['   ', '## Objective']])('refuses indented sections without accepting or publishing (%j, %s)', async (indent, heading) => {
+    const text = checkpointOfLength(600).replace('## Important Details', `${indent}${heading}\nUnexpected section.\n## Important Details`)
+    let sends = 0
+    const accepted: unknown[] = []
+    vi.stubGlobal('fetch', async (url: unknown) => {
+      expect(String(url)).toBe('https://api.openai.com/v1/chat/completions')
+      sends++
+      return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\ndata: [DONE]\n\n`)
+    })
+    const model = createOpenAICompatibleClient({ apiKey: 'controlled', model: 'fixture' })
+    await expect(summarizeWithModel(model, 'recorded input', 1024, undefined, undefined, 500, undefined, undefined, { onPieceAccepted: x => accepted.push(x) })).rejects.toMatchObject({ kind: 'checkpoint-format' })
+    expect(sends).toBe(2)
+    expect(accepted).toEqual([])
+    const session = createSession()
+    append(session, { type: 'user/message', text: 'Recorded objective and completed outcome.' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = await createCompactionEngine({ model, config: { contextWindow: 100000 }, telemetry: { emit(e) { if (e.type === 'provider/context' && e.data.operation === 'summary-piece-accepted') accepted.push(e.data) }, close() {} } }).compact(session)
+      expect(result).toMatchObject({ compacted: false, reason: 'summarizer-failed', blockedReason: 'compaction: summary does not contain a complete framed checkpoint' })
+      expect(sends).toBe(4)
+      expect(accepted).toEqual([])
+      expect(session.events.some(e => e.type === 'compaction/summary' || e.type === 'tool/result')).toBe(false)
+      expect(warn).toHaveBeenCalledOnce()
+    } finally { warn.mockRestore() }
+})
 it('refuses a length-valid sectionless checkpoint after two quality rounds', async () => {
   let sends = 0
   vi.stubGlobal('fetch', async () => {
