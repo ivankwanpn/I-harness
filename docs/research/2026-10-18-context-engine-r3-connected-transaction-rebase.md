@@ -1,8 +1,10 @@
 # Connected F3 transaction — rebase after accepted F3a/F3b
 
-2026-10-18. Read-only source analysis pinned to `40e5d9364e0a7f92a74f1a0a15ef5bbeea23f6bb` (product468fb626). F3c1 is the only active writer. This note defines the next connected implementation boundary; it does not claim product completion or override the approved framework. Rebase the concrete summary interfaces against accepted F3c1 before producing its executable plan.
+2026-10-18. Initial read-only source analysis was pinned to `40e5d9364e0a7f92a74f1a0a15ef5bbeea23f6bb` (product468fb626), while F3c1 was active. Current reviewed prerequisites are F3c1 throughc2c00851 and F3c2 throughec3d3da4. No product writer is active at this checkpoint; the connected producer is next. This note does not claim its completion or override the approved framework.
 
 Normative inputs: `2026-10-16-context-engine-r3-f3-preflight.md`, framework ownership/ports, R1D selection notes, accepted F1 publication, F2 historical readers and F3b unit/protection contracts. Old R1D scratch references to format4 are historical; actual current format is7.
+
+Reviewed prerequisite overlay: [F3c1](2026-10-18-context-engine-r3-f3c1-verification.md) now supplies actual text eligibility and complete bounded checkpoint acceptance. [F3c2](2026-10-18-context-engine-r3-f3c2-verification.md) now supplies `projectConversationCandidate`, shared readonly archive access and staged `history()` without installation, connected to actual prune pricing. Earlier prospective-projection proposals below describe why that prerequisite was needed; do not implement it again. Use the actual accepted function signature/private metadata contract in the forthcoming producer plan. No selector/publication was enabled by either prerequisite.
 
 ## Actual owners and required changes
 
@@ -69,7 +71,7 @@ Prune/reset need the same complete-unit/protection rules. Prune is an optional o
 - Auto/manual/recovery all use this one path; no hooks/input claims/tool effects repeated; one changed-input authorization remains with main recovery owner.
 - Final source-bound tests/types/audit and fresh copied actual Gateway/CLI paths, followed by full-range independent review. The18 historical F3a gaps and subsequent14-scope baseline are not blanket exemptions.
 
-F3c1 implementation is independent and still active. This rebase note is preparatory work only; no second product writer or selector/publication implementation has started.
+The initial F3c1 work was independent; both bounded prerequisites are now accepted as noted above. This rebase note remains preparatory for the connected producer; no selector/publication implementation has started.
 
 ## Additional actual consumer checks
 
@@ -104,3 +106,23 @@ The prospective core projection needs an explicitly candidate-tagged result. Bas
 The publisher's trusted synchronous precondition must check both selected-source validity and the last assessed full view at the existing no-await issuance point. A private assessment proof belongs to that particular owner/capture, not an arbitrary caller-supplied boolean. If late semantic suffix/protection/surface or applicable calculation state changed, it returns stale-before-issue and the bounded engine remeasures; if only raw eventCount changed through irrelevant telemetry, semantic equality can retain the result. Recheck Stop/ownership regardless of data equality.
 
 Existing CompactionConfig/Request/Result type consumers are real in CLI, core-agent and executor; preserve their meaningful options/compatibility data while moving the actual reduction owner. The new result needs typed unchanged/ready/reduced-over-target/blocked and publication disposition; `compacted:true` alone is never a target/send certificate. Prepared/capture/receipt handles remain private. If a reduction committed but a later target check remains over budget, report the committed change and remaining block honestly instead of returning a false no-change result. Freeze the exact discriminated shape and migration assertions in the executable plan before product work.
+
+## Finite span search refinement
+
+The oldest eligible non-summary run can be too small to benefit from the complete retained checkpoint, while a later run beyond a protected steer contains large reducible work. A first no-progress summary must not permanently starve that later material. Preserve one contiguous span per proposal and exact coverage; within the same logical-step allowance, mark a failed/no-progress span attempted and try the next eligible run rather than submitting the unchanged source again. The finite untried-span domain must shrink, all local summary calls still share the same≤8 tracker, and genuine stale recapture still consumes the same3-rebuild allowance. Fixed system/schema or globally incompatible native input remains a global block; do not spend calls on retries that cannot change that fixed component.
+
+This is a root refinement for the future executable producer plan, not active C2 behavior. Its independent oracle should contain a small first span, retained steer and larger later span: no intermediate/failed checkpoint is published, the later span can reduce, and no call/source allowance is reset. Cost if wrong is bounded extra summary work; premature failure despite reducible later material is the defect this rule prevents.
+
+## Guarded-publication coalescing boundary
+
+The actual managed-document pump coalesces adjacent entries when action, source identity and required disposition match. A new optional reduction capture that keeps source undefined could share a frame with earlier same-action feedback/input facts. The history stage would see that prefix, but a final guard reading only live state.view would not see the uninstalled prefix inside its own batch. Thus a last-assessed full-request check could miss a semantic/protection change even though it runs at beforeIssue.
+
+Ruling for the connected producer: give each guarded reduction capture a private unique optional coalescing-source identity through the existing Authorization.source field. It is a batching boundary, not a registered required-settlement authority. Keep its intended prune/replacement records inside one closed group, but never coalesce it with ordinary metadata/feedback or another reduction capture. Prior queued work must finish/install first, so the normal final live-view guard includes it; later queued work remains a subsequent suffix. This avoids a fake staged Session/second request renderer inside the writer and uses the existing writer lane.
+
+Mandatory controls: held queue plus same-action plugin feedback before reduction makes the later full-view proof stale before any R write; irrelevant metadata before it remains semantically compatible; two guarded captures cannot share a frame; ordinary existing coalescing remains unchanged. A pure source-valid check alone is insufficient because a retained suffix can change final capacity. Cost is a separate physical journal frame for a reduction, preserving ordinary coalescing elsewhere.
+
+## Summary source versus raw input overrides
+
+The source manifest describes selected items, not whatever raw options might replace their encoded conversation with. The connected SummaryPort must inspect the actual prepared input facts for message/input overrides and incomplete remote input. A direct conversation override can cause a complete-looking summary to describe unselected configured messages; no declared coverage may be published from that request. Reject that source mismatch before summary transport, preserving raw options and explicit summary-binding choice. Fixed configured system/schema remain policy input, separately counted in full preparation; do not confuse them with proof that the selected conversation was supplied.
+
+The final main candidate independently needs strict actual input progress: changing a stored summary while a raw messages override keeps the physical request unchanged cannot qualify. Where the actual override proves selected context cannot affect the failing dimension, return the explicit fixed-input block before spending further summary calls. Otherwise compare the actual selected final preparation and preserve every retained suffix. These are separate source-coverage and progress checks; neither is achieved by C1's output-format eligibility observation.

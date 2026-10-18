@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. One GPT6.1Sol/high implementer, then a fresh task reviewer; no recursive agents. Steps use checkbox (`- [ ]`) syntax.
 
-**Status:** Rebased on accepted F3c1 productc2c00851 and root checkpoint80480d20. Exact documentation BASE is supplied at dispatch. This is an independently testable private-projection gate before connected replacement production.
+**Status:** COMPLETE from exact BASE9c4b1274bacb803d4f0de8d1e104289935cfceee throughec3d3da47139e5c39e4122ff07881bfd36582414; fresh full-range spec/quality review approved, no Critical/Important finding. [Verification](../../research/2026-10-18-context-engine-r3-f3c2-verification.md) records the test-placement deviation, source/copy proof and retained limits. Connected replacement production remains pending.
 
 **Goal:** Replace the current prune-price path's fabricated Session with a core-owned noncommitting projection that shares the actual historical validation and rendering pipeline.
 
@@ -85,13 +85,13 @@ Candidate rewrites are nonempty ordinary dense data, from the closed three-event
 
 The returned envelope/projection/items are frozen at the same structural level as normal projection. Retained payload behavior follows the existing optional capturePayload contract; do not silently change legacy nonplain value support or claim new deep ownership without capture. Future snapshot preparation supplies its existing strict capture callback. This function itself never mutates source or installs a stage.
 
-- [ ] **Step 1: Bind exact BASE and capture normal owners.**
+- [x] **Step 1: Bind exact BASE and capture normal owners.**
 
 Record supplied BASE/clean product state and read only the named ownership paths. Existing `createConversationValidationIndex(...).stage(...)` validates without mutation but exposes only commit; its `HistoryIndex.stage` already has private staged facts. Existing render-items obtains payloads, sources and prune substitutions from the Session. Add a read view of the same staged facts, not a parallel implementation of replacement/rewind/grouping.
 
 Capture a baseline of core-session and compaction's actual prune/provenance scopes before editing. Use sequential commands from Step7; reuse accepted unrelated C1 evidence explicitly, not a whole-suite rerun merely to establish a new label.
 
-- [ ] **Step 2: Write independent literal projection/lifecycle RED controls.**
+- [x] **Step 2: Write independent literal projection/lifecycle RED controls.**
 
 Use the accepted replacement fixtures with safe exact source coordinates, including the honest stepless positive and physical closed/open cases. A basic literal is:
 
@@ -117,7 +117,7 @@ expect(candidate).toMatchObject({ kind: 'candidate', sourceEventCount: 3, projec
 
 Then append the same draft through the ordinary core append path in a separate fixture copy and compare its model messages with the candidate; JSONL/cold projection must agree too. This is data-projection equivalence, not a durable receipt test. New candidate/stage contract controls fail before those APIs exist; record that honestly. The current prune price already has passing numerical behavior, so its migration is tested by before/after equivalence, not an invented numeric RED or a test that merely greps implementation text. Independent literal source/message/price assertions must exercise the new contract and real consumer after implementation.
 
-- [ ] **Step 3: Provide a noncommitting stage view and shared archive access.**
+- [x] **Step 3: Provide a noncommitting stage view and shared archive access.**
 
 Expose `history()` on HistoryIndex's stage as a read-only preview of its base plus staged structural facts by calling existing `projectHistory`; reuse its index/visibility/replacement owner. In ConversationValidationIndex's staged result, expose `history()` with a check that rejects after consumption or when its captured revision is stale, using the same lifecycle check as commit. Calling the view must not merge any new facts/counts/dependencies/consumed sources. A successful commit still installs once; invalid/stale stages leave the existing index untouched. Capture the base count at stage creation so later state installation cannot change the preview's extent.
 
@@ -125,7 +125,7 @@ Adapt the normal payload/source/prune helpers to `ConversationEventArchive` with
 
 Do not use the legacy seed-import fact family as a shortcut to create candidate changes, and do not grant a fact producer capability. The stage is derived validation state only. Leave managed Session publication/install and source receipt ownership untouched.
 
-- [ ] **Step 4: Implement the tagged private candidate entry.**
+- [x] **Step 4: Implement the tagged private candidate entry.**
 
 Validate/capture the closed proposal, construct prospective suffix coordinates and run the normal structural stage against source.formatVersion. A format6 source cannot preview a replacement requiring7; do not mutate its header. A source that is readable but ineligible for a replacement still receives the same historical refusal as a real append. Prune/reset projection does not establish their authorization/eligibility; the future producer must enforce those separately.
 
@@ -135,7 +135,7 @@ The candidate projection's archiveEventCount remains the actual base count; pros
 
 An empty proposal is rejected rather than silently acting as an alternate normal projector. Invalid candidate ids, accessors/sparse proposals, supplied seq, wrong family, forward/missing/noncontiguous/incomplete/shared-unit coverage must not alter source/index or call any observer/model/tool/storage operation.
 
-- [ ] **Step 5: Replace the actual current prune-price consumer.**
+- [x] **Step 5: Replace the actual current prune-price consumer.**
 
 Keep the existing `surfaceTokensAfterPrune(session, records)` signature and all normal price behavior, including empty records returning the ordinary active-message estimate. Its nonempty path becomes:
 
@@ -148,7 +148,7 @@ return estimateContent(renderConversation(candidate.projection));
 
 Use existing token-meter message pricing, not a second estimator. Do not call activeTokens with a fabricated Session or reimplement the renderer inside compaction. This real current caller is the reason the new API is delivered now; no dummy SDK/CLI consumer. Actual selection/prune records/publication/cap/summary rules remain unchanged, with their known later obligations preserved.
 
-- [ ] **Step 6: Complete literal source, native and rollback tests.**
+- [x] **Step 6: Complete literal source, native and rollback tests.**
 
 Cover replacement, prune, explicit reset and combined proposed prune+replacement through the same shared projection. Include nested existing replacement, retained suffix, native reasoning/continuation order, parallel call/result groups and tool-image companions; compare candidate message bytes/shape to an actual separately appended/cold projection. Verify original raw bodies and real source IDs are unchanged, candidate summary refs are nonaddressable/absent and no new input or permission provenance appears.
 
@@ -156,7 +156,7 @@ Cover staged view before commit, after another stage commits, and after its own 
 
 For the real prune-price consumer, assert an independently literal price and equality with the eventual normal projected messages, including non-ASCII/JSON-escaping/tool-image cases. Instrument normal append observers and injected capture callbacks to show no append/dispatch and no duplicate per-result payload materialization. Preserve legacy payload/capture behavior; any discovered incompatibility is a task issue, not silently relabelled unsupported.
 
-- [ ] **Step 7: Qualify and commit the source boundary.**
+- [x] **Step 7: Qualify and commit the source boundary.**
 
 Run sequentially with maxWorkers2/minWorkers1: full core-session, full compaction, ContextEngine snapshot/protection/revision tests, persistence replacement-seed/seed-semantics/fork/rewind-event, SDK session-context and Gateway cold-session/cold-state-inspection. Reuse unrelated C1 protocol acceptance/14BASE receipts with explicit source delta; do not assert those failures repaired.
 
