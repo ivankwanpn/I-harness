@@ -28,6 +28,14 @@ import { createProviderRuntime, type ProviderRuntime } from "../src/index.ts"
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+it('keeps selected semantic identity across unrelated llm settings changes', async () => {
+  const f = await fixture({ providers: { route: { protocol: 'openai-completions', apiKeyEnv: 'SYNTHETIC', baseURL: 'https://route.test', models: [{ id: 'm', contextWindow: 1000 }] } } })
+  const input = { sessionSelection: { provider: 'route', model: 'm' } }, before = await f.runtime.describeModelBindingMetadata!(input)
+  const document = JSON.parse(readFileSync(f.settingsPath, 'utf8'))
+  document.llm.providers.unrelated = { protocol: 'openai-completions', models: [{ id: 'other' }] }
+  await f.settings.set({ llm: document.llm })
+  expect((await f.runtime.describeModelBindingMetadata!(input))?.bindingConfigFingerprint).toBe(before?.bindingConfigFingerprint)
+})
 
 it("describes binding identity without authentication or a client and observes manual endpoint/template changes", async () => {
   const resolve = vi.fn(async () => { throw new Error("metadata must not authenticate") }), describe = vi.fn(async () => { throw new Error("metadata must not inspect credentials") })

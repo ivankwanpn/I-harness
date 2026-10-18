@@ -2,7 +2,7 @@ import { prepareTextFixture, completeCheckpoint } from '../../compaction/test/fi
 import type { LLMRequest } from '@i-harness/llm-seam'
 import { describe, expect, it } from "vitest"
 import { createSession, append } from "@i-harness/core-session"
-import { createAgent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
 
 // 用真實 compaction engine（M11）+ 真實 token-meter budget（M20）+ 新 resetWindow
 // 測試三層 overflow 觸發。summarizer 用 spy model 直接回傳簡短摘要。
@@ -37,7 +37,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     // layer-1 compact（retainTokens 50）把最舊 2 條 shadow 掉 → 摘要 6 + 保留 54
     // + "work" 5 = 65 tokens < 100 → 繼續。
     for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(800) })
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("answer"),
@@ -49,13 +49,13 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
       // measures the budget ladder, not the summary floor).
       // A complete framed fixture needs 400 retained code units; the former
       // 64-unit ceiling could hold only its old unframed word.
-      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
-      budget: { contextWindow: 1500, reserveRatio: 0.5 },
+      compact: { contextWindow: 6000, thresholdRatio: 0.15, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
+      budget: { contextWindow: 6000, reserveRatio: 0.9 },
     } as never)
     const r = await agent.run("work", undefined)
     expect(r.finalText).toBe("answer")
     // verify: compaction/end 已寫入（layer-1 compact 被觸發）
-    expect(session.events.some((e) => e.type === "compaction/end")).toBe(true)
+    expect(session.events.some((e) => e.type === "compaction/replacement")).toBe(true)
     // layer 1 成功 → 不該有 compaction/reset
     expect(session.events.some((e) => e.type === "compaction/reset")).toBe(false)
   })
@@ -63,7 +63,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
   it("refuses an over-window surface without silently resetting its history", async () => {
     const session = createSession()
     for (let i = 0; i < 96; i++) append(session, { type: "user/message", text: "hi" })
-    const agent = createAgent(ctx, { session, tools: createEmptyRegistry(), model: makeModel("never"), systemPrompt: "",
+    const agent = createAgentWithSummary(ctx, { session, tools: createEmptyRegistry(), model: makeModel("never"), systemPrompt: "",
       compact: { contextWindow: 200, retainTokens: 100000 }, budget: { contextWindow: 200, reserveRatio: .5, resetWindow: true } })
     await expect(agent.run("work")).rejects.toThrow(/prompt_too_long/)
     expect(session.events.some(event => event.type === "compaction/reset")).toBe(false)
@@ -78,7 +78,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     // 小型舊歷史（seq-keyed、可被 reset 移除）；當前訊息本身巨大（604 tokens）
     // ——resetRetainLast 2 必然把它留在尾部 → reset 後仍在 budget 之上。
     for (let i = 0; i < 5; i++) append(session, { type: "user/message", text: "hi" })
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("never"),
@@ -89,7 +89,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     } as never)
     await expect(agent.run("z".repeat(2400), undefined)).rejects.toThrow(/prompt_too_long/)
     expect(session.events.some(event => event.type === "compaction/reset")).toBe(false)
-    expect(session.events.some((e) => e.type === "compaction/end")).toBe(false)
+    expect(session.events.some((e) => e.type === "compaction/replacement")).toBe(false)
     // Ruling 4 不變式：durability——失敗路徑也不刪原始事件
     expect(session.events.filter((e) => e.type === "user/message")).toHaveLength(6)
   })
@@ -101,7 +101,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
     const session = createSession()
     // 6 × (ceil(150/4)+4) = 252 tokens > floor(200*1.0)=200 → overflow at the first boundary
     for (let i = 0; i < 6; i++) append(session, { type: "user/message", text: "y".repeat(150) })
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("no"),
@@ -118,7 +118,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
   it("layer 3: fail-closed when reset disabled or insufficient", async () => {
     const session = createSession()
     for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "z".repeat(200) })
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("nope"),
@@ -136,8 +136,8 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
   // added to the checkBudget measurement at the budget call site.
   it("the actual fixed system surface pushes an under-budget history to fail-closed", async () => {
     const session = createSession()
-    for (let i = 0; i < 2; i++) append(session, { type: "user/message", text: "x".repeat(200) }) // ~54 tokens each
-    const agent = createAgent(ctx, {
+    for (let i = 0; i < 2; i++) append(session, { type: "user/message", text: "x".repeat(2000) }) // ~54 tokens each
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("never"),
@@ -153,7 +153,7 @@ describe("overflow budget enforcement (compact→reset→fail-closed)", () => {
   it("the same session stays under budget without overheadTokens (M33 counting)", async () => {
     const session = createSession()
     for (let i = 0; i < 2; i++) append(session, { type: "user/message", text: "x".repeat(200) })
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("ok"),
@@ -175,7 +175,7 @@ describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {
   it("throws at creation when budget.contextWindow is NaN", () => {
     const session = createSession()
     expect(() =>
-      createAgent(ctx, {
+      createAgentWithSummary(ctx, {
         session,
         tools: createEmptyRegistry(),
         model: makeModel("x"),
@@ -188,7 +188,7 @@ describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {
   it("throws at creation when budget.contextWindow is 0", () => {
     const session = createSession()
     expect(() =>
-      createAgent(ctx, {
+      createAgentWithSummary(ctx, {
         session,
         tools: createEmptyRegistry(),
         model: makeModel("x"),
@@ -202,7 +202,7 @@ describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {
     const session = createSession()
     for (const bad of [-1, 1.5, Number.NaN]) {
       expect(() =>
-        createAgent(ctx, {
+        createAgentWithSummary(ctx, {
           session,
           tools: createEmptyRegistry(),
           model: makeModel("x"),
@@ -215,7 +215,7 @@ describe("budget config validation (fail-loud at creation, Ruling 8a)", () => {
 
   it("accepts a valid budget config and runs normally", async () => {
     const session = createSession()
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model: makeModel("ok"),
@@ -264,17 +264,17 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
       ...(createEmptyRegistry() as Record<string, unknown>),
       schemas: () => [{ name: "read", description: "d", inputSchema: {}, exposure: "direct" }],
     } as never
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools,
       model,
       systemPrompt: "SYS-PROMPT",
       maxTurns: 10,
-      compact: { contextWindow: 1500, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
-      budget: { contextWindow: 1500, reserveRatio: 0.5 },
+      compact: { contextWindow: 6000, thresholdRatio: 0.15, retainTokens: 50, maxTokens: 100, minSummaryChars: 1 },
+      budget: { contextWindow: 6000, reserveRatio: 0.9 },
     } as never)
     await agent.run("work", undefined)
-    expect(session.events.some((e) => e.type === "compaction/end")).toBe(true)
+    expect(session.events.some((e) => e.type === "compaction/replacement")).toBe(true)
 
     // Every call — the summarizer's and the turn's — carries the shape. Before
     // D2 the summarizer's had `systemPrompt: ""` and `tools: 0`.
@@ -306,7 +306,7 @@ describe("the compaction engine gets the agent's resolved cap (M73)", () => {
         yield { type: "end" } as never
       },
     }
-    const agent = createAgent(ctx, {
+    const agent = createAgentWithSummary(ctx, {
       session,
       tools: createEmptyRegistry(),
       model,
@@ -318,7 +318,7 @@ describe("the compaction engine gets the agent's resolved cap (M73)", () => {
       // `clampOutputCap` returns the value untouched when the window is missing
       // or when the input leaves room, so a cap LARGER than the window is the
       // one shape that can only have come out of the clamp.
-      compact: { contextWindow: 8_000, maxTokens: 100, minSummaryChars: 1 },
+      compact: { contextWindow: 100_000, maxTokens: 100, minSummaryChars: 1 },
     } as never)
     // The MANUAL path: `compact()` summarizes unconditionally (no threshold
     // gate) and makes exactly ONE model call — the summarizer's. So the single

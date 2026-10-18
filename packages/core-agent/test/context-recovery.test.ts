@@ -5,7 +5,7 @@ import { append, createSession, deriveMessages, deriveContextRecovery, fromJSONL
 import { createToolRegistry } from "@i-harness/core-tools"
 import { wrapPreparedRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
-import { createAgent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
 
 const sse = (delta: object, finish_reason = "stop") => new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } })
 const overflow = () => new Response(JSON.stringify({ error: { code: "context_length_exceeded", message: "Maximum context length exceeded", type: "invalid_request_error" } }), { status: 400 })
@@ -16,37 +16,47 @@ function fixture(options: { failure?: () => Response; repeat?: boolean; fixed?: 
   tools.register({ name: "write", description: "controlled effect", inputSchema: { type: "object" }, execute: async () => { effects++; return "prior outcome ".repeat(1200) } })
   const attempts: { inputFingerprint: string; inputCost: number }[] = []
   let reject = true
+  const partialOrder: string[] = []
   const actual = createOpenAICompatibleClient({ apiKey: "controlled", model: "fixture", ...(options.fixed ? { options: { messages: [{ role: "user", content: "fixed input" }] } } : {}), fetch: async () => {
-    if (reject) { reject = false; return (options.failure ?? overflow)() }
+    if (reject) { reject = false; partialOrder.push("http400"); return (options.failure ?? overflow)() }
     return options.repeat ? overflow() : sse({ content: "accepted" }, options.ending)
   } })
   const model: ModelClient = { stream: request => actual.stream(request), async prepare(request) {
     const prepared = await actual.prepare!(request)
     return wrapPreparedRequest(prepared, (stream, control) => (async function*() {
       if (!reject) await options.beforeRetry?.()
-      if (options.partial && reject) {
-        yield { type: "text/chunk", text: "failed partial" } as const
-        yield { type: "tool_call", call: { id: "not-dispatched", name: "write", args: {} } } as const
+      const rejectingAttempt = reject
+      for await (const event of stream({ ...control,
+        confirmExecution(confirmation) { control?.confirmExecution?.(confirmation); partialOrder.push('confirmed') },
+        validateBeforeTransport() { control?.validateBeforeTransport?.(); attempts.push({ inputFingerprint: prepared.measurement.input.inputFingerprint, inputCost: Object.values(prepared.measurement.input.components).reduce((n, c) => n + c.heuristicTokens, 0) }) },
+      })) {
+        if (options.partial && rejectingAttempt && event.type === 'error') {
+          expect(partialOrder).toEqual(['confirmed', 'http400'])
+          partialOrder.push('synthetic-observation')
+          yield { type: 'text/chunk', text: 'failed partial' } as const
+          yield { type: 'tool_call', call: { id: 'not-dispatched', name: 'write', args: {} } } as const
+          partialOrder.push('inner-error')
+        }
+        yield event
       }
-      // Record only authorized physical dispatch, after the owner guard.
-      yield* stream({ ...control, validateBeforeTransport() { control?.validateBeforeTransport?.(); attempts.push({ inputFingerprint: prepared.measurement.input.inputFingerprint, inputCost: Object.values(prepared.measurement.input.components).reduce((n, c) => n + c.heuristicTokens, 0) }) } })
     })())
   } }
   const summary: ModelClient = { prepare: prepareTextFixture, async *stream() { summaries++; await options.summary?.(); yield { type: "text/chunk", text: checkpointOfLength(600) }; yield { type: "end" } } }
   const deps = { session, sessionId: "owned", tools, model, systemPrompt: "Keep authority and outcomes", budget: { contextWindow: 100000 }, maxOutputTokens: 1024,
-    compact: { contextWindow: 100000, auto: false, retainTokens: 100, summarizationModel: summary, summaryLimits: { contextWindow: 100000 }, prune: options.prune ? { thresholdChars: 1000, headChars: 120, tailChars: 80 } : false as const },
+    compact: { contextWindow: 100000, auto: false, retainTokens: 0, summarizationModel: summary, summaryLimits: { contextWindow: 100000 }, prune: options.prune ? { thresholdChars: 1000, headChars: 120, tailChars: 80 } : false as const },
     stepInputs: { claimAtStepBoundary() { claims++ } }, flush: () => options.flush?.(session) ?? Promise.resolve() }
   // A real earlier accepted tool body, then balanced append-only history.
-  const seed = createAgent(ctx, { ...deps, model: { async *stream() { if (!effects) yield { type: "tool_call", call: { id: "prior", name: "write", args: {} } }; else yield { type: "text/chunk", text: "earlier accepted" }; yield { type: "end" } } } })
-  return { ctx, session, deps, attempts, seed, get effects() { return effects }, get summaries() { return summaries }, get hooks() { return hooks }, get claims() { return claims } }
+  const seed = createAgentWithSummary(ctx, { ...deps, model: { async *stream() { if (!effects) yield { type: "tool_call", call: { id: "prior", name: "write", args: {} } }; else yield { type: "text/chunk", text: "earlier accepted" }; yield { type: "end" } } } })
+  return { ctx, session, deps, attempts, seed, partialOrder, get effects() { return effects }, get summaries() { return summaries }, get hooks() { return hooks }, get claims() { return claims } }
 }
 
 it("recovers a real adapter context 400 with one durably changed, reduced main input and no tool replay", async () => {
   const f = fixture({ partial: true }); await f.seed.run("original task ".repeat(1500))
   const beforeHooks = f.hooks, beforeClaims = f.claims
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   expect((await agent.followup("continue")).finalText).toBe("accepted")
   expect(f.attempts).toHaveLength(2)
+  expect(f.partialOrder.slice(0, 4)).toEqual(['confirmed', 'http400', 'synthetic-observation', 'inner-error'])
   expect(f.attempts[1]!.inputFingerprint).not.toBe(f.attempts[0]!.inputFingerprint)
   expect(f.attempts[1]!.inputCost).toBeLessThan(f.attempts[0]!.inputCost)
   expect(f.effects).toBe(1); expect(f.summaries).toBe(1)
@@ -62,7 +72,7 @@ it("recovers a real adapter context 400 with one durably changed, reduced main i
 it("local active pruning can recover without a summary call and retains the authoritative prior result", async () => {
   const f = fixture({ prune: true }); await f.seed.run("original task")
   const rawPrior = f.session.events.find(event => event.type === "tool/result" && event.callId === "prior")
-  expect((await createAgent(f.ctx, f.deps).followup("continue")).finalText).toBe("accepted")
+  expect((await createAgentWithSummary(f.ctx, f.deps).followup("continue")).finalText).toBe("accepted")
   expect(f.attempts).toHaveLength(2); expect(f.attempts[1]!.inputCost).toBeLessThan(f.attempts[0]!.inputCost)
   expect(f.summaries).toBe(0); expect(f.effects).toBe(1)
   expect(f.session.events).toContain(rawPrior)
@@ -72,7 +82,7 @@ it("local active pruning can recover without a summary call and retains the auth
 it.each(["stop", "surface"] as const)("held retry authorization respects %s without renewing its consumed allowance", async mode => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), abort = new AbortController()
   const f = fixture({ beforeRetry: async () => { entered.resolve(); await release.promise } }); await f.seed.run("original ".repeat(1500))
-  const pending = createAgent(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
+  const pending = createAgentWithSummary(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
   await entered.promise
   if (mode === "stop") abort.abort()
   else f.deps.systemPrompt = "authority changed while auth held"
@@ -85,13 +95,13 @@ it("an error after the completed provider response cannot reopen an owned recove
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   let calls = 0
   const model: ModelClient = { async *stream() { calls++; yield { type: "text/chunk", text: "committed response" }; yield { type: "end" }; throw Object.assign(new Error("context_length_exceeded"), { code: "CONTEXT_WINDOW_EXCEEDED" }) } }
-  await expect(createAgent(ctx, { session, sessionId: "owned", tools, model, systemPrompt: "" }).run("current task")).rejects.toThrow()
+  await expect(createAgentWithSummary(ctx, { session, sessionId: "owned", tools, model, systemPrompt: "" }).run("current task")).rejects.toThrow()
   expect(calls).toBe(1); expect(deriveContextRecovery(session, "owned")).toBeUndefined()
 })
 
 it.each(["length", "content_filter"] as const)("a %s rebuilt main cannot resolve rejection merely because its summary succeeded", async ending => {
   const f = fixture({ ending }); await f.seed.run("original ".repeat(1500))
-  await expect(createAgent(f.ctx, f.deps).followup("continue")).rejects.toMatchObject({ code: ending === "length" ? "MODEL_OUTPUT_TRUNCATED" : "MODEL_REFUSED" })
+  await expect(createAgentWithSummary(f.ctx, f.deps).followup("continue")).rejects.toMatchObject({ code: ending === "length" ? "MODEL_OUTPUT_TRUNCATED" : "MODEL_REFUSED" })
   expect(f.attempts).toHaveLength(2); expect(f.summaries).toBe(1); expect(f.effects).toBe(1)
   expect(deriveContextRecovery(f.session, "owned")).toMatchObject({ state: "retry-started", retryConsumed: true })
 })
@@ -105,7 +115,7 @@ it.each(["failure", "stop"] as const)("a %s during the resolution checkpoint kee
       entered.resolve(); await release.promise
     }
   } }); await f.seed.run("original ".repeat(1500)); armed = true
-  const pending = createAgent(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
+  const pending = createAgentWithSummary(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
   if (mode === "stop") { await entered.promise; abort.abort(); release.resolve() }
   expect(await pending).toBeInstanceOf(Error)
   expect(deriveContextRecovery(f.session, "owned")?.state).not.toBe("resolved")
@@ -120,7 +130,7 @@ it.each([
   [429, { error: { code: "insufficient_quota", message: "Quota exceeded" } }],
 ] as const)("ordinary HTTP %s does not compact and keeps the same agent usable", async (status, body) => {
   const f = fixture({ failure: () => new Response(JSON.stringify(body), { status }) }); await f.seed.run("original ".repeat(1500))
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   await expect(agent.followup("continue")).rejects.toThrow()
   expect(f.summaries).toBe(0); expect(deriveContextRecovery(f.session, "owned")).toBeUndefined()
   expect((await agent.followup("next")).finalText).toBe("accepted")
@@ -129,22 +139,22 @@ it.each([
 
 it("a second confirmed overflow blocks durably across calibration loss and reload", async () => {
   const f = fixture({ repeat: true }); await f.seed.run("original ".repeat(1500))
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   expect(f.attempts).toHaveLength(2); expect(f.summaries).toBe(1)
   expect(deriveContextRecovery(f.session, "owned")).toMatchObject({ state: "blocked", retryConsumed: true })
   agent.updateContext!({ ...f.deps, maxOutputTokens: 512 })
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   const restored = fromJSONL(toJSONL(f.session))
-  await expect(createAgent(f.ctx, { ...f.deps, session: restored }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: restored }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
 })
 
 it("fixed input and an output cap edit cannot masquerade as recovery progress", async () => {
   const f = fixture({ fixed: true }); await f.seed.run("original ".repeat(1500))
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
-  expect(f.attempts).toHaveLength(1); expect(f.summaries).toBe(1)
+  expect(f.attempts).toHaveLength(1); expect(f.summaries).toBe(0)
   expect(deriveContextRecovery(f.session, "owned")?.state).toBe("blocked")
   agent.updateContext!({ ...f.deps, maxOutputTokens: 128 })
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
@@ -155,15 +165,15 @@ it.each(["required", "projection", "retry-started"] as const)("a rejected %s dur
   let armed = false
   const f = fixture({ flush: async session => {
     const recovery = deriveContextRecovery(session, "owned")
-    if (armed && (checkpoint === "projection" ? session.events.at(-1)?.type === "compaction/end" : recovery?.state === checkpoint)) throw new Error(`held ${checkpoint} store failure`)
+    if (armed && (checkpoint === "projection" ? session.events.at(-1)?.type === "compaction/replacement" : recovery?.state === checkpoint)) throw new Error(`held ${checkpoint} store failure`)
   } }); await f.seed.run("original ".repeat(1500)); armed = true
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   await expect(agent.followup("continue")).rejects.toThrow("store failure")
   expect(f.attempts).toHaveLength(1); expect(f.effects).toBe(1)
   expect(deriveContextRecovery(f.session, "owned")?.state).not.toBe("resolved")
   if (checkpoint === "retry-started") {
     armed = false
-    await expect(createAgent(f.ctx, { ...f.deps, session: fromJSONL(toJSONL(f.session)) }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+    await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: fromJSONL(toJSONL(f.session)) }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
     expect(f.attempts).toHaveLength(1)
   }
 })
@@ -174,9 +184,9 @@ it.each(["required", "projection", "retry-started", "summary"] as const)("Stop d
   const hold = async () => { if (armed && !held) { held = true; entered.resolve(); await release.promise } }
   const f = fixture({ summary: checkpoint === "summary" ? hold : undefined, flush: async session => {
     const recovery = deriveContextRecovery(session, "owned")
-    if (checkpoint === "projection" ? session.events.at(-1)?.type === "compaction/end" : recovery?.state === checkpoint) await hold()
+    if (checkpoint === "projection" ? session.events.at(-1)?.type === "compaction/replacement" : recovery?.state === checkpoint) await hold()
   } }); await f.seed.run("original ".repeat(1500)); armed = true
-  const pending = createAgent(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
+  const pending = createAgentWithSummary(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
   await entered.promise; abort.abort(); release.resolve()
   expect(await pending).toBeInstanceOf(Error)
   expect(f.attempts).toHaveLength(1); expect(f.effects).toBe(1)
@@ -186,7 +196,7 @@ it.each(["required", "projection", "retry-started", "summary"] as const)("Stop d
 
 it("an explicit different model tuple gets a fresh owned window even with partial identity", async () => {
   const f = fixture({ repeat: true }); await f.seed.run("original ".repeat(1500))
-  const agent = createAgent(f.ctx, f.deps)
+  const agent = createAgentWithSummary(f.ctx, f.deps)
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   f.deps.model = createOpenAICompatibleClient({ model: "different", apiKey: "controlled", fetch: async () => sse({ content: "fresh model" }) })
   agent.updateContext!({ budget: { contextWindow: 100000 }, maxOutputTokens: 512 })
@@ -203,7 +213,7 @@ it.each([
   const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
   const initialMetadata = direction === "known-to-unknown" ? metadata("configured-provider") : undefined
   const finalMetadata = direction === "unknown-to-known" ? metadata("configured-provider") : undefined
-  const agent = createAgent(f.ctx, { ...f.deps, compact: consumed ? f.deps.compact : undefined, contextMetadata: initialMetadata })
+  const agent = createAgentWithSummary(f.ctx, { ...f.deps, compact: consumed ? f.deps.compact : undefined, contextMetadata: initialMetadata })
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   const previous = deriveContextRecovery(f.session, "owned")!
   expect(previous.retryConsumed).toBe(consumed)
@@ -214,7 +224,7 @@ it.each([
   expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { recoveryRequired: true, fullByProvider: true } })
   expect(deriveContextRecovery(f.session, "owned", { modelId: "fixture", protocol: "openai-compatible", providerId: finalMetadata?.providerId })).toMatchObject({ recoveryId: previous.recoveryId, retryConsumed: consumed })
   const restored = fromJSONL(toJSONL(f.session))
-  await expect(createAgent(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: finalMetadata }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: finalMetadata }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   expect(f.attempts).toHaveLength(attempts)
   expect(new Set(f.session.events.filter(event => event.type === "context/recovery").map(event => event.recoveryId)).size).toBe(1)
   expect(f.effects).toBe(1)
@@ -223,7 +233,7 @@ it.each([
 it("an explicit different known provider gets fresh actual admission and retains the old rejection", async () => {
   const f = fixture(); await f.seed.run("original task")
   const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
-  const agent = createAgent(f.ctx, { ...f.deps, compact: undefined, contextMetadata: metadata("first-provider") })
+  const agent = createAgentWithSummary(f.ctx, { ...f.deps, compact: undefined, contextMetadata: metadata("first-provider") })
   await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   const previous = deriveContextRecovery(f.session, "owned", metadata("first-provider"))!
   agent.updateContext!({ budget: f.deps.budget, maxOutputTokens: f.deps.maxOutputTokens, contextMetadata: metadata("different-provider") })
@@ -235,7 +245,7 @@ it("an explicit different known provider gets fresh actual admission and retains
 it.each(["ambiguous", "known-b"] as const)("%s identity preserves consumed A while known B keeps its own actual retry", async identity => {
   const f = fixture({ repeat: true }); await f.seed.run("original task ".repeat(1500))
   const metadata = (providerId: string) => ({ version: 1 as const, providerId, modelId: "fixture", protocol: "openai-compatible", identityCoverage: "partial" as const, contextWindow: 100000 })
-  await expect(createAgent(f.ctx, { ...f.deps, contextMetadata: metadata("provider-a") }).followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
+  await expect(createAgentWithSummary(f.ctx, { ...f.deps, contextMetadata: metadata("provider-a") }).followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
   expect(f.attempts).toHaveLength(2)
   const consumedA = deriveContextRecovery(f.session, "owned", metadata("provider-a"))!
   expect(consumedA.retryConsumed).toBe(true)
@@ -248,7 +258,7 @@ it.each(["ambiguous", "known-b"] as const)("%s identity preserves consumed A whi
     inputCost: initial.inputCost, inputBytes: initial.inputBytes, modelId: "fixture", protocol: "openai-compatible", providerId: "provider-b", state: "blocked", retryConsumed: false })
   const restored = fromJSONL(toJSONL(f.session))
   expect(deriveContextRecovery(restored, "owned", metadata("provider-b"))).toMatchObject({ recoveryId: "unconsumed-provider-b", retryConsumed: false })
-  const agent = createAgent(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: identity === "known-b" ? metadata("provider-b") : undefined })
+  const agent = createAgentWithSummary(f.ctx, { ...f.deps, session: restored, compact: undefined, contextMetadata: identity === "known-b" ? metadata("provider-b") : undefined })
   await expect(agent.followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
   expect(f.attempts).toHaveLength(identity === "known-b" ? 3 : 2)
   expect(deriveContextRecovery(restored, "owned", metadata("provider-a"))).toMatchObject({ recoveryId: consumedA.recoveryId, retryConsumed: true })
@@ -259,7 +269,7 @@ it.each(["length", "content_filter"])("fences an entire explicitly %s tool batch
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx); let effects = 0
   tools.register({ name: "write", description: "effect", inputSchema: {}, execute: async () => { effects++; return "done" } })
   const model = createOpenAICompatibleClient({ apiKey: "controlled", model: "fixture", fetch: async () => sse({ content: "partial", tool_calls: [{ index: 0, id: "failed", type: "function", function: { name: "write", arguments: "{}" } }] }, reason) })
-  await expect(createAgent(ctx, { session, sessionId: "owned", model, tools, systemPrompt: "" }).run("do it")).rejects.toMatchObject({ code: reason === "length" ? "MODEL_OUTPUT_TRUNCATED" : "MODEL_REFUSED" })
+  await expect(createAgentWithSummary(ctx, { session, sessionId: "owned", model, tools, systemPrompt: "" }).run("do it")).rejects.toMatchObject({ code: reason === "length" ? "MODEL_OUTPUT_TRUNCATED" : "MODEL_REFUSED" })
   expect(effects).toBe(0); expect(session.events.filter(e => e.type === "tool/dispatch")).toHaveLength(0)
   expect(session.events.filter(e => e.type === "tool/result")).toMatchObject([{ callId: "failed", isError: true, output: { code: "TOOL_ABORTED_BEFORE_DISPATCH" } }])
   expect(session.events.some(e => e.type === "assistant/message" && e.text === "partial")).toBe(true)

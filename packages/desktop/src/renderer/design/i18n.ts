@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "壓縮後的完整請求仍超過目標。": "The complete request is still above the target after compaction.",
+  "壓縮未完成。": "Compaction did not complete.",
   "引用內容合計過長，請移除部分引用或附件；草稿仍保留。": "The combined reference content is too long. Remove some references or attachments; your draft is retained.",
   "等待模型回應…": "Waiting for the model to respond…", "等待模型繼續輸出…": "Waiting for more model output…", "請求已進行 {seconds} 秒。": "Request elapsed: {seconds}s.",
   "模型等待期限": "Model wait deadlines", "首次回應期限（秒）": "First response deadline (seconds)", "進度期限（秒）": "Progress deadline (seconds)", "儲存等待設定": "Save wait settings",

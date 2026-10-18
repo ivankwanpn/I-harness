@@ -5,7 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { deriveMessages } from "@i-harness/core-session"
-import { createCompactionEngine } from "@i-harness/compaction"
+import { createCompactionHarness } from '../../compaction/test/fixtures/engine.ts'
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
@@ -25,13 +25,13 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
     const assembly = await service.assemblyFor("s")
     const session = assembly.session
     await recordFixture(assembly.factOwner, { type: "turn/start" })
-    await recordFixture(assembly.factOwner, { type: "user/message", text: "continue planned work" })
+    await recordFixture(assembly.factOwner, { type: "user/message", text: "continue planned work".repeat(200) })
     await recordFixture(assembly.factOwner, { type: "todo/write", version: 1, items: [{ content: "Finish durable Todo editor", status: "in_progress" }, { content: "Verify saved state", status: "pending" }] })
     await recordFixture(assembly.factOwner, { type: "assistant/message", text: "The plan is ready." })
     await recordFixture(assembly.factOwner, { type: "turn/end" })
     const compacted = await assembly.compactNow()
     expect(compacted.compacted).toBe(true)
-    expect(compacted.shadowedSeqs).toContain(2)
+    expect(compacted.shadowedSeqs).toEqual([1])
     expect(JSON.stringify(deriveMessages(session))).not.toContain("Finish durable Todo editor")
     await service.submit("s", "continue after compression", new AbortController().signal)
     expect(requests.at(-1)!.systemPrompt).toContain('"content":"Finish durable Todo editor","status":"in_progress"')
@@ -45,11 +45,11 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
     await recordFixture(assembly.factOwner, { type: "todo/write", version: 1, items: [{ content: "Human corrected next step", status: "pending" }] })
     const humanTodoSeq = session.events.at(-1)!.seq!
     await recordFixture(assembly.factOwner, { type: "assistant/message", text: "A retained final context line." })
-    const resetAction = assembly.factOwner.beginAction()
-    const engine = createCompactionEngine({ model: summarizer, config: { contextWindow: 100_000, minSummaryChars: 1 }, facts: () => resetAction.facts.compaction })
-    const reset = await engine.resetWindow(session, 1).finally(() => resetAction.finish())
+
+    const engine = createCompactionHarness({ model: summarizer, config: { contextWindow: 100_000, minSummaryChars: 1 }, factOwner: assembly.factOwner })
+    const reset = await engine.resetWindow(session, 1)
     expect(reset.reset).toBe(true)
-    expect(reset.shadowedSeqs).toContain(humanTodoSeq)
+    expect(reset.shadowedSeqs).not.toContain(humanTodoSeq)
     await service.submit("s", "continue after reset", new AbortController().signal)
     expect(requests.at(-1)!.systemPrompt).toContain('"content":"Human corrected next step","status":"pending"')
     expect(requests.at(-1)!.systemPrompt).not.toContain("Finish durable Todo editor")

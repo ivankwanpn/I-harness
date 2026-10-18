@@ -1,3 +1,4 @@
+import { createSummaryPort } from '../../compaction/src/index.ts'
 import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, Inbox } from "@i-harness/core-session"
@@ -38,7 +39,7 @@ it.each(["spawn", "job"] as const)("outer steer leaves nested %s awaiting the or
   let launches = 0
   const roles = createRoleRegistry(); roles.register({ ...f.role, name: "general" })
   const model: ModelClient = { async *stream() { launches++; started.resolve(); await held.promise; yield { type: "text/chunk", text: "actual child" }; yield { type: "end" } } }
-  const deps = { ...f.deps, roles, parentModel: model }
+  const deps = { ...f.deps, roles, summaryFactory: createSummaryPort, parentModel: model }
   for (const tool of createSubagentTools(deps)) deps.parentRegistry.register(tool)
   const job = deps.jobs.registerJob("root", "subagent", "held")
   const call = deps.parentRegistry.get("code_exec")!, wait = deps.parentRegistry.get("code_wait")!
@@ -98,7 +99,7 @@ it("disposing a child stops its queued followups from starting fresh turns", asy
   const roles = createRoleRegistry(); roles.register(f.role)
   f.deps.table.add(entry.path, entry)
   try {
-    expect(await ensureResidentAgent({ ...f.deps, parentModel: model, roles }, entry)).toBe(true)
+    expect(await ensureResidentAgent({ ...f.deps, summaryFactory: createSummaryPort, parentModel: model, roles }, entry)).toBe(true)
     append(entry.session, { type: "subagent/inbox", messageId: "one", message: "one" })
     append(entry.session, { type: "subagent/inbox", messageId: "two", message: "two" })
     void driveFollowups(f.deps, entry, entry.sessionId!)
@@ -150,7 +151,7 @@ it.each(["followup", "resume"] as const)("interrupt_agent drains live code and a
   const entry: ChildAgentEntry = { path: "root/probe", status: "waiting", sessionId: "live", roleName: f.role.name, session: createSession(), controller: new AbortController(), mailbox: [] }
   const roles = createRoleRegistry(); roles.register(f.role)
   f.deps.table.add(entry.path, entry)
-  const deps = { ...f.deps, parentModel: model, roles }
+  const deps = { ...f.deps, summaryFactory: createSummaryPort, parentModel: model, roles }
   const tools = createSubagentTools(deps)
   const execute = (name: string, args: unknown) => tools.find(tool => tool.name === name)!.execute(args, {})
   try {

@@ -4,7 +4,7 @@ import { createSession, type Session } from '@i-harness/core-session'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createPreparedPayload, createRetryingClient, resolveRetryPolicy, type LiveExecutionIdentity, type ModelClient, type ExecutionConfirmation, type LLMUsage } from '@i-harness/llm-seam'
 import { ProjectionCounter } from '@i-harness/token-meter'
-import { createAgent } from '../src/index.ts'
+import { createAgentWithSummary } from './fixtures/agent.ts'
 import { createExecutionOwner } from '../src/agent/execution.ts'
 import { captureRequestCandidate } from '../src/agent/request-snapshot.ts'
 const E: LiveExecutionIdentity = { version: 1, runtimeId: 'runtime', bindingLifetimeId: 'binding', authEpoch: 'E', scope: 'managed-subscription', coldCompatible: false }
@@ -47,7 +47,7 @@ function fixture(session = createSession(), retry = false) {
     })
   } }
   const sending = retry ? Object.assign(createRetryingClient(model, resolveRetryPolicy({ mode: 'always', backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } })), { executionIdentity: E }) : model
-  const agent = createAgent(ctx, { session, sessionId: 'owner', model: sending, tools, systemPrompt: '', budget: { contextWindow: 20000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
+  const agent = createAgentWithSummary(ctx, { session, sessionId: 'owner', model: sending, tools, systemPrompt: '', budget: { contextWindow: 20000 }, stepInputs: { claimAtStepBoundary() { claims++ } } })
   return { agent, session, confirmers, preUsage: () => { usageBeforeConfirm = true }, usage: (value: LLMUsage) => { usage = value }, fail: () => { failNext = true }, set: (epoch: string | undefined) => { identity = epoch ? { ...E, authEpoch: epoch } : undefined }, epochs, counts: () => ({ confirms, sends, hooks, claims }) }
 }
 it('writes exact accepted v2 lineage and prices only actual replay suffix on the next live step', async () => {
@@ -83,7 +83,7 @@ it('requires explicit format readiness before an old standalone Session sends', 
 it('requires the same readiness before a standalone manual summary can send', async () => {
   const ctx = createContext(), session: Session = { formatVersion: 3, events: [{ type: 'user/message', text: 'recorded work', seq: 0 }] }
   let sends = 0
-  const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: '', compact: { contextWindow: 20000, minSummaryChars: 1, retainTokens: 0, prune: false }, model: { async *stream() { sends++; yield { type: 'text/chunk', text: 'complete summary' }; yield { type: 'end' } } } })
+  const agent = createAgentWithSummary(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: '', compact: { contextWindow: 20000, minSummaryChars: 1, retainTokens: 0, prune: false }, model: { async *stream() { sends++; yield { type: 'text/chunk', text: 'complete summary' }; yield { type: 'end' } } } })
   await expect(agent.compact!()).rejects.toMatchObject({ code: 'CONTEXT_FORMAT_PRECONDITION' })
   expect(sends).toBe(0)
 })
@@ -128,7 +128,7 @@ it('ignores an old settled collector after the next turn establishes F', async (
 })
 it('keeps a raw custom completion structural and uncalibrated without a receipt', async () => {
   const ctx = createContext(), session = createSession()
-  await createAgent(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: '', model: { async *stream() { yield { type: 'usage', usage: { inputTokens: 100, inputTokenSemantics: 'includes-cache' } }; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } } }).run('custom')
+  await createAgentWithSummary(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: '', model: { async *stream() { yield { type: 'usage', usage: { inputTokens: 100, inputTokenSemantics: 'includes-cache' } }; yield { type: 'text/chunk', text: 'answer' }; yield { type: 'end' } } } }).run('custom')
   expect(session.events.find(e => e.type === 'model/exchange-accepted')?.version).toBe(1)
   expect(session.events.some(e => e.type === 'context/usage')).toBe(false)
 })

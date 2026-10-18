@@ -1,5 +1,17 @@
 import { expect, it } from "vitest"
 import { append, createSession, projectConversation, readConversationState } from "../src/index.ts"
+it('protects a closed physical unit that still owns an unsettled child without protecting unrelated older exchanges', () => {
+  const session=createSession()
+  for (const label of ['older','delegating']) {
+    append(session,{type:'step/start'});append(session,{type:'assistant/message',text:label})
+    if(label==='delegating') append(session,{type:'subagent/start',version:1,taskId:'opaque-task',agentPath:'/child',role:'research',description:'pending'})
+    append(session,{type:'step/end'})
+  }
+  const projection=projectConversation(session,{ownerSessionId:'owner'}),before=readConversationState(session,projection)
+  expect(before.kind==='available'&&before.state.itemIds).toEqual([projection.items[1]!.id])
+  append(session,{type:'subagent/end',version:1,taskId:'opaque-task',outcome:'completed'})
+  expect(readConversationState(session,projectConversation(session,{ownerSessionId:'owner'}))).toMatchObject({kind:'available',state:{itemIds:[]}})
+})
 
 it.each(['failed', 'unaccepted', 'unknown', 'error'] as const)('protects input with %s physical work using the shared unit source', kind => {
   const session = createSession()

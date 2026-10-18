@@ -3,7 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createAgent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
 
 function pressureAgent(
   selection: { provider?: string; modelId?: string },
@@ -11,7 +11,7 @@ function pressureAgent(
 ) {
   const ctx = createContext(), session = createSession()
   for (let i = 0; i < 7; i++) append(session, { type: "user/message", text: `${i}: ` + "word ".repeat(80) })
-  const agent = createAgent(ctx, {
+  const agent = createAgentWithSummary(ctx, {
     session, tools: createToolRegistry(ctx), systemPrompt: "",
     model: createMockClient([{ role: "assistant", text: "done" }]),
     contextMetadata: selection.modelId ? { version: 1, providerId: selection.provider, modelId: selection.modelId, protocol: "custom", identityCoverage: "partial", contextWindow: 10000 } : undefined,
@@ -58,7 +58,7 @@ describe("createAgent per-model compaction policies", () => {
     const ctx = createContext(), session = createSession()
     for (let i = 0; i < 7; i++) append(session, { type: "user/message", text: `${i}: ` + "word ".repeat(80) })
     let binding = { identity: {}, contextWindow: 10000, contextMetadata: { version: 1 as const, providerId: "deepseek", modelId: "unlisted", protocol: "custom", contextWindow: 10000, identityCoverage: "partial" as const } }
-    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: "", bindingForStep: () => binding,
+    const agent = createAgentWithSummary(ctx, { session, tools: createToolRegistry(ctx), systemPrompt: "", bindingForStep: () => binding,
       model: createMockClient([{ role: "assistant", text: "first" }, { role: "assistant", text: "second" }]),
       compact: { contextWindow: 10000, thresholdRatio: 0.8, summarizationModel: createMockClient([{ role: "assistant", text: "checkpoint " + "work ".repeat(120) }]),
         modelPolicies: { "deepseek/deepseek-v4-pro": { thresholdRatio: 0.05, retainTokens: 400 } } } })

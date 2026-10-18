@@ -142,7 +142,7 @@ describe("Desktop SDK router", () => {
       },
       async close() {},
     } as SdkServer
-    const router = createDesktopRouter(base, (frame) => sent.push(frame), { compact: async () => ({ compacted: true }) })
+    const router = createDesktopRouter(base, (frame) => sent.push(frame), { compact: async () => ({ compacted: true,shadowedSeqs:[],outcome:'ready' as const,publication:'nondurable' as const }) })
     await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
     const change = router.handleLine(encodeFrame(makeRequest(2, "session/model/set", { sessionId: "s" })))
     await Promise.resolve()

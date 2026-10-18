@@ -45,6 +45,7 @@ export async function assembleChild(
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    summaryFactory: opts.summaryFactory,
     ...(inheritedBindingForStep ? { bindingForStep: inheritedBindingForStep } : {}),
     isSubagent: true,
     ...(opts.childSessions && sessionId ? { ensureWritableContext: ownedContextReadiness(opts.childSessions.coordinator, sessionId, childSession) } : {}),

@@ -1,4 +1,6 @@
 import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
+/** Data-only connected reduction compatibility; importing this type loads no engine. */
+export type SessionCompactResult = import('@i-harness/context-engine').ReductionResult
 // M27 R-C4: NDJSON JSON-RPC 2.0 line framing for @i-harness/sdk.
 //
 // The wire contract: ONE JSON-RPC 2.0 message per line (JSON.stringify +

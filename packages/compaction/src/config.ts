@@ -1,6 +1,5 @@
 import type { ModelClient, ReasoningEffort } from "@i-harness/llm-seam"
 import type { ContextBindingMetadata } from "@i-harness/core-session"
-import { resolveModelContext, type ProviderProfile } from "@i-harness/provider"
 
 // M33 §3: model-free prune pass options. `false` (explicit) turns the whole
 // pass off; the defaults are the recommended carving (aligned with the
@@ -224,17 +223,4 @@ export function resolveCompactSpec(
     summarizationModel: policy.summarizationModel ?? config.summarizationModel,
     auto: policy.auto ?? config.auto,
   })
-}
-
-// M15: catalog-first window resolution — per-model override → profile-level →
-// config. Pure and exported so tests (and hosts) can assert it directly.
-export function resolveContextWindow(
-  profile: ProviderProfile | undefined,
-  modelId: string | undefined,
-  config: { contextWindow: number },
-): number {
-  const catalogWindow = profile && modelId
-    ? resolveModelContext(profile, modelId).contextWindow
-    : undefined
-  return catalogWindow ?? config.contextWindow
 }

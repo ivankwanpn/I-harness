@@ -1,5 +1,5 @@
 import { estimateContent, projectionFingerprint } from '@i-harness/token-meter'
-import { copyConversationData, type ConversationSourceRef, type ConversationCoverage } from '@i-harness/core-session'
+import { renderConversation, type ConversationSourceRef, type ConversationCoverage } from '@i-harness/core-session'
 import type { ContextSnapshot } from '../contracts/snapshot.ts'
 import type { ReductionGroup, ReductionPolicy, ReductionRun } from './contracts.ts'
 
@@ -36,7 +36,7 @@ export function reductionGroups(snapshot: ContextSnapshot, protectedSeqs: readon
       || refs(item).some(ref => protectedSources.has(ref.id) || ref.seq !== undefined && seqs.has(ref.seq)))
     const covered = complete ? members.map(coverage) : []
     groups.push(Object.freeze({ id: projectionFingerprint(members), items: Object.freeze(members), coverage: Object.freeze(covered),
-      protected: protectedGroup, complete, tokens: estimateContent(copyConversationData(members.flatMap(item => item.messages))) }))
+      protected: protectedGroup, complete, tokens: estimateContent(renderConversation({ items: members })) }))
     i = last + 1
   }
   return Object.freeze(groups)

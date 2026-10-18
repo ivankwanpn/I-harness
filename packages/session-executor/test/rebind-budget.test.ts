@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
 import { appendStandalone as append } from "./helpers.ts"
 import { it, expect, vi } from "vitest"
 
@@ -6,14 +7,14 @@ import { createSessionService } from "../src/service.ts"
 
 it("switches the live output cap, compaction window and context tool together", async () => {
   const requests: LLMRequest[] = []
-  const first: ModelClient = { async *stream() { yield { type: "text/chunk", text: "A" }; yield { type: "end" } } }
+  const first: ModelClient = { prepare: prepareTextFixture,  async *stream() { yield { type: "text/chunk", text: "A" }; yield { type: "end" } } }
   let mainCalls = 0
-  const second: ModelClient = { async *stream(request) {
+  const second: ModelClient = { prepare: prepareTextFixture,  async *stream(request) {
     requests.push(request)
     const directive = request.messages.at(-1)?.content
     const summary = typeof directive === "string" && directive.includes("You are now acting as a compaction engine")
     if (!summary && ++mainCalls === 1) yield { type: "tool_call", call: { name: "get_context_remaining", args: {} } }
-    else yield { type: "text/chunk", text: "Keep the existing task and its decisions. ".repeat(20) }
+    else yield { type: "text/chunk", text: summary ? checkpointOfLength(600) : "Keep the existing task and its decisions. ".repeat(20) }
     yield { type: "end" }
   } }
   const service = createSessionService({ workspace: process.cwd(), compact: { auto: true },
@@ -30,10 +31,13 @@ it("switches the live output cap, compaction window and context tool together", 
     service.rebindModel("s", { providerId: "test", modelId: "b", label: "b", model: second, contextWindow: 50000, maxOutputTokens: 777 })
     expect(await service.assemblyFor("s")).toBe(assembly)
     await service.submit("s", "continue", new AbortController().signal)
-    expect(assembly.session.events.some(e => e.type === "compaction/summary")).toBe(true)
+    expect(assembly.session.events.some(e => e.type === "compaction/replacement")).toBe(true)
     expect(requests.every(r => r.maxOutputTokens !== undefined && r.maxOutputTokens <= 777)).toBe(true)
     const summaryRequests = requests.filter(request => String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine"))
-    expect(summaryRequests).toHaveLength(2)
+    // The oldest tiny run is tried once without progress; the later complete
+    // groups then partition into two useful checkpoints under the same bound.
+    expect(summaryRequests).toHaveLength(3)
+    expect(summaryRequests[0]!.messages.slice(0, -1).map(message => message.content)).toEqual(["first"])
     expect(summaryRequests.flatMap(request => request.messages).reduce((sum, message) => sum + (typeof message.content === "string" && /^x+$/.test(message.content) ? message.content.length : 0), 0)).toBe(170000)
     expect(assembly.session.events.filter(e => e.type === "tool/result")).toContainEqual(expect.objectContaining({ output: expect.objectContaining({ window: 50000 }) }))
   } finally { await service.close() }
@@ -43,7 +47,7 @@ it("rejects a rebind while a turn is running without changing the reported model
   let release!: () => void
   const gate = new Promise<void>(r => { release = r })
   let started = false
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = { prepare: prepareTextFixture,  async *stream() {
     started = true
     await gate
     yield { type: "text/chunk", text: "A" }
@@ -64,10 +68,10 @@ it("rejects rebinding while a manually invoked compaction is awaiting a model", 
   let release!: () => void
   const gate = new Promise<void>(resolve => { release = resolve })
   let started = false
-  const model: ModelClient = { async *stream() {
+  const model: ModelClient = { prepare: prepareTextFixture,  async *stream() {
     started = true
     await gate
-    yield { type: "text/chunk", text: "Keep the requested task and decisions. ".repeat(20) }
+    yield { type: "text/chunk", text: checkpointOfLength(600) }
     yield { type: "end" }
   } }
   const service = createSessionService({ workspace: process.cwd(), compact: { auto: true },

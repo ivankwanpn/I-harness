@@ -1,3 +1,4 @@
+import { prepareTextFixture, checkpointOfLength } from '../../../packages/compaction/test/fixtures/checkpoint.ts'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readdirSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs"
 import { writeFile } from "node:fs/promises"
@@ -412,17 +413,18 @@ describe("headless CLI (M2)", () => {
       // Inline structural model: every stream() call (agent turn OR the shared
       // summarizer call) yields the same long text, so the e2e is deterministic
       // (a script-based createMockClient would be consumed by the summarizer).
-      const model: ModelClient = {
-        async *stream() {
-          yield { type: "text/chunk", text: "compacted work summary line ".repeat(20) }
+      const model: ModelClient = { prepare: prepareTextFixture,
+        async *stream(request) {
+          yield { type: "text/chunk", text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600,'compacted work summary line') : 'compacted work summary line' }
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("z".repeat(200_000), {
+      const seed=createSession();append(seed,{type:"user/message",text:"z".repeat(200000)});append(seed,{type:"assistant/message",text:"older completed exchange"});
+      const result = await runHeadless("continue", { session:seed,
         workspace: dir, approveAll: true, compact, model,
       })
       expect(result.exitCode).toBe(0)
-      const summary = result.session!.events.find((e) => e.type === "compaction/summary")
+      const summary = result.session!.events.find((e) => e.type === "compaction/replacement")
       expect(summary).toBeDefined()
       // the summary is model-visible in the final derived surface
       const msgs = deriveMessages(result.session!)
@@ -1591,13 +1593,14 @@ describe("M11 runHeadless compaction contract", () => {
     // bypasses the pressure gate — so this has to be an auto path, i.e. a real run.
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-"))
     try {
-      const model: ModelClient = {
-        async *stream() {
-          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+      const model: ModelClient = { prepare: prepareTextFixture,
+        async *stream(request) {
+          yield { type: "text/chunk", text: String(request.messages.at(-1)?.content).includes('You are now acting as a compaction engine') ? checkpointOfLength(600) : 'done' }
           yield { type: "end" }
         },
       }
-      const result = await runHeadless("work ".repeat(40_000), {
+      const seed=createSession();append(seed,{type:"user/message",text:"z".repeat(200000)});append(seed,{type:"assistant/message",text:"older completed exchange"});
+      const result = await runHeadless("continue", { session:seed,
         workspace: dir,
         approveAll: true,
         model,
@@ -1606,7 +1609,7 @@ describe("M11 runHeadless compaction contract", () => {
         compact: { contextWindow: 100_000, thresholdRatio: .5, retainTokens: 0, maxTokens: 256, auto: true },
       })
       expect(result.exitCode).toBe(0)
-      expect(result.session?.events.some((e) => e.type === "compaction/summary")).toBe(true)
+      expect(result.session?.events.some((e) => e.type === "compaction/replacement")).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -2285,4 +2288,3 @@ describe("headless CLI M29 file-backed session query wiring", () => {
     expect(fileBackedCalls.list.length).toBe(before)
   }, 30_000)
 })
-

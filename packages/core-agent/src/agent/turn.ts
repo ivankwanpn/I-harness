@@ -49,7 +49,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       await drainHookContext(ctx, deps)
-      const candidateState: import("./execution.ts").CandidateExecutionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
+      const candidateState: import("./execution.ts").CandidateExecutionState & import('./recovery.ts').RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, reductionAttempts: { count: 0, staleRebuilds: 0 }, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
       let candidate: Awaited<ReturnType<typeof admit>>
       let streamStep: ReturnType<typeof modelLoop.start>
       while (true) {
@@ -74,7 +74,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
               candidateState.handoff = handoff
               rebuild = true
             } else if ((error as { code?: string })?.code === "CONTEXT_INPUT_STALE" && !physicalAttempts && !observed) {
-              if (++candidateState.staleRebuilds > 3) await streamStep.fail(stalePreparedInput())
+              if (++candidateState.reductionAttempts!.staleRebuilds > 3) await streamStep.fail(stalePreparedInput())
               rebuild = true
             } else if (!streamStep.result().providerEnded && failure?.code === "CONTEXT_WINDOW_EXCEEDED" && failure.reason === "context-limit") {
               await streamStep.discard()

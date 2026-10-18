@@ -7,6 +7,7 @@ import type { AgentDeps } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 
 export interface RecoveryAdmissionState {
+  reductionAttempts?: import('@i-harness/context-engine').ReductionAttempts
   recoveryCompacted?: boolean
   recoveryId?: string
   recoveryInputFingerprint?: string
@@ -74,11 +75,10 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
       }
       if (state.recoveryCompacted || !context.compactor) return blocked(previous, "Protected or fixed input cannot be reduced under the rejected binding and shape", signal)
       state.recoveryCompacted = true
-      const turn = deps.session.events.findLastIndex(event => event.type === "turn/start")
-      const start = deps.session.events.findIndex((event, index) => index > turn && event.type === "user/message")
-      const protectedSeqs = deps.session.events.slice(Math.max(0, start)).flatMap(event => event.seq === undefined ? [] : [event.seq])
-      const result = await context.compactor.recover(deps.session, { signal, protectedSeqs, reason: "recovery", maxSummaryCalls: 8 })
+      const attempts = state.reductionAttempts ??= { count: 0, staleRebuilds: 0 }
+      const result = await context.compactor.recover(deps.session, { signal, reason: "recovery", maxSummaryCalls: 8, attempts })
       await flush(signal)
+      if (result.publication === 'recovery-required') throw Object.assign(new Error('Context reduction publication requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
       if (!result.compacted) return blocked(previous, result.blockedReason ? "Bounded summary admission could not produce a recovery checkpoint" : "No balanced older material can produce a reduced recovery input", signal)
       return "rebuild"
     },

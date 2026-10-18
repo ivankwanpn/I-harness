@@ -547,7 +547,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
           const result = await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
-          if (selection.current === scope && result?.reason === "summarizer-failed") setTaskActionFailure({ scope, message: [t("摘要產生失敗，未完成壓縮。"), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(" ") })
+          if (selection.current === scope && (result?.outcome === 'blocked' || result?.outcome === 'reduced-over-target')) setTaskActionFailure({ scope, message: [result.outcome === 'reduced-over-target' ? t('壓縮後的完整請求仍超過目標。') : t('壓縮未完成。'), safeCompactionBlockedReason(result.blockedReason)].filter(Boolean).join(' ') })
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
         queue,

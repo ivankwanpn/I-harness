@@ -23,7 +23,8 @@ import {
   type DiagnosticRecord,
   type Redactor,
 } from "@i-harness/diagnostics"
-import { createCompactionEngine, type CompactionConfig } from "../src/index.ts"
+import { createCompactionHarness } from './fixtures/engine.ts'
+import { type CompactionConfig } from '../src/index.ts'
 
 /** The identity redactor: these cases are about the ROUTING (phase/level), and
  *  the real scans are their own task. */
@@ -44,7 +45,7 @@ function parsed(lines: string[]): DiagnosticRecord[] {
 }
 
 /** `engine.test.ts`'s config + long-session fixture, unchanged. */
-const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
+const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.8, maxTokens: 200 }
 
 function longSession() {
   const s = createSession()
@@ -72,14 +73,14 @@ it("the summarizer's fail-soft report is the ambient handle's, at phase turn / l
   const { stream, lines } = captureStream()
   installDiagnostics(createDiagnostics({ stream, runId: "r15", redactor: passthrough }))
 
-  const engine = createCompactionEngine({ model: failing, config })
+  const engine = createCompactionHarness({ model: failing, config })
   const result = await engine.compact(longSession())
 
   // M73: the summarizer-failure arm names its reason (the shape stays pinned).
-  expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
+  expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed", outcome: "blocked", publication: "none", blockedReason: "summary-failed" })
   expect(lines).toHaveLength(1)
   expect(parsed(lines)[0]).toMatchObject({ phase: "turn", level: "warn", run: "r15" })
-  expect(parsed(lines)[0]!.msg).toBe("[i-harness] compaction summarizer failed (fail-soft, retrying next step): Summary request failed.")
+  expect(parsed(lines)[0]!.msg).toBe("[i-harness] compaction summarizer failed: summary-failed")
   expect(JSON.stringify(parsed(lines))).not.toContain("model exploded")
   expect(warn).not.toHaveBeenCalled()
 })

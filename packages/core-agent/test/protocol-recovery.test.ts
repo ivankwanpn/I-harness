@@ -4,14 +4,14 @@ import { createContext } from "@i-harness/core-plugin"
 import { createSession, deriveContextRecovery, deriveMessages, fromJSONL, toJSONL } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { wrapPreparedRequest, type ModelClient, type LLMMessage, type PreparedRequestMeasurement } from "@i-harness/llm-seam"
-import { summarizeWithModel } from "../../compaction/src/summarizer.ts"
+import { summarizeFixture } from '../../compaction/test/fixtures/summary.ts'
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import { createOpenAIClient } from "../../llm-openai/src/index.ts"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { createGeminiClient } from "../../llm-gemini/src/index.ts"
 import { createBedrockClient, type BedrockRuntimeFace } from "../../llm-bedrock/src/index.ts"
 import { systemFetch } from "../../http-transport/src/index.ts"
-import { createAgent } from "../src/index.ts"
+import { createAgentWithSummary } from './fixtures/agent.ts'
 vi.mock("../../http-transport/src/index.ts", () => ({ systemFetch: vi.fn() }))
 afterEach(() => vi.unstubAllGlobals())
 const variants = ["chat", "responses", "subscription", "anthropic", "gemini", "bedrock"] as const
@@ -68,7 +68,7 @@ function setup(variant: Variant, mode: "success" | "repeat" | "stop" | "storage"
   return { ctx, deps, session, tools, wire, measured, held, release, setStage(value: typeof stage) { stage = value }, get effects() { return effects } }
 }
 it.each(variants.flatMap(variant => (["success", "repeat", "stop", "storage"] as const).map(mode => [variant, mode] as const)))("%s actual pipeline preserves recovery/authority/effects in %s", async (variant, mode) => {
-  const f = setup(variant, mode), agent = createAgent(f.ctx, f.deps)
+  const f = setup(variant, mode), agent = createAgentWithSummary(f.ctx, f.deps)
   await agent.run("Original task and authorization. ".repeat(800))
   expect(f.effects).toBe(1)
   const original = f.session.events.find(e => e.type === "tool/result")
@@ -98,7 +98,7 @@ it.each(variants.flatMap(variant => (["success", "repeat", "stop", "storage"] as
   expect(deriveMessages(restored).some(m => m.role === "user" && m.content === "continue")).toBe(true)
   if (mode === "repeat") {
     const count = f.wire.length
-    await expect(createAgent(f.ctx, { ...f.deps, session: restored }).followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
+    await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: restored }).followup("continue")).rejects.toMatchObject({ recoveryBlocked: true })
     expect(f.wire).toHaveLength(count)
     expect(recovery).toMatchObject({ state: "blocked", retryConsumed: true })
   }
@@ -106,7 +106,7 @@ it.each(variants.flatMap(variant => (["success", "repeat", "stop", "storage"] as
     expect(recovery.state).toBe("resolved")
     f.setStage("schema")
     const count = f.wire.filter(item => item.summary).length
-    await expect(createAgent(f.ctx, { ...f.deps, session: restored }).followup("schema check")).rejects.toThrow()
+    await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: restored }).followup("schema check")).rejects.toThrow()
     expect(f.wire.filter(item => item.summary)).toHaveLength(count)
     expect(deriveContextRecovery(restored, "owner")?.state).toBe("resolved")
   }
@@ -117,7 +117,7 @@ it.each(variants)("%s prepares legal standalone summary slices for balanced auto
   const f = setup(variant, "success"), messages: LLMMessage[] = [{ role: "user", content: "Original task and authorized scope" }]
   for (let i = 0; i < 6; i++) messages.push({ role: "assistant", content: "", toolCalls: [{ id: `round-${i}`, name: "effect", args: {} }] }, { role: "tool", toolCallId: `round-${i}`, content: `result-${i}:` + "資料".repeat(1000) })
   const original = JSON.stringify(messages), facts: { inputTokens: number; outputReserve: number }[] = []
-  expect((await summarizeWithModel(f.deps.model, "Synthetic retained transcript", 1024, undefined, undefined, 500, undefined,
+  expect((await summarizeFixture(f.deps.model, "Synthetic retained transcript", 1024, undefined, undefined, 500, undefined,
     { systemPrompt: f.deps.systemPrompt, tools: f.tools.schemas(), messages }, { contextWindow: 20000, onMeasurement: value => facts.push(value) })).text).toBe(checkpoint.trim())
   expect(f.wire.length).toBeGreaterThan(1); expect(f.wire.length).toBeLessThanOrEqual(8)
   expect(f.effects).toBe(0); expect(f.session.events).toEqual([])
@@ -136,5 +136,5 @@ it.each(variants)("%s prepares legal standalone summary slices for balanced auto
   expect(replayed).toEqual(Array.from({ length: 6 }, (_, i) => `result-${i}`))
   expect(facts).toHaveLength(f.wire.length)
   expect(facts.every(value => value.inputTokens + value.outputReserve + 1000 <= 20000)).toBe(true)
-  expect(f.wire.some(({ body }) => JSON.stringify(body).includes("following recorded conversation continuation"))).toBe(true)
+  expect(f.wire.some(({ body }) => JSON.stringify(body).includes("source-record framing"))).toBe(true)
 })

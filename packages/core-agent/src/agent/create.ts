@@ -36,6 +36,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     const action = factOwner.beginAction(signal ?? deps.signal)
     deps.facts = action.facts
     deps.assertFactOpen = action.assertOpen
+    deps.captureContextReduction = action.captureContextReduction?.bind(action)
     const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
     let running: Promise<T>
     deps.sourceFacts = action.registerSettlementSource(async () => {
@@ -83,7 +84,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     compact: (instructions, options) => track(() => withFactAction(options?.signal, async signal => {
       await ensureWritableContext(deps)
       context.refreshBinding()
-      return context.compactor ? context.compactor.compact(deps.session, instructions, { ...options, signal }) : { compacted: false, shadowedSeqs: [] }
+      return context.compactor ? context.compactor.compact(deps.session, instructions, { ...options, signal }) : { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' }
     })),
   }
 }

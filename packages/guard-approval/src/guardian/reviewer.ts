@@ -53,6 +53,7 @@ export interface GuardianReviewDeps {
   contextMetadata?: SpawnOptions["contextMetadata"]
   reasoningEffort?: SpawnOptions["reasoningEffort"]
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"]
+  summaryFactory?: SpawnOptions['summaryFactory']
   autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   parentModel: ModelClient
@@ -182,6 +183,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
     ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
+    summaryFactory: deps.summaryFactory,
     // M73: the session's numbers are the numbers of THE SESSION'S MODEL. When a
     // guardian model is configured, this child runs on a different endpoint
     // whose window we do not know here — passing the session's would be a

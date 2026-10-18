@@ -149,6 +149,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
           budgetBinding: deps.budgetBinding, contextMetadata: deps.contextMetadata, reasoningEffort: deps.reasoningEffort,
           inheritedBindingForStep: deps.inheritedBindingForStep,
+          summaryFactory: deps.summaryFactory,
           ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
           jobs: deps.jobs,
           table: deps.table,

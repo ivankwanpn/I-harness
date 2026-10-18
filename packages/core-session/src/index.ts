@@ -39,7 +39,7 @@ export type { PruneRecord } from "./projection/pruning.ts"
 export { rewindCuts } from "./projection/rewind.ts"
 export type { RewindCut } from "./projection/rewind.ts"
 export { deriveProjectionRewrite } from "./projection/rewrite.ts"
-export { deriveMessagesUpTo, deriveMessages } from "./projection/messages.ts"
+export { deriveMessages } from "./projection/messages.ts"
 export { projectConversation } from "./conversation/project.ts"
 export { readConversationState } from "./conversation/state.ts"
 export type { ConversationState } from "./conversation/state.ts"
@@ -69,7 +69,7 @@ export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts
 export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
 export { captureFactGroup, resolveFactGroup } from './managed/groups.ts'
 export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, LifecycleFact } from './managed/groups.ts'
-export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, LegacyCompactionFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
+export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
 export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'
 export { createFactPorts } from './managed/ports-factory.ts'
 export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource } from './managed/source-scope.ts'

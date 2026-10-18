@@ -100,6 +100,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    summaryFactory: deps.summaryFactory,
     ...(declared === undefined && deps.inheritedBindingForStep ? { bindingForStep: deps.inheritedBindingForStep } : {}),
     isSubagent: true,
     ...(childCoordinator && childSessionId ? { ensureWritableContext: ownedContextReadiness(childCoordinator, childSessionId, entry.session) } : {}),

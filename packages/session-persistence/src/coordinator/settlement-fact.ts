@@ -8,14 +8,14 @@ export function captureSettlementFact(draft: FactGroupDraft, operations: {
   reconcile(key: BatchKey): Promise<FactOutcome>
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
-}): CapturedSettlementFact {
-  return retainSettlementCapture(captureFactGroup(draft), operations)
+}, synchronousAdmission = false): CapturedSettlementFact {
+  return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission)
 }
-export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1]): CapturedSettlementFact {
+export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1], synchronousAdmission = false): CapturedSettlementFact {
   if (capture.kind !== 'captured') operations.quarantineCapture()
-  let latest: FactOutcome | undefined, serial = Promise.resolve()
+  let latest: FactOutcome | undefined, serial: Promise<void> | undefined = synchronousAdmission ? undefined : Promise.resolve()
   const track = (work: () => Promise<FactOutcome>): Promise<FactOutcome> => {
-    const result = serial.then(work)
+    const result = serial ? serial.then(work) : work()
     serial = result.then(() => {}, () => {})
     return result
   }

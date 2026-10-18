@@ -1,5 +1,6 @@
+import { deriveMessagesUpTo } from '../src/projection/messages.ts'
 import { describe, expect, it } from 'vitest'
-import { append, captureFactGroup, createConversationValidationIndex, deriveMessages, deriveMessagesUpTo, fromJSONL, projectConversation, toJSONL, validateConversationHistory, type Session, type SessionEvent } from '../src/index.ts'
+import { append, captureFactGroup, createConversationValidationIndex, deriveMessages, fromJSONL, projectConversation, toJSONL, validateConversationHistory, type Session, type SessionEvent } from '../src/index.ts'
 
 // Coordinates and expected order are literal: no production selector/publisher.
 function fixture(): Session {

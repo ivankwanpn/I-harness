@@ -10,6 +10,8 @@ export function stalePreparedInput(): Error { return Object.assign(new Error("Mo
 /** Hooks/inbox claims belong to the logical step. Rebuilds only prepare its current surface. */
 export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentContext, prepare: ReturnType<typeof createStepInput>, recovery: ReturnType<typeof createRecovery>) {
   return async function admit(abort: AbortSignal | undefined, scope: LLMRequest["requestScope"], getSteps: () => number, state: RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } & CandidateExecutionState = { staleRebuilds: 0, compacted: false, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }) {
+    const attempts = state.reductionAttempts ??= { count: 0, staleRebuilds: state.staleRebuilds }
+    context.bindReductionScope(attempts, scope)
     while (true) {
       deps.assertFactOpen?.()
       abort?.throwIfAborted()
@@ -19,12 +21,12 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
       const { request, requestRevision } = prepare(abort, scope, getSteps, captured)
       const initial = await prepareModelRequest(captured.model, request)
       abort?.throwIfAborted()
-      if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+      if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const assess = (authorized = false, selected = initial, selectOutputCap = true) => context.ownedBudget.assess(selected, captured, captured.snapshot.surface.contextWindow, captured.snapshot.surface.maxOutputTokens, context.budgetCfg?.reserveRatio, authorized, selectOutputCap)
       const assessed = assess()
       const recoveryAdmission = await recovery.admit(assessed.prepared.measurement, state, abort)
       if (recoveryAdmission === "rebuild") { state.compacted = true; continue }
-      if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+      if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const finalAssessment = recoveryAdmission === "authorized"
         ? assess(true, assessed.prepared, false) : assessed
       const { prepared, snapshot } = finalAssessment
@@ -44,30 +46,32 @@ export function createAdmission(deps: AgentDeps & AgentConfig, context: AgentCon
         checkpointed = true
       }
       const automatic = deps.autoCompactionEnabled?.() ?? context.compactEnabled
-      if (context.compactor && !state.compacted && recoveryAdmission !== "authorized" && (snapshot.admission === "compact" || automatic)) {
+      if (context.compactor && recoveryAdmission !== "authorized" && (snapshot.admission === "compact" || automatic)) {
         // This pass may invoke a summary model. Its preceding budget fact must
         // have passed the same durable barrier as a main transport.
         await checkpoint()
-        if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+        if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
         state.compacted = true
         let result
         try {
-          result = snapshot.admission === "compact" ? await context.compactor.compact(deps.session, undefined, { signal: abort })
-            : automatic ? await context.compactor.maybeCompact(deps.session, { signal: abort }) : undefined
+          result = snapshot.admission === "compact" ? await context.compactor.compact(deps.session, undefined, { signal: abort, attempts })
+            : automatic ? await context.compactor.maybeCompact(deps.session, { signal: abort, attempts }) : undefined
         } catch (error) {
           if ((error as { code?: string })?.code !== "CONTEXT_INPUT_STALE") throw error
           state.compacted = false
-          if (++state.staleRebuilds > 3) throw stalePreparedInput()
+          if (++attempts.staleRebuilds > 3) throw stalePreparedInput()
           continue
         }
         abort?.throwIfAborted()
-        if (!current() || result?.compacted) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+        if (result?.publication === 'recovery-required') throw Object.assign(new Error('Context reduction publication requires reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' })
+        if (result?.compacted) continue
+        if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       }
       if (snapshot.admission === "compact") throw new Error(`prompt_too_long: prepared context cannot fit the owned window (${snapshot.admissionInputTokens} input tokens; ${snapshot.outputReserve} output reserve)`)
       // Legacy custom clients with no host window remain source-compatible and
       // explicitly neutral-only/unavailable. No window is invented.
       if (!checkpointed) await checkpoint()
-      if (!current()) { if (++state.staleRebuilds > 3) throw stalePreparedInput(); continue }
+      if (!current()) { if (++attempts.staleRebuilds > 3) throw stalePreparedInput(); continue }
       const validateBeforeTransport = () => {
         deps.assertFactOpen?.()
         abort?.throwIfAborted()

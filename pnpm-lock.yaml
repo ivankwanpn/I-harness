@@ -321,6 +321,9 @@ importers:
 
   packages/compaction:
     dependencies:
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
@@ -330,9 +333,6 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
-      '@i-harness/provider':
-        specifier: workspace:*
-        version: link:../provider
       '@i-harness/telemetry':
         specifier: workspace:*
         version: link:../telemetry
@@ -1182,6 +1182,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@i-harness/context-engine':
+        specifier: workspace:*
+        version: link:../context-engine
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session

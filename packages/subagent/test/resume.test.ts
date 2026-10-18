@@ -1,3 +1,5 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
+import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -47,7 +49,7 @@ function setup() {
   const model = createMockClient([{ role: "assistant", text: "child done" }])
   const deps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
-    parentModel: model, resolveModel: noRoleModel, exec, agents: createAgentRegistry(),
+    summaryFactory: createSummaryPort, parentModel: model, resolveModel: noRoleModel, exec, agents: createAgentRegistry(),
     tasks: createTaskRegistry(),
   }
   return { deps, table, agents: deps.agents, jobs }
@@ -305,7 +307,7 @@ describe("ensureResidentAgent", () => {
     }
     // No declared selection ⇒ the inherit arm, which runs on `parentModel` —
     // the recording client stands in for it.
-    const rebuilt: SubagentToolDeps = { ...deps, parentModel: roleClient }
+    const rebuilt: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: roleClient }
 
     await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
 
@@ -383,7 +385,7 @@ describe("ensureResidentAgent", () => {
       },
     }
     const rebuilt: SubagentToolDeps = {
-      ...deps, autoCompactionEnabled: () => false, parentModel: parentClient,
+      ...deps, autoCompactionEnabled: () => false, summaryFactory: createSummaryPort, parentModel: parentClient,
       contextWindow: 1_000, maxOutputTokens: 4_242,
     }
 
@@ -416,9 +418,9 @@ describe("ensureResidentAgent", () => {
     }
     append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
     table.add(entry.path, entry)
-    const SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (the floor)
+    const SUMMARY = checkpointOfLength(600) // ≥ 500 chars (the floor)
     const requests: LLMRequest[] = []
-    const client: ModelClient = {
+    const client: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
         const last = request.messages.at(-1)
@@ -431,7 +433,7 @@ describe("ensureResidentAgent", () => {
     // fixture exhausted the shared eight-call budget before retaining a usable
     // checkpoint. Give directives/source/output coherent headroom while keeping
     // real over-window pressure by increasing restored history with the window.
-    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 16_000 }
+    const rebuilt: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: client, contextWindow: 16_000 }
 
     await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
 
@@ -442,7 +444,7 @@ describe("ensureResidentAgent", () => {
     // …and it was the rebuilt child's OWN compactor that rescued it
     expect(requests.length).toBeGreaterThan(1)
     expect(entry.session.events.filter(e => e.type === "user/message" && e.text.startsWith("q"))).toHaveLength(12)
-    expect(entry.session.events.some(e => e.type === "compaction/summary")).toBe(true)
+    expect(entry.session.events.some(e => e.type === "compaction/replacement")).toBe(true)
     expect(requests.some(request => request.maxOutputTokens === 4096)).toBe(true)
   }, 15_000)
 
@@ -512,7 +514,7 @@ describe("driveFollowups rebuild injection (M23 wakeup no-op fix)", () => {
     expect(agents.get("child-1")).toBeUndefined()
 
     const model = createMockClient([{ role: "assistant", text: "driven" }])
-    const wakeDeps: SubagentToolDeps = { ...deps, parentModel: model }
+    const wakeDeps: SubagentToolDeps = { ...deps, summaryFactory: createSummaryPort, parentModel: model }
     await driveFollowups({ ...wakeDeps, rebuild: (e) => ensureResidentAgent(wakeDeps, e) }, entry, "child-1")
 
     // the drive was NOT dropped: agent rebuilt + inbox turned
@@ -551,7 +553,7 @@ describe("resume_agent semantics preserved", () => {
     append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "queued before resume" })
     table.add(entry.path, entry)
     const model = createMockClient([{ role: "assistant", text: "queued handled" }])
-    const tools = createSubagentTools({ ...deps, parentModel: model })
+    const tools = createSubagentTools({ ...deps, summaryFactory: createSummaryPort, parentModel: model })
     const resume = tools.find((t) => t.name === "resume_agent")!
     const out = await resume.execute({ target: "root/helper" }, {})
     expect(out).toEqual({ resumed: true })
@@ -615,7 +617,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     return registerSubagent(ctx, parentReg, {
       resolveModel: noRoleModel,
       exec: registerExec(createContext()),
-      parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
+      summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
       restoredState,
       persist: { coordinator, stateId: "main", parentSessionId: "main" },
@@ -687,7 +689,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const subagent = registerSubagent(ctx, parentReg, {
       resolveModel: noRoleModel,
       exec: registerExec(createContext()),
-      parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
+      summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
     })
     await expect(subagent.ready).resolves.toBeUndefined()

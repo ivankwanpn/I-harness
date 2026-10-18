@@ -1,6 +1,7 @@
+import { resolveModelContext } from '../src/catalog/context.ts'
 import { describe, expect, it, vi } from "vitest"
 import { readFileSync } from "node:fs"
-import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContextEvidence, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveEffectiveModelContextEvidence, type ProviderProfile } from "../src/index.ts"
 
 // D3: the table's own shape is asserted by reading the SHIPPED FILE, because
 // the loader's readers are not exported — they have no production consumer yet

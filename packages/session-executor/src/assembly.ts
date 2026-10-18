@@ -1,3 +1,4 @@
+import { summaryFactory, composeCompactConfig } from './context-composition.ts'
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 // packages/session-executor/src/assembly.ts — R-C0 (engine-owned posture).
 // ONE assembly implementation. `runHeadless` (one-shot) and the web
@@ -18,7 +19,7 @@ import { actionMetadataFacts, actionFeedbackFacts } from './lifecycle/action-fac
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
-import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
+import { approxTokens, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import { prepareModelRequest, type ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator, ManagedDocument } from "@i-harness/session-persistence"
@@ -1264,7 +1265,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       get contextWindow() { return opts.contextWindow },
       get budgetBinding() { return opts.budgetBinding },
       get contextMetadata() { return opts.contextMetadata },
-      inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+      summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
       get reasoningEffort() { return currentReasoningEffort },
       get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
@@ -1401,7 +1402,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         get contextWindow() { return opts.contextWindow },
         get budgetBinding() { return opts.budgetBinding },
         get contextMetadata() { return opts.contextMetadata },
-        inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+        summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
         get reasoningEffort() { return currentReasoningEffort },
         get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
@@ -1453,7 +1454,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           get contextWindow() { return opts.contextWindow },
           get budgetBinding() { return opts.budgetBinding },
           get contextMetadata() { return opts.contextMetadata },
-          inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
+          summaryFactory, inheritedBindingForStep: () => ({ identity: currentModel, executionIdentity: currentModel.executionIdentity, contextMetadata: opts.contextMetadata, budgetBinding: opts.budgetBinding, contextWindow: opts.contextWindow, maxOutputTokens: opts.maxOutputTokens, reasoningEffort: currentReasoningEffort }),
           get reasoningEffort() { return currentReasoningEffort },
           get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
@@ -1542,25 +1543,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // directly in the compact config. The assembly's value wins when both exist;
     // the config's is the fallback. Requiring only the first would break callers
     // that already supply the second — a regression the assembly tests caught.
-    const compactWindow = opts.contextWindow ?? opts.compact?.contextWindow
-    let compactForAgent: CompactionConfig | undefined
-    if (opts.compact !== undefined) {
-      if (compactWindow !== undefined) {
-        compactForAgent = {
-          ...opts.compact,
-          contextWindow: compactWindow,
-          ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
-        }
-      } else {
-        d.warn(
-          "[i-harness] compaction was requested but no context window could be resolved, so auto-compaction is DISABLED for this session. " +
-            "Pressure will not trigger a summary; once the budget is exhausted the turn will be refused with prompt_too_long instead. " +
-            "Supply `contextWindow`, put one in the compact config, or use a model binding that carries one.",
-        )
-      }
-    }
+    const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      summaryFactory,
       modelBindingIdentity: () => currentModel,
       ...(opts.coordinator && opts.sessionId ? { ensureWritableContext: ownedContextReadiness(opts.coordinator, opts.sessionId, session) } : {}),
       budgetBinding: () => opts.budgetBinding,
@@ -1723,7 +1709,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return subagent.jobs.kill(id)
       },
       compactNow: async (instructions?: string) =>
-        agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
+        agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [], outcome: 'unchanged', publication: 'none' },
       pluginMcpResults,
       pluginAgentResults,
       updatePluginCapabilities: async (options) => {

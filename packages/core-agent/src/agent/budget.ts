@@ -11,16 +11,32 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
   const calibration = createAcceptedCalibration(ownerSessionId, observationLifetimeId)
   const compatibility = (evidence: RequestEvidence): Parameters<ReturnType<typeof createAcceptedCalibration>["probe"]>[1] => { const expected = expectedExecution(evidence.executionIdentity); return { ownerSessionId, observationLifetimeId, executionEpochId: expected.kind === "known" ? expected.identity.authEpoch : undefined, branchId: evidence.snapshot.coordinates.branchId, contextEpoch: evidence.snapshot.coordinates.contextEpoch, projectionRevision: evidence.projectionRevision } }
   const retirements: Extract<SessionEvent, { type: 'context/usage'; version: 2; op: 'retire' }>[] = []
-  const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) retirements.push(event) }
+  const retire = (reason: CalibrationRetirementReason) => { const event = calibration.retire(reason); if (event) { calibrationRevision++; retirements.push(event) } }
   const drainRetirements = async () => { while (retirements.length) { committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage(retirements[0]!)); retirements.shift() } }
   let latest: BudgetRead = { kind: "unavailable", reason: "No prepared request budget is available" }
   let bindingRevision = 0
   let captured: RequestEvidence | undefined
   let invalidated: string | undefined
+  let calibrationRevision = 0
   const historical = (reason: string): BudgetRead => latest.kind === "ready"
     ? { kind: "ready", snapshot: { ...latest.snapshot, admission: "unavailable", reason } } : latest
   return {
     ownerSessionId,
+    assessmentRevision() {
+      let history = ''
+      for (const event of session.events) if (event.type === 'context/usage' || event.type === 'context/recovery') history = `${history}:${event.seq}`
+      return `${bindingRevision}:${calibrationRevision}:${history}`
+    },
+    probe(prepared: PreparedModelRequest, evidence: RequestEvidence, prospectiveRewrite: boolean, reserveRatio = .9) {
+      return assessLegacyPreparedRequest(prepared, {
+        ownerSessionId, binding: evidence.metadata, bindingRevision, projectionRevision: evidence.projectionRevision,
+        neutralFingerprint: evidence.neutralFingerprint, requestContext: requestContextIdentity(evidence),
+        contextWindow: evidence.snapshot.surface.contextWindow, configuredCap: evidence.snapshot.surface.maxOutputTokens, reserveRatio,
+      }, {
+        estimate: input => calibration.probe(input, { ...compatibility(evidence), ...(prospectiveRewrite ? { prospectiveRewrite: true as const } : {}) }),
+        recoveryRequired: input => { const recovery = deriveContextRecovery(session, ownerSessionId, { ...input, providerId: evidence.metadata?.providerId ?? input.providerId }); return !!recovery && recovery.state !== 'resolved' },
+      })
+    },
     invalidateCalibration() { retire("context-rewritten") },
     retire,
     invalidate() { retire("binding-changed"); invalidated = "Model context binding changed"; bindingRevision++ },
@@ -69,7 +85,7 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       await drainRetirements()
       if (accepted && session.events[accepted.seq!] === accepted) {
         const sample = calibration.recordAccepted(measurement.input, accepted.request, accepted, usage)
-        if (sample.kind === "sample") committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage({ type: "context/usage", version: 2, op: "sample", checkpoint: { ...sample.checkpoint, accepted: { ...sample.checkpoint.accepted, acceptedSeq: { kind: 'prior', seq: sample.checkpoint.accepted.acceptedSeq, expectedType: 'model/exchange-accepted' } } } }))
+        if (sample.kind === "sample") { calibrationRevision++; committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage({ type: "context/usage", version: 2, op: "sample", checkpoint: { ...sample.checkpoint, accepted: { ...sample.checkpoint.accepted, acceptedSeq: { kind: 'prior', seq: sample.checkpoint.accepted.acceptedSeq, expectedType: 'model/exchange-accepted' } } } })) }
       }
       // Accepted provider output belongs to this owned attempt. A subsequent
       // local edit becomes unavailable until admission measures it again.

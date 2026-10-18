@@ -1,6 +1,7 @@
+import { deriveMessagesUpTo } from '../src/projection/messages.ts'
 import { describe, expect, it } from "vitest"
 import {
-  append, createSession, deriveMessages, deriveMessagesUpTo, fromJSONL, toJSONL,
+  append, createSession, deriveMessages, fromJSONL, toJSONL,
   projectConversation, renderConversation,
   type Session, type SessionEvent, type ProviderContinuation,
 } from "../src/index.ts"

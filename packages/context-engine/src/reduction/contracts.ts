@@ -1,4 +1,4 @@
-import type { ConversationCoverage, ContextReplacementRecordV1, SessionEvent } from '@i-harness/core-session'
+import type { ConversationCoverage, ContextReductionDraft } from '@i-harness/core-session'
 import type { ContextSnapshot } from '../contracts/snapshot.ts'
 
 /** Model-free policy. Concrete summary binding/configuration stays at composition. */
@@ -32,8 +32,7 @@ export interface ReductionGroup {
   readonly tokens: number
 }
 export interface ReductionRun { readonly id: string; readonly groups: readonly ReductionGroup[] }
-export type ReductionRewrite = Omit<ContextReplacementRecordV1, 'seq'>
-  | Omit<Extract<SessionEvent, { type: 'compaction/prune' | 'compaction/reset' }>, 'seq'>
+export type ReductionRewrite = ContextReductionDraft['events'][number]
 export interface SummarySelection {
   readonly snapshot: ContextSnapshot
   readonly groups: readonly ReductionGroup[]
@@ -41,6 +40,7 @@ export interface SummarySelection {
   readonly attempts: ReductionAttempts
   readonly instructions?: string
   readonly signal?: AbortSignal
+  readonly maxCalls?: number
   current(): boolean
 }
 export type SummaryPort = (source: SummarySelection) => Promise<
@@ -53,6 +53,7 @@ export interface ReductionAssessment {
   readonly inputBytes: number
   readonly inputFingerprint: string
   readonly shape: string
+  readonly currentView: string
   readonly fixedInput: boolean
   /** Opaque bridge-owned capability. Its contents are never inspected here. */
   readonly proof: object

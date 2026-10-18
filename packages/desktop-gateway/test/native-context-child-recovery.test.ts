@@ -7,7 +7,8 @@ import {createSessionCoordinator,forkSession} from '@i-harness/session-persisten
 import {createJsonlBackend} from '@i-harness/session-persistence-jsonl'
 import {createSessionAssembly,createDurableSessionLoader} from '@i-harness/session-executor'
 import {createNativeContextRuntime} from '../src/context-runtime.ts'
-import {createCompactionEngine} from '../../compaction/src/index.ts'
+import {createCompactionHarness} from '../../compaction/test/fixtures/engine.ts'
+import {prepareTextFixture,checkpointOfLength} from '../../compaction/test/fixtures/checkpoint.ts'
 import type {LLMRequest,ModelClient} from '../../llm-seam/src/index.ts'
 
 it.each(['off','only'] as const)('child %s captures own refs and recovers after compaction/reset/cold resume and fork',async mode=>{
@@ -37,7 +38,7 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     }
     yield{type:'end'}
   }}
-  const summarizer:ModelClient={async *stream(){yield{type:'text/chunk',text:'The child completed its inspection. Native references are needed to continue.'};yield{type:'end'}}}
+  const summarizer:ModelClient={prepare:prepareTextFixture,async *stream(){yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}}
   const options={workspace:root,sessionId:'parent',model,sandbox:'danger-full-access' as const,approveAll:true,codeMode:{mode},additionalTools:[{name:'fixture_long',description:'long fixture',inputSchema:{type:'object'},isReadOnly:true,execute:async()=>{effects++;return 'a'.repeat(20000)+'DIRECT_MARKER'+'b'.repeat(20000)}}],pluginAgents:[{name:'native-child',description:'native child',systemPrompt:'NATIVE_CHILD',tools:['fixture_long','context_output_read','context_output_search']}]}
   let assembly=await createSessionAssembly({...options,coordinator,contextOutput:runtime.contextOutput,contextOutputSourceFor:runtime.sourceFor})
   const observe=()=>assembly.ctx.on('agent/post-tool',payload=>{const event=payload as {name:string;session:Session};if(event.name==='fixture_long'||event.name==='code_exec')childSession=event.session})
@@ -82,7 +83,7 @@ it.each(['off','only'] as const)('child %s captures own refs and recovers after 
     await recordFixture(childOwner,{type:'user/message',text:'rewound turn'})
     await recordFixture(childOwner,{type:'context/result-ref',ref:hidden});await recordFixture(childOwner,{type:'turn/end'})
     await recordFixture(childOwner,{type:'rewind/point',version:1,targetTurn:2,anchorSeq:anchor!,mode:'all',fileOps:[]})
-    const compactor=createCompactionEngine({model:summarizer,facts:()=>compactionAction.facts.compaction,config:{contextWindow:100000,minSummaryChars:1}})
+    const compactor=createCompactionHarness({model:summarizer,factOwner:childOwner,config:{contextWindow:100000,minSummaryChars:1,prune:false}})
     expect((await compactor.compact(childSession!)).compacted).toBe(true)
     expect(JSON.stringify(deriveMessages(childSession!))).not.toContain(refs[0]!.id)
     await followup('continue after compaction');expect(requests.at(-1)!.systemPrompt).not.toContain(hidden.id)

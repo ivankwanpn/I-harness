@@ -67,7 +67,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     });
     const assertAuthorized = (authorization: Authorization) => {
         held.assertHeld();
-        authorization.assertSource?.();
+        try { authorization.assertSource?.(); }
+        catch (error) {
+            const code = (error as { code?: string }).code;
+            if (code === 'FACT_PRECONDITION_STALE' || code === 'FACT_CANCELLED' || code === 'FACT_CLOSED') throw error;
+            failSource();
+            throw new FactRecoveryRequiredError();
+        }
         if (quarantined || sourceFault && !authorization.required)
             throw new FactRecoveryRequiredError();
         if (!authorization.required && (closing || authorization.action.stopped || authorization.action.signal?.aborted)) {
@@ -163,7 +169,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         entry.ticket.release();
                         entry.resolve({ kind: 'not-issued', code: (error as {
                                 code?: 'FACT_CLOSED' | 'FACT_CANCELLED';
-                            }).code ?? 'FACT_RECOVERY_REQUIRED' });
+                            }).code ?? 'FACT_INVALID_GROUP' });
                     }
                 }
                 if (!entries.length)

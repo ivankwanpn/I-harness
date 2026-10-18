@@ -1,3 +1,5 @@
+import { prepareTextFixture, checkpointOfLength } from '../../compaction/test/fixtures/checkpoint.ts'
+import { createSummaryPort } from '../../compaction/src/index.ts'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -208,7 +210,7 @@ describe("spawnChild", () => {
       parentSession,
       parentCtx,
       role: roles.get("general")!,
-      parentModel: model,
+      summaryFactory: createSummaryPort, parentModel: model,
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -272,7 +274,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const opts: SpawnOptions = {
       taskName: "ordering", message: "initial", parentPath: "root", parentCtx, parentRegistry, parentSession,
       role: { name: "probe", description: "probe", systemPrompt: "role prompt", tools: ["read"] },
-      parentModel: { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } },
+      summaryFactory: createSummaryPort, parentModel: { async *stream(request) { prompts.push(request.systemPrompt!); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } },
       resolveModel: noRoleModel, table, agents, jobs, forkTurns: "all",
       childSessions: { coordinator, parentSessionId: "parent" },
       inheritedSystemContext: () => { throw new Error("callback must be read after inherited ownership") },
@@ -335,7 +337,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentSession,
       parentCtx: ctx,
       role: roles.get("general")!,
-      parentModel: { stream(request) { requests.push(request); return mock.stream(request) } },
+      summaryFactory: createSummaryPort, parentModel: { stream(request) { requests.push(request); return mock.stream(request) } },
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -405,7 +407,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentSession,
       parentCtx: ctx,
       role: roles.get("general")!,
-      parentModel: mock,
+      summaryFactory: createSummaryPort, parentModel: mock,
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -454,7 +456,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentSession,
       parentCtx: ctx,
       role: roles.get("general")!,
-      parentModel: mock,
+      summaryFactory: createSummaryPort, parentModel: mock,
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -480,7 +482,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const { sessionId, path } = await spawnChild({
       taskName: "h", message: "hi", parentPath: "root",
       parentRegistry, parentSession, parentCtx: ctx, role: roles.get("general")!,
-      parentModel: mock, resolveModel: noRoleModel, jobs, table,
+      summaryFactory: createSummaryPort, parentModel: mock, resolveModel: noRoleModel, jobs, table,
       agents: createAgentRegistry(),
     })
     expect(sessionId).toBeUndefined()
@@ -521,7 +523,7 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
       childSessions: { coordinator, parentSessionId: "sess-main" },
@@ -566,7 +568,7 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
         taskName: "helper", message: "do the thing", parentPath: "root",
         parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
         role: f.roles.get("general")!,
-        parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
+        summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
         forkTurns: "all",
         contextWindow: 2_000,
         jobs: f.jobs, table: f.table, agents: f.agents,
@@ -627,7 +629,7 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
         taskName: "helper", message: "do the thing", parentPath: "root",
         parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
         role: f.roles.get("general")!,
-        parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
+        summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
         contextWindow: 2_000,
         jobs: f.jobs, table: f.table, agents: f.agents,
       })
@@ -662,7 +664,7 @@ describe("spawnChild onSettled seam (M26-D1)", () => {
     const { path } = await spawnChild({
       taskName: "helper", message: "hi", parentPath: "root", parentRegistry: parentReg,
       parentSession: createSession(), parentCtx: ctx, role: roles.get("general")!,
-      parentModel: model, resolveModel: noRoleModel, jobs, table,
+      summaryFactory: createSummaryPort, parentModel: model, resolveModel: noRoleModel, jobs, table,
       agents: createAgentRegistry(),
       onSettled: (info) => { settled.push(info) },
     })
@@ -726,7 +728,7 @@ describe("spawnChild — M49 Default prompt carries the subagent contract", () =
       parentSession,
       parentCtx,
       role: roles.get("general")!,
-      parentModel: model,
+      summaryFactory: createSummaryPort, parentModel: model,
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -841,7 +843,7 @@ function windowEnforcedClient(inner: ModelClient, contextWindow: number): ModelC
   const rejected: LLMRequest[] = []
   return {
     served,
-    rejected,
+    rejected, prepare: prepareTextFixture,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       const input = estimateContent(request.messages) + estimateChildOverhead(request.systemPrompt, request.tools)
       const cap = request.maxOutputTokens ?? 0
@@ -883,7 +885,7 @@ function spawnFixture() {
     jobs: createJobRegistry(),
     table: createAgentTable(),
     agents: createAgentRegistry(),
-    parentModel: createMockClient([{ role: "assistant", text: "parent" }]),
+    summaryFactory: createSummaryPort, parentModel: createMockClient([{ role: "assistant", text: "parent" }]),
   }
 }
 
@@ -904,7 +906,7 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       // A role that names a model is gated by `plugins.subagentModel` (the case
       // below); this case is about the RESOLVER, so it turns the gate on.
       allowSubagentModelSelection: true,
@@ -932,7 +934,7 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })).rejects.toThrow(/Unknown provider "gw"/)
@@ -947,7 +949,7 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
 
@@ -987,7 +989,7 @@ describe("the role's model: settings beats the role, and the toggle gates both",
   const spawnWith = (f: ReturnType<typeof spawnFixture>, opts: SpawnOverrides) => spawnChild({
     taskName: "helper", message: "do the thing", parentPath: "root",
     parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
-    parentModel: f.parentModel, jobs: f.jobs, table: f.table, agents: f.agents,
+    summaryFactory: createSummaryPort, parentModel: f.parentModel, jobs: f.jobs, table: f.table, agents: f.agents,
     ...opts,
   })
 
@@ -1103,7 +1105,7 @@ describe("the role's resolved reasoningEffort reaches the child", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1125,7 +1127,7 @@ describe("the role's resolved reasoningEffort reaches the child", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1158,7 +1160,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1181,7 +1183,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,        // no role model → the inherit arm
-      parentModel: parentClient, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: parentClient, resolveModel: noRoleModel,
       contextWindow: 200_000, maxOutputTokens: 4_242,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1199,7 +1201,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: parentClient, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: parentClient, resolveModel: noRoleModel,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
     await settled(f.jobs, jobId)
@@ -1221,7 +1223,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,        // no role model → the inherit arm
-      parentModel: parentClient, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: parentClient, resolveModel: noRoleModel,
       contextWindow: 1_000, maxOutputTokens: 4_242,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1248,7 +1250,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       contextWindow: 200_000, maxOutputTokens: 4_242,
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1276,7 +1278,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
-      parentModel: f.parentModel, resolveModel,
+      summaryFactory: createSummaryPort, parentModel: f.parentModel, resolveModel,
       allowSubagentModelSelection: true,
       contextWindow: 1_000,   // the SESSION's window — a different model's
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1311,7 +1313,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: parentClient, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: parentClient, resolveModel: noRoleModel,
       contextWindow: 10, // the child's own prompt + tool schemas alone exceed 0.9 × 10
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1359,13 +1361,13 @@ describe("the child's request carries the resolved budget", () => {
     // those numbers.
     for (let i = 0; i < 12; i++) {
       append(f.parentSession, { type: "turn/start" })
-      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
-      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(600) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(600) })
       append(f.parentSession, { type: "turn/end" })
     }
-    const SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (the floor)
+    const SUMMARY = checkpointOfLength(600) // ≥ 500 chars (the floor)
     const requests: LLMRequest[] = []
-    const client: ModelClient = {
+    const client: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         requests.push(request)
         const last = request.messages.at(-1)
@@ -1378,8 +1380,8 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 3_000, // actual prepared seed remains over the owned window
+      summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 16_000, // actual prepared seed remains over the owned window
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1454,7 +1456,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: client, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
       contextWindow: 3_000,
       maxOutputTokens: 4_242,
       forkTurns: "all",
@@ -1504,8 +1506,8 @@ describe("the child's request carries the resolved budget", () => {
     const HEAD = "INHERITED-DIVISIBLE-SENTINEL "
     for (let i = 0; i < 12; i++) {
       append(f.parentSession, { type: "turn/start" })
-      append(f.parentSession, { type: "user/message", text: (i === 0 ? HEAD : "") + `q${i} ` + "filler ".repeat(60) })
-      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "user/message", text: (i === 0 ? HEAD : "") + `q${i} ` + "filler ".repeat(600) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(600) })
       append(f.parentSession, { type: "turn/end" })
     }
     // The fixture's claim, priced with the public meter the engine prices with:
@@ -1517,7 +1519,7 @@ describe("the child's request carries the resolved budget", () => {
     // ≥ 500 chars: the M34 ⑦c floor is enforced on the LAST piece, and a shorter
     // answer would fail the whole chain (measured on the engine's own fixture in
     // summarizer-prefix.test.ts).
-    const CHILD_SUMMARY = "M75-CHILD-SUMMARY-SENTINEL " + "condensed ".repeat(70)
+    const CHILD_SUMMARY = checkpointOfLength(600,"M75-CHILD-SUMMARY-SENTINEL")
     const client = windowEnforcedClient({
       async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
         const last = request.messages.at(-1)
@@ -1525,13 +1527,13 @@ describe("the child's request carries the resolved budget", () => {
         yield { type: "text/chunk", text: isSummary ? CHILD_SUMMARY : "child done" }
         yield { type: "end" }
       },
-    }, 3_000)
+    }, 16_000)
     const { path, jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 3_000,
+      summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 16_000,
       maxOutputTokens: 4_242,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
@@ -1549,19 +1551,19 @@ describe("the child's request carries the resolved budget", () => {
     expect(firstBudget?.snapshot.admissionInputTokens).toBeGreaterThan(3000)
     // THE claim: a summary exists — the outcome the case above cannot reach on
     // its fixture …
-    const marker = childSession.events.find((e) => e.type === "compaction/summary")
+    const marker = childSession.events.find((e) => e.type === "compaction/replacement")
     expect(marker).toBeDefined()
     // … and the reset never ran: no `compaction/reset` marker at all
     expect(childSession.events.some((e) => e.type === "compaction/reset")).toBe(false)
     // the summary names the WHOLE inherited region, the head's two messages
     // (seqs 1/2) included — the content a reset would have dropped unseen
-    expect(marker!.shadowedSeqs).toEqual(expect.arrayContaining([1, 2]))
+    expect(marker!.coverage.flatMap(row=>row.sources.map(source=>source.seq))).toEqual(expect.arrayContaining([1, 2]))
     // The original 53-event region gains the initial admission and promotion.
     // The existing semantic marker stays between those two records.
     expect(childSession.events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ seq: 48, provenance: expect.objectContaining({ producer: 'subagent.initial' }) })])
     expect(childSession.events.find(event => event.seq === 49)).toMatchObject({ type: 'conversation/semantics' })
     expect(childSession.events.filter(event => event.type === 'agent/input/promoted')).toEqual([expect.objectContaining({ seq: 50 })])
-    expect(marker!.shadowedSeqs).toHaveLength(55)
+    expect(marker!.coverage.flatMap(row=>row.sources.map(source=>source.seq))).toEqual(Array.from({length:12},(_,i)=>i===11?[45]:[4*i+1,4*i+2]).flat())
 
     // the mechanism, request by request: the summarizer's calls are the ones
     // whose last message is the directive, and there are several — the pieces
@@ -1642,8 +1644,8 @@ describe("the child's request carries the resolved budget", () => {
     const f = spawnFixture()
     const PARENT_SUMMARY = "PARENT-SUMMARY-SENTINEL " + "old ".repeat(200)
     append(f.parentSession, { type: "turn/start" })
-    append(f.parentSession, { type: "user/message", text: "q " + "filler ".repeat(300) })
-    append(f.parentSession, { type: "assistant/message", text: "a " + "filler ".repeat(300) })
+    append(f.parentSession, { type: "user/message", text: "q " + "filler ".repeat(1200) })
+    append(f.parentSession, { type: "assistant/message", text: "a " + "filler ".repeat(1200) })
     append(f.parentSession, { type: "turn/end" })
     // three more parent turns, appended BEFORE the marker below — log order is
     // turn, then marker, and the marker's position is immaterial for an `all`
@@ -1651,18 +1653,18 @@ describe("the child's request carries the resolved budget", () => {
     // position that matters only when a window is SLICED). The parent's marker
     // does NOT shadow these, so they are what the child's inherited surface is
     // priced on.
+    append(f.parentSession, { type: "compaction/summary", text: PARENT_SUMMARY, shadowedSeqs: [1, 2] })
     for (let i = 0; i < 3; i++) {
       append(f.parentSession, { type: "turn/start" })
-      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(300) })
-      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(300) })
+      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(1200) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(1200) })
       append(f.parentSession, { type: "turn/end" })
     }
     // (`version: 1` is dropped from the brief's snippet: `SessionEvent`'s
     // `compaction/summary` carries `text`/`shadowedSeqs` only — the shape the
     // engine appends — and tsc rejects the extra property.)
-    append(f.parentSession, { type: "compaction/summary", text: PARENT_SUMMARY, shadowedSeqs: [1, 2] })
-    const CHILD_SUMMARY = "CHILD-SUMMARY-SENTINEL " + "new ".repeat(200)
-    const client: ModelClient = {
+    const CHILD_SUMMARY = checkpointOfLength(600,"CHILD-SUMMARY-SENTINEL")
+    const client: ModelClient = { prepare: prepareTextFixture,
       async *stream(request) {
         const last = request.messages.at(-1)
         const isSummary = typeof last?.content === "string" && last.content.includes("summar")
@@ -1674,8 +1676,8 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: client, resolveModel: noRoleModel,
-      contextWindow: 4_000,
+      summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 16_000,
       forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
@@ -1705,14 +1707,14 @@ describe("the child's request carries the resolved budget", () => {
   it("M74: a child whose parent had compacted compacts from the HEAD of its inherited log", async () => {
     const { f, path } = await spawnFromCompactedParent()
     const childSession = f.table.get(path)!.session
-    const marker = childSession.events.filter((e) => e.type === "compaction/summary").at(-1)!
+    const marker = childSession.events.filter((e) => e.type === "compaction/replacement").at(-1)!
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
     // inherited turns the parent's own marker did NOT hide (see the fixture);
     // 16 is the marker and is NOT in the set (region.ts skips markers).
     expect(childSession.events.filter(event => event.type === 'agent/input/admitted')).toEqual([expect.objectContaining({ seq: 17, provenance: expect.objectContaining({ producer: 'subagent.initial' }) })])
     expect(childSession.events.find(event => event.seq === 18)).toMatchObject({ type: 'conversation/semantics' })
     expect(childSession.events.filter(event => event.type === 'agent/input/promoted')).toEqual([expect.objectContaining({ seq: 19 })])
-    expect(marker.shadowedSeqs).toEqual([0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
+    expect(marker.coverage.flatMap(row=>row.sources.map(source=>source.seq))).toEqual([4,6,7,10,11,14])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
@@ -1747,6 +1749,8 @@ describe("the child's request carries the resolved budget", () => {
     // (1024 → 4096 chars) does not slice it, so trimming is the only change.
     expect(deriveMessages(childSession)).toEqual([
       { role: "user", content: CHILD_SUMMARY.trim() },
+      { role: "assistant", content: "a2 " + "filler ".repeat(1200) },
+      { role: "user", content: "do the thing" },
       { role: "assistant", content: "child done" },
     ])
     expect(childSession.events.some(event => event.type === "compaction/summary" && event.text === PARENT_SUMMARY)).toBe(true)
@@ -1784,7 +1788,7 @@ describe("the child's request carries the resolved budget", () => {
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: f.roles.get("general")!,
-      parentModel: client, resolveModel: noRoleModel,
+      summaryFactory: createSummaryPort, parentModel: client, resolveModel: noRoleModel,
       jobs: f.jobs, table: f.table, agents: f.agents, // no contextWindow, no maxOutputTokens
     })
     await settled(f.jobs, jobId)

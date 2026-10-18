@@ -177,6 +177,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    summaryFactory: opts.summaryFactory,
     reportPolicy: opts.reportPolicy,
     table, jobs, roles, factOwner, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,

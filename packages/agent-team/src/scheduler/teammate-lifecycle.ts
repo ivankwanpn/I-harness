@@ -55,6 +55,7 @@ export function createTeammateSpawner(
       // from the session the roster belongs to, and an absent one writes no key.
       ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),
       budgetBinding: sub.budgetBinding, contextMetadata: sub.contextMetadata, reasoningEffort: sub.reasoningEffort, inheritedBindingForStep: sub.inheritedBindingForStep,
+      summaryFactory: sub.summaryFactory,
       ...(sub.maxOutputTokens !== undefined ? { maxOutputTokens: sub.maxOutputTokens } : {}),
       jobs: teamJobs,
       table: sub.table,

@@ -1,222 +1,43 @@
-import { describe, expect, it } from "vitest"
-import { append, createSession, deriveMessagesUpTo, type Session } from "@i-harness/core-session"
-import { estimateContent } from "@i-harness/token-meter"
-import { sliceRegion, sliceMessages } from "../src/slices.ts"
-
-/** One turn: a user message, a read call with its result, an answer. */
-function appendTurn(s: Session, t: number): void {
-  append(s, { type: "turn/start" })
-  append(s, { type: "user/message", text: `question ${t} ` + "filler ".repeat(120) })
-  append(s, { type: "tool/call", callId: `call_${t}`, name: "read", args: { path: `f${t}.txt` } })
-  append(s, { type: "tool/result", callId: `call_${t}`, name: "read", output: { content: "body ".repeat(200) } })
-  append(s, { type: "assistant/message", text: `answer ${t} ` + "filler ".repeat(120) })
-  append(s, { type: "turn/end" })
-}
-
-/** A session of `turns` turns, each with one user message and one read call. */
-function toolSession(turns: number): Session {
-  const s = createSession()
-  for (let t = 0; t < turns; t++) appendTurn(s, t)
-  return s
-}
-
-/** The SECOND-compaction shape: a `compaction/summary` sits INSIDE the region's
- * span, hiding the head it summarised. */
-function secondCompactionSession(): Session {
-  const s = toolSession(3)
-  append(s, { type: "compaction/start" })
-  append(s, { type: "compaction/summary", text: "SUMMARY-OF-HEAD", shadowedSeqs: allSeqs(s) })
-  append(s, { type: "compaction/end" })
-  for (let t = 3; t < 6; t++) appendTurn(s, t)
-  return s
-}
-
-/** The abort-tail shape (M75 fix round 2, Open 2): a turn that ends abnormally
- * appends neither `step/end` nor `turn/end` (`core-agent/src/index.ts:478`,
- * `:486` are on the clean path only), so the next `turn/start` lands directly
- * after a `tool/result` — with the `tool/dispatch` that always sits inside the
- * run (`core-agent/src/execute-tool-calls.ts:249-253`). An event-level walk stops
- * on the dispatch and can put a cut ON the result. */
-function abortTailSession(): Session {
-  const s = createSession()
-  append(s, { type: "turn/start" })
-  append(s, { type: "user/message", text: "q0 " + "filler ".repeat(120) })
-  append(s, { type: "step/start" })
-  append(s, { type: "tool/call", callId: "call_0", name: "read", args: { path: "f0.txt" } })
-  append(s, { type: "tool/dispatch", callId: "call_0" })
-  append(s, { type: "tool/result", callId: "call_0", name: "read", output: { content: "body ".repeat(200) } })
-  append(s, { type: "turn/start" })
-  append(s, { type: "user/message", text: "q1 " + "filler ".repeat(120) })
-  append(s, { type: "step/start" })
-  append(s, { type: "assistant/message", text: "a1 " + "filler ".repeat(120) })
-  append(s, { type: "step/end" })
-  append(s, { type: "turn/end" })
-  return s
-}
-
-/** The M14 tool-result-images shape: a result carrying images projects a
- * synthetic `user` message INSIDE the tool block (core-session's
- * `deriveMessages`, the `tool/result` arm's `Array.isArray(images)` branch), so
- * the fold reads
- * `user, assistant(toolCalls[c1,c2]), tool(c1), user(synthetic), tool(c2)` and
- * the only user-message candidate sits with `c2` still open. */
-function imageResultSession(): Session {
-  const s = createSession()
-  append(s, { type: "user/message", text: "q0 " + "filler ".repeat(120) })
-  append(s, { type: "tool/call", callId: "c1", name: "read", args: { path: "a.png" } })
-  append(s, { type: "tool/call", callId: "c2", name: "read", args: { path: "b.txt" } })
-  append(s, {
-    type: "tool/result",
-    callId: "c1",
-    name: "read",
-    output: { content: "img", images: [{ mediaType: "image/png", dataBase64: "aGk=" }] },
-  })
-  append(s, { type: "tool/result", callId: "c2", name: "read", output: { content: "body ".repeat(200) } })
-  return s
-}
-
-const allSeqs = (s: Session): number[] => s.events.map((e) => e.seq!).filter((n) => n !== undefined)
-
-const textOf = (slice: { content: unknown }[]): string =>
-  slice.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
-
-/** A `tool` message whose call is not in the same piece would be an orphan. */
-const orphans = (slice: { role: string; toolCalls?: { id: string }[]; toolCallId?: string }[]) => {
-  const calls = new Set(slice.flatMap((m) => (m.role === "assistant" ? (m.toolCalls ?? []).map((c) => c.id) : [])))
-  return slice.filter((m) => m.role === "tool" && !calls.has(m.toolCallId ?? ""))
-}
-
-describe("sliceRegion", () => {
-  it("summary reslicing can divide an autonomous chain only after a complete parallel tool round", () => {
-    const whole = [
-      { role: "user" as const, content: "Original task and authority" },
-      { role: "assistant" as const, content: "", toolCalls: [{ id: "a", name: "read", args: {} }, { id: "b", name: "read", args: {} }] },
-      { role: "tool" as const, toolCallId: "a", content: "first outcome" },
-      { role: "user" as const, content: "interleaved instruction must remain in this open block" },
-      { role: "tool" as const, toolCallId: "b", content: "second outcome" },
-      { role: "assistant" as const, content: "", toolCalls: [{ id: "c", name: "read", args: {} }] },
-      { role: "tool" as const, toolCallId: "c", content: "third outcome" },
-    ]
-    expect(sliceMessages(whole, 1)).toHaveLength(1)
-    const pieces = sliceMessages(whole, 1, true)
-    expect(pieces).toHaveLength(2)
-    expect(pieces.flat()).toEqual(whole)
-    expect(pieces[0]).toHaveLength(5)
-    for (const piece of pieces) expect(orphans(piece)).toEqual([])
-  })
-  it("M75: a budget that fits everything returns ONE slice, equal to the whole fold", () => {
-    const s = toolSession(3)
-    const slices = sliceRegion(s, allSeqs(s), 1_000_000)
-    expect(slices).toHaveLength(1)
-    expect(slices[0]).toEqual(deriveMessagesUpTo(s, s.events.at(-1)!.seq!))
-  })
-
-  it("M75: a small budget splits, and the slices together are exactly the region", () => {
-    const s = toolSession(6)
-    const whole = deriveMessagesUpTo(s, s.events.at(-1)!.seq!)
-    const slices = sliceRegion(s, allSeqs(s), 400)
-    expect(slices.length).toBeGreaterThan(1)
-    // nothing dropped, nothing duplicated, order preserved
-    expect(slices.flat()).toEqual(whole)
-  })
-
-  it("M75: no slice contains an orphan tool result", () => {
-    const s = toolSession(6)
-    for (const slice of sliceRegion(s, allSeqs(s), 400)) {
-      const first = slice[0]
-      expect(orphans(slice)).toEqual([])
-      expect(first).toBeDefined()
-    }
-  })
-
-  // M75 ruling 10, verification (a): a cut may only fall on a `user` message, so
-  // every piece after the first OPENS on one — a piece must be a legal
-  // standalone request. (b): no piece opens on a `tool` message; on this fixture
-  // the region's own fold starts with a user message, so the first piece does
-  // too.
-  it("M75: every piece after the first opens on a user message, and none on a tool message", () => {
-    const s = toolSession(6)
-    const pieces = sliceRegion(s, allSeqs(s), 400)
-    expect(pieces.length).toBeGreaterThan(1)
-    for (const [k, piece] of pieces.entries()) {
-      expect(piece[0]).toBeDefined()
-      if (k > 0) expect(piece[0]!.role).toBe("user")
-      expect(piece[0]!.role).not.toBe("tool")
-    }
-  })
-
-  // Tool results remain contiguous before a synthetic image user message. That
-  // image can now start a new slice after every result has closed its call.
-  it("M75: the M14 tool-result-images shape — no piece carries an orphan tool result", () => {
-    const s = imageResultSession()
-    const whole = deriveMessagesUpTo(s, s.events.at(-1)!.seq!)
-    const pieces = sliceRegion(s, allSeqs(s), 400) // a budget that forces cuts
-    expect(pieces.flat()).toEqual(whole)
-    for (const piece of pieces) expect(orphans(piece)).toEqual([])
-    expect(pieces).toHaveLength(2)
-    expect(pieces[1]?.[0]?.role).toBe("user")
-  })
-
-  // M75 ruling 10, Open 2: the abort-tail shape. The event-level walk stopped on
-  // the `tool/dispatch` and could open a piece on the `tool/result`.
-  it("M75: the abort-tail shape never opens a piece on a tool message", () => {
-    const s = abortTailSession()
-    const whole = deriveMessagesUpTo(s, s.events.at(-1)!.seq!)
-    const pieces = sliceRegion(s, allSeqs(s), 400)
-    expect(pieces.length).toBeGreaterThan(1)
-    expect(pieces.flat()).toEqual(whole)
-    for (const piece of pieces) {
-      expect(piece[0]!.role).not.toBe("tool")
-      expect(orphans(piece)).toEqual([])
-    }
-  })
-
-  // M75 ruling 10: the exemption is STRUCTURAL — a piece containing no interior
-  // cut candidate (a user message beyond its first) cannot be split at all, and
-  // only such a piece may exceed the budget. At this budget every piece here is
-  // splittable, so the bound is asserted for all of them.
-  it("M75: the budget is a real bound wherever a piece could have been split", () => {
-    const s = toolSession(6)
-    const budget = 2_000
-    const pieces = sliceRegion(s, allSeqs(s), budget)
-    for (const piece of pieces) {
-      const splittable = piece.slice(1).some((m) => m.role === "user")
-      expect(splittable).toBe(true)
-      if (splittable) expect(estimateContent(piece)).toBeLessThanOrEqual(budget)
-    }
-    expect(pieces.length).toBeGreaterThan(1)
-  })
-
-  // ... and the piece that cannot be split is emitted whole, over budget.
-  it("M75: a piece that cannot be split is emitted whole and over budget", () => {
-    const s = toolSession(6)
-    const budget = 400
-    const pieces = sliceRegion(s, allSeqs(s), budget)
-    expect(pieces).toHaveLength(6) // one turn per piece, 6 turns
-    for (const piece of pieces) {
-      expect(piece.slice(1).some((m) => m.role === "user")).toBe(false) // no interior candidate
-      expect(estimateContent(piece)).toBeGreaterThan(budget)
-      expect(piece[0]!.role).toBe("user")
-    }
-    expect(pieces.flat()).toEqual(deriveMessagesUpTo(s, s.events.at(-1)!.seq!))
-  })
-
-  // M75 fix round (R3 / ruling 10): the second-compaction regression guard. A
-  // rewrite marker inside the region hides the head — under ruling 10 the
-  // elision is already inside the ONE fold the slicer walks, so the pieces tile
-  // it TRIVIALLY (no shrink guard exists to fire); this stays as the guard for
-  // that whole class.
-  it("M75: a rewrite marker inside the region — the pieces still tile the fold it hides", () => {
-    const s = secondCompactionSession()
-    const whole = deriveMessagesUpTo(s, s.events.at(-1)!.seq!)
-    const pieces = sliceRegion(s, allSeqs(s), 400)
-    expect(pieces.flat()).toEqual(whole)
-    expect(pieces).toHaveLength(4) // the summary + the three turns after it
-    const texts = textOf(pieces.flat())
-    for (const t of [0, 1, 2]) {
-      expect(texts).not.toContain(`question ${t} `)
-      expect(texts).not.toContain(`answer ${t} `)
-    }
-    expect(texts).toContain("SUMMARY-OF-HEAD")
-  })
+import { expect, it } from 'vitest'
+import { summarizeFixture, summarySource } from './fixtures/summary.ts'
+import { generateSelectedSummary } from '../src/summary/generate.ts'
+import { spyModel } from './fixtures/history.ts'
+import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts'
+import type { LLMRequest, LLMMessage, ModelClient } from '@i-harness/llm-seam'
+const messages = (): LLMMessage[] => Array.from({ length: 8 }, (_, index) => ({ role: 'user', content: `GROUP-${index} ${'x'.repeat(3000)}` }))
+it('preflight partitions exactly between whole groups and preserves literal 0..7 coverage in rolling merge', async () => {
+  const f = spyModel(), source = summarySource(messages())
+  const result = await generateSelectedSummary(f.model, source, { maxTokens: 1024, minSummaryChars: 500, inherited: true }, { contextWindow: 9000 })
+  expect(f.requests).toHaveLength(2); expect(source.attempts.count).toBe(2)
+  expect(result.groupIds).toEqual(['literal-0','literal-1','literal-2','literal-3','literal-4','literal-5','literal-6','literal-7'])
+  expect(f.requests[0]!.messages.slice(0,-1).map(m => String(m.content).slice(0,7))).toEqual(['GROUP-0','GROUP-1','GROUP-2','GROUP-3'])
+  expect(f.requests[1]!.messages.slice(0,-1).map(m => String(m.content).slice(0,7))).toEqual(['GROUP-4','GROUP-5','GROUP-6','GROUP-7'])
+  expect(String(f.requests[1]!.messages.at(-1)?.content)).toContain(checkpointOfLength(600))
+})
+it('one indivisible huge source blocks without character/message slicing or transport', async () => {
+  const f=spyModel()
+  await expect(summarizeFixture(f.model,'huge'.repeat(10000),1024,undefined,undefined,500,undefined,undefined,{ contextWindow: 9000 })).rejects.toMatchObject({kind:'fixed-input'})
+  expect(f.requests).toEqual([])
+})
+it.each([false,true])('only an explicit confirmed overflow may partition at group boundaries (confirmed=%s)',async confirmed=>{
+  const requests: LLMRequest[]=[]
+  const model:ModelClient={prepare:prepareTextFixture,async *stream(request){requests.push(request);if(requests.length===1)throw confirmed?Object.assign(Error('full'),{code:'CONTEXT_WINDOW_EXCEEDED'}):Error('context window exceeded');yield{type:'text/chunk',text:checkpointOfLength(600)};yield{type:'end'}}}
+  const promise=summarizeFixture(model,'unused',1024,undefined,undefined,500,undefined,{systemPrompt:'',tools:[],messages:messages()},{contextWindow:100000})
+  if(confirmed){await promise;expect(requests).toHaveLength(3)}
+  else{await expect(promise).rejects.toThrow('context window exceeded');expect(requests).toHaveLength(1)}
+})
+it('shares quality retries and pieces under one eight-invocation allowance',async()=>{
+  let calls=0
+  const model:ModelClient={prepare:prepareTextFixture,async *stream(){calls++;if(calls%3===1)throw Object.assign(Error('full'),{code:'CONTEXT_WINDOW_EXCEEDED'});yield{type:'text/chunk',text:calls%3===2?'short':checkpointOfLength(600)};yield{type:'end'}}}
+  const source=summarySource(messages())
+  await expect(generateSelectedSummary(model,source,{maxTokens:1024,minSummaryChars:500,inherited:true},{contextWindow:100000})).rejects.toMatchObject({kind:'call-limit'})
+  expect(calls).toBe(8);expect(source.attempts.count).toBe(8)
+})
+it('an autonomous parallel call/result round stays whole when other groups are split',async()=>{
+  const f=spyModel(), bundle:LLMMessage[]=[{role:'assistant',content:'recorded round',toolCalls:[{id:'a',name:'read',args:{path:'a'}},{id:'b',name:'read',args:{path:'b'}}]},{role:'tool',toolCallId:'b',content:'B'.repeat(3000)},{role:'tool',toolCallId:'a',content:'A'.repeat(3000)}]
+  await summarizeFixture(f.model,'',1024,undefined,undefined,500,undefined,{systemPrompt:'',tools:[],messages:[...messages(),...bundle]},{contextWindow:11000})
+  const carriers=f.requests.filter(request=>request.messages.some(message=>message.role==='tool'))
+  expect(carriers).toHaveLength(1)
+  expect(carriers[0]!.messages.filter(message=>message.role==='tool').map(message=>message.toolCallId)).toEqual(['b','a'])
+  expect(carriers[0]!.messages.some(message=>message.role==='assistant'&&message.toolCalls?.length===2)).toBe(true)
 })

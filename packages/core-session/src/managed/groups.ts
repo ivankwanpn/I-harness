@@ -2,6 +2,7 @@ import type { SessionEvent } from '../events/types.ts'
 import type { DeepReadonly, SeqRef, SessionView } from './types.ts'
 import { captureLegacyFact, isStrictFactData } from './capture.ts'
 import { isContextEventType } from '../events/context.ts'
+import { validContextReductionDraft } from './reduction.ts'
 
 type Event<K extends SessionEvent['type']> = Extract<SessionEvent, { type: K }>
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
@@ -78,7 +79,7 @@ export function captureFactGroup(draft: FactGroupDraft):
   // Producer wrappers and the DTO structural slots are data. Legacy conversion
   // is limited to ordinary args/output; native/context proof stays strict.
   try {
-    if (draft.kind === 'context-reduction' && (!isStrictFactData(draft) || draft.events.some(event => Object.hasOwn(event, 'seq')))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+    if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     for (const value of groupEvents(draft)) {

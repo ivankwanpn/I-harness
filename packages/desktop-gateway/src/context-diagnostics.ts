@@ -1,5 +1,7 @@
 /** Content-free allowlist shared by the gateway producer and desktop journal. */
 export interface CompactionDiagnostic {
+  outcomeState?: import('@i-harness/sdk').SessionCompactResult['outcome']
+  publication?: import('@i-harness/sdk').SessionCompactResult['publication']
   blockedReason?: string
   operation: "summary" | "attempt"
   providerId?: string; modelId?: string
@@ -15,6 +17,8 @@ export interface CompactionDiagnostic {
 /** Only engine-derived explanations; never arbitrary summarizer/provider text. */
 export function safeCompactionBlockedReason(value: unknown): string | undefined {
   if (typeof value !== "string" || value.length > 256) return
+  const closed: NonNullable<import('@i-harness/sdk').SessionCompactResult['blockedReason']>[] = ['summary-unavailable','source-unrepresentable','opaque','fixed-input','capacity-unavailable','no-eligible-source','no-progress','call-limit','unstable-input','summary-failed','publication-unavailable','publication-not-issued','publication-recovery-required','output-incompatible','output-unknown','output-floor','retention-output','checkpoint-format']
+  if (closed.includes(value as NonNullable<import('@i-harness/sdk').SessionCompactResult['blockedReason']>)) return value
   const numeric = "(?:[0-9]{1,16}|unknown)"
   const templates = [
     `retained checkpoint ceiling ${numeric} chars is below quality floor ${numeric}`,
@@ -41,7 +45,7 @@ export function safeCompactionDiagnostic(value: unknown): CompactionDiagnostic |
       result[key] = r[key]
     }
   }
-  const enums = { reason: ["auto", "manual", "recovery"], outcome: ["skipped", "prune-only", "failure", "success"],
+  const enums = { reason: ["auto", "manual", "recovery"], outcome: ["skipped", "prune-only", "failure", "success"], outcomeState: ['unchanged','ready','reduced-over-target','blocked'], publication: ['none','committed','nondurable','recovery-required'],
     capSupport: ["supported", "unsupported", "unknown"], coverage: ["complete", "neutral-only", "incomplete"], estimateSource: ["projected-heuristic"] }
   for (const key of Object.keys(enums) as (keyof typeof enums)[]) {
     if (r[key] === undefined) continue

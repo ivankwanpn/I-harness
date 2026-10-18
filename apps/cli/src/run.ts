@@ -103,6 +103,7 @@ export async function handleSessionCompactCommand(
     throw new TypeError("session-compact: instructions must be a string")
   }
   const result = await deps.compactNow(instructions)
+  if (result.outcome === 'blocked') return JSON.stringify(result)
   if (!result.compacted) {
     // M73: a summarizer failure used to answer with the same sentence as an
     // empty region — a real failure reading as "there was nothing to do".
@@ -114,6 +115,11 @@ export async function handleSessionCompactCommand(
   return JSON.stringify({
     compacted: result.compacted,
     shadowedSeqs: result.shadowedSeqs,
+    outcome: result.outcome,
+    publication: result.publication,
+    ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}),
+    ...(result.pruned !== undefined ? { pruned: result.pruned } : {}),
+    ...(result.reset !== undefined ? { reset: result.reset } : {}),
     ...(result.summary !== undefined ? { summary: result.summary } : {}),
   })
 }

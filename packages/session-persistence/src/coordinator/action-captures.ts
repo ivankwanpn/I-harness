@@ -13,7 +13,7 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
-    captureContextReduction(draft, checkCurrent) { return actionHandle(captureSettlementFact(draft, guarded(checkCurrent))) },
+    captureContextReduction(draft, checkCurrent) { return actionHandle(captureSettlementFact(draft, guarded(checkCurrent), true)) },
     captureCodeStore(event) {
       operations.assertHeld()
       return strictType(event, 'code/store') ? actionHandle(captureSettlementFact({ kind: 'code', event }, operations)) : invalid()

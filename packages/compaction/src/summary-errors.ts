@@ -2,12 +2,13 @@ export class SummaryCheckpointError extends Error {
   constructor(readonly failure: unknown) { super("compaction: summary checkpoint persistence failed", { cause: failure }) }
 }
 
-type SummaryBlock = "retention-policy" | "output-floor" | "fixed-input" | "call-limit" | "call-policy" | "shrink-limit" | "retention-output" | "binding" | "opaque" | "refused" | "truncated" | "incomplete" | "output-incompatible" | "output-unknown" | "checkpoint-format" | "tool-output"
+type SummaryBlock = "retention-policy" | "output-floor" | "fixed-input" | "call-limit" | "call-policy" | "shrink-limit" | "retention-output" | "binding" | "opaque" | 'source-unrepresentable' | "refused" | "truncated" | "incomplete" | "output-incompatible" | "output-unknown" | "checkpoint-format" | "tool-output"
 /** Closed engine-owned reasons; provider messages never become result data. */
 export class SummaryBlockedError extends Error {
   constructor(readonly kind: SummaryBlock, facts: { chars?: number; floor?: number; input?: number; output?: number; window?: number; limit?: number } = {}) {
     const numeric = (value: number | undefined) => Number.isSafeInteger(value) && value! >= 0 ? String(value) : "unknown"
     const reasons: Record<SummaryBlock, string> = {
+      'source-unrepresentable': 'compaction: selected visible source order cannot be represented completely',
       'output-incompatible': 'compaction: summary request requires structured or forced tool output',
       'output-unknown': 'compaction: summary request text output eligibility is unknown',
       'checkpoint-format': 'compaction: summary does not contain a complete framed checkpoint',

@@ -54,7 +54,7 @@ export function describeSelection(settings: SettingsStoreSurface, provider: (id:
   const content = { schema: 1, provider: selection.providerId, model: selection.modelId, protocol: profile.codexSubscription ? "openai-responses-subscription" : profile.protocol,
     endpoint, catalog: profile.catalog, contextWindow, maxOutputTokens, reasoningEffort, inputModalities: profile.inputModalities,
     maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, promptCache: profile.promptCache,
-    limits, generation, capability, revision: settings.getSectionRevision("llm") }
+    limits, generation, capability }
   const metadata: ContextBindingMetadata = { version: 1, providerId: selection.providerId, modelId: selection.modelId, protocol: content.protocol,
     ...(contextWindow !== undefined ? { contextWindow } : {}), ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}), ...(reasoningEffort ? { reasoningEffort } : {}),
     identityCoverage: partial ? "partial" : "complete",

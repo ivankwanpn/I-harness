@@ -36,6 +36,8 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  summaryFactory?: import('@i-harness/compaction').SummaryFactory
+  captureContextReduction?: NonNullable<import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureContextReduction']>
   factOwner?: FactOwner
   facts?: FactPorts<ProducerFactOutcome>
   sourceFacts?: SettlementFacts<ProducerFactOutcome>

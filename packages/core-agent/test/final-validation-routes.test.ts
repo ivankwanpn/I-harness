@@ -1,11 +1,12 @@
+import { deriveMessagesUpTo } from '../../core-session/src/projection/messages.ts'
 import { afterEach, expect, it, vi } from 'vitest'
-import { append, createSession, deriveMessages, deriveMessagesUpTo, projectConversation, Inbox } from '@i-harness/core-session'
+import { append, createSession, deriveMessages, projectConversation, Inbox } from '@i-harness/core-session'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createOpenAIClient } from '../../llm-openai/src/index.ts'
-import { summarizeWithModel } from '../../compaction/src/summarizer.ts'
-import { createAgent } from '../src/index.ts'
+import { summarizeFixture } from '../../compaction/test/fixtures/summary.ts'
+import { createAgentWithSummary } from './fixtures/agent.ts'
 const image = { mediaType: 'image/png' as const, dataBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' }
 afterEach(() => vi.unstubAllGlobals())
 it('keeps a valid remote assistant-audio reference unavailable to owned main/summary without sending or compacting', async () => {
@@ -14,9 +15,9 @@ it('keeps a valid remote assistant-audio reference unavailable to owned main/sum
   vi.stubGlobal('fetch', async () => { sends++; return new Response('') })
   tools.register({ name: 'effect', description: '', inputSchema: {}, execute: async () => { effects++; return 'done' } })
   const model = createOpenAICompatibleClient({ model: 'm', apiKey: '', options: { messages: [{ role: 'assistant', content: 'previous answer', audio: { id: 'remote-audio' } }] } })
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: '', compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'summary' }; yield { type: 'end' } } } } })
+  const agent = createAgentWithSummary(ctx, { session, tools, model, systemPrompt: '', compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'summary' }; yield { type: 'end' } } } } })
   await expect(agent.run('retained new human input')).rejects.toThrow(/unpriced fixed provider references/)
-  await expect(summarizeWithModel(model, 'summary source', 1024)).rejects.toThrow(/unpriced provider references/)
+  await expect(summarizeFixture(model, 'summary source', 1024)).rejects.toThrow(/unpriced provider references/)
   expect(sends).toBe(0); expect(effects).toBe(0); expect(compacts).toBe(0)
   expect(session.events.find(event => event.type === 'user/message')).toMatchObject({ text: 'retained new human input' })
 })
@@ -81,7 +82,7 @@ it('actual Chat main preserves a steered background outcome and sibling image wi
     return new Response(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: bodies.length === 1 ? 'tool_calls' : 'stop' }] })}\n\ndata: [DONE]\n\n`)
   })
   const model = createOpenAICompatibleClient({ apiKey: '', model: 'm', inputModalities: ['text', 'image'] })
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: '', stepInputs: inbox, maxParallelToolCalls: 2 })
+  const agent = createAgentWithSummary(ctx, { session, tools, model, systemPrompt: '', stepInputs: inbox, maxParallelToolCalls: 2 })
   expect((await agent.run('original human input')).finalText).toBe('done')
   expect(effects).toBe(2); expect(bodies).toHaveLength(2)
   const messages = bodies[1].messages
@@ -103,8 +104,8 @@ it.each(['chat', 'responses'] as const)('%s actual main and summary reject malfo
   const model = route === 'chat' ? createOpenAICompatibleClient({ model: 'm', apiKey: '', options: { messages: null } }) : createOpenAIClient({ model: 'm', apiKey: '', options: { input: [null] } })
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
   tools.register({ name: 'effect', description: '', inputSchema: {}, execute: async () => { effects++; return 'done' } })
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: '', compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'summary' }; yield { type: 'end' } } } } })
+  const agent = createAgentWithSummary(ctx, { session, tools, model, systemPrompt: '', compact: { contextWindow: 10000, auto: true, summarizationModel: { async *stream() { compacts++; yield { type: 'text/chunk', text: 'summary' }; yield { type: 'end' } } } } })
   await expect(agent.run('original task')).rejects.toMatchObject({ code: 'INVALID_ARGUMENT', modelFailure: { reason: 'schema' } })
-  await expect(summarizeWithModel(model, 'summary data', 1024)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
+  await expect(summarizeFixture(model, 'summary data', 1024)).rejects.toMatchObject({ code: 'INVALID_ARGUMENT' })
   expect(sends).toBe(0); expect(effects).toBe(0); expect(compacts).toBe(0)
 })

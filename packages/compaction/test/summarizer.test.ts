@@ -2,7 +2,7 @@ import { prepareTextFixture, checkpointOfLength } from './fixtures/checkpoint.ts
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
-import { summarizeWithModel } from "../src/summarizer.ts"
+import { summarizeFixture } from './fixtures/summary.ts'
 import { buildSummaryPrompt } from "../src/summary/prompt.ts"
 import { prepareModelRequest, type PreparedModelRequest } from "@i-harness/llm-seam"
 
@@ -16,7 +16,7 @@ it.each(["overflow", "incomplete"] as const)("blocks a final summary derivative 
   const candidate: PreparedModelRequest = { textOutput: { status: 'allowed', reason: 'ordinary-text' }, measurement: { ...base.measurement, input: selectedInput, output: { ...output, effectiveCap: 10 } }, withOutputCap() { throw new Error("no convergence loop") }, async *stream() { sends++; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } }
   const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input: initialInput, output }, withOutputCap: () => candidate }
   const model: ModelClient = { async *stream() { throw new Error("unprepared") }, async prepare() { return initial } }
-  await expect(summarizeWithModel(model, "literal", 10, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 100, onMeasurement() { reports++ } })).rejects.toThrow(/fixed summary input|unpriced provider/)
+  await expect(summarizeFixture(model, "literal", 10, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 100, onMeasurement() { reports++ } })).rejects.toThrow(/fixed summary input|unpriced provider/)
   expect(sends).toBe(0); expect(reports).toBe(0)
 })
 it("reports and sends the selected summary measurement", async () => {
@@ -29,22 +29,22 @@ it("reports and sends the selected summary measurement", async () => {
   // The retained ceiling must fit the complete literal; the independent wire cap stays 10.
   const candidate: PreparedModelRequest = { textOutput: { status: 'allowed', reason: 'ordinary-text' }, measurement: { ...base.measurement, input: finalInput, output }, withOutputCap() { throw Error("only one selection") }, async *stream() { sends++; yield { type: "text/chunk", text: checkpointOfLength(500) }; yield { type: "end" } } }
   const initial: PreparedModelRequest = { ...candidate, measurement: { ...base.measurement, input, output }, withOutputCap() { selections++; return candidate } }
-  await expect(summarizeWithModel({ async *stream() { throw Error("unprepared") }, async prepare() { return initial } }, "literal", 125, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 1000, onMeasurement: facts => reports.push(facts) })).resolves.toEqual({ text: checkpointOfLength(500), attempts: 1 })
+  await expect(summarizeFixture({ async *stream() { throw Error("unprepared") }, async prepare() { return initial } }, "literal", 125, undefined, undefined, 1, undefined, undefined, { maxOutputTokens: 10, contextWindow: 1000, onMeasurement: facts => reports.push(facts) })).resolves.toEqual({ text: checkpointOfLength(500), attempts: 1 })
   expect(sends).toBe(1); expect(selections).toBe(1)
   // The neutral fixture also retains four system and five schema tokens.
   expect(reports).toEqual([expect.objectContaining({ inputTokens: 114, outputReserve: 10, effectiveCap: 10, coverage: "complete" })])
 })
-import { createCompactionEngine, resolveConfig, type CompactionConfig } from "../src/index.ts"
+import { createCompactionHarness } from './fixtures/engine.ts'
+import { resolveConfig, type CompactionConfig } from '../src/index.ts'
 
-// Spy model that records the summarizer input. `summarizeWithModel` builds the
+// Spy model that records the summarizer input. `summarizeFixture` builds the
 // prompt with `buildSummaryPrompt` and passes it as the single user-message
 // content (systemPrompt is empty), so the prompt surface is
 // `request.messages[0].content`.
 function spyModel(inputs: string[]): ModelClient {
   return { prepare: prepareTextFixture,
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-      const content = request.messages[0]?.content
-      inputs.push(typeof content === "string" ? content : JSON.stringify(content))
+      inputs.push(request.messages.map(message => typeof message.content === "string" ? message.content : JSON.stringify(message.content)).join("\n"))
       yield { type: "text/chunk", text: checkpointOfLength(600) } // ≥ 500 chars (M34 ⑦c floor)
       yield { type: "end" }
     },
@@ -112,32 +112,32 @@ describe("summarizer prompt (M33 §1, structured 8-section template)", () => {
 describe("summarizer anchored compaction (M33 §1.2)", () => {
   it("two-round compaction anchors the second prompt on the first summary", async () => {
     const s = createSession()
-    for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
+    for (let i = 0; i < 10; i++) append(s, { type: "user/message", text: "word ".repeat(140) })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05, maxTokens: 200 }
-    const engine = createCompactionEngine({ model: spyModel(inputs), config })
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.8, maxTokens: 200 }
+    const engine = createCompactionHarness({ model: spyModel(inputs), config })
 
     const r1 = await engine.compact(s)
     expect(r1.compacted).toBe(true)
     expect(r1.summary).toBeDefined()
     expect(inputs[0]).not.toContain("<previous-summary>")
 
-    append(s, { type: "user/message", text: "brand new work after the first compaction" })
+    append(s, { type: "user/message", text: "brand new work after the first compaction".repeat(100) })
     const r2 = await engine.compact(s)
     expect(r2.compacted).toBe(true)
-    expect(inputs[1]).toContain("<previous-summary>")
+    expect(inputs[1]).not.toContain("<previous-summary>")
     expect(inputs[1]).toContain(r1.summary!)
-    expect(inputs[1]).toContain("Update the anchored summary")
+    expect(inputs[1]).toContain('"kind":"summary"')
     // Event shape unchanged: one summary per round.
-    expect(s.events.filter((e) => e.type === "compaction/summary")).toHaveLength(2)
+    expect(s.events.filter((e) => e.type === "compaction/replacement")).toHaveLength(2)
   })
 
   it("compact(session, instructions) threads instructions into the prompt", async () => {
     const s = createSession()
-    append(s, { type: "user/message", text: "hello" })
+    append(s, { type: "user/message", text: "hello".repeat(200) })
     const inputs: string[] = []
-    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
-    const engine = createCompactionEngine({ model: spyModel(inputs), config })
+    const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.8 }
+    const engine = createCompactionHarness({ model: spyModel(inputs), config })
     const r = await engine.compact(s, "summarize the tool section in Chinese")
     expect(r.compacted).toBe(true)
     expect(inputs[0]).toContain("User instructions")
@@ -146,10 +146,10 @@ describe("summarizer anchored compaction (M33 §1.2)", () => {
 })
 
 describe("summary degenerate floor (M34 ⑦c)", () => {
-  const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.05 }
+  const config: CompactionConfig = { contextWindow: 10000, thresholdRatio: 0.8 }
   function smallSession(): ReturnType<typeof createSession> {
     const s = createSession()
-    for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: "word ".repeat(40) })
+    for (let i = 0; i < 5; i++) append(s, { type: "user/message", text: "word ".repeat(140) })
     return s
   }
 
@@ -162,7 +162,7 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
         yield { type: "end" }
       },
     }
-    const engine = createCompactionEngine({ model: flip, config })
+    const engine = createCompactionHarness({ model: flip, config })
     const result = await engine.compact(smallSession())
     expect(result.compacted).toBe(true)
     expect(calls.n).toBe(2) // the short output was retried once
@@ -179,10 +179,10 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
       },
     }
     const s = smallSession()
-    const engine = createCompactionEngine({ model: short, config })
+    const engine = createCompactionHarness({ model: short, config })
     const result = await engine.compact(s)
     // M73: the summarizer-failure arm names its reason (the shape stays pinned).
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed", blockedReason: "compaction: retained summary outside quality/size limits (100 chars; floor 500; ceiling 4096)" })
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed", blockedReason: "retention-output", outcome: "blocked", publication: "none" })
     expect(calls.n).toBe(2) // one retry, then fail-soft
     // M78 exception, named: "a failed pass appends nothing" is no longer true in
     // general — a pass that PRUNED leaves its `compaction/prune` marker behind
@@ -202,7 +202,7 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
         yield { type: "end" }
       },
     }
-    const engine = createCompactionEngine({ model: ok, config })
+    const engine = createCompactionHarness({ model: ok, config })
     expect((await engine.compact(smallSession())).compacted).toBe(true)
     expect(calls.n).toBe(1)
   })
@@ -234,7 +234,7 @@ describe("M77: a refused summary request", () => {
   }
 
   it("names the refusal instead of blaming an empty output", async () => {
-    await expect(summarizeWithModel(refusingModel, "shadow text", 200)).rejects.toThrow(
+    await expect(summarizeFixture(refusingModel, "shadow text", 200)).rejects.toThrow(
       "compaction: the provider refused to produce a summary",
     )
   })
@@ -246,7 +246,7 @@ describe("M77: a refused summary request", () => {
     // title's "BYTE FOR BYTE" was a claim the matcher did not make — a message
     // that kept this prefix and appended anything at all still passed. The
     // anchored form is the title's actual claim, and it can only be STRICTER.
-    await expect(summarizeWithModel(emptyCleanModel, "shadow text", 200)).rejects.toThrow(
+    await expect(summarizeFixture(emptyCleanModel, "shadow text", 200)).rejects.toThrow(
       /^compaction: summarizer returned empty output$/,
     )
   })

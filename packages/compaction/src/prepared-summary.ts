@@ -2,6 +2,7 @@ import { assertPreparedValidation, prepareModelRequest, readPreparedTextOutput, 
 import { SummaryBlockedError } from "./summary-errors.ts"
 
 export interface SummaryLimits {
+  expectedImages?: number
   maxOutputTokens?: number
   outputCapExplicit?: boolean
   contextWindow?: number
@@ -25,6 +26,8 @@ export async function prepareSummary(model: ModelClient, request: LLMRequest, ma
   assertPreparedValidation(prepared)
   check()
   const validate = (input: typeof prepared.measurement.input) => {
+    if (input.overriddenInputFields.includes('messages')) throw new SummaryBlockedError('opaque')
+    if (limits.expectedImages !== undefined && input.components.images.imageCount !== limits.expectedImages) throw new SummaryBlockedError('opaque')
     if (limits.metadata && input.coverage !== "neutral-only" && (input.modelId !== limits.metadata.modelId || input.protocol !== limits.metadata.protocol)) throw new SummaryBlockedError("binding")
     if (input.coverage === "incomplete") throw new SummaryBlockedError("opaque")
   }
