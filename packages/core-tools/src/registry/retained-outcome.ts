@@ -110,6 +110,11 @@ export function beginRetainedDispatch(prepared: PreparedCall) {
       finish()
       const source = isRecovery(error) ? selected(dispatch) : undefined
       if (!source) { dispatches.delete(prepared.exec); return error }
+      // This genuinely observed original outcome precedes registry finalization.
+      // Its own registered source must fence optional work until the retained
+      // outcome and fact drain succeeds; a branded finalization need not exist
+      // yet (for example a Code Mode output-index receipt is still unknown).
+      scope.source.holdRecovery()
       const outcome: RetainedToolOutcome = {
         async take() {
           assertScope(scope, prepared)

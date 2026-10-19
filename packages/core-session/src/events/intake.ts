@@ -13,7 +13,7 @@ type IntakeSession = { readonly formatVersion: number; readonly events: readonly
  * owned staging. Only the newly allocated event is normalized. */
 export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
   const resultType = Object.getOwnPropertyDescriptor(event, 'type')?.value
-  if (resultType === 'tool/result' || resultType === 'code/result' || resultType === 'subagent/end' || resultType === 'job/status') validateResultFact(event, session.formatVersion)
+  if (resultType === 'tool/result' || resultType === 'code/result' || resultType === 'code/output' || resultType === 'subagent/end' || resultType === 'job/status') validateResultFact(event, session.formatVersion)
   if (isGenerationEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)
     && (session.formatVersion < 8 || !validGenerationEvent(event))) throw new TypeError('Invalid generation fact')
   if (Object.getOwnPropertyDescriptor(event, 'type')?.value === 'agent/input/preparation' && (session.formatVersion < 8 || !validInputPreparationEvent(event))) throw new TypeError('Invalid input preparation')

@@ -26,6 +26,7 @@ function applyTextRetention(target: CodeModeTextRetention, retained: CodeModeTex
 export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLimits, state: Pick<CellState, 'track' | 'retire'>, retirement: Pick<Retirement, 'close'>, event: (event: CodeModeRuntimeEvent) => void | Promise<void>) {
     const { track } = state;
     const { close } = retirement;
+    const capturedText = new WeakMap<CodeModeItem, CodeModeTextRetentionResult>();
     function output(cell: Cell, encoded: string) {
         if (cell.status !== 'running')
             return;
@@ -49,9 +50,10 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
             if (cell.status !== 'running')
                 return;
             cell.pendingOutputReceipts++;
-            const committed = () => {
+            const committed = (captured?: CodeModeTextRetentionResult) => {
                 if (installed)
                     return;
+                if (captured) capturedText.set(item, captured);
                 cell.items.push(item);
                 cell.bytes += bytes;
                 if (item.type === 'text')
@@ -109,20 +111,32 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         cell.truncated = false;
         cell.textIncomplete = false;
         cell.yielded = false;
-        const fullText = admitted.filter((item): item is Extract<CodeModeItem, {
+        const textItems = admitted.filter((item): item is Extract<CodeModeItem, {
             type: 'text';
-        }> => item.type === 'text').map(item => item.text).join('\n');
+        }> => item.type === 'text');
+        const captured = textItems.length > 0 && textItems.every(item => capturedText.has(item));
+        // Shipping mounts already captured each original item before its F1
+        // receipt. Only standalone runtimes without an event owner use the
+        // legacy observer-time port; never join/re-store shipping text bodies.
+        const fullText = captured ? '' : textItems.map(item => item.text).join('\n');
+        const admittedBytes = textItems.reduce((total, item) => total + Buffer.byteLength(item.text), Math.max(0, textItems.length - 1));
         let textRetention: CodeModeTextRetention | undefined;
         let continueRetention: (() => Promise<CodeModeTextRetentionResult>) | undefined;
         const previewBytes = Math.min(TEXT_CAP, tokens * 4);
         const diagnosticBytes = cell.error === undefined ? 0 : Buffer.byteLength(textSlice(cell.error, previewBytes));
-        if (Buffer.byteLength(fullText) > previewBytes - diagnosticBytes || incomplete) {
-            textRetention = { stored: false, cellId: cell.id, ...(cell.origin.sessionId ? { sessionId: cell.origin.sessionId } : {}), admittedBytes: Buffer.byteLength(fullText), omittedBytes: 0, complete: false, truncated: true };
-            if (fullText && !passive) {
+        if (admittedBytes > previewBytes - diagnosticBytes || incomplete || captured) {
+            textRetention = { stored: false, cellId: cell.id, ...(cell.origin.sessionId ? { sessionId: cell.origin.sessionId } : {}), admittedBytes, omittedBytes: 0, complete: false, truncated: admittedBytes > previewBytes - diagnosticBytes || incomplete, representation: captured && textItems.length > 1 ? 'code-text-index-v1' : 'text' };
+            if ((fullText || captured) && (!passive || captured)) {
                 try {
                     const retaining = (async (): Promise<CodeModeTextRetentionResult> => {
+                        if (captured) {
+                            const results = textItems.map(item => capturedText.get(item)!);
+                            const unavailable = results.find(result => result.kind !== 'ready');
+                            if (unavailable) return unavailable;
+                            if (results.length === 1) return results[0]!;
+                        }
                         const retentionSignal = AbortSignal.any([cell.retentionStop.signal, ...(cell.origin.abortSignal ? [cell.origin.abortSignal] : []), ...(signal ? [signal] : [])]);
-                        retentionSignal.throwIfAborted();
+                        if (!captured) retentionSignal.throwIfAborted();
                         // No host owner means no durable result. There is deliberately no
                         // spill fallback: an untracked temp file is not a saved result.
                         if (!options.retainText)
@@ -130,7 +144,12 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                         const retained = await options.retainText({
                             text: fullText, cellId: cell.id, origin: { ...cell.origin, abortSignal: retentionSignal }, complete: !incomplete, status: cell.status, retainOutcome(settle) {
                                 continueRetention = settle;
-                            }
+                            }, ...(captured ? { index: { version: 1 as const, kind: 'code-text-index' as const, items: admitted.map(item => {
+                                if (item.type !== 'text') return { type: item.type };
+                                const result = capturedText.get(item)!;
+                                if (result.kind !== 'ready') throw new FactRecoveryRequiredError();
+                                return { type: 'text' as const, envelope: result.envelope };
+                            }) } } : {})
                         });
                         // A canceled save that never issued an artifact operation is a
                         // known non-durable disposition; it is not "storage unknown".

@@ -22,6 +22,21 @@ describe('closed retained result facts', () => {
     expect(() => append(session, event(value))).toThrow()
     expect(reads).toBe(0)
   })
+  it('validates code output alternatives on actual intake and cold decoding while keeping legacy content', () => {
+    const output = { type: 'code/output', cellId: 'original', envelope: ready() } as unknown as SessionEvent
+    const session = createSession()
+    append(session, output)
+    append(session, { type: 'code/output', cellId: 'legacy', content: { type: 'text', text: 'old output' } })
+    const raw = toJSONL(session)
+    expect(fromJSONL(raw).events).toHaveLength(2)
+    expect(() => append(createSession(), { ...output, content: 'duplicate raw' } as SessionEvent)).toThrow()
+    expect(() => fromJSONL(raw.replace('"envelope":', '"content":"duplicate raw","envelope":'))).toThrow()
+    expect(() => fromJSONL(raw.replace('"formatVersion":10', '"formatVersion":9'))).toThrow()
+    expect(() => fromJSONL(raw.replace('"formatVersion":10', '"formatVersion":11'))).toThrow()
+    const legacy = createSession()
+    append(legacy, { type: 'code/output', cellId: 'legacy', content: { type: 'text', text: 'literal old output' } })
+    expect(fromJSONL(toJSONL(legacy).replace('"formatVersion":10', '"formatVersion":9')).events[0]).toMatchObject({ content: { text: 'literal old output' } })
+  })
   it('retains stack-safe native property semantics for a deep accessor result in one traversal', () => {
     let reads = 0
     let value: unknown = Object.defineProperty({}, 'answer', { enumerable: true, get() { reads++; return 42 } })

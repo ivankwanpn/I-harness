@@ -97,6 +97,7 @@ export function validateResultFact(event: object, formatVersion: number): void {
   const revision = Object.getOwnPropertyDescriptor(event, 'resultRevision')
   if (child && revision && !field) throw new TypeError('Child result revision requires its envelope')
   if (!field) return
+  if (Object.getOwnPropertyDescriptor(event, 'type')?.value === 'code/output' && 'content' in event) throw new TypeError('Code output cannot contain both raw content and a result envelope')
   if (formatVersion < 10 || !('value' in field) || !field.enumerable || 'output' in event || 'isError' in event || !validResultEnvelope(field.value)) throw new TypeError('Invalid result envelope or session format')
   if (child) {
     if (!revision || !('value' in revision) || !revision.enumerable || typeof revision.value !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(revision.value)) throw new TypeError('Invalid child result revision')

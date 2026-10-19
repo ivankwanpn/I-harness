@@ -114,7 +114,8 @@ it.each(['quota-refused', 'f1-unknown'] as const)('keeps one real emitted window
       await actor.reconcile(key!)
       await mount.dispose()
       const events = actor.view.events
-      expect(events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])
+      expect(events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ envelope: expect.objectContaining({ retention: expect.objectContaining({ kind: 'artifact' }) }) })])
+      expect(JSON.stringify(events.filter(event => event.type === 'code/output'))).not.toContain('original retained emitted 中文 '.repeat(2000))
       expect(events.some(event => event.type === 'code/cell' && event.state === 'started')).toBe(true)
       expect(events.filter(event => event.type === 'context/result-ref')).toEqual([])
       expect(parent.view.events).toEqual([])
@@ -125,7 +126,8 @@ it.each(['quota-refused', 'f1-unknown'] as const)('keeps one real emitted window
     } else {
       // A known quota refusal is explicit and bounded; the guest still runs once.
       await agent.run('emit the original window')
-      expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])
+      expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ envelope: expect.objectContaining({ retention: expect.objectContaining({ kind: 'unavailable', reason: 'quota' }) }) })])
+      expect(JSON.stringify(actor.view.events.filter(event => event.type === 'code/output'))).not.toContain('original retained emitted 中文 '.repeat(2000))
       expect(actor.view.events.filter(event => event.type === 'context/result-ref')).toEqual([])
       expect(parent.view.events).toEqual([])
       const results = actor.view.events.filter(event => event.type === 'tool/result')

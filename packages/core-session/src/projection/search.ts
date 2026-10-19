@@ -1,6 +1,7 @@
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, imageSummaryDescriptor } from "../images.ts"
 import type { ImageInput } from "../images.ts"
+import { resultText } from '../results/projection.ts'
 
 // Canonical event→searchable-text normalizer for the session-query FTS index
 // (M10b). Control events and assistant/chunk (streaming noise duplicating the
@@ -18,6 +19,7 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "code/result":
       return codeSearchText(ev.output)
     case "code/output": {
+      if (ev.envelope) return ev.envelope.retention.kind === 'inline' ? resultText(ev.envelope) : ev.envelope.preview;
       if (typeof ev.content === "string") return ev.content
       if (ev.content && typeof ev.content === "object" && !Array.isArray(ev.content)) {
         const item = ev.content as { type?: unknown; text?: unknown }

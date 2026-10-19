@@ -31,7 +31,10 @@ export type CodeModeTextUnavailable = "no-owner" | "quota" | "encoding" | "stora
  * own bounded `text` is the model view; `envelope.preview` stays empty so the
  * same huge text is never carried twice. `envelope.retention` is the exact
  * immutable artifact reference (artifact codec) or an explicit unavailable. */
-export interface CodeModeTextRetention { stored: boolean; envelope?: ResultEnvelope; unavailable?: CodeModeTextUnavailable; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
+export interface CodeModeTextRetention { stored: boolean; envelope?: ResultEnvelope; representation?: 'text' | 'code-text-index-v1'; unavailable?: CodeModeTextUnavailable; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
+/** Ordered references to original text facts; media positions remain explicit.
+ * This index contains no second copy of the original text/media bodies. */
+export interface CodeModeTextIndex { version: 1; kind: 'code-text-index'; items: ({ type: 'text'; envelope: ResultEnvelope } | { type: 'image' | 'audio' })[] }
 export type CodeModeTextRetentionResult =
   | { kind: "ready"; envelope: ResultEnvelope }
   | { kind: "unavailable"; reason: Exclude<CodeModeTextUnavailable, "storage-unknown"> }
@@ -43,7 +46,7 @@ export interface CodeModeObserveOptions {
 }
 export type CodeModeRuntimeEvent =
   | { type: "started"; cellId: string; source: string; origin: CodeModeOrigin }
-  | { type: "output"; cellId: string; item: CodeModeItem; origin: CodeModeOrigin; committed?(): void; retainOutcome?(): void }
+  | { type: "output"; cellId: string; item: CodeModeItem; origin: CodeModeOrigin; committed?(retained?: CodeModeTextRetentionResult): void; retainOutcome?(): void }
   | { type: "closed"; cellId: string; status: Exclude<CodeModeStatus, "running">; error?: string; origin: CodeModeOrigin; policyRefusal?: true; committed?(): void; retainOutcome?(): void }
 export interface CodeModeRuntimeOptions {
   tools(): CodeModeToolDefinition[]
@@ -57,6 +60,9 @@ export interface CodeModeRuntimeOptions {
    * The host owns the durable artifact through the existing result store; this
    * port never writes a spill file and never returns the raw text again. */
   retainText?(input: {text:string;cellId:string;origin:CodeModeOrigin;complete:boolean;status:CodeModeStatus;
+    index?: CodeModeTextIndex;
+    /** Original admitted output source, valid through passive settlement. */
+    assertHeld?(): void;
     retainOutcome?(settle:() => Promise<CodeModeTextRetentionResult>):void;
     retentionRecovery?(): void;
   }): Promise<CodeModeTextRetentionResult|undefined>

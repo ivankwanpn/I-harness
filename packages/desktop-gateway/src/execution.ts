@@ -101,6 +101,10 @@ export function createDesktopExecution(coordinator: SessionCoordinator, service:
         const cell = cells.get(event.cellId); if (!cell) continue
         if (event.type === "code/output") {
           if (cell.output.length >= 100) { cell.truncated = true; continue }
+          if (event.envelope) {
+            cell.output.push({ kind: 'text', text: clip(cell, { preview: event.envelope.preview, retention: event.envelope.retention }), seq: event.seq })
+            continue
+          }
           const content = event.content as { type?: string; text?: string } | null
           cell.output.push({ kind: content?.type ?? "value", text: clip(cell, content?.type === "text" ? content.text : event.content), seq: event.seq })
         } else if (event.type === "code/call") {

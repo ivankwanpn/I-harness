@@ -2,7 +2,7 @@ import { afterEach as afterFixture, vi as fixtureVi } from 'vitest'
 afterFixture(() => fixtureVi.unstubAllGlobals())
 import { controlledModel } from "./controlled-model.ts"
 import { subscribe } from '@i-harness/core-session'
-import { expect, it, vi } from "vitest"
+import { expect, it } from "vitest"
 import { mkdtemp, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
@@ -49,18 +49,26 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     await execute("spawn_teammate", { name: "helper", description: "read fixture", prompt: "read teammate", context: "fresh" })
     const rows = (await execute("list_agents", {}) as { agents: Array<{ path: string; sessionId: string }> }).agents
     const ids = ["root/normal", "lead/helper"].map(path => rows.find(row => row.path === path)!.sessionId)
-    const waitTurns = async (count: number) => { await vi.waitFor(async () => {
+    const waitTurns = async (count: number) => {
       for (const id of ids) {
-        await coordinator.flush(id)
-        const events = (await coordinator.snapshot!(id)).session.events
+        const document = await coordinator.openManagedDocument(id)
+        await new Promise<void>(done => {
+          const reached = () => document.view.events.filter(event => event.type === 'turn/end').length >= count
+          const off = subscribe(document.view, event => { if (event.type === 'turn/end' && reached()) { off(); done() } })
+          if (reached()) { off(); done() }
+        })
+        // Inspect the genuine committed live view after its receipt. A cold
+        // snapshot is fenced while unrelated owner metadata is still draining.
+        const events = document.view.events
         expect(events.filter(e => e.type === "turn/end")).toHaveLength(count)
         expect(events.some(e => e.type === "code/call" && e.name === "list_dir")).toBe(true)
-        expect(events.filter(e => e.type === "code/output")).toEqual(expect.arrayContaining([expect.objectContaining({ content: { type: "text", text: '["list_dir"]' } })]))
+        expect(events.filter(e => e.type === "code/output")).toEqual(expect.arrayContaining([expect.objectContaining({ envelope: expect.objectContaining({ preview: '["list_dir"]' }) })]))
       }
-    }) }
+    }
     await waitTurns(1)
     let boundaryClose: Promise<void> | undefined
     let boundaryState: ReturnType<typeof assembly.subagentState> | undefined
+    const reachedBoundary = Promise.withResolvers<void>()
     const endings = new Map(ids.map(id => [id, 1]))
     const boundaryUnsubscribers = await Promise.all(ids.map(async id => subscribe((await coordinator.openManagedDocument(id)).view, event => {
       if (event.type !== 'turn/end') return
@@ -69,6 +77,7 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
         boundaryState = assembly.subagentState()
         boundaryClose = service.close()
         void boundaryClose.catch(error => console.error('Exact turn-end close failure', inspect(error, { depth: 12 })))
+        reachedBoundary.resolve()
       }
     })))
     expect(parallelLimits).toEqual([1, 1, 1])
@@ -79,18 +88,24 @@ it("keeps child outputs and stored state through snapshot-before-close at the ex
     expect(assembly.session.events.some(e => e.type === "code/dispatch")).toBe(false)
     await execute("followup_task", { target: "root/normal", message: "followup" })
     await execute("team_followup_task", { target: "helper", message: "followup" })
-    await waitTurns(2)
+    // The exact receipt callback starts closing the original owner. Its cold
+    // snapshot is intentionally unavailable while that drain is pending; wait
+    // for the observed receipt and the real close, without weakening the fence
+    // or increasing this test's existing deadline.
+    await reachedBoundary.promise
     const restoredState = boundaryState ?? assembly.subagentState()
     await (boundaryClose ?? service.close())
+    await waitTurns(2)
     for (const unsubscribe of boundaryUnsubscribers) unsubscribe()
     service = createSessionService({ ...options, restoredState })
     assembly = await service.assemblyFor("parent")
     await execute("followup_task", { target: "root/normal", message: "restored followup" })
     await execute("team_followup_task", { target: "helper", message: "restored followup" })
     await waitTurns(3)
+    await service.close()
     for (const id of ids) {
       const events = (await coordinator.snapshot!(id)).session.events
-      const numbers = events.filter(e => e.type === "code/output").map(e => (e as { content: { text?: string } }).content.text).filter(text => /^\d+$/.test(text ?? ""))
+      const numbers = events.filter(e => e.type === "code/output").map(e => e.envelope?.preview).filter(text => /^\d+$/.test(text ?? ""))
       expect(numbers).toEqual(["1", "2", "3"])
     }
   } catch (error) {

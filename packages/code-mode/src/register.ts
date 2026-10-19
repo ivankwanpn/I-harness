@@ -2,28 +2,16 @@ import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
 import { userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
-import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeObservation, CodeModeWaitInput } from "./types.ts"
+import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
 import { codeModeDescription } from "./catalog.ts"
 import { replayCodeModeStore } from "./state.ts"
 import { codeModeFactOwner } from './facts.ts'
 import { createCodeModeEventFacts } from './event-facts.ts'
+import { createCodeOutputPublisher } from './output-facts.ts'
+import { observationOutput } from './observation-output.ts'
 
-function observationOutput(out: CodeModeObservation) {
-  if (out.policyRefusal) throw Object.assign(new Error(out.error || "Code Mode policy refusal"), { policyRefusal: true as const })
-  const images = out.items.flatMap(item => item.type === "image" ? [item.image] : [])
-  return {
-    cellId: out.cellId, cell_id: out.cellId, status: out.status, text: out.text, truncated: out.truncated,
-    ...(out.yielded ? { yielded: true as const, yield_reason: out.yieldReason } : {}),
-    ...(out.textRetention ? { textRetention: out.textRetention } : {}),
-    ...(out.error ? { error: out.error } : {}),
-    items: out.items.map(item => item.type === "text" ? { type: "text", length: item.text.length }
-      : item.type === "image" ? { type: "image", mediaType: item.image.mediaType, name: item.image.name }
-        : { type: "audio", bytes: Math.ceil(item.audioUrl.length * .75) }),
-    ...(images.length ? { images } : {}),
-  }
-}
 function retainedObservation(exec: ToolExec, refresh: () => Promise<void>): import('./types.ts').CodeModeObserveOptions['retained'] {
   const retained = exec.retainOutcome?.()
   retained?.beforeRead(refresh)
@@ -38,6 +26,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   if (!["off", "mixed", "only"].includes(mode)) throw new Error("Invalid Code Mode mode")
   const broker = createCodeModeBroker(ctx, tools, options)
   const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() })
+  const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const refreshObservation = async () => { await facts.refresh(); await runtime.drainRetainedObservations?.() }
   const liveCells = new Set<string>()
   const open = new Map<string, string | undefined>()
@@ -49,7 +38,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   void ready.catch(() => {})
   const runtime = createCodeModeRuntime({
     config: options.config,
-    ...(options.retainText ? { retainText: input => options.retainText!({ ...input, retentionRecovery: () => facts.requireRecovery() }) } : {}),
+    ...(options.retainText ? { retainText: input => options.retainText!({ ...input, assertHeld: facts.assertHeld, retentionRecovery: () => facts.requireRecovery() }) } : {}),
     ...(!nondurable ? { retentionRecovery: () => facts.requireRecovery() } : {}),
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
@@ -71,7 +60,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         }
       } else if (event.type === "output") {
         if (!nondurable) event.retainOutcome?.()
-        await facts.required({ type: "code/output", cellId: event.cellId, content: event.item }, event.committed)
+        await publishOutput(event)
       }
       else {
         const committed = () => { liveCells.delete(event.cellId); broker.retireCell(event.cellId); event.committed?.() }

@@ -80,7 +80,7 @@ it("ordinary children mount their own role-scoped Code Mode and never copy paren
     expect(f.requests[0]!.tools.map(t => t.name)).toEqual(["code_exec", "code_status", "code_wait"])
     expect(f.requests[0]!.maxOutputTokens).toBe(123)
     const output = child.session.events.find(event => event.type === "code/output")
-    expect(output).toMatchObject({ content: { text: '["allowed"]' } })
+    expect(output).toMatchObject({ envelope: { preview: '["allowed"]', retention: { kind: 'unavailable', reason: 'unsupported-owner' } } })
     expect(child.session.events.some(event => event.type === "code/call" && event.name === "allowed")).toBe(true)
     expect(f.deps.parentSession.events.some(event => event.type === "code/dispatch")).toBe(false)
     await child.dispose?.()
@@ -176,7 +176,7 @@ it.each(["followup", "resume"] as const)("interrupt_agent drains live code and a
     await entry.followupChain
     expect(entry.finalText).toBe("done")
     expect(entry.error).toBeUndefined()
-    expect(entry.session.events.some(event => event.type === "code/output" && (event.content as { text?: string }).text === "kept")).toBe(true)
+    expect(entry.session.events.some(event => event.type === "code/output" && event.envelope?.preview === "kept")).toBe(true)
     expect(f.deps.parentSession.events.some(event => event.type === "code/call")).toBe(false)
   } finally { release(); await entry.dispose?.(); await f.parentMount.dispose() }
 })

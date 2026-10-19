@@ -14,6 +14,8 @@ import type { ManagedArtifactRef } from '@i-harness/core-session'
 import { createCodeModeRuntime } from '@i-harness/code-mode'
 import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts'
 import { PNG } from '../../image-validation/test/fixtures.ts'
+import { createSessionService, createDurableSessionLoader } from '../src/index.ts'
+import { controlledModel } from './controlled-model.ts'
 
 /** Independent page reader: the expected text is a literal fixture, never the
  * product serializer's own output. */
@@ -62,7 +64,15 @@ it('captures every accepted item once and reads the exact retained text after th
     const body = await readArtifact(service, id, ref!)
     expect(createHash('sha256').update(body).digest('hex')).toBe(ref!.contentDigest)
     expect(body.length).toBe(ref!.encodedBytes)
-    expect(JSON.parse(body.toString('utf8'))).toBe(expected)
+    expect(retention.representation).toBe('code-text-index-v1')
+    const index = JSON.parse(body.toString('utf8'))
+    expect(index.kind).toBe('code-text-index')
+    expect(index.items.map((item: { type: string }) => item.type)).toEqual(['text', 'image', 'text'])
+    const texts = []
+    for (const item of index.items) if (item.type === 'text') texts.push(JSON.parse((await readArtifact(service, id, item.envelope.retention.ref)).toString('utf8')))
+    expect(texts).toEqual([first, second])
+    expect(texts.join('\n')).toBe(expected)
+    expect(JSON.stringify(document.view.events.filter(event => event.type === 'code/output'))).not.toContain(second)
     expect(retention.envelope?.preview).toBe('')
   } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}); await service.close(); await ctx.scope.unmount() }
 })
@@ -127,3 +137,39 @@ it('binds the emitted-text artifact to the acting child document, never a parent
     expect(parent.view.events).toEqual([])
   } finally { await runtime?.dispose().catch(() => {}); await parent.close().catch(() => {}); await child.close().catch(() => {}); await coordinator.close().catch(() => {}); await service.close() }
 })
+
+it('uses the actual restricted child assembly mount and preserves its own durable output authority', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-a3-role-child-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  await coordinator.create({ sessionId: 'parent' })
+  const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'fixture', config: { enabled: false } })
+  let requests = 0
+  const child = controlledModel(async function* () {
+    if (++requests === 1) yield { type: 'tool_call', call: { id: 'child-code', name: 'code_exec', args: { code: 'text(ALL_TOOLS.map(t=>t.name)); text("child-owned".repeat(3000));', yield_time_ms: 5000 } } }
+    else yield { type: 'text/chunk', text: 'child complete' }
+    yield { type: 'end' }
+  })
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
+    modelPolicy: 'test-mock', sandbox: 'danger-full-access', codeMode: { mode: 'only' }, contextWindow: 100000,
+    pluginAgents: [{ name: 'probe', description: 'restricted test role', systemPrompt: 'Use only your role tools', tools: ['list_dir', 'code_exec', 'code_wait'] }],
+    additionalTools: [{ name: 'parent_secret', description: '', inputSchema: {}, execute: async () => { throw new Error('Child must not call parent-only tools') } }],
+    allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: 'fixture', model: 'child' }),
+    resolveRoleModel: async () => ({ status: 'ready', binding: { client: child, contextWindow: 100000 } }),
+  })
+  try {
+    const assembly = await service.assemblyFor('parent')
+    await assembly.tools.get('spawn_agent')!.execute({ task_name: 'probe', agent_type: 'probe', message: 'emit once', fork_turns: 'none', background: false }, { sessionId: 'parent' })
+    const rows = await assembly.tools.get('list_agents')!.execute({}, { sessionId: 'parent' }) as { agents: { path: string; sessionId: string }[] }
+    const id = rows.agents.find(row => row.path === 'root/probe')!.sessionId
+    const events = (await coordinator.snapshot!(id)).session.events
+    const outputs = events.filter(event => event.type === 'code/output')
+    expect(outputs).toHaveLength(2)
+    expect(outputs[0]!.envelope?.preview).toBe('["list_dir"]')
+    const ref = outputs[1]!.envelope?.retention.kind === 'artifact' ? outputs[1]!.envelope.retention.ref : undefined
+    expect(ref).toBeDefined()
+    expect(JSON.parse((await readArtifact(output, id, ref!)).toString('utf8'))).toBe('child-owned'.repeat(3000))
+    await expect(output.readResult({ sessionId: 'parent' }, { ref: ref! })).rejects.toThrow()
+    expect(assembly.session.events.some(event => event.type === 'code/output')).toBe(false)
+    expect(requests).toBe(2)
+  } finally { await service.close(); await coordinator.close(); await output.close() }
+}, 20000)

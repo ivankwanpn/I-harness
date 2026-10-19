@@ -117,14 +117,13 @@ it.each(['disable','clear','close'] as const)('%s drains a trusted native produc
   release();await Promise.all([transition,rejected]);expect(service.status().activeJobs).toBe(0);expect(service.status().results).toBe(0)
 })
 
-it('human Stop settles a held emitted-text retention as capture-canceled without publishing a ref',async()=>{
+it('human Stop joins already accepted emitted text and preserves its original saved output',async()=>{
   const{service,ctx,tools,session}=await setup()
   const actual=createCodeTextRetention({service,sessionId:'s'})
-  let entered=false,aborted=false,release!:()=>void
+  let entered=false,release!:()=>void
   const held=new Promise<void>(resolve=>{release=resolve})
   const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:async input=>{
     entered=true
-    input.origin.abortSignal?.addEventListener('abort',()=>{aborted=true})
     await held
     return actual(input)
   }});cleanup.push(()=>mount.dispose())
@@ -134,15 +133,22 @@ it('human Stop settles a held emitted-text retention as capture-canceled without
   expect(cell.type).toBe('code/cell')
   let stopped=false
   const stopping=mount.terminateCell!(cell.type==='code/cell'?cell.cellId:'').then(()=>{stopped=true})
-  try {await vi.waitFor(()=>expect(aborted).toBe(true));expect(stopped).toBe(false)}finally{release()}
+  try {await new Promise<void>(done=>setImmediate(done));expect(stopped).toBe(false)}finally{release()}
   await stopping
-  const result=await running
+  const first=await running
+  const initial=first.output as{status:string;cell_id:string}
+  const result=initial.status==='running'?await tools.execute({name:'code_wait',args:{cell_id:initial.cell_id}}):first
   const output=result.output as{status:string;textRetention:CodeModeTextRetention}
   expect(output.status).toBe('terminated')
-  expect(output.textRetention).toMatchObject({stored:false,unavailable:'capture-canceled'})
+  expect(output.textRetention).toMatchObject({stored:true,complete:true})
+  const ref=output.textRetention.envelope?.retention.kind==='artifact'?output.textRetention.envelope.retention.ref:undefined
+  expect(ref).toBeDefined()
+  const page=await service.readResult({sessionId:'s'},{ref:ref!})
+  expect(page.data.kind).toBe('text')
   expect(service.status().results).toBe(0)
   expect(session.events.some(event=>event.type==='context/result-ref')).toBe(false)
   expect(JSON.stringify(session.events)).not.toContain('"text":"AFTER_STOP"')
+  expect(session.events.filter(event=>event.type==='code/output'||event.type==='code/cell').map(event=>event.type==='code/cell'?event.state:event.type)).toEqual(['started','code/output','terminated'])
 })
 
 it('preserves typed failures and supported images while bounding escaped textual envelopes',async()=>{

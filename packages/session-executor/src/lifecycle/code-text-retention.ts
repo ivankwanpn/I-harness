@@ -27,15 +27,18 @@ export function createCodeTextRetention(options: CodeTextRetentionOptions): NonN
     }
     const execution: ResultExecution = { outcome: outcomeFor(input.status), dispatch: 'not-dispatched' }
     const operationId = randomUUID()
-    let scope: ResultArtifactScope | undefined, active = true, opened = false
-    const capture = createResultCapture(input.text, execution, {
+    let scope: ResultArtifactScope | undefined, active = true, issued = false
+    const capture = createResultCapture(input.index ?? input.text, execution, {
       forceArtifact: true,
       completeness: input.complete ? 'complete' : 'source-limited',
       async openArtifact() {
+        input.assertHeld?.()
         scope ??= service.registerResultScope({ operationId, sessionId, callId: input.cellId, ...(source ? { source } : {}) },
-          () => active && !input.origin.abortSignal?.aborted)
+          () => { input.assertHeld?.(); return active })
+        // Issuance precedes awaiting the store. A lost initialization receipt
+        // is not evidence that no original operation exists.
+        issued = true
         const sink = await service.beginResult(scope, 'json-utf8-v1')
-        opened = true
         return sink
       },
     })
@@ -45,7 +48,7 @@ export function createCodeTextRetention(options: CodeTextRetentionOptions): NonN
       const work = (async (): Promise<CodeModeTextRetentionResult> => {
         // Cancellation before any artifact operation is a known refusal, never
         // an uncertain write and never a successful retained value.
-        if (input.origin.abortSignal?.aborted && !opened) return { kind: 'unavailable', reason: 'capture-canceled' }
+        if (!input.assertHeld && input.origin.abortSignal?.aborted && !issued) return { kind: 'unavailable', reason: 'capture-canceled' }
         const result = await capture.settle()
         // Unknown storage keeps the original operation retriable; it is never
         // reported as a successful retained value.

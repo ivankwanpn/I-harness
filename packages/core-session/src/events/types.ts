@@ -58,7 +58,7 @@ export type SessionEvent =
     | { type: "code/call"; cellId: string; parentCallId?: string; callId: string; name: string; args: unknown; seq?: number }
     | { type: "code/dispatch"; cellId: string; callId: string; eventSeq?: number; seq?: number }
     | ({ type: "code/result"; cellId: string; callId: string; name: string; seq?: number } & import('../results/types.ts').ResultFactPayload)
-    | { type: "code/output"; cellId: string; content: unknown; seq?: number }
+    | ({ type: "code/output"; cellId: string; seq?: number } & ({ content: unknown; envelope?: never } | { envelope: import('../results/types.ts').ResultEnvelope; content?: never }))
     | { type: "context/result-ref"; ignorable?: true; ref: { id: string; workspaceId: string; sessionId: string; callId: string; label: string; revision: string; bytes: number; originalBytes: number; complete: boolean; expiresAt: number; source?: { sourceId: string; path?: string; revision?: string; readonly?: boolean } }; seq?: number }
     // Candidate JSON writes become replayable only with a later successful
     // terminal code/cell record for this owner; later failure/stop suppresses them.

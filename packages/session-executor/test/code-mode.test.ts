@@ -103,13 +103,16 @@ it("retains Code Mode emitted text as a managed artifact in the assembly's resul
   const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings, modelPolicy: "test-mock", sandbox: "workspace-write", codeMode: { mode: "only" } })
   let cold: ReturnType<typeof createContextOutputService> | undefined
   try {
-    const result = (await assembly.tools.execute({ name: "code_exec", args: { code: 'text("x".repeat(20000));' } })).output as { status: string; textRetention: CodeModeTextRetention }
+    const result = (await assembly.tools.execute({ name: "code_exec", args: { code: 'text("x".repeat(1048576));', yield_time_ms: 5000 } })).output as { status: string; textRetention: CodeModeTextRetention }
     expect(result.status).toBe("completed")
     const retention = result.textRetention
     expect(retention).toMatchObject({ stored: true, complete: true })
     expect(retention).not.toHaveProperty("path")
     const ref = retention.envelope?.retention.kind === "artifact" ? retention.envelope.retention.ref : undefined
-    expect(ref).toMatchObject({ codec: "json-utf8-v1", completeness: "complete", encodedBytes: Buffer.byteLength(JSON.stringify("x".repeat(20000))) })
+    expect(ref).toMatchObject({ codec: "json-utf8-v1", completeness: "complete", encodedBytes: 1048578 })
+    const original = assembly.session.events.filter(event => event.type === 'code/output')
+    expect(original).toHaveLength(1)
+    expect(Buffer.byteLength(JSON.stringify(original[0]))).toBeLessThanOrEqual(64000)
     expect(assembly.session.events.some(event => event.type === "context/result-ref")).toBe(false)
     const location = await contextWorkspaceLocation(root, coordinator.storageRoot!)
     cold = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, authorizeResult: async access => access.sessionId === id })
@@ -123,6 +126,6 @@ it("retains Code Mode emitted text as a managed artifact in the assembly's resul
     }
     const body = Buffer.concat(pieces)
     expect(createHash("sha256").update(body).digest("hex")).toBe(ref!.contentDigest)
-    expect(JSON.parse(body.toString())).toBe("x".repeat(20000))
+    expect(JSON.parse(body.toString())).toBe("x".repeat(1048576))
   } finally { await cold?.close(); await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

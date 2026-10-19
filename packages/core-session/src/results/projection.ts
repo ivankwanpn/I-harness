@@ -15,7 +15,7 @@ export function resultDisposition(envelope: ResultEnvelope): 'unknown' | 'not-di
 /** Only closed actual result slots create reference dependencies. */
 export function managedResultRefs(event: SessionEventView): readonly ManagedArtifactRef[] {
   const envelope = event.type === 'job/status' ? event.job.result?.kind === 'retained' ? event.job.result.envelope : undefined
-    : event.type === 'tool/result' || event.type === 'code/result' || event.type === 'subagent/end' ? event.envelope : undefined
+    : event.type === 'tool/result' || event.type === 'code/result' || event.type === 'code/output' || event.type === 'subagent/end' ? event.envelope : undefined
   if (!envelope) return []
   return [...(envelope.retention.kind === 'artifact' ? [envelope.retention.ref] : []), ...(envelope.dependencies?.kind === 'artifact-set' ? [envelope.dependencies.ref] : [])]
 }
