@@ -13,7 +13,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
   const state = createCellState(options,config)
   function event(event: Parameters<NonNullable<CodeModeRuntimeOptions['onEvent']>>[0]) { return options.onEvent?.(event) }
   const retirement = createRetirement(options,errorCap,state,event,reason => runtime.cancel(reason))
-  const output = createOutput(options,config,errorCap,state,retirement,event)
+  const output = createOutput(options,config,state,retirement,event)
   const workers = createWorkerEvents(options,config,errorCap,state,retirement,output)
   const exec = createAdmission(options,config,errorCap,state,retirement,output,workers,event)
   const { observe } = output

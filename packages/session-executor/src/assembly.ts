@@ -34,9 +34,10 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
+import { type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
-import { createNativeCodeTextRetention, installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
+import { installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
+import { createCodeTextRetention } from "./lifecycle/code-text-retention.ts"
 import { createTaskResultRetention } from './lifecycle/task-result-retention.ts'
 import { createToolResultRetention } from './lifecycle/result-retention.ts'
 import { acquireAssemblyResultStore } from './lifecycle/result-store.ts'
@@ -1163,12 +1164,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
-  const codeSpillStore = opts.outputSpill?.spillRoot === undefined ? undefined : createUnifiedSpillStore(opts.outputSpill.spillRoot)
   const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" && typeof opts.codeMode !== "function" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
-    ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session:mountOptions.session,sessionId:mountOptions.sessionId,sourceFor:opts.contextOutputSourceFor,...(opts.sessionId?{parent:{sessionId:opts.sessionId,session,factOwner}}:{})})}:{}),
+    ...(opts.contextOutput ? {retainText:createCodeTextRetention({service:opts.contextOutput,sessionId:mountOptions.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
     ...mountOptions,
     config: codeModeNow(),
-    ...(codeSpillStore ? { spillStore: mountOptions.spillStore ?? codeSpillStore } : {}),
     ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
   })
   let workflowMount: WorkflowMountHandle | undefined
@@ -1515,9 +1514,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       return call
     })
     if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
-      ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
+      ...(opts.contextOutput ? {retainText:createCodeTextRetention({service:opts.contextOutput,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
       session, factOwner, sessionId: opts.sessionId, config: codeMode,
-      ...(codeSpillStore ? { spillStore: codeSpillStore } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
     })
     await codeModeMount?.ready?.()

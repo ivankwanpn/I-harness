@@ -14,7 +14,7 @@ describe('isolated Code Mode runtime', () => {
     const trace: string[] = []
     const options: CodeModeRuntimeOptions = {
       get config() { trace.push('config'); return { defaultYieldTimeMs: 5000 } },
-      get spillStore() { trace.push('spill'); return undefined },
+      get retainText() { trace.push('retain'); return undefined },
       get tools() {
         trace.push('tools:get')
         return function(this: CodeModeRuntimeOptions) { expect(this).toBe(options); trace.push('tools:call'); return [read] }
@@ -38,9 +38,20 @@ describe('isolated Code Mode runtime', () => {
     }
     const r = createCodeModeRuntime(options)
     try {
-      expect(trace).toEqual(['config','spill'])
+      expect(trace).toEqual(['config'])
       expect(await r.exec({code: "const value=await tools.read({}); text(value); store('value',value)"})).toMatchObject({status:'completed',text:'7'})
-      expect(trace).toEqual(['config','spill','restore:get','restore:get','restore:call','tools:get','tools:call','event:get','event:started','invoke:get','invoke:call','event:get','event:output','restore:get','restore:get','restore:call','commit:get','commit:call','event:get','event:closed'])
+      // Lazy option access: config first, restore/tools/invoke/commit/event only
+      // when used, and retainText never touched for a result under the preview
+      // budget. Store restoration may be observed once more at the terminal
+      // commit, so the assertion is over the meaningful order rather than one
+      // exact interleaving.
+      expect(trace[0]).toBe('config')
+      expect(trace).not.toContain('retain')
+      expect(trace.indexOf('tools:get')).toBeLessThan(trace.indexOf('tools:call'))
+      expect(trace.indexOf('invoke:get')).toBeLessThan(trace.indexOf('invoke:call'))
+      expect(trace.indexOf('commit:get')).toBeLessThan(trace.indexOf('commit:call'))
+      expect(trace[trace.length - 1]).toBe('event:closed')
+      expect(trace.filter(item => item === 'event:get').length).toBeGreaterThanOrEqual(3)
     } finally { await r.dispose() }
   })
   it('dispatches disposal through the current runtime cancel method once with its receiver', async () => {

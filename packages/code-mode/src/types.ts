@@ -1,9 +1,7 @@
-import type { ImageInput, SessionView as Session, FactOwner } from "@i-harness/core-session"
+import type { ImageInput, ResultEnvelope, SessionView as Session, FactOwner } from "@i-harness/core-session"
 import type { ToolExec, ToolRegistry, UserSteerSource } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolSchema } from "@i-harness/llm-seam"
-import type { SpillStore } from "@i-harness/output-retention"
-import type { ContextResultRef } from "@i-harness/context-output"
 
 export interface CodeModeConfig {
   mode?: "off" | "mixed" | "only"
@@ -25,7 +23,19 @@ export type CodeModeStatus = "running" | "completed" | "failed" | "terminated"
 export type CodeModeJsonValue = null | boolean | number | string | CodeModeJsonValue[] | { [key: string]: CodeModeJsonValue }
 export type CodeModeStoreEntries = Array<[string, CodeModeJsonValue]>
 export interface CodeModeStoreCommit { cellId: string; origin: CodeModeOrigin; writes: CodeModeStoreEntries; signal: AbortSignal; committed?(): void; cancelled?(): void; retainOutcome?(): void }
-export interface CodeModeTextRetention { stored: boolean; path?: string; contextRef?: ContextResultRef; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
+/** Non-durable disposition for emitted text. There is no spill path and no
+ * inline giant value: the model keeps its bounded window and this says why the
+ * complete text is not retained. */
+export type CodeModeTextUnavailable = "no-owner" | "quota" | "encoding" | "storage-refused" | "unsupported-owner" | "capture-canceled" | "storage-unknown"
+/** Model/archive descriptor for one consumed output window. The observation's
+ * own bounded `text` is the model view; `envelope.preview` stays empty so the
+ * same huge text is never carried twice. `envelope.retention` is the exact
+ * immutable artifact reference (artifact codec) or an explicit unavailable. */
+export interface CodeModeTextRetention { stored: boolean; envelope?: ResultEnvelope; unavailable?: CodeModeTextUnavailable; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
+export type CodeModeTextRetentionResult =
+  | { kind: "ready"; envelope: ResultEnvelope }
+  | { kind: "unavailable"; reason: Exclude<CodeModeTextUnavailable, "storage-unknown"> }
+  | { kind: "recovery-required" }
 export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; yielded?: true; yieldReason?: "user-steer" }
 export interface CodeModeObserveOptions {
   userSteer?: UserSteerSource
@@ -43,14 +53,13 @@ export interface CodeModeRuntimeOptions {
   restoreStore?(origin: CodeModeOrigin): readonly (readonly [string, CodeModeJsonValue])[]
   /** Serialized after merged-state validation and awaited before success. */
   commitStore?(commit: CodeModeStoreCommit): void | Promise<void>
-  /** Optional host store; the default temp store is created only on truncation. */
-  spillStore?: SpillStore
-  /** Native host capture, before the model observation loses emitted text. */
-  retainText?(input: {text:string;cellId:string;origin:CodeModeOrigin;complete:boolean;
-    captureReference?(ref:ContextResultRef): () => Promise<void>;
-    retainOutcome?(settle:() => Promise<ContextResultRef|undefined>):void;
+  /** Native host capture, before the model observation loses emitted text.
+   * The host owns the durable artifact through the existing result store; this
+   * port never writes a spill file and never returns the raw text again. */
+  retainText?(input: {text:string;cellId:string;origin:CodeModeOrigin;complete:boolean;status:CodeModeStatus;
+    retainOutcome?(settle:() => Promise<CodeModeTextRetentionResult>):void;
     retentionRecovery?(): void;
-  }): Promise<ContextResultRef|undefined>
+  }): Promise<CodeModeTextRetentionResult|undefined>
   retentionRecovery?(): void
   config?: CodeModeConfig
 }
@@ -67,5 +76,5 @@ export interface CodeModeRuntime {
   drainRetainedObservations?(): Promise<void>
 }
 export interface CodeModeMount { ready?(): Promise<void>; schemas(): ToolSchema[]; liveCells?(): { id: string; status: "running" }[]; terminateCell?(cellId: string): Promise<void>; cancel(reason?: string): Promise<void>; dispose(): Promise<void> }
-export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; spillStore?: SpillStore; retainText?: CodeModeRuntimeOptions['retainText']; flush?(): Promise<void>; maxParallel?: number }
+export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; flush?(): Promise<void>; maxParallel?: number }
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount

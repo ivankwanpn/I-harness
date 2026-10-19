@@ -9,7 +9,10 @@ import { registerCodeMode } from '@i-harness/code-mode'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { resolveShell, createShellTools } from '@i-harness/shell'
 import { registerExec, registerRetainedOutput } from '@i-harness/exec'
-import { createNativeCodeTextRetention, installNativeContextOutput } from '../src/context-output.ts'
+import { installNativeContextOutput } from '../src/context-output.ts'
+import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts'
+import type { CodeModeTextRetention } from '@i-harness/code-mode'
+import type { ManagedArtifactRef } from '@i-harness/core-session'
 
 const cleanup: Array<()=>Promise<void>>=[]
 afterEach(async()=>{for(const dispose of cleanup.splice(0).reverse()) await dispose()})
@@ -40,16 +43,33 @@ it('keeps nested Code Mode tool values intact while capturing them through the s
   expect(result.output).toMatchObject({status:'completed',text:'50000'})
   expect(session.events.some(event=>event.type==='context/result-ref')).toBe(true)
 })
+async function readRetainedText(service:ReturnType<typeof createContextOutputService>,sessionId:string,ref:ManagedArtifactRef){
+  let offset=0,encoded=''
+  for(;;){
+    const page=await service.readResult({sessionId},{ref,offset})
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+    if(page.data.kind!=='text')throw new Error('Expected a text page')
+    encoded+=page.data.text
+    if(page.eof)break
+    offset=page.nextOffset!
+  }
+  return JSON.parse(encoded) as string
+}
+
 it('retains complete emitted Code Mode text behind the bounded observation',async()=>{
   const{service,tools,ctx,session}=await setup()
-  const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:createNativeCodeTextRetention({service,session,sessionId:'s'})});cleanup.push(()=>mount.dispose())
+  const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:createCodeTextRetention({service,sessionId:'s'})});cleanup.push(()=>mount.dispose())
   const result=await tools.execute({name:'code_exec',args:{code:'text("begin"+"x".repeat(20000)+"中段錯誤"+"y".repeat(20000));',max_output_tokens:16}})
-  const output=result.output as{text:string;textRetention:{contextRef:{id:string};complete:boolean}}
+  const output=result.output as{text:string;textRetention:CodeModeTextRetention}
   expect(output.text.length).toBeLessThan(100)
-  expect(output.textRetention.contextRef.id).toBeTruthy()
+  const envelope=output.textRetention.envelope!
+  expect(envelope.retention).toMatchObject({kind:'artifact',ref:{codec:'json-utf8-v1',completeness:'complete'}})
   expect(output.textRetention.complete).toBe(true)
-  const hits=await service.search({sessionId:'s'},{query:'中段錯誤'})
-  expect(hits.hits.some(hit=>hit.ref.id===output.textRetention.contextRef.id)).toBe(true)
+  expect(Buffer.byteLength(JSON.stringify(output.textRetention))).toBeLessThanOrEqual(64_000)
+  expect(envelope.preview).toBe('')
+  const ref=envelope.retention.kind==='artifact'?envelope.retention.ref:undefined
+  expect(await readRetainedText(service,'s',ref!)).toBe('begin'+'x'.repeat(20000)+'中段錯誤'+'y'.repeat(20000))
+  expect(session.events.some(event=>event.type==='context/result-ref')).toBe(false)
 })
 
 it('captures full real shell stdout and stderr before shell preview loss',async()=>{
@@ -97,13 +117,17 @@ it.each(['disable','clear','close'] as const)('%s drains a trusted native produc
   release();await Promise.all([transition,rejected]);expect(service.status().activeJobs).toBe(0);expect(service.status().results).toBe(0)
 })
 
-it('human Stop aborts and drains the actual native Code Mode retention callback',async()=>{
+it('human Stop settles a held emitted-text retention as capture-canceled without publishing a ref',async()=>{
   const{service,ctx,tools,session}=await setup()
-  const capture=service.capture.bind(service)
+  const actual=createCodeTextRetention({service,sessionId:'s'})
   let entered=false,aborted=false,release!:()=>void
   const held=new Promise<void>(resolve=>{release=resolve})
-  service.capture=(input,signal)=>capture(input,signal,async({signal:owned})=>{entered=true;owned.addEventListener('abort',()=>{aborted=true});await held;return{text:input.text,complete:true}})
-  const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:createNativeCodeTextRetention({service,session,sessionId:'s'})});cleanup.push(()=>mount.dispose())
+  const mount=registerCodeMode(ctx,tools,{session,sessionId:'s',config:{mode:'only'},retainText:async input=>{
+    entered=true
+    input.origin.abortSignal?.addEventListener('abort',()=>{aborted=true})
+    await held
+    return actual(input)
+  }});cleanup.push(()=>mount.dispose())
   const running=tools.execute({name:'code_exec',args:{code:'text("x".repeat(20000));await yield_control();await new Promise(()=>{});text("AFTER_STOP");',yield_time_ms:1000,max_output_tokens:16}})
   await vi.waitFor(()=>expect(entered).toBe(true))
   const cell=session.events.find(event=>event.type==='code/cell')!
@@ -111,7 +135,11 @@ it('human Stop aborts and drains the actual native Code Mode retention callback'
   let stopped=false
   const stopping=mount.terminateCell!(cell.type==='code/cell'?cell.cellId:'').then(()=>{stopped=true})
   try {await vi.waitFor(()=>expect(aborted).toBe(true));expect(stopped).toBe(false)}finally{release()}
-  await stopping;await running
+  await stopping
+  const result=await running
+  const output=result.output as{status:string;textRetention:CodeModeTextRetention}
+  expect(output.status).toBe('terminated')
+  expect(output.textRetention).toMatchObject({stored:false,unavailable:'capture-canceled'})
   expect(service.status().results).toBe(0)
   expect(session.events.some(event=>event.type==='context/result-ref')).toBe(false)
   expect(JSON.stringify(session.events)).not.toContain('"text":"AFTER_STOP"')

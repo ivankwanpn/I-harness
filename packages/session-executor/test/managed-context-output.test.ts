@@ -14,7 +14,8 @@ import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createContextOutputService } from '@i-harness/context-output'
 import { installNativeContextOutput } from '../src/context-output.ts'
-import { createNativeCodeTextRetention } from '../src/context-output.ts'
+import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts'
+import type { CodeModeTextRetention } from '@i-harness/code-mode'
 import { registerCodeMode } from '@i-harness/code-mode'
 
 it('refuses result references through generic metadata even with a runtime cast and accepts the actual narrow source',async()=>{
@@ -86,80 +87,82 @@ it.each([true,false])('retains the actual after-next output and exact reference 
   } finally { await coordinator.close().catch(() => {}); await service.close() }
 })
 
-it('retains a real emitted-text observation through reference uncertainty and Stop with one capture and the same window', async () => {
+it('retains one real emitted-text observation as a managed artifact and keeps it readable after Stop', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-emitted-ref-'))
   const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true } })
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  let sends = 0, captures = 0, finalizations = 0, key: BatchKey | undefined, blocked=true
-  const capture = service.capture.bind(service)
-  service.capture = async (...args) => { captures++; return capture(...args) }
+  let sends = 0, calls = 0, finalizations = 0
   ctx.on('tools/post-execute', () => { finalizations++ })
-  const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' }, retainText: createNativeCodeTextRetention({ service, session: document.view, sessionId: id }) })
-  const actual = backend.appendOwnedBatch!
-  const reconcile=backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch=async(...args)=>blocked?{kind:'unknown',key:args[3].key}:reconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { key = args[3].key; return { kind: 'unknown', key } }
-    return outcome
-  }
+  const mount = registerCodeMode(ctx, tools, { session: document.view, sessionId: id, factOwner: document, config: { mode: 'mixed' }, retainText: createCodeTextRetention({ service, sessionId: id }) })
   const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(document.view, id, action), session: document.view, factOwner: document, tools, sessionId: id, systemPrompt: '', model: controlledModel(async function* () {
-    sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("original emitted window ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } }; yield { type: 'end' }
+    if (++sends === 1) { calls++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("original emitted window ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } } }
+    else yield { type: 'text/chunk', text: 'done' }
+    yield { type: 'end' }
   }) })
   try {
-    await expect(agent.run('emit the original window')).rejects.toThrow()
-    expect([captures, finalizations, sends]).toEqual([1, 0, 1]); expect(key).toBeDefined()
-    await mount.cancel('human Stop during reference recovery')
-    blocked=false;await document.reconcile(key!)
+    await agent.run('emit the original window')
+    await mount.cancel('human Stop after the real window')
     document.revokeNewWork(); await document.close()
     const events = (await backend.read(id)).events
-    const refs = events.filter(event => event.type === 'context/result-ref'), results = events.filter(event => event.type === 'tool/result')
-    expect(refs).toHaveLength(1); expect(results).toHaveLength(1)
-    expect(results[0]!.output).toMatchObject({ status: 'completed', text: expect.stringContaining('original emitted'), textRetention: { contextRef: { id: refs[0]!.ref.id }, complete: true } })
-    expect([captures, finalizations, sends]).toEqual([1, 1, 1])
+    // No legacy reference fact: the bounded envelope in the committed tool
+    // result is the only published handle.
+    expect(events.filter(event => event.type === 'context/result-ref')).toEqual([])
+    const results = events.filter(event => event.type === 'tool/result')
+    expect(results).toHaveLength(1)
+    const output = results[0]!.output as { status: string; text: string; textRetention: CodeModeTextRetention }
+    expect(output.status).toBe('completed')
+    expect(output.text).toContain('original emitted')
+    const retention = output.textRetention
+    expect(retention).toMatchObject({ stored: true, complete: true })
+    const ref = retention.envelope?.retention.kind === 'artifact' ? retention.envelope.retention.ref : undefined
+    expect(ref).toMatchObject({ codec: 'json-utf8-v1', completeness: 'complete' })
+    let offset = 0, encoded = ''
+    for (;;) {
+      const page = await service.readResult({ sessionId: id }, { ref: ref!, offset })
+      if (page.data.kind !== 'text') throw new Error('Expected a text page')
+      encoded += page.data.text
+      if (page.eof) break
+      offset = page.nextOffset!
+    }
+    expect(JSON.parse(encoded)).toBe('original emitted window '.repeat(2000))
+    expect([calls, finalizations]).toEqual([1, 1])
+    expect([sends, finalizations]).toEqual([2, 1])
   } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}); await service.close() }
 })
 
-it('keeps actor and parent emitted-text reference dispositions independent through two unknown receipts and close', async () => {
-  const root = await mkdtemp(join(tmpdir(), 'ih-f1-parent-emitted-ref-'))
+it('keeps emitted-text artifact ownership with the acting document and grants another session nothing implicitly', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-f1-emitted-owner-'))
   const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const parentId = (await coordinator.create()).id, actorId = (await coordinator.create()).id
-  const parent = await coordinator.openManagedDocument(parentId), actor = await coordinator.openManagedDocument(actorId)
+  const emitterId = (await coordinator.create()).id, otherId = (await coordinator.create()).id
+  const emitter = await coordinator.openManagedDocument(emitterId), other = await coordinator.openManagedDocument(otherId)
   const service = createContextOutputService({ root: join(root, 'context'), workspaceId: 'fixture', config: { enabled: true } })
-  const ctx = createContext(), tools = createToolRegistry(ctx), keys = new Map<string, BatchKey>(), blocked=new Set([actorId,parentId])
-  let captures = 0, finalizations = 0, sends = 0
-  const capture = service.capture.bind(service)
-  service.capture = async (...args) => { captures++; return capture(...args) }
+  const ctx = createContext(), tools = createToolRegistry(ctx)
+  let sends = 0, calls = 0, finalizations = 0
   ctx.on('tools/post-execute', () => { finalizations++ })
-  const mount = registerCodeMode(ctx, tools, { session: actor.view, sessionId: actorId, factOwner: actor, config: { mode: 'mixed' }, retainText: createNativeCodeTextRetention({ service, session: actor.view, sessionId: actorId, parent: { sessionId: parentId, session: parent.view, factOwner: parent } }) })
-  const actual = backend.appendOwnedBatch!
-  const reconcile=backend.reconcileOwnedBatch!
-  backend.reconcileOwnedBatch=async(...args)=>blocked.has(args[0])?{kind:'unknown',key:args[3].key}:reconcile(...args)
-  backend.appendOwnedBatch = async (...args) => {
-    const outcome = await actual(...args)
-    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/result-ref')) { keys.set(args[0], args[3].key); return { kind: 'unknown', key: args[3].key } }
-    return outcome
-  }
-  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(parent.view, parentId, action), session: parent.view, factOwner: parent, tools, sessionId: parentId, systemPrompt: '', model: controlledModel(async function* () {
-    sends++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("same emitted original ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } }; yield { type: 'end' }
+  const mount = registerCodeMode(ctx, tools, { session: emitter.view, sessionId: emitterId, factOwner: emitter, config: { mode: 'mixed' }, retainText: createCodeTextRetention({ service, sessionId: emitterId }) })
+  const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(emitter.view, emitterId, action), session: emitter.view, factOwner: emitter, tools, sessionId: emitterId, systemPrompt: '', model: controlledModel(async function* () {
+    if (++sends === 1) { calls++; yield { type: 'tool_call', call: { id: 'outer', name: 'code_exec', args: { code: 'text("same emitted original ".repeat(2000));', yield_time_ms: 5000, max_output_tokens: 16 } } } }
+    else yield { type: 'text/chunk', text: 'done' }
+    yield { type: 'end' }
   }) })
   try {
-    await expect(agent.run('emit once for both documents')).rejects.toThrow()
-    expect(keys.has(actorId)).toBe(true); expect(keys.has(parentId)).toBe(false)
-    await mount.cancel('Stop after the real window')
-    blocked.delete(actorId);await actor.reconcile(keys.get(actorId)!)
-    await expect(mount.dispose()).rejects.toThrow()
-    expect(keys.has(parentId)).toBe(true)
-    expect(parent.view.events.some(event => event.type === 'context/result-ref' || event.type === 'tool/result')).toBe(false)
-    blocked.delete(parentId);await parent.reconcile(keys.get(parentId)!)
-    parent.revokeNewWork(); await parent.close(); await mount.dispose(); await actor.close()
-    const parentEvents = (await backend.read(parentId)).events, actorEvents = (await backend.read(actorId)).events
-    const parentRefs = parentEvents.filter(event => event.type === 'context/result-ref'), actorRefs = actorEvents.filter(event => event.type === 'context/result-ref')
-    expect(parentRefs).toHaveLength(1); expect(actorRefs).toHaveLength(1)
-    expect(parentRefs[0]!.ref.id).toBe(actorRefs[0]!.ref.id)
-    expect(parentEvents.filter(event => event.type === 'tool/result')).toEqual([expect.objectContaining({ output: expect.objectContaining({ status: 'completed', text: expect.stringContaining('same emitted original'), textRetention: expect.objectContaining({ contextRef: expect.objectContaining({ id: actorRefs[0]!.ref.id }) }) }) })])
-    expect([captures, finalizations, sends]).toEqual([1, 1, 1])
+    await agent.run('emit once for the acting document')
+    emitter.revokeNewWork(); await emitter.close(); other.revokeNewWork(); await other.close()
+    const emitterEvents = (await backend.read(emitterId)).events, otherEvents = (await backend.read(otherId)).events
+    expect(emitterEvents.filter(event => event.type === 'context/result-ref')).toEqual([])
+    expect(otherEvents.filter(event => event.type === 'tool/result')).toEqual([])
+    const result = emitterEvents.filter(event => event.type === 'tool/result')[0]!
+    const retention = (result.output as { textRetention: CodeModeTextRetention }).textRetention
+    const ref = retention.envelope?.retention.kind === 'artifact' ? retention.envelope.retention.ref : undefined
+    expect(ref).toBeDefined()
+    // The emitting document's pin is the only read authority; a different
+    // session cannot read the body just because it knows the ref shape.
+    const page = await service.readResult({ sessionId: emitterId }, { ref: ref! })
+    expect(page.data.kind).toBe('text')
+    await expect(service.readResult({ sessionId: otherId }, { ref: ref! })).rejects.toThrow()
+    expect([calls, finalizations]).toEqual([1, 1])
+    expect(sends).toBeGreaterThanOrEqual(2)
   } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}); await service.close() }
 })

@@ -1,9 +1,8 @@
 import type { PluginContext } from '@i-harness/core-plugin'
 import { append, rewindCuts, FactRecoveryRequiredError, isNondurableSession, type FactOwner, type SessionView as Session } from '@i-harness/core-session'
-import type { CodeModeRuntimeOptions } from '@i-harness/code-mode'
 import type { ToolExec } from '@i-harness/core-tools'
 import { renderContextRecovery, type ContextCapture, type ContextOutputService, type ContextResultRef } from '@i-harness/context-output'
-import { createHash, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { retainedOutputReader } from '@i-harness/exec'
 import { createResultReferencePublisher } from './lifecycle/result-references.ts'
 import { createReferenceRetention } from './lifecycle/reference-retention.ts'
@@ -139,37 +138,4 @@ export function installNativeContextOutput(ctx:PluginContext,options:NativeConte
     retained?.ready(body.projection)
     return body.projection
   })
-}
-
-/** Each observation is a separate immutable native result, even when a cell
- * emits the same text again. The callback carries trusted cell ownership. */
-export function createNativeCodeTextRetention(options:NativeContextOutputOptions) {
-  let sequence=0
-  const captureParent=options.parent?createResultReferencePublisher(options.parent.session,options.parent.factOwner):undefined
-  return async(input:Parameters<NonNullable<CodeModeRuntimeOptions['retainText']>>[0])=>{
-    const actor=input.origin.sessionId ?? options.sessionId
-    if(!actor||!options.service.status().enabled) return undefined
-    const source=await options.sourceFor?.(actor)
-    const callId='code-'+createHash('sha256').update(JSON.stringify([input.origin.callId,input.cellId,sequence++])).digest('hex')
-    const ref=await options.service.capture({sessionId:actor,callId,label:'Code Mode emitted text',text:input.text,complete:input.complete,...(source?{source}:{})},input.origin.abortSignal)
-    if(ref && !input.origin.abortSignal?.aborted && options.service.status().enabled){
-      let memorySaved = false
-      const retention = createReferenceRetention(ref, [
-        { capture: () => input.captureReference?.(ref) ?? (async () => {
-          if (memorySaved) return
-          if (!isNondurableSession(options.session)) throw new FactRecoveryRequiredError()
-          append(options.session, { type: 'context/result-ref', ignorable: true, ref }); memorySaved = true
-        }) },
-        ...(options.sessionId && options.sessionId !== actor && options.sessionId !== options.parent?.sessionId
-          ? [{ grant: () => options.service.grant({ sessionId: actor, signal: input.origin.abortSignal }, [ref.id], options.sessionId!) }] : []),
-        ...(options.parent && options.parent.sessionId !== actor ? [{
-          grant: () => options.service.grant({ sessionId: actor, signal: input.origin.abortSignal }, [ref.id], options.parent!.sessionId),
-          capture: () => captureParent!(ref),
-        }] : []),
-      ], () => input.retentionRecovery?.())
-      input.retainOutcome?.(retention.settle)
-      return retention.initial()
-    }
-    return undefined
-  }
 }

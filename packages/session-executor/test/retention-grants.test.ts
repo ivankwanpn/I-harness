@@ -9,12 +9,15 @@ import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createAgent } from '@i-harness/core-agent'
+import { decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createContextOutputService } from '@i-harness/context-output'
 import { registerCodeMode } from '@i-harness/code-mode'
 import { createSessionService } from '../src/service.ts'
-import { createNativeCodeTextRetention, installNativeContextOutput } from '../src/context-output.ts'
+import { installNativeContextOutput } from '../src/context-output.ts'
+import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts'
+import type { CodeModeTextRetention } from '@i-harness/code-mode'
 
 it('retains actual after-next output/ref across a held then rejected grant, blocks optional work and still saves received input', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-after-next-grant-'))
@@ -67,46 +70,72 @@ it('retains actual after-next output/ref across a held then rejected grant, bloc
   } finally { release.resolve(); await service.close().catch(() => {}); await coordinator.close().catch(() => {}); await output.close() }
 })
 
-it.each(['capture-failed', 'second-grant-failed'] as const)('retains the real emitted window without recapture, regrant or fake failure (%s)', async mode => {
+it.each(['quota-refused', 'f1-unknown'] as const)('keeps one real emitted window and no implicit parent publication (%s)', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-emitted-grants-'))
   const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const actorId = (await coordinator.create()).id, hostId = (await coordinator.create()).id, parentId = (await coordinator.create()).id
+  const actorId = (await coordinator.create()).id, parentId = (await coordinator.create()).id
   const actor = await coordinator.openManagedDocument(actorId), parent = await coordinator.openManagedDocument(parentId)
   const output = createContextOutputService({ root: join(root, 'outputs'), workspaceId: 'controlled', config: { enabled: true } })
+  if (mode === 'quota-refused') await output.configure({ maxDiskBytes: 4096 })
   const ctx = createContext(), tools = createToolRegistry(ctx)
-  const capture = output.capture.bind(output), grant = output.grant.bind(output)
-  let captures = 0, sends = 0, finalizers = 0
-  const grants: string[] = []
-  output.capture = async (...args) => {
-    captures++
-    if (mode === 'capture-failed') throw new Error('controlled capture has no confirmed ref')
-    return capture(...args)
-  }
-  output.grant = async (...args) => {
-    grants.push(args[2])
-    if (args[2] === parentId) throw new Error('controlled second grant unknown')
-    return grant(...args)
+  let sends = 0, calls = 0, finalizers = 0, key: BatchKey | undefined
+  const actualAppend = backend.appendOwnedBatch!, actualReconcile = backend.reconcileOwnedBatch!
+  let blocked = mode === 'f1-unknown'
+  if (mode === 'f1-unknown') {
+    backend.reconcileOwnedBatch = async (...args) => blocked ? { kind: 'unknown', key: args[3].key } : actualReconcile(...args)
+    backend.appendOwnedBatch = async (...args) => {
+      const outcome = await actualAppend(...args)
+      if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'code/output')) { key = args[3].key; return { kind: 'unknown', key } }
+      return outcome
+    }
   }
   ctx.on('tools/post-execute', () => { finalizers++ })
   const mount = registerCodeMode(ctx, tools, { session: actor.view, sessionId: actorId, factOwner: actor, config: { mode: 'mixed' },
-    retainText: createNativeCodeTextRetention({ service: output, session: actor.view, sessionId: hostId, parent: { sessionId: parentId, session: parent.view, factOwner: parent } }),
+    retainText: createCodeTextRetention({ service: output, sessionId: actorId }),
   })
   const agent = createAgent(ctx, { generationFactory: action => createGenerationLifecycle(actor.view, actorId, action), session: actor.view, factOwner: actor, tools, sessionId: actorId, systemPrompt: '', model: controlledModel(async function* () {
-    sends++; yield { type: 'tool_call', call: { id: 'original-cell', name: 'code_exec', args: { code: 'text("original retained emitted 中文 ".repeat(2000))', max_output_tokens: 16, yield_time_ms: 5000 } } }; yield { type: 'end' }
+    if (++sends === 1) { calls++; yield { type: 'tool_call', call: { id: 'original-cell', name: 'code_exec', args: { code: 'text("original retained emitted 中文 ".repeat(2000))', max_output_tokens: 16, yield_time_ms: 5000 } } } }
+    else yield { type: 'text/chunk', text: 'done' }
+    yield { type: 'end' }
   }) })
   try {
-    await expect(agent.run('emit the original window')).rejects.toThrow()
-    expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])
-    expect(actor.view.events.filter(event => event.type === 'code/cell').map(event => event.state)).toEqual(['started', 'completed'])
-    expect(actor.view.events.filter(event => event.type === 'context/result-ref')).toHaveLength(mode === 'capture-failed' ? 0 : 1)
-    expect(parent.view.events).toEqual([])
-    await expect(agent.run('new optional work')).rejects.toThrow()
-    await mount.cancel('Stop after the actual emitted window')
-    await expect(mount.dispose()).rejects.toThrow()
-    await expect(mount.dispose()).rejects.toThrow()
-    await expect(actor.close()).rejects.toThrow()
-    expect(actor.view.events.filter(event => event.type === 'tool/result')).toEqual([])
-    expect(grants).toEqual(mode === 'capture-failed' ? [] : [hostId, parentId])
-    expect([captures, sends, finalizers]).toEqual([1, 1, 0])
+    if (mode === 'f1-unknown') {
+      // The unknown receipt must not become a successful exchange; the tool
+      // observation is a recovery failure, and the mount reports the same.
+      await expect(agent.run('emit the original window')).rejects.toThrow()
+      expect(key).toBeDefined()
+      // An unknown receipt is not installed as a successful fact.
+      expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([])
+      expect(actor.view.events.filter(event => event.type === 'context/result-ref')).toEqual([])
+      expect(parent.view.events).toEqual([])
+      await expect(mount.dispose()).rejects.toThrow()
+      await expect(mount.dispose()).rejects.toThrow()
+      blocked = false
+      await actor.reconcile(key!)
+      await mount.dispose()
+      const events = actor.view.events
+      expect(events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])
+      expect(events.some(event => event.type === 'code/cell' && event.state === 'started')).toBe(true)
+      expect(events.filter(event => event.type === 'context/result-ref')).toEqual([])
+      expect(parent.view.events).toEqual([])
+      expect(calls).toBe(1)
+      // No second guest execution ever appears for the same window.
+      expect(events.filter(event => event.type === 'code/output')).toHaveLength(1)
+      expect(finalizers).toBeLessThanOrEqual(1)
+    } else {
+      // A known quota refusal is explicit and bounded; the guest still runs once.
+      await agent.run('emit the original window')
+      expect(actor.view.events.filter(event => event.type === 'code/output')).toEqual([expect.objectContaining({ content: { type: 'text', text: 'original retained emitted 中文 '.repeat(2000) } })])
+      expect(actor.view.events.filter(event => event.type === 'context/result-ref')).toEqual([])
+      expect(parent.view.events).toEqual([])
+      const results = actor.view.events.filter(event => event.type === 'tool/result')
+      expect(results).toHaveLength(1)
+      const retention = (results[0]!.output as { textRetention: CodeModeTextRetention }).textRetention
+      expect(retention).toMatchObject({ stored: false, unavailable: 'quota' })
+      expect(Buffer.byteLength(JSON.stringify(results[0]!.output))).toBeLessThanOrEqual(64_000)
+      await mount.dispose()
+      expect([calls, finalizers]).toEqual([1, 1])
+      expect(sends).toBeGreaterThanOrEqual(2)
+    }
   } finally { await mount.dispose().catch(() => {}); await coordinator.close().catch(() => {}); await output.close(); await ctx.scope.unmount() }
 })

@@ -1,16 +1,29 @@
 import type { CodeModeRuntimeOptions, CodeModeRuntimeEvent } from '../types.js';
 import type { RuntimeLimits } from './limits.js';
 import type { Cell, CellState } from './cell-state.js';
-import { createUnifiedSpillStore } from '@i-harness/output-retention';
 import { validateImage } from '@i-harness/image-validation';
 import { waitForObservation } from '@i-harness/core-tools';
-import type { CodeModeItem, CodeModeObservation, CodeModeObserveOptions, CodeModeTextRetention } from '../types.js';
+import type { CodeModeItem, CodeModeObservation, CodeModeObserveOptions, CodeModeTextRetention, CodeModeTextRetentionResult } from '../types.js';
 import type { Retirement } from './retirement.js';
 import { FactRecoveryRequiredError } from '@i-harness/core-session';
-import { TEXT_CAP, ITEM_CAP, diagnostic, message, textSlice } from './limits.js';
-/** Admission barrier and the sole observer/output-window and spill lifetime. */
-export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLimits, errorCap: number, state: Pick<CellState, 'track' | 'retire'>, retirement: Pick<Retirement, 'close'>, event: (event: CodeModeRuntimeEvent) => void | Promise<void>) {
-    let spillStore = options.spillStore;
+import { TEXT_CAP, ITEM_CAP, message, textSlice } from './limits.js';
+
+/** Map one host retention disposition onto the bounded model/archive descriptor.
+ * Only a verified artifact makes `stored` true; everything else is explicit. */
+function applyTextRetention(target: CodeModeTextRetention, retained: CodeModeTextRetentionResult, incomplete: boolean): void {
+    if (retained.kind === 'unavailable') { target.stored = false; target.unavailable = retained.reason; return }
+    if (retained.kind === 'recovery-required') { target.stored = false; target.unavailable = 'storage-unknown'; return }
+    const retention = retained.envelope.retention
+    if (retention.kind === 'artifact') {
+        target.stored = true; target.complete = retention.ref.completeness === 'complete' && !incomplete; target.envelope = retained.envelope; delete target.unavailable; return
+    }
+    // An inline value would carry the whole text again; never treat it as an archive.
+    target.stored = false; target.unavailable = retention.kind === 'unavailable' ? retention.reason : 'unsupported-owner'
+}
+/** Admission barrier and the sole observer/output-window lifetime. Complete
+ * emitted text is retained by the host's result store; this module never
+ * writes a spill file and never re-inlines the huge text. */
+export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLimits, state: Pick<CellState, 'track' | 'retire'>, retirement: Pick<Retirement, 'close'>, event: (event: CodeModeRuntimeEvent) => void | Promise<void>) {
     const { track } = state;
     const { close } = retirement;
     function output(cell: Cell, encoded: string) {
@@ -100,44 +113,39 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
             type: 'text';
         }> => item.type === 'text').map(item => item.text).join('\n');
         let textRetention: CodeModeTextRetention | undefined;
-        let continueRetention: (() => Promise<import('@i-harness/context-output').ContextResultRef | undefined>) | undefined;
+        let continueRetention: (() => Promise<CodeModeTextRetentionResult>) | undefined;
         const previewBytes = Math.min(TEXT_CAP, tokens * 4);
         const diagnosticBytes = cell.error === undefined ? 0 : Buffer.byteLength(textSlice(cell.error, previewBytes));
         if (Buffer.byteLength(fullText) > previewBytes - diagnosticBytes || incomplete) {
             textRetention = { stored: false, cellId: cell.id, ...(cell.origin.sessionId ? { sessionId: cell.origin.sessionId } : {}), admittedBytes: Buffer.byteLength(fullText), omittedBytes: 0, complete: false, truncated: true };
             if (fullText && !passive) {
                 try {
-                    const retaining = (async () => {
+                    const retaining = (async (): Promise<CodeModeTextRetentionResult> => {
                         const retentionSignal = AbortSignal.any([cell.retentionStop.signal, ...(cell.origin.abortSignal ? [cell.origin.abortSignal] : []), ...(signal ? [signal] : [])]);
                         retentionSignal.throwIfAborted();
-                        const ref = await options.retainText?.({
-                            text: fullText, cellId: cell.id, origin: { ...cell.origin, abortSignal: retentionSignal }, complete: !incomplete, retainOutcome(settle) {
+                        // No host owner means no durable result. There is deliberately no
+                        // spill fallback: an untracked temp file is not a saved result.
+                        if (!options.retainText)
+                            return { kind: 'unavailable', reason: 'no-owner' };
+                        const retained = await options.retainText({
+                            text: fullText, cellId: cell.id, origin: { ...cell.origin, abortSignal: retentionSignal }, complete: !incomplete, status: cell.status, retainOutcome(settle) {
                                 continueRetention = settle;
                             }
                         });
-                        retentionSignal.throwIfAborted();
-                        if (ref)
-                            return { ref };
-                        spillStore ??= createUnifiedSpillStore();
-                        return { path: await spillStore.saveText(fullText, `code-${cell.origin.sessionId ?? 'session'}-${cell.id}`) };
+                        // A canceled save that never issued an artifact operation is a
+                        // known non-durable disposition; it is not "storage unknown".
+                        if (retained?.kind === 'unavailable' && retained.reason === 'capture-canceled')
+                            return retained;
+                        // A save that already completed stays truthful even if the
+                        // observer was stopped meanwhile; the original operation owns it.
+                        if (!retained)
+                            return { kind: 'unavailable', reason: 'no-owner' };
+                        if (retained.kind === 'recovery-required')
+                            throw new FactRecoveryRequiredError();
+                        return retained;
                     })();
                     track(retaining.then(() => { }, () => { }), cell);
-                    const stored = await retaining;
-                    if (stored.ref) {
-                        if (Buffer.byteLength(JSON.stringify(stored.ref)) > Math.min(4096, config.maxResultBytes))
-                            throw new Error('Native text reference limit exceeded');
-                        textRetention.contextRef = stored.ref;
-                        textRetention.stored = true;
-                        textRetention.complete = stored.ref.complete && !incomplete;
-                    }
-                    else {
-                        const path = stored.path;
-                        if (typeof path !== 'string' || !path || Buffer.byteLength(path) > Math.min(4096, config.maxResultBytes))
-                            throw new Error('Text retention reference limit exceeded');
-                        textRetention.path = path;
-                        textRetention.stored = true;
-                        textRetention.complete = !incomplete;
-                    }
+                    applyTextRetention(textRetention, await retaining, incomplete);
                 }
                 catch (error) {
                     if (options.retentionRecovery) {
@@ -157,12 +165,10 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                                 const work = (async () => {
                                     if (!continueRetention)
                                         throw new FactRecoveryRequiredError();
-                                    const ref = await continueRetention();
-                                    if (!ref)
+                                    const retained = await continueRetention();
+                                    if (retained.kind === 'recovery-required')
                                         throw new FactRecoveryRequiredError();
-                                    textRetention!.contextRef = ref;
-                                    textRetention!.stored = true;
-                                    textRetention!.complete = ref.complete && !incomplete;
+                                    applyTextRetention(textRetention!, retained, incomplete);
                                     cell.recoveredProjection = finishProjection();
                                     cell.pendingProjection = undefined;
                                     cell.retainedOutputBytes -= bytes;
@@ -181,13 +187,12 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                         };
                         throw new FactRecoveryRequiredError();
                     }
-                    const bounded = diagnostic(`Text retention failed: ${message(error)}`, errorCap);
-                    cell.error = bounded.text;
-                    truncated ||= bounded.truncated;
-                    // Completion data may already be durable; a retention error remains
-                    // visible without claiming that disk persistence was rolled back.
-                    if (cell.status === 'running')
-                        close(cell, 'failed', cell.error);
+                    // A failed retention attempt is an explicit non-durable disposition;
+                    // it never rewrites the guest's own execution outcome and never
+                    // writes the huge text into the model window instead. Unknown stays
+                    // recoverable through the original capture when a recovery owner was
+                    // registered above; otherwise it is reported as unknown, not success.
+                    textRetention.unavailable = 'storage-unknown';
                 }
             }
         }

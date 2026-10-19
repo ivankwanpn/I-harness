@@ -49,8 +49,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   void ready.catch(() => {})
   const runtime = createCodeModeRuntime({
     config: options.config,
-    ...(options.spillStore ? { spillStore: options.spillStore } : {}),
-    ...(options.retainText ? { retainText: input => options.retainText!({ ...input, captureReference: ref => facts.captureReference(ref), retentionRecovery: () => facts.requireRecovery() }) } : {}),
+    ...(options.retainText ? { retainText: input => options.retainText!({ ...input, retentionRecovery: () => facts.requireRecovery() }) } : {}),
     ...(!nondurable ? { retentionRecovery: () => facts.requireRecovery() } : {}),
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
