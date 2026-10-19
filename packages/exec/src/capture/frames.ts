@@ -14,8 +14,14 @@ export type ExecFrameObservation =
 export interface ExecResultRetention {
   readonly previewBytes?: number
   begin(input: { sourceId: string; owner: Readonly<ExecutionOwner> }): ExecFrameCapture
-  /** Trusted source registration only; it must not change native settlement.
-   * Resolves with this exact source's settled dependency even when no tool
-   * producer is active any more (background job completion, host close). */
+  /** Passive owner settlement. Commits the original capture without claiming
+   * any observer and without registering a tool dependency; the capture
+   * coalesces concurrent calls and caches only a known terminal outcome. */
+  settle(capture: ExecFrameCapture): Promise<ExecFrameObservation>
+  /** Genuine observer registration for the CURRENT prepared ToolExec: binds
+   * this same original source to that observer's own result catalog and
+   * settles it. Registration is synchronous; storage settlement is coalesced
+   * by the capture. A later observer is registered even when the artifact was
+   * already committed for an earlier one. */
   observe(capture: ExecFrameCapture): Promise<ExecFrameObservation>
 }

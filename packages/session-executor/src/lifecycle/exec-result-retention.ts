@@ -8,24 +8,36 @@ import { resultSourceBinding } from './result-sources.ts'
 /** The actual native capture token outlives a promoted startup source; it owns
  * storage only and can never invoke a command or acquire new execution rights. */
 export function createExecResultRetention(service: ContextOutputService | undefined, previewBytes = 64000): ExecResultRetention {
-  const captures = new WeakSet<ExecFrameCapture>(), producers = new WeakMap<ExecFrameCapture, ToolExec>()
-  const dependencies = new WeakMap<ExecFrameCapture, ToolResultDependency>()
-  const origins = new WeakMap<ExecFrameCapture, string>(), targets = new WeakMap<ExecFrameCapture, string | undefined>()
-  /** One dependency handle per original capture; storage settlement itself is
-   * coalesced by the capture, so a later observation cannot commit twice. */
-  function dependencyFor(capture: ExecFrameCapture): ToolResultDependency {
-    let dependency = dependencies.get(capture)
-    if (dependency) return dependency
-    const target = targets.get(capture), origin = origins.get(capture)
-    dependency = { sourceId: capture.sourceId, async settle() {
+  const captures = new WeakSet<ExecFrameCapture>(), origins = new WeakMap<ExecFrameCapture, string>()
+  /** The startup caller's session target, used only for passive settlement. */
+  const startupTargets = new WeakMap<ExecFrameCapture, string | undefined>()
+  const passive = new WeakMap<ExecFrameCapture, ToolResultDependency>()
+  const observers = new WeakMap<ExecFrameCapture, WeakMap<ToolExec, ToolResultDependency>>()
+
+  /** Reads settle the same original artifact; only the grant target differs. */
+  function dependencyFor(capture: ExecFrameCapture, target: string | undefined): ToolResultDependency {
+    return { sourceId: capture.sourceId, async settle() {
       const result = await capture.settle()
-      if (result.kind !== 'ready' || result.dependency.retention.kind !== 'artifact' || !target || !origin || target === origin) return result
-      if (!service) return { kind: 'recovery-required' }
+      if (result.kind !== 'ready' || result.dependency.retention.kind !== 'artifact' || !service || !target) return result
+      const origin = origins.get(capture)
+      if (!origin || origin === target) return result
       try { await service.grant({ sessionId: origin }, [result.dependency.retention.ref.id], target) }
       catch { return { kind: 'recovery-required' } }
       return result
     } }
-    dependencies.set(capture, dependency)
+  }
+  function passiveDependency(capture: ExecFrameCapture): ToolResultDependency {
+    let dependency = passive.get(capture)
+    if (!dependency) { dependency = dependencyFor(capture, startupTargets.get(capture)); passive.set(capture, dependency) }
+    return dependency
+  }
+  /** One dependency handle per observing tool exec; concurrent reads inside the
+   * same call reuse it, a later genuine reader gets its own registration. */
+  function observerDependency(capture: ExecFrameCapture, exec: ToolExec): ToolResultDependency {
+    let byExec = observers.get(capture)
+    if (!byExec) { byExec = new WeakMap(); observers.set(capture, byExec) }
+    let dependency = byExec.get(exec)
+    if (!dependency) { dependency = dependencyFor(capture, resultSourceBinding(exec)?.sessionId ?? startupTargets.get(capture)); byExec.set(exec, dependency) }
     return dependency
   }
   return {
@@ -38,15 +50,22 @@ export function createExecResultRetention(service: ContextOutputService | undefi
         scope ??= service.registerResultScope({ operationId, sessionId: binding.sessionId, callId: binding.callId!, ...(binding.descriptor ? { source: binding.descriptor } : {}) }, () => captures.has(capture))
         return service.beginResult(scope, 'exec-frames-v1')
       } })
-      captures.add(capture); origins.set(capture, input.owner.sessionId); targets.set(capture, binding?.sessionId)
-      if (exec) producers.set(capture, exec)
+      captures.add(capture); origins.set(capture, input.owner.sessionId); startupTargets.set(capture, binding?.sessionId)
       return capture
+    },
+    async settle(capture): Promise<ExecFrameObservation> {
+      if (!captures.has(capture)) return { kind: 'recovery-required' }
+      return passiveDependency(capture).settle()
     },
     async observe(capture): Promise<ExecFrameObservation> {
       if (!captures.has(capture)) return { kind: 'recovery-required' }
-      const exec = producers.get(capture) ?? currentToolResultProducer()
-      const dependency = dependencyFor(capture)
-      if (exec) registerToolResultDependency(exec, dependency)
+      const exec = currentToolResultProducer()
+      // No genuine prepared call is present: this is the passive owner path.
+      if (!exec) return passiveDependency(capture).settle()
+      const dependency = observerDependency(capture, exec)
+      // Registration is synchronous so the observer's finalizer sees it; a
+      // conflicting handle would only be a forged/duplicated source identity.
+      registerToolResultDependency(exec, dependency)
       return dependency.settle()
     },
   }
