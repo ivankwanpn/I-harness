@@ -1,0 +1,53 @@
+import { expect, it } from 'vitest'
+import { resolve } from 'node:path'
+import { createExecutionLease, type TransportExecutionBackend } from '../../../packages/sandbox/src/index.ts'
+import { compileExecutionPolicy } from '../../../packages/sandbox-policy/src/index.ts'
+import { createExecService, type BackgroundJobView, type ExecFrameCapture } from '../../../packages/exec/src/index.ts'
+import { createExecFrameCapture } from '../../../packages/output-retention/src/index.ts'
+
+it('allows a completed background job to retry its original uncertain frame settlement on query or close', async () => {
+  let drain!: () => void, release!: () => void
+  const drained = new Promise<void>(done => { drain = done }), gate = new Promise<void>(done => { release = done })
+  let launches = 0, attempts = 0, observations = 0
+  let frameCapture!: ExecFrameCapture
+  const backend: TransportExecutionBackend = {
+    async probe() { return { id: 'retry-source', availability: 'available', assurance: 'unverified', features: { writeIsolation: false, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: true } } },
+    async prepare(spec, policy) { return { policy, async rollback() {}, async commit(check) {
+      check(); launches++
+      const lease = createExecutionLease({ receipt: { executionId: 'retry-source-1', backendId: 'retry-source', policyFingerprint: policy.fingerprint, owner: spec.owner, assurance: 'unverified' },
+        rootExited: gate.then(() => ({ exitCode: 0 })), waitTreeEmpty: () => gate, settleIo: () => drained, releaseResources: async () => {}, terminate: async () => { release() } })
+      return { pid: 123, receipt: lease.receipt, rootExited: lease.rootExited, get settled() { return lease.settled }, cancel: lease.cancel, release: lease.release,
+        io: { async write() {}, async endInput() {}, output: (async function* () { try { yield { channel: 'stdout' as const, data: Buffer.from('original') }; await gate } finally { drain() } })() } }
+    } } },
+  }
+  const exec = createExecService({ execution: { defaultOwner: { sessionId: 'retry-owner' }, selectBackend: () => backend, validateAuthority() {},
+    resolvePolicy: owner => compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'retry', workspaceRoot: resolve('.') } }) },
+    resultRetention: {
+      begin({ sourceId }) { return frameCapture = createExecFrameCapture({ sourceId, openArtifact: async () => ({
+        async write() {}, async reconcileWrite() { return 'ready' as const },
+        async finish() { attempts++; return attempts === 1 ? { kind: 'recovery-required' as const, operationId: 'original' } : { kind: 'refused' as const, reason: 'storage-refused' as const, observedEncodedBytes: 0 } },
+        async reconcile() { throw new Error('The capture itself owns finish retries') },
+      }) }) },
+      async observe(capture) { observations++; return capture.settle() },
+    } })
+  let disposed = false
+  try {
+    const { jobId } = await exec.runBackground({ argv: ['controlled-retry-source'] })
+    const terminalPromise = new Promise<BackgroundJobView>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error('No terminal view')), 5000)
+      const stop = exec.subscribeJob(jobId, view => { if (view.status !== 'running') { clearTimeout(timer); stop(); done(view) } })
+    })
+    release()
+    const first = await terminalPromise
+    expect(first.retentionFailure).toBe('recovery-required')
+    exec.getOutput(jobId); exec.listJobs()
+    await new Promise<void>(done => setImmediate(done))
+    await exec.dispose(); disposed = true
+    const apiAttempts = attempts, apiObservations = observations
+    // Independent control: the very same original capture can now settle.
+    const directOriginalRetry = await frameCapture.settle()
+    console.log(JSON.stringify({ launches, apiAttempts, apiObservations, directOriginalRetry, directAttempts: attempts }))
+    expect(directOriginalRetry.kind).toBe('ready')
+    expect(apiAttempts, 'Query/list/close must be able to retry the original unknown settlement; it must not be permanently memoized as void').toBeGreaterThanOrEqual(2)
+  } finally { release(); if (!disposed) await exec.dispose() }
+})
