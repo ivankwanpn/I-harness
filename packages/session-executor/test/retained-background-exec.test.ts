@@ -7,12 +7,15 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import type { BackgroundJobView, ExecService } from '@i-harness/exec'
 import { contextWorkspaceLocation, createContextOutputService } from '@i-harness/context-output'
 import type { ManagedArtifactRef, ResultDependencyCatalog } from '@i-harness/core-session'
+import { currentToolResultProducer, toolResultDependencies, type ToolExec } from '@i-harness/core-tools'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { controlledModel } from './controlled-model.ts'
 
 const worker = [
+  "import { existsSync } from 'node:fs'",
   "process.stdout.write(Buffer.concat([Buffer.from('A'), Buffer.from([0]), Buffer.from('\u{1F600}')]))",
-  "setTimeout(() => { process.stderr.write(Buffer.from([0xff, 0x00, 0x7f])) }, 400)",
+  "while (!existsSync(process.argv[2])) await new Promise(done => setTimeout(done, 10))",
+  "process.stderr.write(Buffer.from([0xff, 0x00, 0x7f]))",
 ].join('\n')
 
 it('settles one background frame dependency automatically and binds the shipping job_output catalog', async () => {
@@ -20,9 +23,9 @@ it('settles one background frame dependency automatically and binds the shipping
   await mkdir(base, { recursive: true })
   const root = await mkdtemp(resolve(base, 'background-')), settings = resolve(root, 'settings.json')
   await writeFile(settings, JSON.stringify({ contextSubsystems: { contextOutput: { enabled: false, maxDiskBytes: 8388608 } } }))
-  const workerPath = resolve(root, 'worker.mjs')
+  const workerPath = resolve(root, 'worker.mjs'), releasePath = resolve(root, 'release-worker')
   await writeFile(workerPath, worker)
-  const command = '& "' + process.execPath + '" "' + workerPath + '"'
+  const command = '& "' + process.execPath + '" "' + workerPath + '" "' + releasePath + '"'
   const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } }), { id } = await coordinator.create()
   let sends = 0, startupAt = 0, revoked = false, jobId: string | undefined
   const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings,
@@ -38,7 +41,8 @@ it('settles one background frame dependency automatically and binds the shipping
       } else yield { type: 'text/chunk', text: 'done' }
       yield { type: 'end' }
     }) })
-  let cold: ReturnType<typeof createContextOutputService> | undefined
+  let cold: ReturnType<typeof createContextOutputService> | undefined, startupProducer: ToolExec | undefined
+  assembly.ctx.on('tools/post-execute', input => { if ((input as { name: string }).name === 'pwsh') startupProducer = currentToolResultProducer() })
   try {
     await assembly.agent.run('start one real background command')
     // Startup gate: the tool receipt carried the job id without waiting for EOF.
@@ -50,6 +54,8 @@ it('settles one background frame dependency automatically and binds the shipping
     jobId = receipt.job_id
     // The startup receipt is not an observer of the unfinished capture.
     expect(event.envelope?.dependencies).toBeUndefined()
+    expect(startupProducer).toBeDefined()
+    expect(toolResultDependencies(startupProducer!)).toHaveLength(0)
     const exec = assembly.ctx.services.get<ExecService>('exec/service')!
     const startup = exec.getOutput(jobId)
     expect(startup.status).toBe('running')
@@ -57,13 +63,16 @@ it('settles one background frame dependency automatically and binds the shipping
 
     // A subscriber is the only observer; no getOutput/listJobs call asks for
     // the output before completion, so settlement must be automatic.
-    const terminal = await new Promise<BackgroundJobView>((resolveView, rejectView) => {
+    const completed = new Promise<BackgroundJobView>((resolveView, rejectView) => {
       const timer = setTimeout(() => rejectView(new Error('background job did not settle')), 60_000)
       const stop = exec.subscribeJob(jobId!, view => {
         if (view.status === 'running') return
         clearTimeout(timer); stop(); resolveView(view)
       })
     })
+    await writeFile(releasePath, '')
+    const terminal = await completed
+    expect(toolResultDependencies(startupProducer!), 'Passive completion must not mutate the finalized startup producer').toHaveLength(0)
     expect(terminal.status, JSON.stringify({ stdout: terminal.stdout, stderr: terminal.stderr })).toBe('completed')
     expect(terminal.exitCode).toBe(0)
     if (!terminal.retained) throw new Error('Expected automatic artifact settlement: ' + JSON.stringify({ retained: terminal.retained, failure: terminal.retentionFailure }))
@@ -145,6 +154,7 @@ it('settles one background frame dependency automatically and binds the shipping
     revoked = false
     expect((await bytesOf(dependency.retention.ref)).equals(body)).toBe(true)
   } finally {
+    await writeFile(releasePath, '')
     await cold?.close()
     await assembly.dispose()
     await coordinator.close()

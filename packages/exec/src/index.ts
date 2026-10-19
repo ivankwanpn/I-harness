@@ -29,6 +29,9 @@ export interface ExecCommand {
   sandbox?: SandboxExecutionPolicy
 }
 export interface ExecResult {
+  /** Retention/availability of this foreground observation, separate from the
+   * original command outcome and a background job's stored disposition. */
+  retentionFailure?: 'recovery-required' | 'unavailable'
   stdout: string
   stderr: string
   exitCode: number

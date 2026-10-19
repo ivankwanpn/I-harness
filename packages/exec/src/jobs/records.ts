@@ -7,41 +7,20 @@ import { createCaptureFactory } from "../capture/output.ts"
 import { createTransportLaunch } from "../transport-launch.ts"
 import { createJobObservation } from "./observation.ts"
 import { view } from "./views.ts"
+import { createJobRetention } from './retention.ts'
 
 /** The sole job registry, ID allocator and service disposal owner. */
 export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): ExecService {
   const jobs = new Map<string, Job>()
+  const captureJobs = new WeakMap<Capture, Job>()
   let nextJob = 0
   let disposed = false
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
-  const makeCapture = createCaptureFactory(options, supervisor, launchTransport)
-  const observe = (capture: Capture) => { if (capture.frames) void retain(capture) }
-
-  /** Record this original capture's current settlement on its own job. Never
-   * memoizes a void result: a recovery-required outcome stays retriable and the
-   * capture itself caches only a known terminal disposition. */
-  async function record(job: Job): Promise<void> {
-    const frames = job.capture.frames, owner = options.resultRetention
-    if (!frames || !owner) return
-    try {
-      const observation = await owner.observe(frames)
-      if (observation.kind === "ready") {
-        job.retained = observation.dependency
-        job.retentionFailure = observation.dependency.retention.kind === "unavailable" ? "unavailable" : undefined
-      } else job.retentionFailure = "recovery-required"
-    } catch { job.retentionFailure = "recovery-required" }
-  }
-
-  /** Passive settlement for a capture that is not (or no longer) a job; the
-   * foreground run path uses this inside its own prepared call. */
-  async function retain(capture: Capture): Promise<void> {
-    const frames = capture.frames, owner = options.resultRetention
-    if (!frames || !owner) return
-    const job = [...jobs.values()].find(candidate => candidate.capture === capture)
-    if (!job) { await owner.observe(frames); return }
-    await record(job)
-  }
+  const createCapture = createCaptureFactory(options, supervisor, launchTransport)
+  const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture))
+  const makeCapture: typeof createCapture = async (...args) => retention.track(await createCapture(...args))
+  const { observe, record } = retention
 
   const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed, observe })
 
@@ -55,6 +34,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     const id = "bash-" + (++nextJob)
     const job: Job = { id, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
     jobs.set(id, job)
+    captureJobs.set(capture, job)
     void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
     void capture.execution.handle.settled.then(settlement => {
       job.settlement = settlement
@@ -120,7 +100,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
       // A genuine reader inside its own prepared call registers the same
       // original source here; outside one this remains a passive retry.
-      if (job.status !== "running") observe(job.capture)
+      if (job.status !== "running") void observe(job.capture)
       return view(job)
     },
     subscribeJob(jobId, listener) {
@@ -130,7 +110,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       return () => { job.listeners.delete(listener) }
     },
     listJobs() {
-      return [...jobs.values()].filter(job => canAccess(job.owner)).map(job => { if (job.status !== "running") observe(job.capture); return view(job) })
+      return [...jobs.values()].filter(job => canAccess(job.owner)).map(job => { if (job.status !== "running") void observe(job.capture); return view(job) })
     },
     async killJob(jobId) {
       const job = jobs.get(jobId)
@@ -165,16 +145,13 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     launchTransport, cancelExecution,
     async dispose() {
       disposed = true
-      const unresolved: string[] = []
+      let unresolved: string[] = []
       try {
         await supervisor.dispose()
         // Close join: still-unknown settlements get one honest retry on their
         // original capture before the producer-side services are torn down.
-        await Promise.allSettled([...jobs.values()].map(async job => {
-          await job.capture.complete.catch(() => {})
-          await record(job)
-          if (job.retentionFailure === "recovery-required") unresolved.push(job.id)
-        }))
+        await Promise.allSettled([...jobs.values()].map(job => job.capture.complete))
+        unresolved = await retention.drain()
         await host.dispose?.()
       } finally { for (const job of jobs.values()) job.listeners.clear() }
       if (unresolved.length) throw Object.assign(new Error("Result retention still requires recovery: " + unresolved.join(",")), { code: "ARTIFACT_RECOVERY_REQUIRED" })

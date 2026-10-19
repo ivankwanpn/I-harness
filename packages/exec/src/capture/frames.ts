@@ -16,8 +16,10 @@ export interface ExecResultRetention {
   begin(input: { sourceId: string; owner: Readonly<ExecutionOwner> }): ExecFrameCapture
   /** Passive owner settlement. Commits the original capture without claiming
    * any observer and without registering a tool dependency; the capture
-   * coalesces concurrent calls and caches only a known terminal outcome. */
-  settle(capture: ExecFrameCapture): Promise<ExecFrameObservation>
+   * coalesces concurrent calls and caches only a known terminal outcome.
+   * Legacy adapters may omit this hook; the original capture's settle method
+   * is then used directly, without invoking an observer as a fallback. */
+  settle?(capture: ExecFrameCapture): Promise<ExecFrameObservation>
   /** Genuine observer registration for the CURRENT prepared ToolExec: binds
    * this same original source to that observer's own result catalog and
    * settles it. Registration is synchronous; storage settlement is coalesced

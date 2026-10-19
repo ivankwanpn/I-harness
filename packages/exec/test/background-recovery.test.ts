@@ -67,7 +67,7 @@ it('keeps an unknown settlement retriable through query/list/close on the origin
   } finally { job.release(); if (!disposed) await job.exec.dispose().catch(() => {}) }
 })
 
-it('promotes a retried unknown settlement into the real committed artifact', async () => {
+it('projects the controlled sink artifact disposition after retrying the original unknown capture', async () => {
   const job = await runJob({ finishes: [{ kind: 'unknown' }, { kind: 'artifact' }] })
   let disposed = false
   try {
@@ -94,16 +94,22 @@ it('reports a still-unknown close join honestly instead of claiming settlement',
   } finally { job.release(); if (!disposed) await job.exec.dispose().catch(() => {}) }
 })
 
-it('keeps a failed observer registration retriable and recovers on the next genuine read', async () => {
+it('keeps passive storage intact when a current observer fails and allows the next observation', async () => {
   const job = await runJob({ finishes: [{ kind: 'artifact' }], observeThrows: 1 })
   let disposed = false
   try {
-    expect(job.first.retentionFailure).toBe('recovery-required')
-    expect(job.first.retained).toBeUndefined()
-    job.exec.getOutput(job.jobId)
+    expect(job.first.retained).toMatchObject({ retention: { kind: 'artifact' } })
+    expect(job.first.retentionFailure).toBeUndefined()
+    expect(job.counters().observations).toBe(0)
+    const denied = job.exec.getOutput(job.jobId)
     await new Promise<void>(done => setImmediate(done))
-    expect(job.exec.getOutput(job.jobId).retained).toMatchObject({ retention: { kind: 'artifact' } })
-    expect(job.counters().launches).toBe(1)
+    expect(denied.retained).toEqual(job.first.retained)
+    expect(denied.retentionFailure).toBeUndefined()
+    const later = job.exec.getOutput(job.jobId)
+    await new Promise<void>(done => setImmediate(done))
+    expect(later.retained).toEqual(job.first.retained)
+    expect(later.retentionFailure).toBeUndefined()
+    expect(job.counters()).toEqual({ launches: 1, attempts: 1, observations: 2 })
     await job.exec.dispose(); disposed = true
   } finally { job.release(); if (!disposed) await job.exec.dispose().catch(() => {}) }
 })
