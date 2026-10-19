@@ -2,6 +2,13 @@
 
 狀態：**UNACCEPTED。R4A 第一批由外部實作者（deepseek-flash-1017）部分完成，等待 Codex 功能＋結構驗收。** 本文件不含接受、合併、標籤或發佈聲明；產品工作已停在本次 checkpoint。
 
+> **2026-10-19 更正（保留原文與原 receipts，不覆寫）**
+>
+> Codex 驗收指出本文件兩處範圍錯誤；以下更正取代原文的相應結論：
+>
+> 1. **完整套件比較混入不同 source（E1）**。原文 §3.1 的「65 failed vs 67 failed、失敗檔集合相同、沒有可歸因新失敗」不成立：該 candidate 全套件執行與 handoff baseline 全套件執行在香港時間 07:46:31–07:51:28 與 07:50:23–07:54:37 **重疊約 64.9 秒**，期間同一 checkout 的 8 個產品檔＋1 個測試檔曾由 candidate 內容切換成 handoff 內容再切回（即為取得 RED 證據所做的 stash/revert/apply），因此該次比較不是固定 source 的 qualification。原結論作廢；有效比較見 [Fix Round 1 交付](2026-10-19-context-r4a-fix-round1-delivery.md) 的隔離 worktree／順序執行證據。
+> 2. **「1MiB 級」背景 fixture 實為 9 raw bytes（E2）**。原文 §2 A2、§4 A1、§8 與 §5.3 把 `retained-background-exec` 描述成 1MiB 級背景控制，但該 fixture 只有 stdout `A + NUL + emoji`（6 bytes）與 stderr `ff 00 7f`（3 bytes），合計 **9 raw bytes**。`managed-frames` 的 2MiB 控制是不同 foreground／stub retention 流程，不能互換。Fix Round 1 未新增 1MiB 背景控制（列為未做），因此不得以本批任何結果宣稱大輸出背景資格。
+
 ## 1. 固定起點與交接核對
 
 | 項目 | 值 |
