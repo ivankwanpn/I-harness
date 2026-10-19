@@ -14,6 +14,9 @@ export interface TaskResultPage {
   data: { kind: 'text'; text: string }
 }
 export interface TaskResultStore {
+  /** True only when this composition can actually read retained bytes back.
+   * An adapter object existing is not proof of a durable reader. */
+  available?(): boolean
   forSource?(context?: ToolExec, current?: () => boolean): Promise<TaskResultStore>
   capture(task: Readonly<TaskResultTarget>, body: TaskResultBody, revision: string, execution?: ResultExecution, current?: () => boolean): ResultFinalization
   read(task: Readonly<TaskResultTarget>, ref: ManagedArtifactRef, args: { offset?: number; maxBytes?: number }): Promise<{ ref: ManagedArtifactRef; offset: number; nextOffset: number | null; eof: boolean; data: { kind: 'text'; text: string } | { kind: 'bytes'; base64: string } }>
@@ -41,6 +44,8 @@ export class TaskResultOwner {
   readonly #preparing = new Map<string, Promise<TaskResultStore>>()
   readonly #stores = new Map<string, TaskResultStore>()
   constructor(readonly store: TaskResultStore) {}
+  /** The same capability the real store declares; never inferred from shape. */
+  available(): boolean { return this.store.available?.() === true }
   async prepare(task: TaskResultTarget, context?: ToolExec, current?: () => boolean): Promise<TaskResultStore> {
     let pending = this.#preparing.get(task.id)
     if (!pending) {

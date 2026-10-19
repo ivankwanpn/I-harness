@@ -61,8 +61,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     }
   }
 
-  /** Restored retrieval is advertised only for this composition's actual owner.
-   * A retained ref without a reader is an unsupported owner, not a disk promise. */
+  /** Restored retrieval is advertised only for a composition that declares a
+   * real reader. An adapter object, or a store without that capability, is an
+   * unsupported owner rather than a disk promise. */
   function restoredRetention(task: TaskRecord, owned: boolean): void {
     if (task.bodyKind === "legacy-text" && !task.result) { task.retention = "durable"; delete task.retentionError; return }
     if (task.result?.kind === "pending") { task.retention = "pending"; delete task.retentionError; return }
@@ -250,7 +251,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         if (doc.formatVersion === 1) t.bodyKind = "legacy-text"
         else unqualifyRestoredTask(t)
         records.set(t.id, t)
-        if (opts.reportPolicy && t.outcome !== undefined) restoredRetention(t, Boolean(resultOwner))
+        if (opts.reportPolicy && t.outcome !== undefined) restoredRetention(t, resultOwner?.available?.() === true)
         const anon = t.callEventSeq === undefined && t.toolCallId === undefined
         if (anon) restoredAnon += 1
         byIdentity.set(

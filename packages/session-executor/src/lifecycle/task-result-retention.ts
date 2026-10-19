@@ -8,6 +8,9 @@ import { resultSourceBinding } from './result-sources.ts'
  * Its document owns pins; the parent's current source/lineage owns access. */
 export function createTaskResultRetention(service: ContextOutputService | undefined, sourceFor: ((sessionId: string) => Promise<ContextCapture['source']>) | undefined, parentSessionId?: string, stateId = parentSessionId): TaskResultStore {
   const build = (bound?: { source: ContextCapture['source']; current?: () => boolean }): TaskResultStore => ({
+    // The ContextOutput service is the real reader; without it this adapter can
+    // capture nothing and must not be advertised as a durable-read capability.
+    available: () => service !== undefined && parentSessionId !== undefined,
     ...(!bound ? { async forSource(context?: import('@i-harness/core-tools').ToolExec, current?: () => boolean) {
       const prepared = context ? resultSourceBinding(context) : undefined
       const source = prepared ? prepared.descriptor : parentSessionId ? await sourceFor?.(parentSessionId) : undefined
