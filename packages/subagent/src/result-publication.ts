@@ -6,20 +6,46 @@ export interface ResultPublication {
   savedObservation?: { status: AuxiliaryResultStatus; execution?: ResultExecution }
 }
 
-export function validResultPublication(row: object): boolean {
-  const publication = Object.getOwnPropertyDescriptor(row, 'publication'), observation = Object.getOwnPropertyDescriptor(row, 'savedObservation')
-  if (publication && (!('value' in publication) || !publication.enumerable) || observation && (!('value' in observation) || !observation.enumerable)) return false
-  const kind = publication?.value, saved = observation?.value
-  if (kind === undefined && saved === undefined) return true
-  if (!['unqualified', 'committed'].includes(kind) || kind === 'unqualified' && saved === undefined) return false
-  if (saved === undefined) return true
-  if (!isStrictFactData(saved) || !saved || typeof saved !== 'object' || Array.isArray(saved) || !Object.hasOwn(saved, 'status')
-    || Object.keys(saved).some(key => !['status', 'execution'].includes(key)) || !['running', 'waiting', 'completed', 'killed', 'error', 'recovery-required'].includes(saved.status)) return false
-  if (saved.execution === undefined) return true
-  const execution = saved.execution
+const publicationKinds = ['unqualified', 'committed'] as const
+const resultOutcomes = ['succeeded', 'failed', 'canceled', 'unknown'] as const
+const resultDispatches = ['not-dispatched', 'dispatched', 'unknown'] as const
+const auxiliaryStatuses: readonly AuxiliaryResultStatus[] = ['running', 'waiting', 'completed', 'killed', 'error', 'recovery-required']
+
+/** The one exact execution descriptor shared by every result owner. */
+export function validResultExecution(value: unknown): value is ResultExecution {
+  const execution = value
   return !!execution && typeof execution === 'object' && !Array.isArray(execution) && Object.keys(execution).length === 2
     && Object.keys(execution).every(key => ['outcome', 'dispatch'].includes(key))
-    && ['succeeded', 'failed', 'canceled', 'unknown'].includes(execution.outcome) && ['not-dispatched', 'dispatched', 'unknown'].includes(execution.dispatch)
+    && resultOutcomes.includes((execution as ResultExecution).outcome) && resultDispatches.includes((execution as ResultExecution).dispatch)
+}
+
+/** Closed saved-observation descriptor. Each domain supplies its own status
+ * and outcome vocabularies; nothing else is shared. */
+export function validSavedObservation(value: unknown, statuses: readonly string[], outcomes?: readonly string[]): boolean {
+  const saved = value
+  if (!isStrictFactData(saved) || !saved || typeof saved !== 'object' || Array.isArray(saved) || !Object.hasOwn(saved, 'status')) return false
+  const allowed = outcomes ? ['status', 'outcome', 'execution'] : ['status', 'execution']
+  if (Object.keys(saved).some(key => !allowed.includes(key))) return false
+  const row = saved as { status: unknown; outcome?: unknown; execution?: unknown }
+  if (typeof row.status !== 'string' || !statuses.includes(row.status)) return false
+  if (outcomes && (typeof row.outcome !== 'string' || !outcomes.includes(row.outcome))) return false
+  return row.execution === undefined || validResultExecution(row.execution)
+}
+
+/** Shared publication wrapper: the owning domain validates only its observation. */
+export function validPublicationDescriptor(row: object, observation: (saved: unknown) => boolean): boolean {
+  const publication = Object.getOwnPropertyDescriptor(row, 'publication'), saved = Object.getOwnPropertyDescriptor(row, 'savedObservation')
+  if (publication && (!('value' in publication) || !publication.enumerable) || saved && (!('value' in saved) || !saved.enumerable)) return false
+  const kind = publication?.value, observationValue = saved?.value
+  if (kind === undefined && observationValue === undefined) return true
+  if (!publicationKinds.includes(kind as 'unqualified' | 'committed') || kind === 'unqualified' && observationValue === undefined) return false
+  if (observationValue === undefined) return true
+  return observation(observationValue)
+}
+
+/** State/job mirrors: their own status vocabulary, no outcome field. */
+export function validResultPublication(row: object): boolean {
+  return validPublicationDescriptor(row, saved => validSavedObservation(saved, auxiliaryStatuses))
 }
 
 function sameResult(saved: RetainedResultRevision, published: RetainedResultRevision | undefined): published is Extract<RetainedResultRevision, { kind: 'retained' }> {

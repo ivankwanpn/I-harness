@@ -35,6 +35,21 @@ it('refuses forged task publication/saved-observation descriptors at the actual 
   } as unknown as TaskProtocolDocument)).toThrow(/publication/)
 })
 
+/** The task owner persists {status, outcome, execution}. Every legal one must
+ * round-trip, and only the closed vocabulary is accepted. */
+it.each([
+  ['completed', 'completed'], ['error', 'error'], ['cancelled', 'cancelled'], ['recovery-required', 'recovery-required'],
+] as const)('accepts its own current-format %s row and rejects invalid domain values', (status, outcome) => {
+  const registry = () => createTaskRegistry({ reportPolicy: SHIPPING_REPORT_POLICY })
+  const base = { ...row, status, outcome, resultText: 'preview', result: { version: 1, kind: 'pending' as const, revision: 'original' },
+    publication: 'unqualified' as const, savedObservation: { status, outcome, execution: { outcome: 'succeeded' as const, dispatch: 'dispatched' as const } } }
+  expect(() => registry().restore({ formatVersion: 2, tasks: [{ ...base }], notifications: [] } as unknown as TaskProtocolDocument)).not.toThrow()
+  expect(() => registry().restore({ formatVersion: 2, tasks: [{ ...base, savedObservation: { ...base.savedObservation, outcome: 'invented' } }], notifications: [] } as unknown as TaskProtocolDocument)).toThrow(/publication/)
+  expect(() => registry().restore({ formatVersion: 2, tasks: [{ ...base, savedObservation: { status, execution: { outcome: 'succeeded', dispatch: 'dispatched' } } }], notifications: [] } as unknown as TaskProtocolDocument)).toThrow(/publication/)
+  expect(() => registry().restore({ formatVersion: 2, tasks: [{ ...base, savedObservation: { ...base.savedObservation, extra: 1 } }], notifications: [] } as unknown as TaskProtocolDocument)).toThrow(/publication/)
+  expect(() => registry().restore({ formatVersion: 1, tasks: [{ ...base }], notifications: [] } as unknown as TaskProtocolDocument)).toThrow(/legacy/)
+})
+
 it('keeps the current task-document version and result descriptors when a cold reader has no result owner', async () => {
   const root = await mkdtemp(join(tmpdir(), 'task-negative-resave-'))
   let coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })

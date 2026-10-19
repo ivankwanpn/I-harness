@@ -1,6 +1,16 @@
 import type { SessionView } from '@i-harness/core-session'
-import type { TaskRecord } from './types.ts'
-import { retainedResultWitness } from '../result-publication.ts'
+import type { TaskRecord, TaskOutcome, TaskStatus } from './types.ts'
+import { retainedResultWitness, validPublicationDescriptor, validSavedObservation } from '../result-publication.ts'
+
+/** Task rows persist their own status/outcome domain. Reusing the state/job
+ * observation schema would reject an owner's own legally saved current-format
+ * document on its next cold restore. */
+const taskStatuses: readonly TaskStatus[] = ['accepted', 'running', 'completed', 'error', 'cancelled', 'recovery-required']
+const taskOutcomes: readonly TaskOutcome[] = ['completed', 'error', 'cancelled', 'recovery-required']
+
+export function validTaskResultPublication(row: object): boolean {
+  return validPublicationDescriptor(row, saved => validSavedObservation(saved, taskStatuses, taskOutcomes))
+}
 
 /** Derived cold qualification over the saved observation. No new producer,
  * completion fact, notification or execution source is created here. */
