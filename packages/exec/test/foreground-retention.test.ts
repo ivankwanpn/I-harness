@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import type { TransportExecutionBackend } from '@i-harness/sandbox'
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
-import { createExecService, type ExecutionSupervisor } from '../src/index.ts'
+import { createExecService, retainedOutputReader, type ExecutionSupervisor } from '../src/index.ts'
 import { createExecFrameCapture } from '../../output-retention/src/index.ts'
 
 function foreground(exitCode: number, rejectObserver: boolean, unknownStorage = false) {
@@ -46,6 +46,9 @@ it.each([0, 7])('reports observation recovery without rewriting the original nat
   try {
     const result = await exec.run({ argv: ['controlled-foreground'] })
     expect(result).toMatchObject({ stdout: 'original', stderr: '', exitCode, timedOut: false, retentionFailure: 'recovery-required' })
+    const reader = retainedOutputReader(result)
+    expect(reader, 'Observation metadata must preserve the original producer reader').toBeTypeOf('function')
+    expect(await reader!({ maxBytes: 1024, signal: new AbortController().signal })).toMatchObject({ text: 'stdout:\noriginal\nstderr:\n', complete: true })
     await new Promise<void>(done => setImmediate(done))
     expect(counts()).toEqual({ launches: 1, observations: 1 })
   } finally { await exec.dispose() }

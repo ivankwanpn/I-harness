@@ -1,6 +1,7 @@
 import type { ExecCommand, ExecResult, ExecRunOptions, ExecStreamRunOptions, PromotedRun } from "../index.ts"
 import type { Capture } from "../capture/contracts.ts"
 import { validateInput } from "../capture/input.ts"
+import { registerRetainedOutput, retainedOutputReader } from '../retained-output.ts'
 
 interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
@@ -13,7 +14,11 @@ interface JobObservation {
 export function createJobObservation({ makeCapture, registerJob, isDisposed, observe }: JobObservation) {
   async function observed(capture: Capture, result: ExecResult): Promise<ExecResult> {
     const retentionFailure = await observe?.(capture)
-    return retentionFailure ? { ...result, retentionFailure } : result
+    if (!retentionFailure) return result
+    const observation = { ...result, retentionFailure }
+    const reader = retainedOutputReader(result)
+    if (reader) registerRetainedOutput(observation, reader)
+    return observation
   }
   async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
     validateInput(command)
