@@ -1,6 +1,6 @@
 # ContextEngine 外部實作與 Codex 驗收計劃
 
-> **For agentic workers:** Use `superpowers:executing-plans` to execute the current approved batch task by task. The user selected a separate `deepseek-flash-1017` implementer and Codex as reviewer. Do not start additional agents. Steps use checkbox (`- [ ]`) tracking. If that skill is unavailable in the executing harness, follow the explicit workflow below; no plugin installation is required.
+> **For agentic workers:** Use `superpowers:executing-plans` to execute the current approved batch task by task. The latest user workflow is a separate `deepseek-flash-1017` initial implementer, followed by Codex review and direct adjustment. Do not start additional implementation agents. Steps use checkbox (`- [ ]`) tracking. If that skill is unavailable in the executing harness, follow the explicit workflow below; no plugin installation is required.
 
 **Goal:** 接手現有 ContextEngine 重構，完成剩餘結果保存、語意繼承、可靠交付、觀測及大型長會話工作，按完整交付批次交給 Codex 驗收。
 
@@ -12,14 +12,14 @@
 
 ## 1. 使用方式與授權變更
 
-2026-10-19 使用者決定：目前 Codex 停止產品實作、準備交接，由另一個 agent 使用 **deepseek-flash-1017** 實作，完成後交回 Codex 驗收。這個新指示覆蓋舊文件中「實作子代理一律 GPT6.1Sol」的分工要求；既有資料／權限／驗收契約保持有效。
+2026-10-19 使用者先決定由另一個 agent 使用 **deepseek-flash-1017** 實作，再調整為「DeepSeek 做初步，Codex 驗收以後自己調整」。後一指示覆蓋先前 Codex 只寫計劃／不修改產品的限制；Codex 可在外部 writer 停止後直接修正並完成驗證。既有資料／權限／驗收契約保持有效；原 GPT6.1Sol reviewer 保持獨立唯讀審查，不與 root 同時寫產品。
 
 - 一次只有一個產品 writer。實作者不自行派子代理、不與仍在修改同一 checkout 的程序並行寫檔。
-- **現在可直接開工的批次是 R4A 收尾**，入口：[R4A 接手執行計劃](2026-10-19-context-engine-r4a-completion-handoff.md)。讀完交接檢查點及該計劃即可開始，不重做 R0–R3。
+- **目前批次仍是 R4A 收尾**，入口：[R4A 接手執行計劃](2026-10-19-context-engine-r4a-completion-handoff.md)。先讀[最新限定範圍驗收](../../research/2026-10-19-context-r4a-codex-refinement.md)：產品已到 `3ba0d782`，舊交接 HEAD 是祖先，不能重做已修正項目或 R0–R3；A3–A6 與其餘驗收義務仍未完成。
 - R4A 整批交付後，Codex 做功能、結構及證據驗收；修正具體 finding 後再接受。R4B/C/R5/R6 的順序及必交內容見下文，其實際接口須以已接受的前一批次為準。
 - 後續每批開工前，Codex 將本文件對應的責任與不變量展開成針對當時 HEAD 的執行計劃。這是原框架要求的接口定稿關卡，不把尚未存在的 API 假裝成現成程式。
 - `task finished`、本地 commit、單一測試 pass、已打包、已驗收、已發佈是不同狀態。實作者可提交 coherent commits，但不可自行標記 reviewer accepted、合併 PR、打 tag 或發佈。
-- 若只有本地修改／局部測試，必須標記 **UNACCEPTED**。使用者目前要求交接，沒有要求這個未驗收檢查點成為正式版本。
+- 若只有本地修改／局部測試，整批仍標記 **UNACCEPTED**；具體修正可有明確限定範圍的 acceptance，不能升格為整批通過。目前未授權將未完成 R4A 當成正式版本發佈。
 
 ## 2. 開始前的唯一入口
 
