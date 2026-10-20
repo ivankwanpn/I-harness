@@ -6,8 +6,8 @@ function backend(): PersistenceBackend {
   return {
     id: "jsonl", capabilities: { seekableRead: false, rawArtifacts: true },
     async create() {}, async append() {}, async list() { return [] },
-    async read() { return { version: 9, events: [] } },
-    async repair() { return { version: 9, events: [] } },
+    async read() { return { version: 10, events: [] } },
+    async repair() { return { version: 10, events: [] } },
     async putDocument() {}, async getDocument() { return undefined },
     async profile() { throw new Error("unused") }, async updateMeta() { throw new Error("unused") },
   }
@@ -85,7 +85,9 @@ describe("coordinator callback and evaluation order", () => {
     await entered.promise
     let calls = 0
     store.replaceEvents = async function (_id, events) { expect(this).toBe(store); calls++; expect(events[0]?.seq).toBe(0) }
-    repaired.resolve({ version: 8, events: [{ type: "assistant/message", text: "persist me" }] })
+    // This fixture exercises current-format sequence canonicalization and late
+    // method lookup; literal predecessor upgrades have their own owner tests.
+    repaired.resolve({ version: 10, events: [{ type: "assistant/message", text: "persist me" }] })
     await loaded
     expect(calls).toBe(1)
     await coordinator.close()
