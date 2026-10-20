@@ -22,7 +22,10 @@ export function acceptedResultPage(value: unknown, query: ResultPageQuery): Page
     if (!safe(value.offset) || value.offset !== (query.offset ?? 0) || value.offset > ref.encodedBytes || !record(value.data)) return
     if (value.eof !== (value.nextOffset === null) || value.nextOffset !== null && (!safe(value.nextOffset) || value.nextOffset <= value.offset || value.nextOffset > ref.encodedBytes)) return
     const length = value.data.kind === "text" && typeof value.data.text === "string" ? new TextEncoder().encode(value.data.text).length : value.data.kind === "bytes" ? bytes(value.data.base64)?.length : undefined
-    if (length === undefined || value.offset + length > (value.nextOffset ?? ref.encodedBytes)) return
+    const span = (value.nextOffset ?? ref.encodedBytes) as number - value.offset
+    // Each original TextDecoder invocation can omit one leading UTF-8 BOM.
+    // Raw byte pages have no decoding allowance; every other byte must appear.
+    if (length === undefined || span !== length && !(value.data.kind === "text" && span === length + 3)) return
   } else {
     if (!cursor(value.cursor) || value.cursor.recordOffset < 9 || value.cursor.recordOffset > ref.encodedBytes || !Array.isArray(value.frames)) return
     // The owner consumes its nine-byte magic header on the initial request.
@@ -42,6 +45,8 @@ export function acceptedResultPage(value: unknown, query: ResultPageQuery): Page
       previous = {channel:frame.channel,frame:frame.frame,offset:frame.offset,length:raw.length,end:frame.end}
     }
     if (!value.frames.length && !value.eof) return
+    if (value.nextCursor !== null && value.nextCursor.recordOffset === value.cursor.recordOffset
+      && (value.frames.length !== 1 || !previous || previous.end || value.nextCursor.sliceOffset - value.cursor.sliceOffset !== previous.length)) return
   }
   return value as unknown as Page
 }

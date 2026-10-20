@@ -11,14 +11,14 @@ import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(() => { cleanup(); useUiStore.setState({locale:"zh-TW",surface:"conversation",reviewOpen:false}) })
-const ref = {version:1 as const,id:"ctxv1_"+"a".repeat(64),revision:"b".repeat(64),codec:"text-utf8-v1" as const,encodedBytes:100,contentDigest:"c".repeat(64),completeness:"source-limited" as const}
+const ref = {version:1 as const,id:"ctxv1_"+"a".repeat(64),revision:"b".repeat(64),codec:"text-utf8-v1" as const,encodedBytes:29,contentDigest:"c".repeat(64),completeness:"source-limited" as const}
 const envelope: Envelope = {version:1,execution:{outcome:"succeeded",dispatch:"dispatched"},preview:"saved preview",media:[],retention:{kind:"artifact",ref}}
-const page = (text:string, offset=0, nextOffset:number|null=null, target:ResultPageQuery["ref"]=ref):ResultPageResult => ({ref:target,offset,nextOffset,eof:nextOffset===null,data:{kind:"text",text}})
+const page = (text:string, offset=0, nextOffset:number|null|undefined=undefined, target:ResultPageQuery["ref"]=ref):ResultPageResult => { const end=offset+new TextEncoder().encode(text).length, next=nextOffset===undefined ? end===target.encodedBytes ? null : end : nextOffset; return {ref:target,offset,nextOffset:next,eof:next===null,data:{kind:"text",text}} }
 const reader = (readPage:(query:ResultPageQuery)=>Promise<ResultPageResult>, workspaceId="w",sessionId="s") => ({workspaceId,sessionId,readPage})
 const read = () => fireEvent.click(screen.getByRole("button",{name:"讀取已保存頁面"}))
 
 it.each(["normal","grouped","nested","code"])("explicitly reads one page through the actual %s Timeline route",async route=>{
-  const readPage=vi.fn(async()=>page("first fragment",0,20))
+  const readPage=vi.fn(async()=>page("first fragment",0,14))
   const event:WireEvent = route==="code" ? {type:"code/output",cellId:"cell",envelope} : route==="nested" ? {type:"code/result",cellId:"cell",callId:"a",name:"bash",envelope} : {type:"tool/result",callId:"a",name:"bash",envelope}
   const events = route==="grouped" ? [event,{type:"tool/result" as const,callId:"b",name:"bash",envelope}] : [event]
   render(<Timeline rows={projectTimeline(events)} resultReader={reader(readPage)} />)
@@ -27,11 +27,11 @@ it.each(["normal","grouped","nested","code"])("explicitly reads one page through
   expect(readPage).not.toHaveBeenCalled(); read()
   expect(await screen.findByText("first fragment")).toBeTruthy()
   expect(readPage).toHaveBeenCalledExactlyOnceWith({ref,maxBytes:16384})
-  readPage.mockResolvedValueOnce(page("second fragment",20))
+  readPage.mockResolvedValueOnce(page("second fragment",14))
   fireEvent.click(screen.getByRole("button",{name:"下一個已保存頁面"}))
   expect(await screen.findByText("second fragment")).toBeTruthy()
   expect(screen.queryByText("first fragment")).toBeNull()
-  expect(readPage).toHaveBeenLastCalledWith({ref,maxBytes:16384,offset:20})
+  expect(readPage).toHaveBeenLastCalledWith({ref,maxBytes:16384,offset:14})
   expect(screen.getByText("已到已保存內容結尾")).toBeTruthy()
   expect(screen.getByText("部分保留 · source-limited")).toBeTruthy()
   fireEvent.click(screen.getByRole("button",{name:"重新讀取第一頁"}))
@@ -49,7 +49,7 @@ it("keeps unavailable/capability-absent output inert and binds the historical Ti
 })
 
 it("switches the single page holder to an explicit catalog without following catalog refs",async()=>{
-  const catalog={...ref,id:"ctxv1_"+"d".repeat(64),codec:"json-utf8-v1" as const}
+  const catalog={...ref,id:"ctxv1_"+"d".repeat(64),codec:"json-utf8-v1" as const,encodedBytes:12}
   const readPage=vi.fn(async(query:ResultPageQuery)=> query.ref.id===catalog.id ? page('{"entries":[',0,null,catalog) : page("primary fragment"))
   render(<ToolActivity name="bash" expanded envelope={{...envelope,dependencies:{kind:"artifact-set",ref:catalog,count:1}}} resultReader={reader(readPage)} />)
   read(); await screen.findByText("primary fragment")
@@ -76,8 +76,9 @@ it.each(["workspace","session","id","revision","version","digest","bytes","codec
 })
 
 it("keeps exact binary data and bounded localized unavailable feedback",async()=>{
-  const readPage=vi.fn(async():Promise<ResultPageResult>=>({ref,offset:0,nextOffset:null,eof:true,data:{kind:"bytes",base64:"/wAA"}}))
-  render(<ToolActivity name="bash" expanded envelope={envelope} resultReader={reader(readPage)} />)
+  const binary={...ref,encodedBytes:3}
+  const readPage=vi.fn(async():Promise<ResultPageResult>=>({ref:binary,offset:0,nextOffset:null,eof:true,data:{kind:"bytes",base64:"/wAA"}}))
+  render(<ToolActivity name="bash" expanded envelope={{...envelope,retention:{kind:"artifact",ref:binary}}} resultReader={reader(readPage)} />)
   read(); await screen.findByText("/wAA"); expect(screen.getByText("原始位元組（base64）")).toBeTruthy()
   readPage.mockResolvedValueOnce({kind:"unavailable",reason:"unauthorized"})
   fireEvent.click(screen.getByRole("button",{name:"重新讀取第一頁"}))
@@ -86,9 +87,9 @@ it("keeps exact binary data and bounded localized unavailable feedback",async()=
 })
 
 it("rejects forged return identity and nonadvancing or malformed pages",async()=>{
-  for(const returned of [page("forged",0,null,{...ref,contentDigest:"d".repeat(64)}),page("stalled",0,0),{ref,offset:0,nextOffset:null,eof:false,data:{kind:"text" as const,text:"bad eof"}}]) {
+  for(const returned of [page("forged",0,null,{...ref,contentDigest:"d".repeat(64)}),page("stalled",0,0),page("short",0,20),page("short",0,null),page("",0,10),{ref,offset:0,nextOffset:null,eof:false,data:{kind:"text" as const,text:"bad eof"}}]) {
     render(<ToolActivity name="bash" expanded envelope={envelope} resultReader={reader(async()=>returned)} />)
-    read(); await screen.findByRole("alert"); expect(screen.queryByText(/forged|stalled|bad eof/)).toBeNull(); cleanup()
+    read(); await screen.findByRole("alert"); expect(screen.queryByText(/forged|stalled|short|bad eof/)).toBeNull(); expect(screen.queryByRole("button",{name:"下一個已保存頁面"})).toBeNull(); cleanup()
   }
 })
 
