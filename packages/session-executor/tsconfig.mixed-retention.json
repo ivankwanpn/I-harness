@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "test/mixed-retention-*.test.ts", "test/helpers/mixed-retention-*.mts"]
+}
