@@ -1,9 +1,11 @@
 import { access as fileAccess } from 'node:fs/promises'
-import { boundary, checkAbort, floorBoundary, prefix, serializedBytes } from './bytes.ts'
+import { checkAbort, serializedBytes } from './bytes.ts'
 import { configureContext, DEFAULT_CONTEXT_OUTPUT_CONFIG, identity, integer } from './config.ts'
-import { ContextStore, digest, referenceId } from './store.ts'
-import type { ContextAccess, ContextOutputOptions, ContextOutputService, ContextOutputStatus, ContextResultRef, ContextSearchResult } from './types.ts'
+import { ContextStore } from './store.ts'
+import type { ContextAccess, ContextOutputOptions, ContextOutputService, ContextOutputStatus, ContextResultRef } from './types.ts'
 import { createArtifactOwnership } from './artifact/ownership.ts'
+import { captureLegacy } from './legacy/capture.ts'
+import { readLegacy, searchLegacy } from './legacy/query.ts'
 
 export function createContextOutputService(options: ContextOutputOptions): ContextOutputService {
   identity(options.workspaceId, 'workspaceId')
@@ -123,34 +125,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       if (!config.enabled && !closed && !closing && controls === 0) return undefined
       // Snapshot caller objects before admitting asynchronous work.
       const captured = structuredClone(input)
-      return run(signal, async (owned) => {
-        // A useful index needs fixed overhead. Avoid creating files for an
-        // impossible disk budget and conservatively reserve index growth.
-        if (config.maxDiskBytes < 65536) return undefined
-        const produced=producer ? await producer({maxBytes:config.maxCaptureBytes,signal:owned}) : undefined
-        checkAbort(owned)
-        if(produced){
-          if(typeof produced.text!=='string'||typeof produced.complete!=='boolean'||(produced.originalBytes!==undefined&&(!Number.isSafeInteger(produced.originalBytes)||produced.originalBytes<Buffer.byteLength(produced.text))))throw new Error('Invalid producer capture')
-          captured.text=produced.text;captured.complete=produced.complete
-        }
-        const current = await getStore(owned)
-        await current.prune()
-        checkAbort(owned)
-        const available = Math.max(0, Math.floor((config.maxDiskBytes - await current.diskBytes() - 32768) / 3))
-        const original = Buffer.from(captured.text, 'utf8')
-        const bytes = prefix(original, Math.min(config.maxCaptureBytes, available))
-        if (original.length > 0 && bytes.length === 0) return undefined
-        const revision = digest(bytes)
-        const ref: ContextResultRef = {
-          id: referenceId(options.workspaceId, captured.sessionId, captured.callId, revision),
-          workspaceId: options.workspaceId, sessionId: captured.sessionId, callId: captured.callId,
-          label: captured.label, revision, bytes: bytes.length, originalBytes: produced?.originalBytes ?? original.length,
-          complete: captured.complete && bytes.length === (produced?.originalBytes ?? original.length),
-          expiresAt: Date.now() + config.retentionDays * 86400000,
-          ...(captured.source ? { source: captured.source } : {}),
-        }
-        return current.put({ ref, ...(captured.source ? { source: captured.source } : {}) }, bytes, config.maxDiskBytes, owned)
-      }, true)
+      return run(signal, owned => captureLegacy(options.workspaceId, captured, producer, () => config, getStore, owned), true)
     },
     async read(access, query) {
       identity(access.sessionId, 'sessionId')
@@ -158,14 +133,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       const id = query.refId
       const offset = integer(query.offset ?? 0, 'offset')
       const budget = Math.min(config.maxReadBytes, integer(query.maxBytes ?? config.maxReadBytes, 'read budget', 1))
-      return run(access.signal, async (owned) => {
-        const ref = await readable(caller, id, owned)
-        const bytes = await store!.bytes(id, owned)
-        if (offset > bytes.length || !boundary(bytes, offset)) throw new Error('offset must be an exact UTF-8 boundary within the captured output')
-        const end = floorBoundary(bytes, offset + budget)
-        if (end === offset && offset < bytes.length) throw new Error('read budget cannot fit the next UTF-8 character')
-        return { ref, text: bytes.subarray(offset, end).toString('utf8'), offset, nextOffset: end < bytes.length ? end : null, eof: end === bytes.length }
-      })
+      return run(access.signal, owned => readLegacy(id, offset, budget, owned, () => readable(caller, id, owned), (id, signal) => store!.bytes(id, signal)))
     },
     async search(access, query) {
       identity(access.sessionId, 'sessionId')
@@ -177,52 +145,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       if (maxBytes < serializedBytes({ hits: [], partial: true, reasons: ['byte-budget'] })) throw new Error('search budget cannot fit result metadata')
       const filter = query.refIds === undefined ? undefined : new Set(query.refIds)
       if (filter && (filter.size > 100 || [...filter].some((id) => typeof id !== 'string'))) throw new Error('refIds must contain at most 100 references')
-      return run(access.signal, async (owned) => {
-        const current = await getStore(owned)
-        const result: ContextSearchResult = { hits: [], partial: false, reasons: [] }
-        const mark = (reason: string) => { result.partial = true; if (!result.reasons.includes(reason)) result.reasons.push(reason) }
-        const matchers = terms.map((term) => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'))
-        let scannedBytes = 0
-        for await (const { ref, verify } of current.candidates(terms, owned, mark)) {
-          checkAbort(owned)
-          if (filter && !filter.has(ref.id) || !await allowed(caller, ref, owned) || !current.get(ref.id)) continue
-          if (!ref.complete) mark('incomplete-capture')
-          if (!verify) continue
-          if (scannedBytes + ref.bytes > 32 * 1024 * 1024) { mark('scan-byte-budget'); break }
-          scannedBytes += ref.bytes
-          const bytes = await current.bytes(ref.id, owned)
-          const text = bytes.toString('utf8')
-          const matches = matchers.map((matcher) => matcher.exec(text))
-          if (matches.some((match) => match === null)) continue
-          if (result.hits.length >= limit) { mark('limit'); break }
-          const first = matches.reduce((a, b) => a!.index <= b!.index ? a : b)!
-          const offset = Buffer.byteLength(text.slice(0, first.index))
-          const matchEnd = offset + Buffer.byteLength(first[0])
-          let start = floorBoundary(bytes, Math.max(0, offset - 256))
-          let end = floorBoundary(bytes, Math.min(bytes.length, matchEnd + 512))
-          const hit = { ref, text: '', offset: start, endOffset: end }
-          // Budget actual JSON including escape expansion, ref metadata, and
-          // partial reasons. Shrink the surrounding window before dropping a hit.
-          const previous = [...result.hits]
-          while (true) {
-            hit.offset = start; hit.endOffset = end; hit.text = bytes.subarray(start, end).toString('utf8')
-            result.hits = [...previous, hit]
-            if (serializedBytes(result) <= maxBytes) break
-            mark('byte-budget')
-            if (end > matchEnd) end = floorBoundary(bytes, Math.max(matchEnd, end - 32))
-            else if (start < offset) {
-              start = Math.min(offset, start + 32)
-              while (!boundary(bytes, start)) start++
-            } else { result.hits = previous; break }
-          }
-          if (result.reasons.includes('byte-budget')) break
-        }
-        // A reason added after earlier hits must itself remain inside the budget.
-        while (serializedBytes(result) > maxBytes && result.hits.length) result.hits.pop()
-        if (serializedBytes(result) > maxBytes) { result.reasons = ['byte-budget']; result.partial = true }
-        checkAbort(owned)
-        return result
-      })
+      return run(access.signal, owned => searchLegacy({ terms, limit, maxBytes, filter }, getStore, (ref, signal) => allowed(caller, ref, signal), owned))
     },
     async grant(access, refIds, targetSessionId) {
       identity(access.sessionId, 'sessionId')
