@@ -1,6 +1,8 @@
 # R4A — Mixed retention, saved quotas and derived index lifecycle
 
-Approved bounded execution plan, 2026-10-21. [Bounded integrity is accepted](../../research/2026-10-21-context-r4a-result-integrity-acceptance.md) at3a196bbf65c0f3f403ff14ef157c1a1c2725088a. The [independent preflight/re-review](../../research/context-r4a-mixed-retention-preflight-20261021/review.md) and [accepted-source rebase](../../research/context-r4a-mixed-retention-preflight-20261021/accepted-source-rebase.md) pass; all five amendments are incorporated. Root pins the subsequent documentation-only plan checkpoint as the fresh writer's clean BASE in its brief. This is readiness for qualification, not an already reproduced product failure.
+**Accepted bounded qualification, 2026-10-21:** [root acceptance](../../research/2026-10-21-context-r4a-mixed-retention-acceptance.md) records40b660c4..abe50917, zero product delta, exact62test/type results, fresh review and independent root audit. Whole R4A, structural closure and A6 scale/packaged work remain open. The executed contract is retained below.
+
+Original readiness: [bounded integrity accepted](../../research/2026-10-21-context-r4a-result-integrity-acceptance.md) at3a196bbf65c0f3f403ff14ef157c1a1c2725088a. The [independent preflight/re-review](../../research/context-r4a-mixed-retention-preflight-20261021/review.md) and [accepted-source rebase](../../research/context-r4a-mixed-retention-preflight-20261021/accepted-source-rebase.md) passed; all five amendments were incorporated before dispatch. No product failure was presumed.
 
 Root-led approved ContextEngine work; one GPT6.1Sol writer, fresh final GPT6.1Sol reviewer, no recursive agents. Version0.1.13-rc.1, Session10 and unrelated decomposition27/43 stay unchanged; no publishing, live provider, installed app or user profile.
 

@@ -1,0 +1,30 @@
+{
+  "sealedUtc": "2026-10-20T20:54:06.605Z",
+  "base": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c",
+  "head": "abe50917788ec042682face5be89a5aff7d18bed",
+  "inventorySha256": "66a05934041e0493239e1992fcb0c7829b7dce17804a385cf7887ef49ba6ccf3",
+  "files": 973,
+  "bytes": 33026861,
+  "external": [
+    {
+      "path": ".superpowers/sdd/2026-10-21-context-r4a-mixed-retention/task-1-report.md",
+      "bytes": 11187,
+      "sha256": "59a407d128ca50c324b9fd56f6277d12e9ee3f43b659e7e6d56b177cccc466de"
+    },
+    {
+      "path": ".superpowers/sdd/2026-10-21-context-r4a-mixed-retention/handback.json",
+      "bytes": 4959,
+      "sha256": "ed2ea24f0f003bdbb0976a3c19d35bca5a369e47c41b35360c6c60b4f309814c"
+    },
+    {
+      "path": "docs/research/2026-10-21-context-r4a-mixed-retention-delivery.md",
+      "bytes": 11016,
+      "sha256": "501f048c486205ff9283be634ba5adb284a71c05ad652a635b7aa05b130ad2a7"
+    }
+  ],
+  "closureExcludes": [
+    "evidence-inventory.json",
+    "evidence-seal.json"
+  ],
+  "noFurtherWrites": true
+}

@@ -1,0 +1,244 @@
+{
+  "status": "PASS",
+  "base": "40b660c44a3e96248ae5ada6a3d2a0f7f54fbc7c",
+  "head": "abe50917788ec042682face5be89a5aff7d18bed",
+  "files": 973,
+  "evidenceBytes": 33026861,
+  "sourceFiles": 2671,
+  "nativeGates": [
+    {
+      "label": "01",
+      "started": "2026-10-20T20:39:34.126Z",
+      "ended": "2026-10-20T20:40:04.039Z",
+      "exit": 0,
+      "sourceCount": 13601
+    },
+    {
+      "label": "02",
+      "started": "2026-10-20T20:41:37.477Z",
+      "ended": "2026-10-20T20:42:15.699Z",
+      "exit": 1,
+      "sourceCount": 13603
+    },
+    {
+      "label": "03",
+      "started": "2026-10-20T20:42:47.225Z",
+      "ended": "2026-10-20T20:42:53.208Z",
+      "exit": 0,
+      "sourceCount": 2670
+    },
+    {
+      "label": "04",
+      "started": "2026-10-20T20:43:57.495Z",
+      "ended": "2026-10-20T20:44:06.638Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "05",
+      "started": "2026-10-20T20:44:20.867Z",
+      "ended": "2026-10-20T20:44:26.839Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "06",
+      "started": "2026-10-20T20:45:10.727Z",
+      "ended": "2026-10-20T20:45:28.794Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "07",
+      "started": "2026-10-20T20:45:35.119Z",
+      "ended": "2026-10-20T20:45:38.819Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "08",
+      "started": "2026-10-20T20:45:39.730Z",
+      "ended": "2026-10-20T20:45:45.716Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "09",
+      "started": "2026-10-20T20:45:46.654Z",
+      "ended": "2026-10-20T20:45:54.649Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "10",
+      "started": "2026-10-20T20:46:54.706Z",
+      "ended": "2026-10-20T20:47:11.998Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "11",
+      "started": "2026-10-20T20:47:41.329Z",
+      "ended": "2026-10-20T20:47:45.110Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "12",
+      "started": "2026-10-20T20:47:46.063Z",
+      "ended": "2026-10-20T20:47:52.253Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "13",
+      "started": "2026-10-20T20:47:53.199Z",
+      "ended": "2026-10-20T20:48:01.353Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "14",
+      "started": "2026-10-20T20:48:35.826Z",
+      "ended": "2026-10-20T20:48:53.427Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "15",
+      "started": "2026-10-20T20:49:17.201Z",
+      "ended": "2026-10-20T20:49:20.910Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "16",
+      "started": "2026-10-20T20:49:21.827Z",
+      "ended": "2026-10-20T20:49:27.792Z",
+      "exit": 0,
+      "sourceCount": 2671
+    },
+    {
+      "label": "17",
+      "started": "2026-10-20T20:49:28.730Z",
+      "ended": "2026-10-20T20:49:36.770Z",
+      "exit": 0,
+      "sourceCount": 2671
+    }
+  ],
+  "productDelta": [],
+  "collected": [
+    {
+      "path": "packages/context-output/test/managed-artifacts.test.ts",
+      "tests": 6,
+      "status": "passed"
+    },
+    {
+      "path": "packages/context-output/test/quota-metadata-concurrency.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "packages/context-output/test/service.test.ts",
+      "tests": 39,
+      "status": "passed"
+    },
+    {
+      "path": "packages/desktop-gateway/test/context-runtime.test.ts",
+      "tests": 5,
+      "status": "passed"
+    },
+    {
+      "path": "packages/desktop-gateway/test/native-context-project-revocation.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "packages/session-executor/test/mixed-retention-native.test.ts",
+      "tests": 1,
+      "status": "passed"
+    },
+    {
+      "path": "packages/session-executor/test/mixed-retention-quota.test.ts",
+      "tests": 4,
+      "status": "passed"
+    },
+    {
+      "path": "packages/session-executor/test/result-store-read.test.ts",
+      "tests": 5,
+      "status": "passed"
+    }
+  ],
+  "literalRecords": [
+    {
+      "kind": "n",
+      "label": "complete",
+      "bytes": 140052,
+      "sha256": "7a0ef58e32705cd3e45c0d86b4d81137aa5838597d9bdc055306a4b16b59fbbc",
+      "presentBody": false
+    },
+    {
+      "kind": "n",
+      "label": "staged",
+      "bytes": 90052,
+      "sha256": "e6b240fe5a9a735f6137f22d91dfa0034739ce31813658e345511bb0a4287232",
+      "presentBody": true
+    },
+    {
+      "kind": "n",
+      "label": "other",
+      "bytes": 80052,
+      "sha256": "045222c2f9ca5b85f47c7233cae69ae4717f0d5bb5606f2e213dff8a5d559842",
+      "presentBody": true
+    },
+    {
+      "kind": "q",
+      "label": "quota-managed",
+      "bytes": 80052,
+      "sha256": "e682b3a6f6b5f5199c2aff44efaf2e642d4e4937d27570beefcf7c3033c48a1d",
+      "presentBody": true
+    },
+    {
+      "kind": "q",
+      "label": "quota-staged",
+      "bytes": 70052,
+      "sha256": "d19abd2dcdf956fc7fb25e7ff2b8addb32efee3c8100443d7fb9520fcaa4beb5",
+      "presentBody": true
+    },
+    {
+      "kind": "c",
+      "label": "calibration",
+      "bytes": 70052,
+      "sha256": "d19abd2dcdf956fc7fb25e7ff2b8addb32efee3c8100443d7fb9520fcaa4beb5",
+      "presentBody": true
+    },
+    {
+      "kind": "r",
+      "label": "protected",
+      "bytes": 70052,
+      "sha256": "2e7e7832b4a62681ed51a3061e0021d1bee245ec23f8453ebc38eeda76f52a3d",
+      "presentBody": true
+    },
+    {
+      "kind": "u",
+      "label": "unopened",
+      "bytes": 90052,
+      "sha256": "e6b240fe5a9a735f6137f22d91dfa0034739ce31813658e345511bb0a4287232",
+      "presentBody": true
+    }
+  ],
+  "partialPrefix": {
+    "bytes": 1000,
+    "sha256": "b7f8821158e53596b600dacd64e47d70ad30be9319e625c305a12a69d87c39c8"
+  },
+  "schedule": {
+    "quota": 370463,
+    "sampledPeak": 294339,
+    "finalBytes": 228786
+  },
+  "limits": [
+    "One calibrated schedule, not all interleavings or global SQLite peak",
+    "Deleted complete a audited from preserved original inventory and executed assertions, not recreated body",
+    "Read-only root audit, not new product runtime tests"
+  ]
+}

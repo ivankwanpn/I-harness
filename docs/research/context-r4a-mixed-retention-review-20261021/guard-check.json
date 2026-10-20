@@ -1,0 +1,48 @@
+[
+  {
+    "mode": "direct",
+    "command": "C:\\Program Files\\nodejs\\node.exe",
+    "args": [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      "import('./packages/session-executor/test/helpers/mixed-retention-fixture.mts').then(()=>{throw new Error('sealed fixture unexpectedly imported')},error=>{if(!/fixture evidence is sealed/.test(error.message))throw error;console.log(error.message)})"
+    ],
+    "cwd": "D:\\I-harness-main",
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-direct\\config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-direct",
+    "marker": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-direct\\evidence-seal.json",
+    "computedOuterMarker": "D:\\I-harness-main\\evidence-seal.json",
+    "started": "2026-10-20T20:50:12.855Z",
+    "ended": "2026-10-20T20:50:13.064Z",
+    "nativeExit": 0,
+    "signal": null,
+    "stdout": "Mixed retention fixture evidence is sealed\n",
+    "stderr": "",
+    "fixtureFilesUnchanged": true
+  },
+  {
+    "mode": "outer",
+    "command": "C:\\Program Files\\nodejs\\node.exe",
+    "args": [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      "import('./packages/session-executor/test/helpers/mixed-retention-fixture.mts').then(()=>{throw new Error('sealed fixture unexpectedly imported')},error=>{if(!/fixture evidence is sealed/.test(error.message))throw error;console.log(error.message)})"
+    ],
+    "cwd": "D:\\I-harness-main",
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-outer\\config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-outer\\gates\\18\\fixtures",
+    "marker": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-outer\\evidence-seal.json",
+    "computedOuterMarker": "D:\\I-harness-main\\.tmp\\r4am-1021-01\\guard-outer\\evidence-seal.json",
+    "started": "2026-10-20T20:50:13.067Z",
+    "ended": "2026-10-20T20:50:13.204Z",
+    "nativeExit": 0,
+    "signal": null,
+    "stdout": "Mixed retention fixture evidence is sealed\n",
+    "stderr": "",
+    "fixtureFilesUnchanged": true
+  }
+]

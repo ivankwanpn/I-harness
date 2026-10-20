@@ -14,6 +14,8 @@
 
 **Rebase:** Between the earlier source inspection221051b2 and accepted9fb933f6, the named tool/store/exec/MCP/task/report/capture ownership paths retain their APIs. The relevant changes are core-session format9/JSONL predecessor handling, core-tools context observation and core-agent automatic soft policy. Actual tool/result and code/result still have legacy raw output, so the new envelope cutover remains required. R4A advances9→10, covering literal9 and prior8 read/upgrade paths and actual downstream version fences. `softAdvances` is explicitly in the reader cutover; accepted E assessment/freshness/publication boundaries are preserved.
 
+**Latest bounded progress, 2026-10-21:** [mixed legacy/managed retention, quota and derived index qualification](../../research/2026-10-21-context-r4a-mixed-retention-acceptance.md) is also accepted, with no product repair. Cohesive task/ContextOutput owner structure and the complete S25 mapping precede final A6 scale/copied/bundled qualification. Those final obligations remain open; this update supersedes the earlier status paragraph's mixed-lifecycle pending entry only.
+
 ## Global constraints
 
 - Existing branch `codex/v0.1.13-development`, workspace `D:/I-harness-main`, version0.1.13-rc.1. One product writer; all delegated work GPT6.1Sol. Root owns architectural rulings, review, evidence and checkpoints. No recursive agents, unrelated refactoring, live accounts/providers, merge/release or version change.
