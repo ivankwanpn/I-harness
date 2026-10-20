@@ -1,0 +1,317 @@
+{
+  "gates": [
+    {
+      "id": "01-baseline-characterization",
+      "start": "2026-10-20T21:08:31.684Z",
+      "end": "2026-10-20T21:08:34.031Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "02-baseline-characterization",
+      "start": "2026-10-20T21:09:01.895Z",
+      "end": "2026-10-20T21:09:04.243Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "03-task-connected-baseline",
+      "start": "2026-10-20T21:09:26.432Z",
+      "end": "2026-10-20T21:09:39.674Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "04-legacy-s25-baseline",
+      "start": "2026-10-20T21:10:09.161Z",
+      "end": "2026-10-20T21:10:29.578Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "05-task-equivalence",
+      "start": "2026-10-20T21:11:40.513Z",
+      "end": "2026-10-20T21:11:52.746Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "06-subagent-types",
+      "start": "2026-10-20T21:12:09.722Z",
+      "end": "2026-10-20T21:12:14.236Z",
+      "code": 2,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "07-subagent-types",
+      "start": "2026-10-20T21:12:30.613Z",
+      "end": "2026-10-20T21:12:35.197Z",
+      "code": 2,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "08-subagent-types",
+      "start": "2026-10-20T21:12:57.175Z",
+      "end": "2026-10-20T21:13:01.831Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "09-task-characterization-desktop-observation",
+      "start": "2026-10-20T21:13:22.538Z",
+      "end": "2026-10-20T21:13:32.256Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "10-bounded-owned-fixture",
+      "start": "2026-10-20T21:16:32.133Z",
+      "end": "2026-10-20T21:16:35.699Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "11-fixture-observation",
+      "start": "2026-10-20T21:17:30.377Z",
+      "end": "2026-10-20T21:17:39.667Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "12-context-types",
+      "start": "2026-10-20T21:18:52.528Z",
+      "end": "2026-10-20T21:18:55.795Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "13-guard-calibration",
+      "start": "2026-10-20T21:19:01.546Z",
+      "end": "2026-10-20T21:19:02.013Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "14-final-fixtures-extracted",
+      "start": "2026-10-20T21:19:31.545Z",
+      "end": "2026-10-20T21:19:41.681Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "exact": true,
+        "total": 25,
+        "passed": 25,
+        "failed": 0
+      }
+    },
+    {
+      "id": "15-final-fixtures-base",
+      "start": "2026-10-20T21:20:23.170Z",
+      "end": "2026-10-20T21:20:33.063Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "exact": true,
+        "total": 25,
+        "passed": 25,
+        "failed": 0
+      }
+    },
+    {
+      "id": "16-final-connected",
+      "start": "2026-10-20T21:21:16.630Z",
+      "end": "2026-10-20T21:21:47.700Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/cold-lookup-integrity.test.ts",
+          "D:/I-harness-main/packages/context-output/test/disabled-grant.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-codecs.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-corruption.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-vectors.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-witness.test.ts",
+          "D:/I-harness-main/packages/context-output/test/service.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/retained-catalog-io.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/retained-result-publication-proof.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/session-subagents.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/subagent-protocol-header.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/cold-state-inspection.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-native.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-quota.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-flow.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-pins.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-scope.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-state-cold.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-state-negative.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-body.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-cold.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-negative.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-search.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-control.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-notification.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-protocol.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/cold-lookup-integrity.test.ts",
+          "D:/I-harness-main/packages/context-output/test/disabled-grant.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-codecs.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-corruption.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-vectors.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-witness.test.ts",
+          "D:/I-harness-main/packages/context-output/test/service.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/desktop-child-authority-host.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/retained-catalog-io.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/retained-result-publication-proof.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/session-subagents.test.ts",
+          "D:/I-harness-main/packages/desktop-gateway/test/subagent-protocol-header.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/cold-state-inspection.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-native.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-quota.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-flow.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-pins.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-child-scope.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-state-cold.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/retained-state-negative.test.ts",
+          "D:/I-harness-main/packages/subagent/test/bounded-reports.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-body.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-cold.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-negative.test.ts",
+          "D:/I-harness-main/packages/subagent/test/retained-task-search.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-control.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-notification.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-protocol.test.ts",
+          "D:/I-harness-main/packages/subagent/test/task-structure.test.ts"
+        ],
+        "exact": true,
+        "total": 210,
+        "passed": 210,
+        "failed": 0
+      }
+    },
+    {
+      "id": "17-subagent-types-final",
+      "start": "2026-10-20T21:22:20.710Z",
+      "end": "2026-10-20T21:22:25.293Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "18-context-types-final",
+      "start": "2026-10-20T21:22:34.851Z",
+      "end": "2026-10-20T21:22:38.113Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "19-executor-types-final",
+      "start": "2026-10-20T21:22:39.185Z",
+      "end": "2026-10-20T21:22:47.199Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "20-executor-mts-types-final",
+      "start": "2026-10-20T21:22:48.290Z",
+      "end": "2026-10-20T21:22:53.859Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "21-gateway-types-final",
+      "start": "2026-10-20T21:22:54.924Z",
+      "end": "2026-10-20T21:23:02.445Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "22-equivalence-census",
+      "start": "2026-10-20T21:23:20.610Z",
+      "end": "2026-10-20T21:23:20.862Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "23-normal-reachability",
+      "start": "2026-10-20T21:23:26.369Z",
+      "end": "2026-10-20T21:23:36.646Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "24-normal-reachability-base-entries",
+      "start": "2026-10-20T21:24:37.145Z",
+      "end": "2026-10-20T21:24:47.640Z",
+      "code": 1,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "25-public-graph",
+      "start": "2026-10-20T21:24:57.255Z",
+      "end": "2026-10-20T21:24:58.552Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "26-reachability-comparison",
+      "start": "2026-10-20T21:27:09.471Z",
+      "end": "2026-10-20T21:27:09.522Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "27-reachability-label-correction",
+      "start": "2026-10-20T21:29:18.644Z",
+      "end": "2026-10-20T21:29:18.690Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "28-frozen-census",
+      "start": "2026-10-20T21:30:29.179Z",
+      "end": "2026-10-20T21:30:29.509Z",
+      "code": 0,
+      "sourceUnchanged": true
+    }
+  ],
+  "sequential": true,
+  "allQualifiedProductTestConfigBytesUnchanged": true,
+  "qualifiedInputs": 2670,
+  "finalInputs": 2680,
+  "evidenceOnlyHelperDriftAfterGate16": [
+    ".tmp/r4as-1021-01/equivalence.mjs",
+    ".tmp/r4as-1021-01/finalize.mjs",
+    ".tmp/r4as-1021-01/public-graph.mjs",
+    ".tmp/r4as-1021-01/reachability-compare.mjs",
+    ".tmp/r4as-1021-01/source-replay.mjs"
+  ]
+}

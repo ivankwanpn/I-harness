@@ -1,0 +1,133 @@
+{
+  "at": "2026-10-20T21:30:03.1677059Z",
+  "query": "Get-CimInstance Win32_Process; node/pwsh/powershell/bash with task root in CommandLine, excluding current query process",
+  "matchingProcesses": [],
+  "finalMixedFixtureCleanup": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\mixed\\c-7n6U2u\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\mixed\\n-1ZYcPV\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 4,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\mixed\\q-c5YItj\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\mixed\\r-0sFol7\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\mixed\\u-SpPwHq\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    }
+  ],
+  "newStructureFixtureDirectories": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\01-baseline-characterization\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\02-baseline-characterization\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\05-task-equivalence\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\09-task-characterization-desktop-observation\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\14-final-fixtures-extracted\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\15-final-fixtures-base\\fixtures\\structure",
+      "remainingEntries": 0
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\16-final-connected\\fixtures\\structure",
+      "remainingEntries": 0
+    }
+  ],
+  "limitation": "This is a task-root process and task-owned fixture check, not a universal handle/OS-temp audit. Historical fixture transient roots were removed by existing joined cleanup; their names were not retrospectively inventoried."
+}

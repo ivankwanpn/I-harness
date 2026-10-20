@@ -1,0 +1,227 @@
+{
+  "unchangedPublicContracts": [
+    "packages/subagent/package.json",
+    "packages/subagent/src/index.ts",
+    "packages/subagent/src/task-protocol.ts",
+    "packages/context-output/package.json",
+    "packages/context-output/src/index.ts",
+    "packages/context-output/src/types.ts"
+  ],
+  "unchangedPackageManifestsAndLock": true,
+  "affectedRuntimePackageClosureAcyclic": [
+    "@i-harness/code-mode",
+    "@i-harness/compaction",
+    "@i-harness/context-engine",
+    "@i-harness/context-output",
+    "@i-harness/core-agent",
+    "@i-harness/core-plugin",
+    "@i-harness/core-session",
+    "@i-harness/core-tools",
+    "@i-harness/diagnostics",
+    "@i-harness/exec",
+    "@i-harness/fs-lock",
+    "@i-harness/fs-watch",
+    "@i-harness/harness-home",
+    "@i-harness/http-transport",
+    "@i-harness/image-validation",
+    "@i-harness/llm-mock",
+    "@i-harness/llm-seam",
+    "@i-harness/output-retention",
+    "@i-harness/preset",
+    "@i-harness/sandbox",
+    "@i-harness/sandbox-local",
+    "@i-harness/sandbox-policy",
+    "@i-harness/sandbox-windows-acl",
+    "@i-harness/sandbox-windows-psec",
+    "@i-harness/sandbox-wsl",
+    "@i-harness/session-persistence",
+    "@i-harness/settings",
+    "@i-harness/shell",
+    "@i-harness/subagent",
+    "@i-harness/telemetry",
+    "@i-harness/token-meter",
+    "@i-harness/workflow"
+  ],
+  "imports": [
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./validation.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./publication.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./settlement.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "@i-harness/core-tools",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./result.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./notifications.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./persistence.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./records.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/registry.ts",
+      "target": "./types.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/subagent/src/task/records.ts",
+      "target": "./types.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "node:fs/promises",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./bytes.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./config.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./store.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./types.ts",
+      "typeOnly": true
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./artifact/ownership.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./legacy/capture.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/service.ts",
+      "target": "./legacy/query.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/legacy/capture.ts",
+      "target": "../bytes.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/legacy/capture.ts",
+      "target": "../store.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/legacy/capture.ts",
+      "target": "../types.ts",
+      "typeOnly": true
+    },
+    {
+      "from": "packages/context-output/src/legacy/query.ts",
+      "target": "../bytes.ts",
+      "typeOnly": false
+    },
+    {
+      "from": "packages/context-output/src/legacy/query.ts",
+      "target": "../store.ts",
+      "typeOnly": true
+    },
+    {
+      "from": "packages/context-output/src/legacy/query.ts",
+      "target": "../types.ts",
+      "typeOnly": true
+    }
+  ],
+  "runtimeImports": [
+    {
+      "package": "@i-harness/subagent",
+      "entry": "D:\\I-harness-main\\packages\\subagent\\src\\index.ts",
+      "exports": [
+        "ParentNotificationStoppedError",
+        "SHIPPING_REPORT_POLICY",
+        "TaskConcurrencyLimitError",
+        "TaskIdentityConflictError",
+        "builtinRoles",
+        "childResultPreview",
+        "classifyRestoredTasks",
+        "createAgentTable",
+        "createJobRegistry",
+        "createNotificationDrain",
+        "createRoleRegistry",
+        "createStaleSubagentsSection",
+        "createSubagentTools",
+        "createTaskRegistry",
+        "driveFollowups",
+        "ensureResidentAgent",
+        "forkTurns",
+        "hasCommittedInitialInput",
+        "isParentNotificationStopped",
+        "isSessionCancelledChain",
+        "notificationMessageId",
+        "projectAgentTaskDetail",
+        "projectAgentTasks",
+        "projectStatus",
+        "projectWorkflowRows",
+        "readTaskResultPage",
+        "registerSubagent",
+        "restoreState",
+        "retainedResultWitness",
+        "snapshotState",
+        "spawnChild",
+        "sweepPendingInbox",
+        "taskDocKey",
+        "wireSubagentPersistence"
+      ]
+    },
+    {
+      "package": "@i-harness/context-output",
+      "entry": "D:\\I-harness-main\\packages\\context-output\\src\\index.ts",
+      "exports": [
+        "contextOutputServiceRoot",
+        "contextPathKey",
+        "contextSourceIdentity",
+        "contextWorkspaceIdentity",
+        "contextWorkspaceLocation",
+        "createContextOutputService",
+        "createContextOutputTools",
+        "loadContextOutputConfiguration",
+        "parseResultPageQuery",
+        "readManagedResultPage",
+        "renderContextRecovery",
+        "resultPageFailure"
+      ]
+    }
+  ]
+}

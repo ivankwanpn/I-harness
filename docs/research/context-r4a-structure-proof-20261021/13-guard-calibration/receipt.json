@@ -1,0 +1,25 @@
+{
+  "id": "13-guard-calibration",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\.tmp\\r4as-1021-01\\guard-check.mjs"
+  ],
+  "cwd": "D:\\I-harness-main",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-1021-01/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-1021-01\\13-guard-calibration\\fixtures\\structure"
+  },
+  "head": "89553ea2126df6008ed51399a41f4204c1401a70",
+  "start": "2026-10-20T21:19:01.546Z",
+  "pid": 17704,
+  "end": "2026-10-20T21:19:02.013Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

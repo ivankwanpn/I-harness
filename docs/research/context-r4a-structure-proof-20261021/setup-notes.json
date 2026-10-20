@@ -1,0 +1,37 @@
+{
+  "uninstrumentedEarlySetupObservations": [
+    {
+      "action": "Initial census import",
+      "outcome": "ERR_MODULE_NOT_FOUND for D:/node_modules/typescript/lib/typescript.js",
+      "cause": "Helper import traversed one parent too far",
+      "correction": "../../node_modules/typescript/lib/typescript.js before successful census",
+      "scope": "Tool transcript preserves actual command/native output. No retrospective native timestamps or byte-exact stdout receipt is fabricated. No product module imported."
+    },
+    {
+      "action": "Attempted Python stdin source transformation",
+      "outcome": "WindowsApps python.exe alias returned without executing the transformation; subsequent file read and git diff showed original registry unchanged",
+      "correction": "Used explicit installed Node executable with saved extract-task.mjs",
+      "scope": "No product edit occurred from the alias invocation. Tool transcript preserves actual command/output; no manufactured Python execution receipt."
+    },
+    {
+      "action": "Exploratory rg path globs and guessed config/source paths",
+      "outcome": "PowerShell rg directory/* arguments and several guessed file paths refused or were absent",
+      "correction": "Use directory rg -g filters and discovered current paths; explicit executor type config is packages/session-executor/tsconfig.mixed-retention.json",
+      "scope": "Read-only setup errors; no product change and not behavioral RED."
+    }
+  ],
+  "runnerReceiptFailures": {
+    "01": "Task test collection could not resolve session-persistence-jsonl package from subagent; switched to established test-relative backend source import. Legacy9/9 passed.",
+    "03": "Original connected task baseline84/87; three actual-child fixtures missing exclusive owned coordinator locks.",
+    "04": "Original legacy/S25106/107; Desktop child test expected legacy output field instead of actual retained inline envelope.",
+    "05": "After task extraction91/94; exact same three original fixture lock failures.",
+    "06": "New test TypeScript optional coordinator method/spy inference errors.",
+    "07": "Remaining optional method Vitest spy inference error, corrected with required actual-method type intersection.",
+    "09": "Final-typed task7/7 pass; Desktop original event-shape failure observed with full default reporter diff.",
+    "10": "Adding only original coordinator locks reaches next original composition gap: missing child generation factory, three failures preserved.",
+    "11": "Existing real generation fixture plus controlled built-in model fixes bounded-reports8/8; Desktop unchanged legacy output expectation still fails. Full actual code inline observation recorded.",
+    "23": "Normal reachability gate exit1 for six existing public export rows; no exemptions/reseed/fake consumers.",
+    "24": "Original BASE entries restore yields byte-identical normal reachability output and same exit1/six rows. New unreferenced leaves remain on disk; lexical scanner can see them."
+  },
+  "metadataCorrection": "Gate26 reachability-comparison.json mislabeled internal validator validateResultFact as validateResultEvent. Original file retained. Gate27 writes corrected reachability-comparison-final.json; native findings unchanged."
+}

@@ -1,0 +1,1249 @@
+{
+  "files": [
+    {
+      "path": "packages/context-output/src/artifact/dependency-membership.ts",
+      "physicalLines": 121,
+      "bytes": 10629,
+      "sha256": "15ec539c2df318fd0f83fbbc4694553e749b0f5a02bc123d41bc3e156c1bb066",
+      "largest": [
+        {
+          "name": "createDependencyMembership",
+          "first": 53,
+          "last": 120,
+          "physicalLines": 68,
+          "characters": 6463
+        },
+        {
+          "name": "settle",
+          "first": 71,
+          "last": 107,
+          "physicalLines": 37,
+          "characters": 3330
+        },
+        {
+          "name": "dependencyEntries",
+          "first": 24,
+          "last": 40,
+          "physicalLines": 17,
+          "characters": 1597
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/exec-reader.ts",
+      "physicalLines": 57,
+      "bytes": 4435,
+      "sha256": "2a9fd4299c9f0fecd2ecd1a8020c1d25ebc28c848e8c67186d960dd71f15097e",
+      "largest": [
+        {
+          "name": "readExecFramePage",
+          "first": 7,
+          "last": 56,
+          "physicalLines": 50,
+          "characters": 4038
+        },
+        {
+          "name": "<anonymous>",
+          "first": 34,
+          "last": 38,
+          "physicalLines": 5,
+          "characters": 536
+        },
+        {
+          "name": "<anonymous>",
+          "first": 9,
+          "last": 9,
+          "physicalLines": 1,
+          "characters": 50
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/index.ts",
+      "physicalLines": 51,
+      "bytes": 3698,
+      "sha256": "fffcd2bfae623ddb5ca99074c55526fbcffb3a561c9a7d759d93992fb7148cd1",
+      "largest": [
+        {
+          "name": "buildIndex",
+          "first": 24,
+          "last": 37,
+          "physicalLines": 14,
+          "characters": 941
+        },
+        {
+          "name": "verifyChunk",
+          "first": 38,
+          "last": 50,
+          "physicalLines": 13,
+          "characters": 1020
+        },
+        {
+          "name": "dimensions",
+          "first": 11,
+          "last": 17,
+          "physicalLines": 7,
+          "characters": 425
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/io.ts",
+      "physicalLines": 70,
+      "bytes": 3760,
+      "sha256": "181ae8a47e2e59d0b7953be73a92e6e62c111b15fd6364cbded514ee41c91c8c",
+      "largest": [
+        {
+          "name": "atomicJson",
+          "first": 32,
+          "last": 56,
+          "physicalLines": 25,
+          "characters": 1515
+        },
+        {
+          "name": "ownedPath",
+          "first": 58,
+          "last": 69,
+          "physicalLines": 12,
+          "characters": 579
+        },
+        {
+          "name": "readExact",
+          "first": 14,
+          "last": 23,
+          "physicalLines": 10,
+          "characters": 515
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/manifest.ts",
+      "physicalLines": 24,
+      "bytes": 1888,
+      "sha256": "36934b704c40b909860e642424016c15550b62149523f48d97ca549ce7adfbbf",
+      "largest": [
+        {
+          "name": "validateManifest",
+          "first": 14,
+          "last": 23,
+          "physicalLines": 10,
+          "characters": 893
+        },
+        {
+          "name": "manifestBytes",
+          "first": 7,
+          "last": 10,
+          "physicalLines": 4,
+          "characters": 372
+        },
+        {
+          "name": "artifactRef",
+          "first": 11,
+          "last": 13,
+          "physicalLines": 3,
+          "characters": 295
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/owner-confirmation.ts",
+      "physicalLines": 33,
+      "bytes": 2440,
+      "sha256": "2c47a50b540ff1801b04d9f7a7527417f72d18cf7a8a4b781ea7edea81e79786",
+      "largest": [
+        {
+          "name": "confirmArtifactOwner",
+          "first": 12,
+          "last": 32,
+          "physicalLines": 21,
+          "characters": 1918
+        },
+        {
+          "name": "<anonymous>",
+          "first": 13,
+          "last": 13,
+          "physicalLines": 1,
+          "characters": 87
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/ownership.ts",
+      "physicalLines": 191,
+      "bytes": 15029,
+      "sha256": "6443c65533dd4cb02212f8f01f45b8b30f581272ed03f828353493bf4a52c84c",
+      "largest": [
+        {
+          "name": "createArtifactOwnership",
+          "first": 19,
+          "last": 190,
+          "physicalLines": 172,
+          "characters": 13801
+        },
+        {
+          "name": "beginResult",
+          "first": 56,
+          "last": 93,
+          "physicalLines": 38,
+          "characters": 2844
+        },
+        {
+          "name": "<anonymous>",
+          "first": 63,
+          "last": 92,
+          "physicalLines": 30,
+          "characters": 2147
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/pins.ts",
+      "physicalLines": 54,
+      "bytes": 3559,
+      "sha256": "054863078985738f57140b049d823d9f08eefe748c7860b34af0e7d73cd95b42",
+      "largest": [
+        {
+          "name": "releaseDocumentPin",
+          "first": 29,
+          "last": 53,
+          "physicalLines": 25,
+          "characters": 1654
+        },
+        {
+          "name": "readPin",
+          "first": 17,
+          "last": 28,
+          "physicalLines": 12,
+          "characters": 876
+        },
+        {
+          "name": "publishPin",
+          "first": 9,
+          "last": 15,
+          "physicalLines": 7,
+          "characters": 496
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/quota.ts",
+      "physicalLines": 53,
+      "bytes": 2759,
+      "sha256": "c3cc38eb1d628f59d4355e8abebb1a2b915d024da866b5f6620809e8f637464e",
+      "largest": [
+        {
+          "name": "physicalBytes",
+          "first": 5,
+          "last": 47,
+          "physicalLines": 43,
+          "characters": 2153
+        },
+        {
+          "name": "<anonymous>",
+          "first": 9,
+          "last": 46,
+          "physicalLines": 38,
+          "characters": 1815
+        },
+        {
+          "name": "run",
+          "first": 14,
+          "last": 29,
+          "physicalLines": 16,
+          "characters": 778
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/reader.ts",
+      "physicalLines": 54,
+      "bytes": 4908,
+      "sha256": "3fdada24bf9220253ab007f27e56a2cd2e0f2ec1603577522e7d7e4183d26781",
+      "largest": [
+        {
+          "name": "readVerifiedArtifactBytes",
+          "first": 10,
+          "last": 38,
+          "physicalLines": 29,
+          "characters": 2774
+        },
+        {
+          "name": "readArtifactPage",
+          "first": 40,
+          "last": 53,
+          "physicalLines": 14,
+          "characters": 1659
+        },
+        {
+          "name": "<anonymous>",
+          "first": 44,
+          "last": 45,
+          "physicalLines": 2,
+          "characters": 368
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/recovery.ts",
+      "physicalLines": 78,
+      "bytes": 5355,
+      "sha256": "c8a3000881f54559d7b40cdc627728c53deeafa0c9f8687fd9d82fefb45977a7",
+      "largest": [
+        {
+          "name": "reconcileArtifact",
+          "first": 36,
+          "last": 77,
+          "physicalLines": 42,
+          "characters": 3383
+        },
+        {
+          "name": "createArtifactPublication",
+          "first": 11,
+          "last": 34,
+          "physicalLines": 24,
+          "characters": 1385
+        },
+        {
+          "name": "<anonymous>",
+          "first": 13,
+          "last": 33,
+          "physicalLines": 21,
+          "characters": 1195
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/types.ts",
+      "physicalLines": 27,
+      "bytes": 1621,
+      "sha256": "4f5f781ac1f7e9596ea3dab2df2d6a1efc360c90547dd52a1204efe4de7c78be",
+      "largest": [],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/artifact/writer.ts",
+      "physicalLines": 151,
+      "bytes": 9414,
+      "sha256": "3be38e68b2d0681f33ea22693766d116712c0fc580dcf8d971bd288928cc6053",
+      "largest": [
+        {
+          "name": "createArtifactWriter",
+          "first": 31,
+          "last": 150,
+          "physicalLines": 120,
+          "characters": 7716
+        },
+        {
+          "name": "commit",
+          "first": 97,
+          "last": 131,
+          "physicalLines": 35,
+          "characters": 2212
+        },
+        {
+          "name": "applyPending",
+          "first": 72,
+          "last": 96,
+          "physicalLines": 25,
+          "characters": 1515
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/bytes.ts",
+      "physicalLines": 27,
+      "bytes": 1173,
+      "sha256": "6253ca1aa9f78f52c7b479b8f3f37827806c4925ca218df4488e57463d908679",
+      "largest": [
+        {
+          "name": "lexicalChunks",
+          "first": 18,
+          "last": 26,
+          "physicalLines": 9,
+          "characters": 364
+        },
+        {
+          "name": "floorBoundary",
+          "first": 7,
+          "last": 11,
+          "physicalLines": 5,
+          "characters": 185
+        },
+        {
+          "name": "checkAbort",
+          "first": 1,
+          "last": 3,
+          "physicalLines": 3,
+          "characters": 149
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/config.ts",
+      "physicalLines": 34,
+      "bytes": 1685,
+      "sha256": "bf84155666e8f707abd4a9e09d963d674fbc2f4fd2c24e34e5272b594bca5dc8",
+      "largest": [
+        {
+          "name": "configureContext",
+          "first": 9,
+          "last": 22,
+          "physicalLines": 14,
+          "characters": 849
+        },
+        {
+          "name": "identity",
+          "first": 24,
+          "last": 28,
+          "physicalLines": 5,
+          "characters": 270
+        },
+        {
+          "name": "integer",
+          "first": 30,
+          "last": 33,
+          "physicalLines": 4,
+          "characters": 210
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/index.ts",
+      "physicalLines": 10,
+      "bytes": 762,
+      "sha256": "1ee2b2d2f0d9ab7856c1212610a945111f3e993d17d075ddc5b8675fe643be9a",
+      "largest": [],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/legacy/capture.ts",
+      "physicalLines": 42,
+      "bytes": 2486,
+      "sha256": "405c1c3c20df8826837e5fd3d8427de24f6613c800bae0b5bff650cdb49786c9",
+      "largest": [
+        {
+          "name": "captureLegacy",
+          "first": 7,
+          "last": 41,
+          "physicalLines": 35,
+          "characters": 2097
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/legacy/query.ts",
+      "physicalLines": 73,
+      "bytes": 4082,
+      "sha256": "2633ca5ce3b07007699b7eea19a0ac495320ef78d700117da98218a6f9c6f678",
+      "largest": [
+        {
+          "name": "searchLegacy",
+          "first": 21,
+          "last": 72,
+          "physicalLines": 52,
+          "characters": 2864
+        },
+        {
+          "name": "readLegacy",
+          "first": 6,
+          "last": 17,
+          "physicalLines": 12,
+          "characters": 776
+        },
+        {
+          "name": "<anonymous>",
+          "first": 30,
+          "last": 30,
+          "physicalLines": 1,
+          "characters": 112
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/recovery.ts",
+      "physicalLines": 18,
+      "bytes": 1128,
+      "sha256": "a11fa42f00b6083b1a4c9a54e4b71de6e0443f903b2b9a56426c24550fc95465",
+      "largest": [
+        {
+          "name": "renderContextRecovery",
+          "first": 4,
+          "last": 17,
+          "physicalLines": 14,
+          "characters": 1033
+        },
+        {
+          "name": "<anonymous>",
+          "first": 7,
+          "last": 7,
+          "physicalLines": 1,
+          "characters": 95
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/result-page.ts",
+      "physicalLines": 46,
+      "bytes": 3540,
+      "sha256": "9f8db25b239e5d5bc2c4804d59a7b72fcba06a63942b9c667a4ad2b832303659",
+      "largest": [
+        {
+          "name": "parseResultPageQuery",
+          "first": 15,
+          "last": 31,
+          "physicalLines": 17,
+          "characters": 1514
+        },
+        {
+          "name": "resultPageFailure",
+          "first": 33,
+          "last": 38,
+          "physicalLines": 6,
+          "characters": 538
+        },
+        {
+          "name": "readManagedResultPage",
+          "first": 40,
+          "last": 45,
+          "physicalLines": 6,
+          "characters": 491
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/search-index.ts",
+      "physicalLines": 69,
+      "bytes": 3117,
+      "sha256": "3ef7171caf02194fd8846f0ec8f21dbdcf481ddda7e7cbe051421063903f6c0a",
+      "largest": [
+        {
+          "name": "walkCandidates",
+          "first": 10,
+          "last": 68,
+          "physicalLines": 59,
+          "characters": 2859
+        },
+        {
+          "name": "<anonymous>",
+          "first": 15,
+          "last": 15,
+          "physicalLines": 1,
+          "characters": 31
+        },
+        {
+          "name": "<anonymous>",
+          "first": 16,
+          "last": 16,
+          "physicalLines": 1,
+          "characters": 87
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/service.ts",
+      "physicalLines": 186,
+      "bytes": 9923,
+      "sha256": "0e0e91b31dd4fa8e9eea2f7d15e0209356be0602f246abb12b50b65dc63f298b",
+      "largest": [
+        {
+          "name": "createContextOutputService",
+          "first": 10,
+          "last": 185,
+          "physicalLines": 176,
+          "characters": 9359
+        },
+        {
+          "name": "getStore",
+          "first": 38,
+          "last": 54,
+          "physicalLines": 17,
+          "characters": 677
+        },
+        {
+          "name": "transition",
+          "first": 66,
+          "last": 81,
+          "physicalLines": 16,
+          "characters": 588
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/store.ts",
+      "physicalLines": 286,
+      "bytes": 15472,
+      "sha256": "5968dd50a1e7ff2e08e149918e26a1b3b246c8cdfcd908896f5f9fa82ca6779f",
+      "largest": [
+        {
+          "name": "open",
+          "first": 47,
+          "last": 103,
+          "physicalLines": 57,
+          "characters": 3679
+        },
+        {
+          "name": "addOwners",
+          "first": 205,
+          "last": 251,
+          "physicalLines": 47,
+          "characters": 2307
+        },
+        {
+          "name": "put",
+          "first": 173,
+          "last": 204,
+          "physicalLines": 32,
+          "characters": 1536
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/tools.ts",
+      "physicalLines": 81,
+      "bytes": 5764,
+      "sha256": "3032f8d13333fcf06abf975aea0f7d54a5270f7d97fd920fe017042a33ee8e7c",
+      "largest": [
+        {
+          "name": "createContextOutputTools",
+          "first": 25,
+          "last": 80,
+          "physicalLines": 56,
+          "characters": 4227
+        },
+        {
+          "name": "execute",
+          "first": 54,
+          "last": 70,
+          "physicalLines": 17,
+          "characters": 1195
+        },
+        {
+          "name": "argumentsObject",
+          "first": 18,
+          "last": 23,
+          "physicalLines": 6,
+          "characters": 395
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/types.ts",
+      "physicalLines": 56,
+      "bytes": 4685,
+      "sha256": "0d34edbbf287d3ae86744ea759470b614b10b2329288495a434e211cf71827e8",
+      "largest": [],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/context-output/src/workspace.ts",
+      "physicalLines": 30,
+      "bytes": 2090,
+      "sha256": "cc98535da178f16da6d5a760818056642c414575936384018bb859ee1bf78ef7",
+      "largest": [
+        {
+          "name": "loadContextOutputConfiguration",
+          "first": 22,
+          "last": 29,
+          "physicalLines": 8,
+          "characters": 647
+        },
+        {
+          "name": "contextWorkspaceIdentity",
+          "first": 10,
+          "last": 13,
+          "physicalLines": 4,
+          "characters": 200
+        },
+        {
+          "name": "contextWorkspaceLocation",
+          "first": 15,
+          "last": 18,
+          "physicalLines": 4,
+          "characters": 301
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/session-subagents.ts",
+      "physicalLines": 21,
+      "bytes": 1510,
+      "sha256": "8ca1c61c69c0a5e452031043f2d95be31588be4169ece9867d873c948cb409c5",
+      "largest": [
+        {
+          "name": "createDesktopSubagents",
+          "first": 13,
+          "last": 20,
+          "physicalLines": 8,
+          "characters": 662
+        },
+        {
+          "name": "close",
+          "first": 19,
+          "last": 19,
+          "physicalLines": 1,
+          "characters": 57
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/session-visibility.ts",
+      "physicalLines": 57,
+      "bytes": 3225,
+      "sha256": "b845e7d86fa926cffd09a65cda5a65bb3bf0b2af38f073e69cba21d652164fc8",
+      "largest": [
+        {
+          "name": "createSubagentVisibility",
+          "first": 13,
+          "last": 29,
+          "physicalLines": 17,
+          "characters": 1037
+        },
+        {
+          "name": "createConversationQuery",
+          "first": 40,
+          "last": 56,
+          "physicalLines": 17,
+          "characters": 742
+        },
+        {
+          "name": "<anonymous>",
+          "first": 15,
+          "last": 28,
+          "physicalLines": 14,
+          "characters": 906
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/catalog.ts",
+      "physicalLines": 130,
+      "bytes": 11731,
+      "sha256": "46d5eee0c74d4ac6a18c62e77fa898e2bb0f0cdda6ad3bd420d7e0a03203e3fe",
+      "largest": [
+        {
+          "name": "createSubagentCatalog",
+          "first": 9,
+          "last": 129,
+          "physicalLines": 121,
+          "characters": 11022
+        },
+        {
+          "name": "list",
+          "first": 11,
+          "last": 127,
+          "physicalLines": 117,
+          "characters": 10801
+        },
+        {
+          "name": "<anonymous>",
+          "first": 17,
+          "last": 17,
+          "physicalLines": 1,
+          "characters": 36
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/changes.ts",
+      "physicalLines": 45,
+      "bytes": 2117,
+      "sha256": "1127ff62596bcdf666aac415f985568c0814a46b729138181ce40eeb2a8d8729",
+      "largest": [
+        {
+          "name": "createSubagentChanges",
+          "first": 2,
+          "last": 44,
+          "physicalLines": 43,
+          "characters": 2033
+        },
+        {
+          "name": "attach",
+          "first": 21,
+          "last": 38,
+          "physicalLines": 18,
+          "characters": 808
+        },
+        {
+          "name": "changed",
+          "first": 9,
+          "last": 15,
+          "physicalLines": 7,
+          "characters": 309
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/control.ts",
+      "physicalLines": 51,
+      "bytes": 4220,
+      "sha256": "6d366fc5c171ecf644c46d14ce564f2886c0b8d95e261441fa86a60709444e7c",
+      "largest": [
+        {
+          "name": "createSubagentControls",
+          "first": 6,
+          "last": 50,
+          "physicalLines": 45,
+          "characters": 3857
+        },
+        {
+          "name": "control",
+          "first": 9,
+          "last": 48,
+          "physicalLines": 40,
+          "characters": 3492
+        },
+        {
+          "name": "<anonymous>",
+          "first": 12,
+          "last": 44,
+          "physicalLines": 33,
+          "characters": 3071
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/read.ts",
+      "physicalLines": 53,
+      "bytes": 4023,
+      "sha256": "2b1cca433bfbf5009a622ff11ffbdf7fa6902028c5d93fb52cfa0e92f029f6ce",
+      "largest": [
+        {
+          "name": "createSubagentReader",
+          "first": 8,
+          "last": 52,
+          "physicalLines": 45,
+          "characters": 3534
+        },
+        {
+          "name": "result",
+          "first": 21,
+          "last": 50,
+          "physicalLines": 30,
+          "characters": 2318
+        },
+        {
+          "name": "history",
+          "first": 10,
+          "last": 20,
+          "physicalLines": 11,
+          "characters": 982
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/result-proof.ts",
+      "physicalLines": 11,
+      "bytes": 810,
+      "sha256": "0593db4ed459cbeb5fc80b2270ccf26780e8dad7ca6feb7eab1385016e5f4bcb",
+      "largest": [
+        {
+          "name": "committedChildResultStatus",
+          "first": 7,
+          "last": 10,
+          "physicalLines": 4,
+          "characters": 457
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/scope.ts",
+      "physicalLines": 61,
+      "bytes": 3515,
+      "sha256": "08e34e77180fbb2ff5638e5111855a6e9c55b0dd3594f78204fe139f537fe462",
+      "largest": [
+        {
+          "name": "createSubagentScope",
+          "first": 7,
+          "last": 60,
+          "physicalLines": 54,
+          "characters": 3022
+        },
+        {
+          "name": "lineage",
+          "first": 15,
+          "last": 29,
+          "physicalLines": 15,
+          "characters": 718
+        },
+        {
+          "name": "authority",
+          "first": 45,
+          "last": 55,
+          "physicalLines": 11,
+          "characters": 626
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/types.ts",
+      "physicalLines": 65,
+      "bytes": 4501,
+      "sha256": "c560ba0e2c8f6d1430e53005bea002368bf8b0b56065780e61fdaba459f8f36d",
+      "largest": [
+        {
+          "name": "records",
+          "first": 44,
+          "last": 52,
+          "physicalLines": 9,
+          "characters": 783
+        },
+        {
+          "name": "jobRecords",
+          "first": 53,
+          "last": 60,
+          "physicalLines": 8,
+          "characters": 467
+        },
+        {
+          "name": "<anonymous>",
+          "first": 46,
+          "last": 51,
+          "physicalLines": 6,
+          "characters": 619
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/jobs.ts",
+      "physicalLines": 195,
+      "bytes": 11627,
+      "sha256": "e59299ce9b4ab700d6a071584c04cf8baca150873562534277015dbd1202bf7c",
+      "largest": [
+        {
+          "name": "createJobRegistry",
+          "first": 50,
+          "last": 194,
+          "physicalLines": 145,
+          "characters": 8914
+        },
+        {
+          "name": "registerJob",
+          "first": 76,
+          "last": 110,
+          "physicalLines": 35,
+          "characters": 2441
+        },
+        {
+          "name": "updateJob",
+          "first": 111,
+          "last": 138,
+          "physicalLines": 28,
+          "characters": 1950
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task-protocol.ts",
+      "physicalLines": 6,
+      "bytes": 287,
+      "sha256": "a545730bf736014e93bdf2eaf699c581bf5200d66167bc91e490223f8940e1e5",
+      "largest": [],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/notifications.ts",
+      "physicalLines": 37,
+      "bytes": 1576,
+      "sha256": "657464b98c29f1a8d12321627e7b1907b05b6dd6c5e90f4c65d1e413365fbf51",
+      "largest": [
+        {
+          "name": "enqueue",
+          "first": 27,
+          "last": 35,
+          "physicalLines": 9,
+          "characters": 507
+        },
+        {
+          "name": "restore",
+          "first": 20,
+          "last": 26,
+          "physicalLines": 7,
+          "characters": 238
+        },
+        {
+          "name": "update",
+          "first": 14,
+          "last": 19,
+          "physicalLines": 6,
+          "characters": 229
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/persistence.ts",
+      "physicalLines": 34,
+      "bytes": 1357,
+      "sha256": "8a198d27fd8a4fc5623eef14d5554379f8e4b904824ba82c526df93ba90d66a7",
+      "largest": [
+        {
+          "name": "save",
+          "first": 13,
+          "last": 25,
+          "physicalLines": 13,
+          "characters": 579
+        },
+        {
+          "name": "<anonymous>",
+          "first": 16,
+          "last": 22,
+          "physicalLines": 7,
+          "characters": 329
+        },
+        {
+          "name": "flush",
+          "first": 26,
+          "last": 32,
+          "physicalLines": 7,
+          "characters": 151
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/publication.ts",
+      "physicalLines": 35,
+      "bytes": 2213,
+      "sha256": "8bedb101ae13cae033c7a8e8defba8fd359c2412c350e13c247e248608f100d8",
+      "largest": [
+        {
+          "name": "qualifyTaskPublication",
+          "first": 26,
+          "last": 34,
+          "physicalLines": 9,
+          "characters": 640
+        },
+        {
+          "name": "unqualifyRestoredTask",
+          "first": 17,
+          "last": 24,
+          "physicalLines": 8,
+          "characters": 573
+        },
+        {
+          "name": "validTaskResultPublication",
+          "first": 11,
+          "last": 13,
+          "physicalLines": 3,
+          "characters": 176
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/records.ts",
+      "physicalLines": 97,
+      "bytes": 4548,
+      "sha256": "802fd4c7cb23f052b8cbecf0b0f67c86a225f76cf31d263090681919a0a94c8b",
+      "largest": [
+        {
+          "name": "submit",
+          "first": 25,
+          "last": 53,
+          "physicalLines": 29,
+          "characters": 1536
+        },
+        {
+          "name": "claim",
+          "first": 55,
+          "last": 67,
+          "physicalLines": 13,
+          "characters": 579
+        },
+        {
+          "name": "indexRestored",
+          "first": 85,
+          "last": 95,
+          "physicalLines": 11,
+          "characters": 425
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/recovery.ts",
+      "physicalLines": 57,
+      "bytes": 2176,
+      "sha256": "c6136043ad484515a55515c2f13fcc91722e945406f15a742711c7dde4c804cb",
+      "largest": [
+        {
+          "name": "classifyRestoredTasks",
+          "first": 3,
+          "last": 23,
+          "physicalLines": 21,
+          "characters": 835
+        },
+        {
+          "name": "completedTurnEvidence",
+          "first": 39,
+          "last": 56,
+          "physicalLines": 18,
+          "characters": 691
+        },
+        {
+          "name": "isSessionCancelledChain",
+          "first": 27,
+          "last": 37,
+          "physicalLines": 11,
+          "characters": 356
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/registry.ts",
+      "physicalLines": 211,
+      "bytes": 9570,
+      "sha256": "f92021aac17dbc14cc413180c7cf30cc8ed6bcd65708304490e30f656cb1799e",
+      "largest": [
+        {
+          "name": "createTaskRegistry",
+          "first": 10,
+          "last": 210,
+          "physicalLines": 201,
+          "characters": 8866
+        },
+        {
+          "name": "retainResult",
+          "first": 55,
+          "last": 87,
+          "physicalLines": 33,
+          "characters": 1348
+        },
+        {
+          "name": "restore",
+          "first": 184,
+          "last": 205,
+          "physicalLines": 22,
+          "characters": 1018
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/result.ts",
+      "physicalLines": 99,
+      "bytes": 6304,
+      "sha256": "ef44152f15c43e26949362c933bb345f720ef320d0dbf5464be283ae1e60c0a2",
+      "largest": [
+        {
+          "name": "readTaskResultPage",
+          "first": 83,
+          "last": 98,
+          "physicalLines": 16,
+          "characters": 1440
+        },
+        {
+          "name": "taskBodyPreview",
+          "first": 26,
+          "last": 39,
+          "physicalLines": 14,
+          "characters": 660
+        },
+        {
+          "name": "settle",
+          "first": 66,
+          "last": 79,
+          "physicalLines": 14,
+          "characters": 882
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/settlement.ts",
+      "physicalLines": 19,
+      "bytes": 1224,
+      "sha256": "1583fe58e120f58c8ca1be863b750dacb06def21160e14675bbd47a66d198705",
+      "largest": [
+        {
+          "name": "settleTaskRecord",
+          "first": 6,
+          "last": 18,
+          "physicalLines": 13,
+          "characters": 955
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/types.ts",
+      "physicalLines": 120,
+      "bytes": 4650,
+      "sha256": "1ba68b68c5e466dc0207714026006a760135ad454ffed8f2e4c7a8912422d511",
+      "largest": [
+        {
+          "name": "<anonymous>",
+          "first": 58,
+          "last": 61,
+          "physicalLines": 4,
+          "characters": 217
+        },
+        {
+          "name": "<anonymous>",
+          "first": 64,
+          "last": 67,
+          "physicalLines": 4,
+          "characters": 148
+        }
+      ],
+      "hardCandidates": []
+    },
+    {
+      "path": "packages/subagent/src/task/validation.ts",
+      "physicalLines": 20,
+      "bytes": 1420,
+      "sha256": "6e086c02b69a714fb954278a1afe313362d7ebb0a63a22b11491b39673849c6d",
+      "largest": [
+        {
+          "name": "validateTaskDocument",
+          "first": 11,
+          "last": 19,
+          "physicalLines": 9,
+          "characters": 890
+        },
+        {
+          "name": "validTaskResult",
+          "first": 6,
+          "last": 9,
+          "physicalLines": 4,
+          "characters": 277
+        }
+      ],
+      "hardCandidates": []
+    }
+  ]
+}
