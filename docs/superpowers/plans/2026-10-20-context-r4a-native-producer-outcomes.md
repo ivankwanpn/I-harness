@@ -6,7 +6,7 @@
 
 **Architecture:** The original sandbox execution lease exposes an observational snapshot of its own termination action. Exec captures a disposition after its existing settlement barriers and keeps that host-only fact in its existing result-identity metadata owner. Original shell/code producers declare through the existing ToolExec registration. No new journal, execution owner, output DTO or generic payload-status classifier.
 
-**Status:** Root design fixed after source inspection and focused read-only GPT6.1Sol review; not dispatched. Predecessor is [owned version qualification](2026-10-20-context-r4a-owned-version-qualification.md). Retained result and display contracts remain unchanged.
+**Status2026-10-20:** Accepted product3cf3bc12/delivery5a2c60f3, including root-authorized NAT-13, after fresh independent PASS and root provenance/copy audit. [Acceptance](../../research/2026-10-20-context-r4a-native-outcomes-acceptance.md) preserves the three separate subagent status assertions and precise source/platform limits. Predecessor is [owned version qualification](2026-10-20-context-r4a-owned-version-qualification.md). Retained result and display contracts remain unchanged.
 
 ## Fixed semantics
 
@@ -22,6 +22,7 @@
 10. Known shell availability/binding/policy/backend refusals declare failed at their original branch. Do not rewrite refusal bodies, rerun admission, change escalation or infer anything from payload error/status.
 11. Any original incomplete cleanup, I/O/observer failure or policy-refusal throw keeps its existing throw/recovery contract. Adding outcome metadata cannot turn incomplete execution settlement into a ready success.
 12. An explicitly declared normal-return unknown must survive registry finalization. Only the undeclared initial state receives the ordinary-return success default.
+13. NAT-13 scoped root ruling after the original `bounds retained completed cells` test reproduced: `runtime/retirement.ts` unconditionally awaits the closed event callback even when it returned void, creating a stale running/capacity observation after synchronous acknowledgement. Preserve that existing RED and fix the original terminal owner to conditionally await a returned promise, then commit. A synchronous callback must return before commit; a promise-returning callback still withholds terminal publication/capacity until its real barrier resolves. Do not move commit before the callback, skip async F1/storage acknowledgement, weaken the test, or add a new completion owner. Hold/reject async callback controls must retain original failure/recovery semantics.
 
 Product0.1.13-rc.1, Session10 and decomposition27/43 remain unchanged. No new dependencies, live user data/provider calls, publishing, audit exemption or unrelated event-driven work.
 
@@ -67,18 +68,21 @@ Do not expose new enumerable fields or symbols in ExecResult, its JSON, shell bo
 
 `code-mode/src/register.ts` declares only execTool's original runtime observation result before `observationOutput`. wait/status/control calls stay observational. The retained native result continues through the same normal/nested F1 publication and model projection; no special second finalizer.
 
+NAT-13 adds only the original `runtime/retirement.ts` synchronous acknowledgement branch and its behavioral controls. Follow the existing `close()` distinction between void and a returned promise; do not use an `instanceof Promise` check that rejects structural/cross-realm promises. The separate pre-existing subagent tool-status failures are not folded into this correction.
+
 ## Task 1 — Wire truthful original producer metadata
 
-- [ ] Inspect named seams and existing tests; reproduce registered nonzero/refusal/code terminal failures wrongly reporting succeeded. Reproduce explicit declared unknown overwritten on normal return through actual registry. Preserve before/after raw evidence.
-- [ ] Implement original lease snapshot and explicit forwarding. Add deterministic lifecycle tests for no termination, pending/reentrant first reason, confirmed, failed/recovery, late tree-empty cancel and natural root0 with still-live tree termination. Preserve incomplete resource handling; observer must not trigger cancel/release itself.
-- [ ] At actual ExecService/capture, prove known0/nonzero, null/observation-error, confirmed reasons, unsupported method and pre-aborted no-launch. Keep original program fields/JSON unchanged. Exercise the retentionFailure rewrap and reader identity; failed retention must not erase or alter command outcome.
-- [ ] Wire all original shell variants and known refusal branches. Use genuine registry prepare/dispatch/finalization and native/controlled backend inputs; a fabricated output-shaped object with `error`, `status`, `exitCode` or `outcome` cannot mint metadata.
-- [ ] Wire code_exec only. Test immediate failure and termination, running/yielded handoff, normal completion, guest-caught nested failure and existing policy refusal. Successful code_wait/status/terminate observations remain success.
-- [ ] Qualify a real SessionExecutor retained normal and nested result path, verifying stored envelope and model projection use the same native outcome without changing source/call identity or original complete value.
-- [ ] Prove startup/promotion and observation/control exceptions with actual original job/cell factories: later error/cancel does not rewrite startup; observing that state stays succeeded. Keep exact bytes, frame dependencies and original Stop/drain assertions in retained execution controls.
-- [ ] Run focused affected owner tests/types sequentially. Real host-native smoke is permitted only in isolated fixtures. Adapter tests skipped on this Windows host remain explicitly unqualified; forwarding/types and fake native boundaries are not Linux/WSL live qualification.
-- [ ] Build one fresh isolated Gateway copy and test the changed actual registered producer path with exact source/copy/import maps. Preserve failures and source stability. No broad full-workspace rerun absent a new concrete concern.
-- [ ] Self-review, commit coherent changes, seal evidence, write delivery and hand back to a fresh independent GPT6.1Sol reviewer. Root then continues explicit artifact paging and remaining approved work.
+- [x] Inspect named seams and existing tests; reproduce registered nonzero/refusal/code terminal failures wrongly reporting succeeded. Reproduce explicit declared unknown overwritten on normal return through actual registry. Preserve before/after raw evidence.
+- [x] Implement original lease snapshot and explicit forwarding. Add deterministic lifecycle tests for no termination, pending/reentrant first reason, confirmed, failed/recovery, late tree-empty cancel and natural root0 with still-live tree termination. Preserve incomplete resource handling; observer must not trigger cancel/release itself.
+- [x] At actual ExecService/capture, prove known0/nonzero, null/observation-error, confirmed reasons, unsupported method and pre-aborted no-launch. Keep original program fields/JSON unchanged. Exercise the retentionFailure rewrap and reader identity; failed retention must not erase or alter command outcome.
+- [x] Wire all original shell variants and known refusal branches. Use genuine registry prepare/dispatch/finalization and native/controlled backend inputs; a fabricated output-shaped object with `error`, `status`, `exitCode` or `outcome` cannot mint metadata.
+- [x] Wire code_exec only. Test immediate failure and termination, running/yielded handoff, normal completion, guest-caught nested failure and existing policy refusal. Successful code_wait/status/terminate observations remain success.
+- [x] Resolve NAT-13's original synchronous terminal acknowledgement RED without changing its bounded-retention/eviction oracle. Verify a held async callback still blocks completed observation and next admission until released, and rejection retains original failure/recovery. Actual promise-bearing retained F1 publication remains awaited.
+- [x] Qualify a real SessionExecutor retained normal and nested result path, verifying stored envelope and model projection use the same native outcome without changing source/call identity or original complete value.
+- [x] Prove startup/promotion and observation/control exceptions with actual original job/cell factories: later error/cancel does not rewrite startup; observing that state stays succeeded. Keep exact bytes, frame dependencies and original Stop/drain assertions in retained execution controls.
+- [x] Run focused affected owner tests/types sequentially. Real host-native smoke is permitted only in isolated fixtures. Adapter tests skipped on this Windows host remain explicitly unqualified; forwarding/types and fake native boundaries are not Linux/WSL live qualification.
+- [x] Build one fresh isolated Gateway copy and test the changed actual registered producer path with exact source/copy/import maps. Preserve failures and source stability. No broad full-workspace rerun absent a new concrete concern.
+- [x] Self-review, commit coherent changes, seal evidence, write delivery and hand back to a fresh independent GPT6.1Sol reviewer. Root then continues explicit artifact paging and remaining approved work.
 
 ## Evidence and acceptance
 

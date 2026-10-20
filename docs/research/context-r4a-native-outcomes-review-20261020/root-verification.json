@@ -1,0 +1,1287 @@
+{
+  "checkedAt": "2026-10-20T14:30:57.089Z",
+  "base": "72a04b02b123ba2371cd78ac21029fe020b4de0e",
+  "productHead": "3cf3bc12c4eea5518f0d7753c0dbb9b1e007cb0b",
+  "handoffHead": "5a2c60f3951bc78decfdde74e7612eccc7bc3b94",
+  "sealSha256": "aafb41ec5812b60a15542ee7d0ac51cfdcca4695d509444243690c38adc22ae0",
+  "sealedFiles": 17772,
+  "receipts": [
+    {
+      "label": "registry-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/result-finalization.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\core-tools",
+      "started": "2026-10-20T14:06:53.941Z",
+      "ended": "2026-10-20T14:06:55.484Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "22b710697256687d880eaaa6aba51a95757d74678fb7a2b0826526bfc4154fda",
+      "logSha256": "cc44e4c612318959797e58743f136a0477ea8d3f9341d64fedb13f9b28c26ef3",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  1 failed | 3 passed (4)",
+        "   Duration  948ms (transform 488ms, setup 0ms, collect 720ms, tests 13ms, environment 0ms, prepare 88ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "registry-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/result-finalization.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\core-tools",
+      "started": "2026-10-20T14:07:15.364Z",
+      "ended": "2026-10-20T14:07:16.855Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "3f5483aa118bb6bd16be51aed8b38fe7b42a664a26875e683e71b0a8c01447f7",
+      "logSha256": "4d99f79c1c4c59c4d1c97f2a0cf33f610f05dbef195044a4e323be5c4b4de699",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  4 passed (4)",
+        "   Duration  892ms (transform 453ms, setup 0ms, collect 671ms, tests 8ms, environment 0ms, prepare 82ms)"
+      ]
+    },
+    {
+      "label": "lease-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/execution-lease.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:07:17.434Z",
+      "ended": "2026-10-20T14:07:18.622Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "b5254f117e91fc86466dd1dede57ddc64926abca7a2fe69cf4835566a6c8e169",
+      "logSha256": "27996389149b6bad21036b63038d344adf571be04e00f843463f4f8c07578982",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  3 failed | 24 passed (27)",
+        "   Duration  574ms (transform 83ms, setup 0ms, collect 108ms, tests 235ms, environment 0ms, prepare 83ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "lease-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/execution-lease.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:07:35.569Z",
+      "ended": "2026-10-20T14:07:36.693Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "de02212ca0caf5048cbdf9306758d51b59a41de048500fe41361e5388a762e1e",
+      "logSha256": "68c8332e10eae8a01cfe330f1c557681b4c806223199c81b4646498dc1bc29e2",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  27 passed (27)",
+        "   Duration  532ms (transform 84ms, setup 0ms, collect 107ms, tests 215ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "label": "exec-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:08:28.875Z",
+      "ended": "2026-10-20T14:08:30.308Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "de02212ca0caf5048cbdf9306758d51b59a41de048500fe41361e5388a762e1e",
+      "logSha256": "9da4d1f1abbd81aa96897b29ef3fa6f59e2ed2ad80f3937d655b2fb9829499f2",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  17 failed (17)",
+        "   Duration  796ms (transform 311ms, setup 0ms, collect 464ms, tests 121ms, environment 0ms, prepare 83ms)",
+        "⎯⎯⎯⎯⎯⎯ Failed Tests 17 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "exec-red-corrected.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:08:57.940Z",
+      "ended": "2026-10-20T14:08:59.309Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "de02212ca0caf5048cbdf9306758d51b59a41de048500fe41361e5388a762e1e",
+      "logSha256": "7d23ed6a52dbc605109d3f9a37c8bac0111eebcc9ab64d16567e1c2b8462d3be",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  17 failed (17)",
+        "   Duration  781ms (transform 299ms, setup 0ms, collect 447ms, tests 113ms, environment 0ms, prepare 78ms)",
+        "⎯⎯⎯⎯⎯⎯ Failed Tests 17 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "exec-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:08:59.891Z",
+      "ended": "2026-10-20T14:09:01.300Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "8086734384a02d8e55941157841d03a88984f84e37710ad7a8b2ad17de3eca38",
+      "logSha256": "0f389d27ebe5f4a590a7124e2d690ceda66c71d3cf671f65d733dbd7354488b9",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  17 passed (17)",
+        "   Duration  808ms (transform 323ms, setup 0ms, collect 487ms, tests 104ms, environment 0ms, prepare 81ms)"
+      ]
+    },
+    {
+      "label": "shell-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:09:57.505Z",
+      "ended": "2026-10-20T14:09:59.639Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "8086734384a02d8e55941157841d03a88984f84e37710ad7a8b2ad17de3eca38",
+      "logSha256": "8b993df7460881b48ebfa7c467326c788d076b7b162eeca7151d1ca02e9a0e80",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  10 failed (10)",
+        "   Duration  1.52s (transform 807ms, setup 0ms, collect 1.23s, tests 72ms, environment 0ms, prepare 83ms)",
+        "⎯⎯⎯⎯⎯⎯ Failed Tests 10 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "code-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:10:00.218Z",
+      "ended": "2026-10-20T14:10:02.095Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "8086734384a02d8e55941157841d03a88984f84e37710ad7a8b2ad17de3eca38",
+      "logSha256": "9d31fe080cd44efd4330bdeae17113b95a4e2fc23cb8294522d60a14c37f33cf",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed | 2 passed (4)",
+        "   Duration  1.27s (transform 522ms, setup 0ms, collect 778ms, tests 295ms, environment 0ms, prepare 75ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "shell-red-corrected.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:10:37.818Z",
+      "ended": "2026-10-20T14:10:40.011Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "8086734384a02d8e55941157841d03a88984f84e37710ad7a8b2ad17de3eca38",
+      "logSha256": "9469e302e3ef4c8fae20bb5460116dc7a3a2ed0cb2b1bbb838ce9b75edb536a7",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  8 failed | 2 passed (10)",
+        "   Duration  1.60s (transform 793ms, setup 0ms, collect 1.21s, tests 176ms, environment 0ms, prepare 77ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 8 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "shell-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:10:40.609Z",
+      "ended": "2026-10-20T14:10:42.780Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "46f830c31507639a1425cdcb62dacf5bdec5fc342484b8edd06ace81b563eeaf",
+      "logSha256": "53d779345b0596f02e9081033524e7ba214827e72558c91889722469b2871009",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  10 passed (10)",
+        "   Duration  1.56s (transform 753ms, setup 0ms, collect 1.15s, tests 202ms, environment 0ms, prepare 83ms)"
+      ]
+    },
+    {
+      "label": "code-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:10:43.335Z",
+      "ended": "2026-10-20T14:10:45.181Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2571,
+      "sourceDigest": "46f830c31507639a1425cdcb62dacf5bdec5fc342484b8edd06ace81b563eeaf",
+      "logSha256": "94546b13f2a341ca48ef1e26e28a43c86c1097ece5aae18f66b196831b67ff8d",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  4 passed (4)",
+        "   Duration  1.26s (transform 516ms, setup 0ms, collect 769ms, tests 289ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "label": "retention-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/foreground-retention.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:11:41.628Z",
+      "ended": "2026-10-20T14:11:43.527Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2576,
+      "sourceDigest": "703ac64a5187f42a7379329f0d1f743a4f85a4740fdf3918454f777c26d9d3eb",
+      "logSha256": "8c86b3050482af5bad69a2e5eb96d887108e5c75ca51b836e03f40d76694fb6e",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  6 passed (6)",
+        "   Duration  1.30s (transform 694ms, setup 0ms, collect 1.05s, tests 35ms, environment 0ms, prepare 79ms)"
+      ]
+    },
+    {
+      "label": "managed-qualification.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-producer-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:12:47.693Z",
+      "ended": "2026-10-20T14:12:53.388Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2577,
+      "sourceDigest": "be2a0911b21a2160b32507f60506a089126b15347220b417ecfc9942d3ebc0f5",
+      "logSha256": "611f4bd0b55c4ef414f6947660a90b8a35b50298307dc2b7260f17aa04264471",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  4 failed (4)",
+        "   Duration  5.06s (transform 2.55s, setup 0ms, collect 4.07s, tests 745ms, environment 0ms, prepare 82ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "managed-qualification-corrected.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-producer-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:13:01.724Z",
+      "ended": "2026-10-20T14:13:08.182Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2577,
+      "sourceDigest": "99d01c86f2ade02a484ba691c2a6618170107788084e36de6d88b3d81c97d1ce",
+      "logSha256": "1d574e9af88a38c3590a3c75df6718c829364b110e05573cbacfecbe46444589",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  4 passed (4)",
+        "   Duration  5.83s (transform 2.47s, setup 0ms, collect 3.94s, tests 1.65s, environment 0ms, prepare 79ms)"
+      ]
+    },
+    {
+      "label": "observations.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\subagent",
+      "started": "2026-10-20T14:14:17.796Z",
+      "ended": "2026-10-20T14:14:20.517Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "30e890d6cb3db2bb420a4f9b58ecd815243244b575aa46a95ee26439d8c2fd41",
+      "logSha256": "eaa14e47da7adfa261ea1a4211cb505d587e31297231241c98d332a00ea0c57c",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  1 failed (1)",
+        "   Duration  2.11s (transform 1.23s, setup 0ms, collect 1.89s, tests 6ms, environment 0ms, prepare 78ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "windows-native.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes-windows.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:14:21.118Z",
+      "ended": "2026-10-20T14:14:23.882Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "30e890d6cb3db2bb420a4f9b58ecd815243244b575aa46a95ee26439d8c2fd41",
+      "logSha256": "d7cea8ea5470a9eec82f608b3e9a84c77a466c846e6b9261a0ce2bd8e1829433",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  1 passed (1)",
+        "   Duration  2.15s (transform 737ms, setup 0ms, collect 1.12s, tests 823ms, environment 0ms, prepare 77ms)"
+      ]
+    },
+    {
+      "label": "observations-corrected.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\subagent",
+      "started": "2026-10-20T14:14:33.234Z",
+      "ended": "2026-10-20T14:14:36.024Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "0c77e3d95c92d0a50144904dbbe4cfc835c79ac18bc4de0e8c7507145b7b343d",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  1 passed (1)",
+        "   Duration  2.17s (transform 1.25s, setup 0ms, collect 1.92s, tests 19ms, environment 0ms, prepare 82ms)"
+      ]
+    },
+    {
+      "label": "type-sandbox.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:14:43.680Z",
+      "ended": "2026-10-20T14:14:44.857Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-sandbox-local.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-local",
+      "started": "2026-10-20T14:14:45.452Z",
+      "ended": "2026-10-20T14:14:47.672Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-sandbox-wsl.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-wsl",
+      "started": "2026-10-20T14:14:48.260Z",
+      "ended": "2026-10-20T14:14:50.381Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-sandbox-windows-psec.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-windows-psec",
+      "started": "2026-10-20T14:14:50.942Z",
+      "ended": "2026-10-20T14:14:53.446Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-core-tools.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\core-tools",
+      "started": "2026-10-20T14:14:54.058Z",
+      "ended": "2026-10-20T14:14:57.427Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-exec.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:14:57.998Z",
+      "ended": "2026-10-20T14:15:01.118Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-shell.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:15:01.679Z",
+      "ended": "2026-10-20T14:15:04.657Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-code-mode.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:15:05.228Z",
+      "ended": "2026-10-20T14:15:08.732Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-session-executor.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:15:09.298Z",
+      "ended": "2026-10-20T14:15:16.007Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-subagent.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\subagent",
+      "started": "2026-10-20T14:15:16.584Z",
+      "ended": "2026-10-20T14:15:21.209Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "sandbox-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/execution-lease.test.ts",
+        "test/execution-public.test.ts",
+        "test/execution-transport.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:15:43.029Z",
+      "ended": "2026-10-20T14:15:44.475Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "cf556752a1fcfe38a4586350361eb1807bff7ce26c8d3249b255f487f28244c5",
+      "summary": [
+        " Test Files  3 passed (3)",
+        "      Tests  30 passed (30)",
+        "   Duration  857ms (transform 92ms, setup 0ms, collect 138ms, tests 160ms, environment 0ms, prepare 211ms)"
+      ]
+    },
+    {
+      "label": "posix-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/posix-execution.test.ts",
+        "test/execution-composition.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-local",
+      "started": "2026-10-20T14:15:45.052Z",
+      "ended": "2026-10-20T14:15:46.458Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "76f4943d02a19d2153bacd024b9e8e3618d537967455bfa63d1ec838566decf4",
+      "summary": [
+        " Test Files  2 passed (2)",
+        "      Tests  9 passed | 2 skipped (11)",
+        "   Duration  780ms (transform 233ms, setup 0ms, collect 386ms, tests 11ms, environment 0ms, prepare 144ms)"
+      ]
+    },
+    {
+      "label": "wsl-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/controller.test.ts",
+        "test/admission.test.ts",
+        "test/wsl-integration.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-wsl",
+      "started": "2026-10-20T14:15:47.022Z",
+      "ended": "2026-10-20T14:15:48.640Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "9b633be325b144c5ff5d3c0d689f178130d14e435acd5bc7bbbcddb45d78b496",
+      "summary": [
+        " Test Files  2 passed | 1 skipped (3)",
+        "      Tests  19 passed | 6 skipped (25)",
+        "   Duration  1000ms (transform 139ms, setup 0ms, collect 224ms, tests 199ms, environment 0ms, prepare 217ms)"
+      ]
+    },
+    {
+      "label": "psec-owner.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/fake-session.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-windows-psec",
+      "started": "2026-10-20T14:15:49.209Z",
+      "ended": "2026-10-20T14:15:52.292Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "ba99c0e36c2981e11797042485ab55f04b0bb74435d621549a5a55c471e7c9d4",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  25 passed (25)",
+        "   Duration  2.50s (transform 323ms, setup 0ms, collect 465ms, tests 1.83s, environment 0ms, prepare 75ms)"
+      ]
+    },
+    {
+      "label": "registry-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/result-finalization.test.ts",
+        "test/retained-outcome.test.ts",
+        "test/registry-contracts.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\core-tools",
+      "started": "2026-10-20T14:15:52.874Z",
+      "ended": "2026-10-20T14:15:55.311Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "d350ad218085aeed9345ea7f2aaf45306d5acde1e052c9ecbecc714d7b7bf713",
+      "summary": [
+        " Test Files  3 passed (3)",
+        "      Tests  15 passed (15)",
+        "   Duration  1.82s (transform 654ms, setup 0ms, collect 1.13s, tests 109ms, environment 0ms, prepare 215ms)"
+      ]
+    },
+    {
+      "label": "exec-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "test/foreground-retention.test.ts",
+        "test/capture-lifecycle.test.ts",
+        "test/stream.test.ts",
+        "test/service-cleanup.test.ts",
+        "test/managed-frames.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:15:55.897Z",
+      "ended": "2026-10-20T14:16:04.333Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "78c46fbd62869b689125af1584015879949977d598024f5ca293ba67eb20af50",
+      "summary": [
+        " Test Files  6 passed (6)",
+        "      Tests  70 passed (70)",
+        "   Duration  7.83s (transform 748ms, setup 0ms, collect 1.46s, tests 5.24s, environment 1ms, prepare 408ms)"
+      ]
+    },
+    {
+      "label": "shell-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "test/native-outcomes-windows.test.ts",
+        "test/shell.test.ts",
+        "test/agent-shell.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\shell",
+      "started": "2026-10-20T14:16:04.899Z",
+      "ended": "2026-10-20T14:16:09.298Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "5f643209ba96345b68711c5fb78541984f1977c20e45ddadde6b1f3c5c45dbe3",
+      "summary": [
+        " Test Files  4 passed (4)",
+        "      Tests  53 passed (53)",
+        "   Duration  3.78s (transform 753ms, setup 0ms, collect 1.66s, tests 1.33s, environment 1ms, prepare 290ms)"
+      ]
+    },
+    {
+      "label": "code-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "test/register.test.ts",
+        "test/human-stop.test.ts",
+        "test/runtime.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:16:09.881Z",
+      "ended": "2026-10-20T14:16:20.668Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "f0f7418d0c7af194c315c66346c5101ff45578ce0bb0d8a869f68c999249e8ea",
+      "summary": [
+        " Test Files  1 failed | 3 passed (4)",
+        "      Tests  1 failed | 60 passed (61)",
+        "   Duration  10.17s (transform 1.02s, setup 0ms, collect 1.79s, tests 7.63s, environment 0ms, prepare 270ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "code-runtime-diagnostic.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/runtime.test.ts",
+        "-t",
+        "bounds retained completed cells",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:16:47.154Z",
+      "ended": "2026-10-20T14:16:48.691Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "526842dff8af41d3198fa922f039f25d98973c46b59db3bb8101e3983d38b4de",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  1 failed | 43 skipped (44)",
+        "   Duration  947ms (transform 452ms, setup 0ms, collect 654ms, tests 76ms, environment 0ms, prepare 76ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "managed-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-producer-outcomes.test.ts",
+        "test/retained-exec-flow.test.ts",
+        "test/retained-background-exec.test.ts",
+        "test/retained-hook-stop.test.ts",
+        "test/retained-code-output.test.ts",
+        "test/retained-mcp-result.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:16:49.269Z",
+      "ended": "2026-10-20T14:17:09.184Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "ab0682648cdca0bd70743e37c930137eb905153146981531c3faedce3f157f77",
+      "logSha256": "326683a9c6675b9cecaebb703e3dfb01197202ea1af5491c9e287430398f9776",
+      "summary": [
+        " Test Files  6 passed (6)",
+        "      Tests  21 passed (21)",
+        "   Duration  19.27s (transform 2.50s, setup 0ms, collect 6.55s, tests 11.49s, environment 1ms, prepare 404ms)"
+      ]
+    },
+    {
+      "label": "exec-final-controls.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:18:15.626Z",
+      "ended": "2026-10-20T14:18:17.031Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "9315a83e4d2e46a700c14f9a71e6c34bce591e999e65232126af96acc4b132e5",
+      "logSha256": "913dcef875a169d73bcbf56b346246fa278ddc287ba21d2598c526d461970918",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  18 passed (18)",
+        "   Duration  789ms (transform 302ms, setup 0ms, collect 453ms, tests 125ms, environment 0ms, prepare 79ms)"
+      ]
+    },
+    {
+      "label": "subagent-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "test/tools.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\subagent",
+      "started": "2026-10-20T14:18:17.627Z",
+      "ended": "2026-10-20T14:18:23.183Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "9315a83e4d2e46a700c14f9a71e6c34bce591e999e65232126af96acc4b132e5",
+      "logSha256": "eaa659fdb695243f3c80b0f248a271c25e21fad4250d6b03c82c15a7a85e6e69",
+      "summary": [
+        " Test Files  1 failed | 1 passed (2)",
+        "      Tests  3 failed | 67 passed (70)",
+        "   Duration  4.92s (transform 1.36s, setup 0ms, collect 2.36s, tests 2.16s, environment 0ms, prepare 144ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "retention-transfer-withdrawal.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/foreground-retention.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:19:00.758Z",
+      "ended": "2026-10-20T14:19:02.647Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "200771e52d7c58af81d16ba8979018efed93c7724beead83791e2fc428928fea",
+      "logSha256": "9389a701fa50385503254cb51d992bb91491dd8597c6989c1df0108647460f51",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  4 failed | 2 passed (6)",
+        "   Duration  1.29s (transform 685ms, setup 0ms, collect 1.03s, tests 39ms, environment 0ms, prepare 87ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "retention-transfer-restored.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/foreground-retention.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:19:03.475Z",
+      "ended": "2026-10-20T14:19:05.350Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "9315a83e4d2e46a700c14f9a71e6c34bce591e999e65232126af96acc4b132e5",
+      "logSha256": "a36e3adaa1cc676ff83b7ed2ccd1393f661158de43cbc960b054cf3138618517",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  6 passed (6)",
+        "   Duration  1.26s (transform 670ms, setup 0ms, collect 1.02s, tests 36ms, environment 0ms, prepare 76ms)"
+      ]
+    },
+    {
+      "label": "gateway-build.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\packages\\desktop\\scripts\\build-gateway.mjs",
+        "--out",
+        ".tmp/context-r4a-native-outcomes-20261020-implementation/gateway"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "started": "2026-10-20T14:19:05.911Z",
+      "ended": "2026-10-20T14:19:10.523Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "9315a83e4d2e46a700c14f9a71e6c34bce591e999e65232126af96acc4b132e5",
+      "logSha256": "c117d08b13be546197fac42fd1f61ed7e2f91c0eec0a20f5cd5f39fc519ddc3c",
+      "summary": []
+    },
+    {
+      "label": "gateway-probe.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\.tmp\\context-r4a-native-outcomes-20261020-implementation\\gateway\\node_modules\\tsx\\dist\\cli.mjs",
+        "proof/probe.ts"
+      ],
+      "cwd": "D:\\I-harness-main\\.tmp\\context-r4a-native-outcomes-20261020-implementation\\gateway",
+      "started": "2026-10-20T14:20:03.396Z",
+      "ended": "2026-10-20T14:20:04.237Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "9315a83e4d2e46a700c14f9a71e6c34bce591e999e65232126af96acc4b132e5",
+      "logSha256": "327a0aa8271dc4a72f9bcdcfd4a4e9d6b42992aab49024fdca60a18daea56aa1",
+      "summary": []
+    },
+    {
+      "label": "nat13-red.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/runtime.test.ts",
+        "-t",
+        "terminal callback|bounds retained completed cells",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:20:50.520Z",
+      "ended": "2026-10-20T14:20:52.369Z",
+      "exit": 1,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "1b3b8a1ab72ed8196f2c3b555830411ae461571575325aae829bd24b3b3f5da7",
+      "logSha256": "255b4f8963230afd7af991b74e79390a1b77ab41bd89e8f555f0931c5840166a",
+      "summary": [
+        " Test Files  1 failed (1)",
+        "      Tests  1 failed | 3 passed | 43 skipped (47)",
+        "   Duration  1.25s (transform 476ms, setup 0ms, collect 698ms, tests 327ms, environment 0ms, prepare 80ms)",
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯"
+      ]
+    },
+    {
+      "label": "nat13-green.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/runtime.test.ts",
+        "-t",
+        "terminal callback|bounds retained completed cells",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:21:01.211Z",
+      "ended": "2026-10-20T14:21:03.372Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "2576b9ee4049719f10c83cc57ae45ed1e07d3ab178f91b580c2902dde335b8b5",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  4 passed | 43 skipped (47)",
+        "   Duration  1.56s (transform 522ms, setup 0ms, collect 768ms, tests 566ms, environment 0ms, prepare 82ms)"
+      ]
+    },
+    {
+      "label": "code-final-owners.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-outcomes.test.ts",
+        "test/register.test.ts",
+        "test/human-stop.test.ts",
+        "test/runtime.test.ts",
+        "test/managed-store-stop.test.ts",
+        "test/output-source-recovery.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:21:03.943Z",
+      "ended": "2026-10-20T14:21:16.187Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "3ae4b63abc81ec0efc9f56aca2f54f3de17ab4f134716844d1998cd358998214",
+      "summary": [
+        " Test Files  6 passed (6)",
+        "      Tests  69 passed (69)",
+        "   Duration  11.64s (transform 1.04s, setup 0ms, collect 2.06s, tests 8.37s, environment 1ms, prepare 445ms)"
+      ]
+    },
+    {
+      "label": "nat13-managed-final.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/native-producer-outcomes.test.ts",
+        "test/retained-code-output.test.ts",
+        "test/code-mode-store.test.ts",
+        "test/code-output-boundary.test.ts",
+        "test/retained-mcp-result.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:21:31.065Z",
+      "ended": "2026-10-20T14:21:50.853Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "63031b97e1bd534222d607885189d1d2a8717db327a1fb8714b7f38565441c8f",
+      "summary": [
+        " Test Files  5 passed (5)",
+        "      Tests  27 passed (27)",
+        "   Duration  19.16s (transform 2.64s, setup 0ms, collect 6.17s, tests 11.94s, environment 1ms, prepare 352ms)"
+      ]
+    },
+    {
+      "label": "type-final-sandbox.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:22:38.043Z",
+      "ended": "2026-10-20T14:22:39.217Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-final-exec.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\exec",
+      "started": "2026-10-20T14:22:39.788Z",
+      "ended": "2026-10-20T14:22:42.952Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-final-code-mode.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\code-mode",
+      "started": "2026-10-20T14:22:43.510Z",
+      "ended": "2026-10-20T14:22:46.967Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "type-final-session-executor.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+        "--noEmit"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "started": "2026-10-20T14:22:47.523Z",
+      "ended": "2026-10-20T14:22:54.232Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "summary": []
+    },
+    {
+      "label": "gateway-final-build.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\packages\\desktop\\scripts\\build-gateway.mjs",
+        "--out",
+        ".tmp/context-r4a-native-outcomes-20261020-implementation/gateway-final"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "started": "2026-10-20T14:22:54.803Z",
+      "ended": "2026-10-20T14:22:59.446Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "f1efc61449fa263eb37a90923c1066564e74040c3012c8fb2d8e7f22ad65e7a2",
+      "summary": []
+    },
+    {
+      "label": "gateway-final-map.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\.tmp\\context-r4a-native-outcomes-20261020-implementation\\prepare-copy.mjs",
+        "gateway-final"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "started": "2026-10-20T14:23:00.052Z",
+      "ended": "2026-10-20T14:23:00.305Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "e3cac074f22c5ad54441d1b8e804700be61ac2b146c2a0cac1677632c2bfe0ca",
+      "summary": []
+    },
+    {
+      "label": "gateway-final-probe.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\.tmp\\context-r4a-native-outcomes-20261020-implementation\\gateway-final\\node_modules\\tsx\\dist\\cli.mjs",
+        "proof/probe.ts"
+      ],
+      "cwd": "D:\\I-harness-main\\.tmp\\context-r4a-native-outcomes-20261020-implementation\\gateway-final",
+      "started": "2026-10-20T14:23:00.955Z",
+      "ended": "2026-10-20T14:23:02.666Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "03bd11938ce21f8d4205bad5822284076e2021b4b00f2fdb0e4a8ca81f184b3d",
+      "summary": []
+    },
+    {
+      "label": "lease-final.json",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "argv": [
+        "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+        "run",
+        "test/execution-lease.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:\\I-harness-main\\packages\\sandbox",
+      "started": "2026-10-20T14:23:45.551Z",
+      "ended": "2026-10-20T14:23:46.596Z",
+      "exit": 0,
+      "stable": true,
+      "sourceCount": 2579,
+      "sourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+      "logSha256": "13643e1d20e98893ceefe605a0450d0f93e19497f8e69123145fe4c03b8821fc",
+      "summary": [
+        " Test Files  1 passed (1)",
+        "      Tests  27 passed (27)",
+        "   Duration  446ms (transform 86ms, setup 0ms, collect 111ms, tests 132ms, environment 0ms, prepare 77ms)"
+      ]
+    }
+  ],
+  "finalSourceFiles": 2579,
+  "finalSourceDigest": "4ba8afd4a265af7bfb884b2ffeea34600b9d217d4f4f2c0a7feef2d27a56f087",
+  "selectedSourceCopies": 245,
+  "selectedEntries": 13,
+  "nativeGeneratedAssets": 9,
+  "fullCopiedPackages": 78,
+  "closureFiles": 1142,
+  "closureEdges": 322,
+  "fixtureImportEdits": 1,
+  "failures": [],
+  "limits": "Early tracked-only RED snapshots omit new untracked fixtures; final manifest and copy include them. Subagent original 3 status oracles remain separate. No live Linux/WSL/confined Psec/IPC/installer qualification."
+}
