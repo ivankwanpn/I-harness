@@ -27,7 +27,7 @@ it('injects the real CLI cold reader and refuses a saved project binding without
   const client = HarnessClient.spawn({ command: process.execPath, args: ['--import', loader, join(repo, 'apps/cli/src/index.ts'), 'sdk', '--session-dir', store], cwd: workspace, env: { IH_CONFIG_DIR: config } })
   try {
     const before = await Promise.all(['unbound', 'bound'].map(id => readFile(join(store, id + '.jsonl'))))
-    expect((await client.initialize()).capabilities['session-result-read']).toEqual(['1'])
+    expect((await client.initialize()).capabilities['session-result-read']).toEqual(['1', '2'])
     expect(await client.readResultPage('unbound', { ref: refs.unbound })).toMatchObject({ ref: refs.unbound, eof: true, data: { text: 'unbound bytes' } })
     expect(await client.readResultPage('bound', { ref: refs.bound })).toMatchObject({ kind: 'unavailable' })
     expect(await Promise.all(['unbound', 'bound'].map(id => readFile(join(store, id + '.jsonl'))))).toEqual(before)

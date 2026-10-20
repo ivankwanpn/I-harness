@@ -219,7 +219,7 @@ export class HarnessClient {
     return readSessionContextState(await this.request("session/context", { sessionId }), sessionId)
   }
   async readResultPage(sessionId: string, query: ResultPageQuery): Promise<ResultPageResult> {
-    if (!this.serverInfo?.capabilities?.['session-result-read']?.includes('1')) throw new Error('Result pages are not supported; initialize a capable server first')
+    if (!this.serverInfo?.capabilities?.['session-result-read']?.includes(query.viaCatalog ? '2' : '1')) throw new Error('Result pages are not supported; initialize a capable server first')
     return await this.request('session/result/read', { ...query, sessionId }) as ResultPageResult
   }
 

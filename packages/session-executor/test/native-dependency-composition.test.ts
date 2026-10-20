@@ -95,6 +95,8 @@ it.each(['calibration', 'source', 'catalog'] as const)('uses original finish ack
   const registrations: { scope: ResultArtifactScope; codec?: string; bytes: Buffer[] }[] = []
   const register = f.service.registerResultScope.bind(f.service)
   const registrationSpy = vi.spyOn(f.service, 'registerResultScope').mockImplementation((...args) => { const scope = register(...args); registrations.push({ scope, bytes: [] }); return scope })
+  const registerDependency = f.service.registerResultDependencyScope.bind(f.service)
+  const dependencyRegistrationSpy = vi.spyOn(f.service, 'registerResultDependencyScope').mockImplementation((...args) => { const scope = registerDependency(...args); registrations.push({ scope, bytes: [] }); return scope })
   const begin = f.service.beginResult.bind(f.service), wrapped = new WeakSet<ResultArtifactSink>()
   const beginSpy = vi.spyOn(f.service, 'beginResult').mockImplementation(async (scope, codec) => {
     const sink = await begin(scope, codec), row = registrations.find(row => row.scope === scope)!
@@ -141,5 +143,5 @@ it.each(['calibration', 'source', 'catalog'] as const)('uses original finish ack
     expect({ bodies, launches }).toEqual({ bodies: 1, launches: 2 })
     expect(await readFile(ledger, 'utf8')).toBe('source-0\nsource-1\n')
     await writeFile(resolve(f.root, 'recovered-receipt.json'), JSON.stringify({ mode, selected, attempts, finalizerEntries, bodies, launches, result, inventory: await f.inventory() }, null, 2))
-  } finally { released = true; finalizerSpy.mockRestore(); beginSpy.mockRestore(); registrationSpy.mockRestore(); await f.close() }
+  } finally { released = true; finalizerSpy.mockRestore(); beginSpy.mockRestore(); registrationSpy.mockRestore(); dependencyRegistrationSpy.mockRestore(); await f.close() }
 }, 60000)

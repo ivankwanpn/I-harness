@@ -35,11 +35,11 @@ export function createToolResultRetention(service: ContextOutputService | undefi
         return service.beginResult(scope, 'json-utf8-v1')
       } })
       const catalogId = randomUUID()
-      return withResultDependencies(primary, toolResultDependencies(prepared.exec), async () => {
+      return withResultDependencies(primary, toolResultDependencies(prepared.exec), async entries => {
         if (!service || !sessionId || !original.view || !original.source) throw Object.assign(new Error('Result dependency owner unavailable'), { code: 'ARTIFACT_OWNER_UNSUPPORTED' })
-        catalogScope ??= service.registerResultScope({ operationId: catalogId, sessionId, callId: prepared.exec.callId!, ...(descriptor ? { source: descriptor } : {}) }, () => { assertResultPrepared(prepared); return true })
+        catalogScope ??= service.registerResultDependencyScope({ operationId: catalogId, sessionId, callId: prepared.exec.callId!, ...(descriptor ? { source: descriptor } : {}) }, () => { assertResultPrepared(prepared); return true }, entries)
         return service.beginResult(catalogScope, 'json-utf8-v1')
-      })
+      }, ref => service && catalogScope ? service.settleResultDependencyMembership(catalogScope, ref) : Promise.resolve('recovery-required'))
     },
     captureSynthetic(context, output, execution) {
       assertSyntheticResult(context)

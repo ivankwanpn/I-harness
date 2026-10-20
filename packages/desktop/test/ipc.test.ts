@@ -68,6 +68,12 @@ describe("Desktop scoped IPC", () => {
     f.setRuntime({client:{request},info:{capabilities:{"session-result-read":["1"]}}})
     expect(await dispatchDesktopRequest(valid,f.dependencies)).toBe(page)
     expect(request).toHaveBeenCalledExactlyOnceWith("session/result/read",{sessionId:"conversation",ref,maxBytes:16384})
+    const native={...ref,codec:"exec-frames-v1"},catalog={...ref,id:"ctxv1_"+"d".repeat(64),codec:"json-utf8-v1"}
+    await expect(dispatchDesktopRequest({...valid,ref:native,viaCatalog:catalog},f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(request).toHaveBeenCalledTimes(1)
+    f.setRuntime({client:{request},info:{capabilities:{"session-result-read":["1","2"]}}})
+    await dispatchDesktopRequest({...valid,ref:native,viaCatalog:catalog},f.dependencies)
+    expect(request).toHaveBeenLastCalledWith("session/result/read",{sessionId:"conversation",ref:native,viaCatalog:catalog,maxBytes:16384})
   })
   it("rejects unsupported subagent catalog hosts and validates lineage/paging arguments before routing", async () => {
     const f = fixture()

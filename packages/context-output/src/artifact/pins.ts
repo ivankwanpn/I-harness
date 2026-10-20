@@ -1,10 +1,10 @@
 import { mkdir, readdir, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import type { ManagedArtifactRef } from '@i-harness/core-session'
 import { atomicJson, boundedJson, ownedPath } from './io.ts'
 import { sha } from './manifest.ts'
 
-interface Pin { version: 1; documentId: string; sessionId: string; state: 'pending' | 'committed'; operationId: string; revision: string; visibilityRef?: ManagedArtifactRef }
+export interface ArtifactPin { version: 1; documentId: string; sessionId: string; state: 'pending' | 'committed'; operationId: string; revision: string }
+type Pin = ArtifactPin
 interface Access { version: 1; sessionId: string; revision: string; pinId: string }
 export async function publishPin(directory: string, pin: Pin): Promise<void> {
   await mkdir(resolve(directory, 'pins'), { recursive: true }); await mkdir(resolve(directory, 'access'), { recursive: true })
@@ -28,12 +28,18 @@ export async function readPin(root: string, directory: string, sessionId: string
 }
 export async function releaseDocumentPin(root: string, directory: string, documentId: string): Promise<boolean> {
   const pinPath = resolve(directory, 'pins', `${sha(documentId)}.json`)
-  let pin: Pin
+  let pin: Pin | undefined
   try { await ownedPath(root, pinPath); pin = await boundedJson(pinPath) as Pin }
-  catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false; throw cause }
-  if (pin.documentId !== documentId) throw new Error('Artifact pin identity conflict')
-  await rm(pinPath)
-  const remaining = await readdir(resolve(directory, 'pins'))
+  catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause }
+  if (pin && pin.documentId !== documentId) throw new Error('Artifact pin identity conflict')
+  if (pin) await rm(pinPath)
+  // A retry after pin deletion still owns cleanup of this exact document's
+  // companions. They confer no independent body retention.
+  const companions = resolve(directory, 'pin-memberships', sha(documentId))
+  try { await ownedPath(root, companions); await rm(companions, { recursive: true, force: true }) }
+  catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause }
+  const remaining = await readdir(resolve(directory, 'pins')).catch((cause: NodeJS.ErrnoException) => { if (cause.code === 'ENOENT') return []; throw cause })
+  if (!pin) return remaining.length === 0
   let replacement: Pin | undefined
   for (const name of remaining) {
     if (!/^[a-f0-9]{64}\.json$/.test(name)) throw new Error('Artifact pin metadata corrupt')

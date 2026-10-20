@@ -463,6 +463,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const internalIds = new Set<string>()
   const base = createSdkServer(service, {
     readResultPage: createConversationResultReader(coordinator, service, isConversation, fence),
+    supportsResultDependencyMembership: true,
     coordinator,
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)

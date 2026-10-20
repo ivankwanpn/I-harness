@@ -1,7 +1,7 @@
 import { mkdir, readdir, rm, lstat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec } from '@i-harness/core-session'
+import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec, type ResultDependency } from '@i-harness/core-session'
 import { identity } from '../config.ts'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
 import type { ArtifactOperation, ArtifactOwner, ManagedArtifactPage, ResultArtifactScope, ResultArtifactSink } from './types.ts'
@@ -14,16 +14,18 @@ import { readExecFramePage } from './exec-reader.ts'
 import { requireSpace } from './quota.ts'
 import { publishPin, readPin, releaseDocumentPin } from './pins.ts'
 import { confirmArtifactOwner, type OwnerConfirmation } from './owner-confirmation.ts'
+import { createDependencyMembership, dependencyEntries, sameArtifactRef, type DependencyRegistration } from './dependency-membership.ts'
 
 export function createArtifactOwnership(options: ContextOutputOptions, quota: () => number) {
   const root = resolve(options.root, 'context-output', sha(options.workspaceId)), managed = resolve(root, 'managed-v1')
-  const scopes = new WeakMap<ResultArtifactScope, { owner: ArtifactOwner; current: () => boolean; codec?: ResultCodec; initialization?: { operation: ArtifactOperation; target: string }; confirmation?: OwnerConfirmation }>()
+  const scopes = new WeakMap<ResultArtifactScope, { owner: ArtifactOwner; current: () => boolean; codec?: ResultCodec; initialization?: { operation: ArtifactOperation; target: string }; confirmation?: OwnerConfirmation; dependencies?: DependencyRegistration }>()
   const deletedDocuments = new Set<string>()
   let closed = false
   const sinks = new WeakMap<ResultArtifactScope, ResultArtifactSink>()
   const writers = new Set<OwnedArtifactSink>()
   let serial: Promise<unknown> = Promise.resolve()
   const directory = (id: string) => { if (!/^ctxv1_[a-f0-9]{64}$/.test(id)) throw new Error('Artifact reference unavailable'); return resolve(managed, id) }
+  const membership = createDependencyMembership(root, options.workspaceId, directory, quota)
   const mutate = <T>(work: () => Promise<T>): Promise<T> => {
     const next = serial.then(async () => {
       const lease = await acquireSessionLock({ lockPath: lockPathFor(options.root, `context-output:${options.workspaceId}`) })
@@ -40,6 +42,16 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     const scope = Object.freeze({ operationId: owner.operationId })
     scopes.set(scope, { owner: structuredClone(owner), current })
     return scope
+  }
+  function registerResultDependencyScope(owner: ArtifactOwner, current: () => boolean, entries: readonly ResultDependency[]): ResultArtifactScope {
+    const frozen = dependencyEntries(entries), scope = registerResultScope(owner, current), registered = scopes.get(scope)!
+    registered.dependencies = { owner: registered.owner, current: () => !closed && !deletedDocuments.has(registered.owner.sessionId) && !deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) && registered.current(), entries: frozen, admitted: new Set() }
+    return scope
+  }
+  async function settleResultDependencyMembership(scope: ResultArtifactScope, ref: ManagedArtifactRef) {
+    const registered = scopes.get(scope), original = registered?.initialization?.operation
+    if (!registered?.dependencies || registered.codec !== 'json-utf8-v1' || original?.phase !== 'committed' || !original.ref || !validManagedArtifactRef(ref) || !sameArtifactRef(original.ref, ref)) return 'recovery-required' as const
+    return mutate(() => membership.settle(registered.dependencies!, ref))
   }
   async function beginResult(scope: ResultArtifactScope, codec: ResultCodec): Promise<ResultArtifactSink> {
     const registered = scopes.get(scope)
@@ -79,7 +91,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       return sink
     })
   }
-  async function authorized(access: ContextAccess, ref: ManagedArtifactRef): Promise<ArtifactOperation> {
+  async function authorized(access: ContextAccess, ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef): Promise<ArtifactOperation> {
     identity(access.sessionId, 'sessionId')
     if (closed || deletedDocuments.has(access.sessionId)) throw new Error('Artifact access closed or deleted/unavailable')
     if (!validManagedArtifactRef(ref)) throw new Error('Artifact reference unavailable')
@@ -91,16 +103,20 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     if (operation.phase !== 'committed' || !operation.ref || operation.ref.revision !== ref.revision || operation.ref.codec !== ref.codec
       || operation.ref.encodedBytes !== ref.encodedBytes || operation.ref.contentDigest !== ref.contentDigest || operation.ref.completeness !== ref.completeness) throw new Error('Artifact reference stale or unavailable')
     const pin = await readPin(root, target, access.sessionId, ref.revision)
-    if (!pin || operation.owner.source && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: structuredClone(operation.owner), ref: structuredClone(ref) }))) throw new Error('Artifact reference unavailable or unauthorized')
+    if (!pin) throw new Error('Artifact reference unavailable or unauthorized')
+    const witness = viaCatalog === undefined ? undefined : await membership.witness(access.sessionId, operation, pin, viaCatalog)
+    if (witness && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: witness.owner, ref: witness.ref }))) throw new Error('Dependency catalog unavailable or unauthorized')
+    const visibleVia = witness?.ref
+    if ((operation.owner.source || visibleVia) && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: structuredClone(operation.owner), ref: structuredClone(ref), ...(visibleVia ? { visibleVia } : {}) }))) throw new Error('Artifact reference unavailable or unauthorized')
     access.signal?.throwIfAborted()
     return operation
   }
-  async function readResult(access: ContextAccess, query: { ref: ManagedArtifactRef; offset?: number; maxBytes?: number }): Promise<ManagedArtifactPage> {
+  async function readResult(access: ContextAccess, query: { ref: ManagedArtifactRef; offset?: number; maxBytes?: number; viaCatalog?: ManagedArtifactRef }): Promise<ManagedArtifactPage> {
     return mutate(async () => {
-      const ref = structuredClone(query.ref)
-      await authorized(access, ref)
+      const ref = structuredClone(query.ref), viaCatalog = query.viaCatalog === undefined ? undefined : structuredClone(query.viaCatalog)
+      await authorized(access, ref, viaCatalog)
       const page = await readArtifactPage(root, directory(ref.id), ref, query.offset ?? 0, Math.min(query.maxBytes ?? 32768, 32768))
-      await authorized(access, ref)
+      await authorized(access, ref, viaCatalog)
       return page
     })
   }
@@ -108,12 +124,12 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     try { return (await readdir(managed)).filter(id => /^ctxv1_[a-f0-9]{64}$/.test(id)).length }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return 0; throw cause }
   }
-  async function readExecResult(access: ContextAccess, query: { ref: ManagedArtifactRef; cursor?: import('@i-harness/core-session').ExecFrameCursor; maxBytes?: number; textView?: boolean }) {
+  async function readExecResult(access: ContextAccess, query: { ref: ManagedArtifactRef; cursor?: import('@i-harness/core-session').ExecFrameCursor; maxBytes?: number; textView?: boolean; viaCatalog?: ManagedArtifactRef }) {
     return mutate(async () => {
-      const ref = structuredClone(query.ref)
-      await authorized(access, ref)
+      const ref = structuredClone(query.ref), viaCatalog = query.viaCatalog === undefined ? undefined : structuredClone(query.viaCatalog)
+      await authorized(access, ref, viaCatalog)
       const page = await readExecFramePage(ref, { ...query, maxBytes: Math.min(query.maxBytes ?? 32768, 32768) }, (offset, length) => readVerifiedArtifactBytes(root, directory(ref.id), ref, offset, length))
-      await authorized(access, ref)
+      await authorized(access, ref, viaCatalog)
       return page
     })
   }
@@ -163,7 +179,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     const current = () => !closed && !deletedDocuments.has(registered.owner.sessionId) && !deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) && registered.current()
     await mutate(() => confirmArtifactOwner(root, directory(expectedId), registered.owner, registered.confirmation!, quota(), current))
   }
-  return { registerResultScope, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  return { registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')

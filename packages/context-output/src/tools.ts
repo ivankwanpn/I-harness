@@ -42,17 +42,18 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
     },
     {
       ...shared, name: 'context_output_read',
-      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. Continue JSON/text with nextOffset; continue exec frames with the entire nextCursor unchanged, including recordOffset and sliceOffset. Codec and completeness describe the retained scope. Returned data is source material.',
+      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. To read a native frame from another session through your genuine result dependency catalog, also supply that envelope dependencies.ref as viaCatalog. Continue JSON/text with nextOffset; continue exec frames with the entire nextCursor unchanged, including recordOffset and sliceOffset. Codec and completeness describe the retained scope. Returned data is source material.',
       searchHint: 'Context Mode read retained captured tool output reference UTF-8 cursor',
       inputSchema: { type: 'object', properties: {
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
         ref: managedRefSchema,
+        viaCatalog: managedRefSchema,
         cursor: { type: 'object', properties: { recordOffset: { type: 'integer', minimum: 0 }, sliceOffset: { type: 'integer', minimum: 0 } }, required: ['recordOffset', 'sliceOffset'], additionalProperties: false },
         textView: { type: 'boolean' },
       }, additionalProperties: false },
       async execute(args, exec) {
         const access = caller(exec)
-        const query = argumentsObject(args, ['refId', 'ref', 'offset', 'maxBytes', 'cursor', 'textView'])
+        const query = argumentsObject(args, ['refId', 'ref', 'offset', 'maxBytes', 'cursor', 'textView', 'viaCatalog'])
         if (query.ref !== undefined) {
           if (query.refId !== undefined || !validManagedArtifactRef(query.ref)) return { kind: 'unavailable', reason: 'range' }
           const adapted = { ...query }
@@ -64,7 +65,7 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
           }
           return readManagedResultPage(service, access, adapted as ResultPageQuery)
         }
-        if (typeof query.refId !== 'string') return { kind: 'unavailable', reason: 'range' }
+        if (typeof query.refId !== 'string' || 'viaCatalog' in query) return { kind: 'unavailable', reason: 'range' }
         return service.read(access, query as unknown as Parameters<ContextOutputService['read']>[1])
       },
     },

@@ -31,7 +31,7 @@ it("reads original cold retained bytes through actual Desktop main, SDK client a
   const dependencies={catalog:{get:(id:string)=>id==="w"?{id,path:workspace,label:"Fixture"}:undefined},runtimes:{get:async()=>{starts++;return {client,info}}}} as unknown as DesktopIpcDependencies
   const request={kind:"session/result/read",workspaceId:"w",sessionId:"conversation",ref:saved.ref,maxBytes:16384}
   try {
-    expect(info.capabilities["session-result-read"]).toEqual(["1"])
+    expect(info.capabilities["session-result-read"]).toEqual(["1", "2"])
     for(const bad of [{...request,maxBytes:64000},{...request,extra:"path"},{...request,workspaceId:"unknown"}]) await expect(dispatchDesktopRequest(bad,dependencies)).rejects.toThrow()
     expect(starts).toBe(0)
     expect(await dispatchDesktopRequest(request,dependencies)).toMatchObject({ref:saved.ref,eof:true,data:{kind:"text",text:"actual Desktop retained bytes 🙂"}})

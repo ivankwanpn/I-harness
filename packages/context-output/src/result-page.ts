@@ -4,8 +4,8 @@ import type { ManagedArtifactPage } from './artifact/types.ts'
 import type { ExecFramePage } from './artifact/exec-reader.ts'
 
 export type ResultPageQuery =
-  | { ref: ManagedArtifactRef; offset?: number; maxBytes?: number; cursor?: never; textView?: never }
-  | { ref: ManagedArtifactRef; cursor?: ExecFrameCursor; maxBytes?: number; textView?: boolean; offset?: never }
+  | { ref: ManagedArtifactRef; offset?: number; maxBytes?: number; cursor?: never; textView?: never; viaCatalog?: never }
+  | { ref: ManagedArtifactRef; cursor?: ExecFrameCursor; maxBytes?: number; textView?: boolean; offset?: never; viaCatalog?: ManagedArtifactRef }
 export type ResultPageResult = ManagedArtifactPage | ExecFramePage | {
   kind: 'unavailable'; reason: 'not-found' | 'stale' | 'unauthorized' | 'corrupt' | 'range' | 'budget' | 'unavailable'
 }
@@ -15,7 +15,8 @@ const nonnegative = (value: unknown): value is number => Number.isSafeInteger(va
 export function parseResultPageQuery(input: unknown): ResultPageQuery | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return
   const value = input as Record<string, unknown>
-  if (Object.keys(value).some(key => !['ref', 'offset', 'cursor', 'maxBytes', 'textView'].includes(key)) || !validManagedArtifactRef(value.ref)) return
+  if (Object.keys(value).some(key => !['ref', 'offset', 'cursor', 'maxBytes', 'textView', 'viaCatalog'].includes(key)) || !validManagedArtifactRef(value.ref)) return
+  if ('viaCatalog' in value && (!validManagedArtifactRef(value.viaCatalog) || value.viaCatalog.codec !== 'json-utf8-v1' || value.ref.codec !== 'exec-frames-v1' || value.viaCatalog.id === value.ref.id)) return
   if (value.maxBytes !== undefined && (!nonnegative(value.maxBytes) || value.maxBytes < 1 || value.maxBytes > 32768)) return
   if (value.ref.codec === 'exec-frames-v1') {
     if ('offset' in value || value.textView !== undefined && typeof value.textView !== 'boolean') return

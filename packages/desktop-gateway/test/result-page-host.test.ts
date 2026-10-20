@@ -25,7 +25,7 @@ it('wires the actual fresh Gateway host to its original durable artifact owner',
   const call = async (method: string, params = {}) => { const current = ++id; await host.handleLine(encodeFrame(makeRequest(current, method, params))); return frames.find(frame => 'id' in frame && frame.id === current) as any }
   try {
     const before = await readFile(join(sessionDir, 'conversation.jsonl'))
-    expect(await call('initialize')).toMatchObject({ result: { capabilities: { 'session-result-read': ['1'] } } })
+    expect(await call('initialize')).toMatchObject({ result: { capabilities: { 'session-result-read': ['1', '2'] } } })
     expect(await call('session/result/read', { sessionId: 'conversation', ref: saved.ref })).toMatchObject({ result: { ref: saved.ref, eof: true, data: { text: 'actual host retained bytes' } } })
     expect(await call('session/result/read', { sessionId: 'hidden', ref: saved.ref })).toMatchObject({ result: { kind: 'unavailable' } })
     expect(await call('session/result/read', { sessionId: 'conversation', ref: saved.ref, maxBytes: 64000 })).toMatchObject({ error: { code: -32602 } })

@@ -125,6 +125,8 @@ const HISTORY_LIMIT_CAP = 1000
 export interface SdkServerOptions {
   /** Visibility is supplied by the host; never falls back to SessionService. */
   readResultPage?: ResultPageHost
+  /** Explicit host opt-in: original pin-owned dependency catalog witnesses. */
+  supportsResultDependencyMembership?: boolean
   /** Server → client writer (responses AND notifications both flow here when
    * provided; see also onNotify for notifications only). */
   onWrite?: (message: RpcMessage) => void
@@ -417,7 +419,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "prompt-context": ["1"],
             "prompt-images": ["1"],
             "session-context": ["1"],
-            ...(opts.readResultPage ? { 'session-result-read': ['1'] } : {}),
+            ...(opts.readResultPage ? { 'session-result-read': opts.supportsResultDependencyMembership ? ['1', '2'] : ['1'] } : {}),
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
@@ -793,7 +795,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try { return makeSuccess(id, await service.contextState(p.sessionId)) }
         catch (error) { return hostMethodFailure(id, "session/context", error) }
       }
-      case 'session/result/read': return dispatchResultPage(id, params, opts.readResultPage)
+      case 'session/result/read': return dispatchResultPage(id, params, opts.readResultPage, opts.supportsResultDependencyMembership)
       case "session/prompt": {
         const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {

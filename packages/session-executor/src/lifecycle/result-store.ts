@@ -77,12 +77,12 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         authorizeResult: async (access, metadata) => {
           try {
             if (metadata.workspaceId !== location.workspaceKey || !metadata.owner.source || (await sourceFor(access.sessionId)).sourceId !== metadata.owner.source.sourceId) return false
-            if (access.sessionId === metadata.owner.sessionId) return true
+            if (!metadata.visibleVia && access.sessionId === metadata.owner.sessionId) return true
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
             const snapshot = (await coordinator.snapshot(access.sessionId)).session, cuts = rewindCuts(snapshot)
             return snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
-              && managedResultRefs(event).some(ref => ref.id === metadata.ref.id && ref.revision === metadata.ref.revision))
+              && managedResultRefs(event).some(ref => ref.id === (metadata.visibleVia ?? metadata.ref).id && ref.revision === (metadata.visibleVia ?? metadata.ref).revision))
           } catch { return false }
         } })
       const entry: StoreEntry = { service, registrations, users: 0, sourceFor,

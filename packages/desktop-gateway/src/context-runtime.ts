@@ -38,7 +38,8 @@ export async function createNativeContextRuntime(options:{
     authorizeResult:async(access,metadata)=>{
       try{
         if(metadata.workspaceId!==workspaceKey||!metadata.owner.source||(await sourceFor(access.sessionId)).sourceId!==metadata.owner.source.sourceId)return false
-        return access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>visible.id===metadata.ref.id&&visible.revision===metadata.ref.revision))
+        const visibleRef=metadata.visibleVia??metadata.ref
+        return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>visible.id===visibleRef.id&&visible.revision===visibleRef.revision))
       }catch{return false}
     },
     authorize:async(access,ref)=>{
