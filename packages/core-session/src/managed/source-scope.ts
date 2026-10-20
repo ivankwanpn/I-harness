@@ -19,6 +19,8 @@ export function settlementSourceSessionId(view: SessionView, source: object): st
 export function delegateFactSettlementSource<T extends object>(parent: object, source: T): T {
   const scope = scopes.get(parent)
   if (scope) scopes.set(source, scope)
+  const memoryView = memoryScopes.get(parent)
+  if (memoryView) memoryScopes.set(source, memoryView)
   return source
 }
 export function isManagedSettlementSource(view: SessionView, source: object): boolean {

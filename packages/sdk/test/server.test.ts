@@ -399,7 +399,14 @@ describe("createSdkServer", () => {
         .map((n) => (n.params as { event: SessionEvent }).event)
       const failed = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
         e.type === "tool/result" && e.name === "skill_get")
-      expect(String((failed?.output as { error?: string } | undefined)?.error)).toContain("SKILL_NOT_FOUND")
+      expect(failed?.envelope).toEqual({
+        version: 1, execution: { outcome: 'failed', dispatch: 'dispatched' }, preview: '', media: [],
+        retention: { kind: 'inline', value: { error: "[SKILL_NOT_FOUND] unknown skill 'missing'. Remedy: run skill_search to discover available skills.", code: 'TOOL_FAILED' }, encodedBytes: 130 },
+      })
+      expect(events.filter(event => event.type === 'tool/result' && event.name === 'skill_get')).toHaveLength(1)
+      expect(events.filter(event => event.type === 'tool/call' && event.name === 'skill_get')).toHaveLength(1)
+      expect(events.some(event => event.type === 'assistant/message' && event.text === 'saw the failure')).toBe(true)
+      expect(service.queueState('s2')).toEqual({ running: false, queued: 0 })
       await server.close()
     } finally {
       await service.close()
