@@ -1,5 +1,7 @@
 # R4A — Retire inactive registry spill and narrow private package surfaces
 
+**Status: bounded unit accepted through8943a443 on2026-10-21.** See [root acceptance](../../research/2026-10-21-context-r4a-surface-acceptance.md). One nonblocking native-preview test oracle improvement is carried to A6; whole R4A/A6 remains open. The following is the original approved implementation contract, not a request to repeat it.
+
 Approved for bounded implementation after structural acceptance c1b1a8d7dfcb2bd47fb0413b1a022a18d8d15eeb and the complete amended preflight/source rebase. See [preflight and amendment closure](../../research/context-r4a-surface-preflight-20261021/preflight-review.md) and [accepted-source rebase](../../research/context-r4a-surface-preflight-20261021/accepted-source-rebase.md). Original R4A requires new shipping results to use mandatory owned retention and retire the old optional registry spill path. The unchanged normal graph still reports six unused package exports. This unit addresses their actual ownership/consumer state, never a fake consumer, new audit exemption or baseline reseed.
 
 User authorizes continuous root-led ContextEngine work with GPT6.1Sol writers/reviewers, one product writer and no recursive agents. Product0.1.13-rc.1 / Session10 stay unchanged. No release, live provider/profile/installed-app actions or unrelated broad R5 refactoring.
