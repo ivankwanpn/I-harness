@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite"
 
 export const INDEX_DB_APPLICATION_ID = 0x49485155 // "IHQU"
-export const INDEX_DB_SCHEMA_VERSION = 1
+export const INDEX_DB_SCHEMA_VERSION = 2
 
 const SCHEMA_DDL = `
   CREATE TABLE IF NOT EXISTS indexed_sessions (

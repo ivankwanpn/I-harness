@@ -36,7 +36,7 @@ function openIndexDatabase(path: string): DatabaseSync {
     if (version > INDEX_DB_SCHEMA_VERSION) {
       throw foreignIndex(path, `schema version ${version} is newer than this build (${INDEX_DB_SCHEMA_VERSION})`)
     }
-    // version < 1 with correct identity → derived/writable → reset rebuild
+    // Older owned schema/projection → derived/writable → transactional rebuild
     runSchemaSetup(db)
     return db
   } catch (err) {

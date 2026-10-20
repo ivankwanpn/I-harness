@@ -1,7 +1,8 @@
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { imageDescriptor, imageSummaryDescriptor } from "../images.ts"
 import type { ImageInput } from "../images.ts"
-import { resultText } from '../results/projection.ts'
+import { stringifyJsonData } from '../serialization/json-data.ts'
+import type { ResultEnvelope } from '../results/types.ts'
 
 // Canonical event→searchable-text normalizer for the session-query FTS index
 // (M10b). Control events and assistant/chunk (streaming noise duplicating the
@@ -17,9 +18,9 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "code/call":
       return `${ev.name} ${codeSearchText(ev.args)}`
     case "code/result":
-      return codeSearchText(ev.output)
+      return ev.envelope ? retainedSearchText(ev.envelope) : codeSearchText(ev.output)
     case "code/output": {
-      if (ev.envelope) return ev.envelope.retention.kind === 'inline' ? resultText(ev.envelope) : ev.envelope.preview;
+      if (ev.envelope) return retainedSearchText(ev.envelope)
       if (typeof ev.content === "string") return ev.content
       if (ev.content && typeof ev.content === "object" && !Array.isArray(ev.content)) {
         const item = ev.content as { type?: unknown; text?: unknown }
@@ -28,8 +29,9 @@ export function deriveSearchText(ev: SessionEvent): string {
       return ""
     }
     case "tool/result": {
-      // Images never enter the FTS index: strip `output.images` before
-      // stringifying so base64 payloads stay out of search text.
+      if (ev.envelope) return retainedSearchText(ev.envelope)
+      // Historical raw results exclude image transport bytes and retain the
+      // original image descriptor. New inline fields remain ordinary data.
       const raw = ev.output
       if (raw === undefined) return ""
       if (typeof raw !== "object" || raw === null) return JSON.stringify(raw)
@@ -54,10 +56,18 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "subagent/start":
       return `${ev.description} ${ev.agentPath}`
     case "subagent/end":
-      return ev.resultText ?? ev.error ?? ""
+      return ev.envelope ? retainedSearchText(ev.envelope) : ev.resultText ?? ev.error ?? ""
     default:
       return ""
   }
+}
+
+/** Bounded result facts only: typed media, refs and dependencies are separate
+ * metadata. Artifact bodies are never read implicitly by the search index. */
+function retainedSearchText(envelope: ResultEnvelope): string {
+  return envelope.retention.kind === 'inline'
+    ? stringifyJsonData(envelope.retention.value) ?? 'null'
+    : envelope.preview
 }
 
 /** Code Mode may carry nested MCP media blocks, not only a top-level images

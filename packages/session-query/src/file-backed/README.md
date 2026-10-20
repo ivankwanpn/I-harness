@@ -31,6 +31,23 @@ stale results. Search hit times remain index rebuild times from `Date.now()`.
 allowing hosts and tests to release Windows file handles. Each query has exactly
 one database and one reconciliation chain.
 
+Search indexes bounded result facts. For format10 retained results in
+`tool/result`, `code/result`, `code/output`, and `subagent/end`, inline retention
+indexes the original owned JSON value, including ordinary fields named `images`,
+`error`, or `ref`. Artifact and unavailable retention index only the stored
+preview. Separate typed media, immutable artifact reference metadata, and
+dependency catalogs are excluded. Search never resolves or reads artifact bodies,
+so a missing match does not establish that the complete result lacks the text.
+Historical raw result events keep their original media-filtering behavior.
+
+Owned derived schema/projection version2 replaces version1's result projection.
+The existing application-id check and transactional schema setup rebuild an older
+owned index on open, even when the source revision and fingerprint are unchanged.
+The next reconciliation repopulates it from JSONL; subsequent unchanged searches
+use the normal skip path. Foreign databases and future derived versions are
+refused. This does not migrate Session format10, source JSONL, or the legacy
+persistence database used by `createSessionQuery`.
+
 The warning module installs its process filter as an import side effect. Both the
 facade and `database.ts` import it before the first runtime `node:sqlite` import;
 the package entry preserves its own leading warning import. SQLite imports in

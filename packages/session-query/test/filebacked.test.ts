@@ -200,7 +200,7 @@ describe("file-backed session query (reconcile-on-search)", () => {
         const { application_id: app } = check.prepare("PRAGMA application_id").get() as { application_id: number }
         const verRow = check.prepare("PRAGMA user_version").get() as { user_version: number }
         expect(app).toBe(0x49485155)
-        expect(verRow.user_version).toBe(1)
+        expect(verRow.user_version).toBe(2)
         const tables = (check.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' OR type = 'virtual'").all() as { name: string }[]).map((t) => t.name)
         for (const t of ["indexed_sessions", "indexed_docs", "lineage"]) expect(tables).toContain(t)
       } finally {
