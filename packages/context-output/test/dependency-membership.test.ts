@@ -2,8 +2,10 @@ import { expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import type { ResultDependency } from '@i-harness/core-session'
-const evidence = resolve(import.meta.dirname, '../../../.tmp/context-r4a-native-dependencies-20261021-implementation')
+const evidence = resolve(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? resolve(import.meta.dirname, '../../../.tmp/context-r4a-native-dependencies-20261021-implementation'))
+if (existsSync(resolve(evidence, 'evidence-seal.json'))) throw new Error('Native dependency evidence root is sealed; set IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT to a fresh task-owned root')
 await mkdir(evidence, { recursive: true }); process.env.IH_CONFIG_DIR = resolve(evidence, 'config')
 const { createContextOutputService, createContextOutputTools } = await import('../src/index.ts')
 const sha = (value: string) => createHash('sha256').update(value).digest('hex')
