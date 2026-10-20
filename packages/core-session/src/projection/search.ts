@@ -56,7 +56,11 @@ export function deriveSearchText(ev: SessionEvent): string {
     case "subagent/start":
       return `${ev.description} ${ev.agentPath}`
     case "subagent/end":
-      return ev.envelope ? retainedSearchText(ev.envelope) : ev.resultText ?? ev.error ?? ""
+      // Current child facts own one aggregate preview in these fields; their
+      // retained descriptor deliberately clears its separate preview.
+      return ev.envelope
+        ? [ev.resultText, ev.error].filter(text => typeof text === 'string').join('\n')
+        : ev.resultText ?? ev.error ?? ""
     default:
       return ""
   }

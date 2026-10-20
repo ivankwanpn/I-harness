@@ -22,7 +22,7 @@ function facts(envelope: ResultEnvelope): SessionEvent[] {
     { type: 'code/call', seq: 3, cellId: 'cell', callId: 'code', name: 'read', args: {} },
     { type: 'code/result', seq: 4, cellId: 'cell', callId: 'code', name: 'read', envelope },
     { type: 'code/output', seq: 5, cellId: 'cell', envelope },
-    { type: 'subagent/end', seq: 6, version: 1, taskId: 'child', outcome: 'completed', resultRevision: 'original', resultText: 'LEGACY_SHADOW', envelope },
+    { type: 'subagent/end', seq: 6, version: 1, taskId: 'child', outcome: 'completed', resultRevision: 'original', resultText: 'CHILD_RESULT_MARKER', error: 'CHILD_ERROR_MARKER', envelope: { ...envelope, preview: '' } },
     { type: 'job/status', seq: 7, version: 1, job: { jobId: 'j', kind: 'subagent', label: 'job', status: 'completed', outputAvailable: true, result: { version: 1, kind: 'retained', revision: 'original', envelope } } },
   ]
 }
@@ -38,7 +38,7 @@ function fixture(bytes: Buffer) {
 }
 const expected = [
   { sessionId: 's', seq: 2, eventType: 'tool/result' }, { sessionId: 's', seq: 4, eventType: 'code/result' },
-  { sessionId: 's', seq: 5, eventType: 'code/output' }, { sessionId: 's', seq: 6, eventType: 'subagent/end' },
+  { sessionId: 's', seq: 5, eventType: 'code/output' },
 ]
 
 describe('retained results through actual framed JSONL and file-backed FTS', () => {
@@ -55,9 +55,12 @@ describe('retained results through actual framed JSONL and file-backed FTS', () 
         expect(hits.map(({ sessionId, seq, eventType }) => ({ sessionId, seq, eventType })).sort((a, b) => a.seq - b.seq)).toEqual(expected)
         for (const hit of hits) expect(hit.snippet).toContain(marker)
       }
+      for (const marker of ['CHILD_RESULT_MARKER', 'CHILD_ERROR_MARKER']) expect(await query.search(marker)).toEqual([
+        expect.objectContaining({ sessionId: 's', seq: 6, eventType: 'subagent/end', snippet: expect.stringContaining(marker) }),
+      ])
       // A valid immutable descriptor has no body-read authority. Its body need
       // not be present for search; only the recorded preview is searchable.
-      for (const hidden of [ref.id, ref.revision, ref.contentDigest, ref.codec, 'source-limited', 'artifact-set', 'TYPED_MEDIA_SECRET', 'aGVsbG8', 'ONLY_IN_ARTIFACT_BODY', 'LEGACY_SHADOW']) expect(await query.search(hidden)).toEqual([])
+      for (const hidden of [ref.id, ref.revision, ref.contentDigest, ref.codec, 'source-limited', 'artifact-set', 'TYPED_MEDIA_SECRET', 'aGVsbG8', 'ONLY_IN_ARTIFACT_BODY']) expect(await query.search(hidden)).toEqual([])
       expect(readFileSync(store.file)).toEqual(bytes)
     } finally { store.cleanup() }
   })
@@ -77,11 +80,13 @@ describe('retained results through actual framed JSONL and file-backed FTS', () 
       old.close()
       const outcomes: string[] = []
       const reopened = createFileBackedSessionQuery({ storeRoot: store.dir, dbPath: store.dbPath, onInspect: (_id, outcome) => outcomes.push(outcome) })
-      expect((await reopened.search('RETAINED_VISIBLE_MARKER')).map(hit => hit.seq).sort()).toEqual([2, 4, 5, 6])
+      expect((await reopened.search('RETAINED_VISIBLE_MARKER')).map(hit => hit.seq).sort()).toEqual([2, 4, 5])
       expect(outcomes).toEqual(['indexed'])
       outcomes.length = 0
-      expect(await reopened.search('RETAINED_VISIBLE_MARKER')).toHaveLength(4)
+      expect(await reopened.search('RETAINED_VISIBLE_MARKER')).toHaveLength(3)
       expect(outcomes).toEqual(['skip'])
+      expect((await reopened.search('CHILD_RESULT_MARKER')).map(hit => hit.seq)).toEqual([6])
+      expect((await reopened.search('CHILD_ERROR_MARKER')).map(hit => hit.seq)).toEqual([6])
       closeSessionQueries()
       const check = new DatabaseSync(store.dbPath, { readOnly: true })
       try {

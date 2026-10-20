@@ -32,13 +32,21 @@ allowing hosts and tests to release Windows file handles. Each query has exactly
 one database and one reconciliation chain.
 
 Search indexes bounded result facts. For format10 retained results in
-`tool/result`, `code/result`, `code/output`, and `subagent/end`, inline retention
+`tool/result`, `code/result`, and `code/output`, inline retention
 indexes the original owned JSON value, including ordinary fields named `images`,
 `error`, or `ref`. Artifact and unavailable retention index only the stored
 preview. Separate typed media, immutable artifact reference metadata, and
 dependency catalogs are excluded. Search never resolves or reads artifact bodies,
 so a missing match does not establish that the complete result lacks the text.
 Historical raw result events keep their original media-filtering behavior.
+
+Current `subagent/end` facts instead own one bounded aggregate preview in the
+separate `resultText` and `error` fields. Search joins both present strings with
+a newline, independent of outcome and retention state; absent fields contribute
+no text. The child result owner deliberately clears the descriptor preview to
+avoid duplicating that aggregate. Search does not index the child's inline body
+or descriptor preview. Historical child facts keep their original first-present
+result/error fallback.
 
 Owned derived schema/projection version2 replaces version1's result projection.
 The existing application-id check and transactional schema setup rebuild an older

@@ -12,16 +12,15 @@ const inline: ResultEnvelope = {
 const artifact: ResultEnvelope = { ...inline, execution: { outcome: 'failed', dispatch: 'dispatched' }, preview: 'RETAINED_VISIBLE_MARKER', retention: { kind: 'artifact', ref } }
 const unavailable: ResultEnvelope = { ...inline, preview: 'UNAVAILABLE_VISIBLE_MARKER', retention: { kind: 'unavailable', reason: 'quota', observedEncodedBytes: 1000000 } }
 
-function result(type: 'tool/result' | 'code/result' | 'code/output' | 'subagent/end', envelope: ResultEnvelope): SessionEvent {
+function result(type: 'tool/result' | 'code/result' | 'code/output', envelope: ResultEnvelope): SessionEvent {
   switch (type) {
     case 'tool/result': return { type, callId: 'tool', name: 'read', envelope }
     case 'code/result': return { type, cellId: 'cell', callId: 'code', name: 'read', envelope }
     case 'code/output': return { type, cellId: 'cell', envelope }
-    case 'subagent/end': return { type, version: 1, taskId: 'child', outcome: 'completed', resultRevision: 'original', resultText: 'LEGACY_SHADOW', envelope }
   }
 }
 
-describe.each(['tool/result', 'code/result', 'code/output', 'subagent/end'] as const)('retained %s search', type => {
+describe.each(['tool/result', 'code/result', 'code/output'] as const)('retained %s search', type => {
   it.each([
     ['inline', inline, '{"images":"ordinary images data","error":"ordinary error data","ref":"ordinary ref data","nested":{"type":"image","dataBase64":"ordinary nested data"}}'],
     ['artifact', artifact, 'RETAINED_VISIBLE_MARKER'],
@@ -36,12 +35,31 @@ describe.each(['tool/result', 'code/result', 'code/output', 'subagent/end'] as c
   })
 })
 
+it.each([['inline', inline], ['artifact', artifact], ['unavailable', unavailable]] as const)('indexes both canonical child fields for %s retention instead of descriptor content', (_kind, envelope) => {
+  const session = createSession()
+  append(session, { type: 'subagent/end', version: 1, taskId: 'child', outcome: 'completed', resultRevision: 'original', resultText: 'CHILD_RESULT_MARKER', error: 'CHILD_ERROR_MARKER', envelope })
+  expect(deriveSearchText(fromJSONL(toJSONL(session)).events[0]!)).toBe('CHILD_RESULT_MARKER\nCHILD_ERROR_MARKER')
+})
+
+it.each([
+  ['only result', 'CHILD_RESULT_MARKER', undefined, 'CHILD_RESULT_MARKER'],
+  ['only error', undefined, 'CHILD_ERROR_MARKER', 'CHILD_ERROR_MARKER'],
+  ['neither', undefined, undefined, ''],
+  ['empty result', '', 'CHILD_ERROR_MARKER', '\nCHILD_ERROR_MARKER'],
+  ['both empty', '', '', '\n'],
+] as const)('preserves present/absent child preview fields (%s)', (_case, resultText, error, expected) => {
+  const session = createSession()
+  append(session, { type: 'subagent/end', version: 1, taskId: 'child', outcome: 'error', resultRevision: 'original', envelope: artifact,
+    ...(resultText !== undefined ? { resultText } : {}), ...(error !== undefined ? { error } : {}) })
+  expect(deriveSearchText(fromJSONL(toJSONL(session)).events[0]!)).toBe(expected)
+})
+
 it('keeps historical raw result filtering and unrelated control event policy', () => {
   const session = createSession()
   append(session, { type: 'tool/result', callId: 'legacy', name: 'read', output: { text: 'legacy text', images: media } })
   append(session, { type: 'code/result', cellId: 'cell', callId: 'legacy', name: 'read', output: { text: 'legacy code', images: media, nested: { type: 'image', data: 'RAW_SECRET' } } })
   append(session, { type: 'code/output', cellId: 'cell', content: { type: 'text', text: 'legacy output' } })
-  append(session, { type: 'subagent/end', version: 1, taskId: 'legacy', outcome: 'completed', resultText: 'legacy child' })
+  append(session, { type: 'subagent/end', version: 1, taskId: 'legacy', outcome: 'completed', resultText: 'legacy child', error: 'legacy fallback' })
   append(session, { type: 'job/status', version: 1, job: { jobId: 'j', kind: 'subagent', label: 'job', status: 'completed', outputAvailable: true, result: { version: 1, kind: 'retained', revision: 'original', envelope: artifact } } })
   expect(deriveSearchText(session.events[0]!)).toBe('{"text":"legacy text"}\nimage: TYPED_MEDIA_SECRET ?x? 6B base64:aGVsbG8=')
   expect(deriveSearchText(session.events[1]!)).toBe('{"text":"legacy code"}')
