@@ -80,3 +80,5 @@ button.tool-result-image-button { cursor: zoom-in; }
 }
 
 .tool-summary-status[data-state="unknown"] { color: var(--ih-muted); }
+.recorded-result-page { display: flex; flex-direction: column; gap: 8px; min-width: 0; padding-top: 6px; }
+.recorded-result-page > section, .recorded-result-frame { display: flex; flex-direction: column; gap: 8px; min-width: 0; }

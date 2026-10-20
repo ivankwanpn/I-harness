@@ -4,6 +4,7 @@ import { elementScroll, useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { activityLabel, outcomeLabel, type TimelineRow } from "./project.ts"
+import type { RecordedResultReader } from "./result-pages.ts"
 import { ToolActivity } from "./ToolActivity.tsx"
 import { ActivityGroup } from "./ActivityGroup.tsx"
 import { groupActivities } from "./activity-groups.ts"
@@ -33,7 +34,7 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
   }}>{text}</Markdown>
 })
 
-function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
+function RowView({ row, open, toggle, page, setPage, navigation, onPreview, resultReader }: { resultReader?: RecordedResultReader; row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
   const toolText = useToolText()
   if (row.kind === "work-stage") {
@@ -42,7 +43,7 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
     const note = row.hasErrors ? toolText("部分活動未完成","Some activities were not completed") : undefined
     return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta" aria-hidden="true">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}</span><ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button>
   }
-  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
+  if (row.kind === "activity-group") return <ActivityGroup resultReader={resultReader} row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
       {row.role === "assistant" ? <><MarkdownMessage text={row.text} /><MessageActions text={row.text}/></> : row.text}
@@ -60,15 +61,15 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
   }
   if (row.kind === "other") {
     const expanded = open.get(row.id) ?? false
-    if (row.codeActivity) return <RecordedCodeActivity event={row.codeActivity} expanded={expanded} onToggle={() => toggle(row.id)} onPreview={onPreview} />
+    if (row.codeActivity) return <RecordedCodeActivity resultReader={resultReader} event={row.codeActivity} expanded={expanded} onToggle={() => toggle(row.id)} onPreview={onPreview} />
     return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{row.title ?? activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{row.title ?? activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} args={row.args} output={row.output} envelope={row.envelope} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
+  return <ToolActivity resultReader={resultReader} name={row.name} args={row.args} output={row.output} envelope={row.envelope} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export interface TimelineProps { rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
-export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible }: TimelineProps) {
+export interface TimelineProps { resultReader?: RecordedResultReader; rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
+export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible, resultReader }: TimelineProps) {
   const t = useText()
   const [preview, setPreview] = useState<{ src: string; name: string }>()
   const grouped = useMemo(() => groupActivities(rows), [rows])
@@ -243,7 +244,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
               style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--accent, #5073c8)", outlineOffset: "-2px" } : {}) }}
             >
               {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
-              <RowView row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
+              <RowView resultReader={resultReader} row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
                 pauseFollowing()
                 setPages((previous) => {
                 const next = new Map(previous); next.set(row.id, page)

@@ -8,6 +8,7 @@ import type { ProjectCatalog } from "./projects.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
 import { contextRequestParams } from "./context-requests.ts"
+import { dispatchResultReadRequest } from "./result-pages.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
@@ -209,6 +210,8 @@ export async function dispatchDesktopRequest(
   }
 
   switch (value.kind as DesktopRequest["kind"]) {
+    case "session/result/read":
+      return dispatchResultReadRequest(value, workspaceId => runtimeForKnownWorkspace(workspaceId, dependencies))
     case "desktop/context/search":
     case "desktop/context/read": {
       const selection = { workspaceId: requireNonEmpty(value.workspaceId, "workspaceId"), ...(value.sessionId === undefined ? {} : { sessionId: requireNonEmpty(value.sessionId, "sessionId") }), ...(value.projectId === undefined ? {} : { projectId: requireNonEmpty(value.projectId, "projectId") }) }

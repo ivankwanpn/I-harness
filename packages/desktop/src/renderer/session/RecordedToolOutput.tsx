@@ -14,6 +14,7 @@ import { CapturedValueBlock, RawRecordedData } from "./RawRecordedData.tsx"
 import { RecordedFileLink } from "./RecordedFileLink.tsx"
 import { formatRecordedValue, record, recordedDiffs, recordedUnifiedDiff, resultImages, safeRecordedUrl, stringField, toolFamily } from "./tool-presentation.ts"
 import { useToolText } from "./tool-text.ts"
+import type { RecordedResultReader } from "./result-pages.ts"
 import { RecordedResultEnvelope, RecordedImages } from "./RecordedResultEnvelope.tsx"
 export { RecordedImages } from "./RecordedResultEnvelope.tsx"
 import type { RecordedResultEnvelope as ResultEnvelope, ToolResultReference } from "./project.ts"
@@ -185,7 +186,7 @@ function RecordedToolBody({ name, args, output, resultReceived, navigation, resu
   </div>
 }
 
-export function RecordedToolOutput({ envelope, ...props }: Parameters<typeof RecordedToolBody>[0] & { envelope?: ResultEnvelope }) {
-  if (envelope) return <RecordedResultEnvelope envelope={envelope} onPreview={props.onPreview} renderInline={value => <RecordedToolBody {...props} output={value} retained />} />
+export function RecordedToolOutput({ envelope, resultReader, ...props }: Parameters<typeof RecordedToolBody>[0] & { envelope?: ResultEnvelope; resultReader?: RecordedResultReader }) {
+  if (envelope) return <RecordedResultEnvelope resultReader={resultReader} envelope={envelope} onPreview={props.onPreview} renderInline={value => <RecordedToolBody {...props} output={value} retained />} />
   return <RecordedToolBody {...props} />
 }

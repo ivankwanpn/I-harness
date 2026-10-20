@@ -75,6 +75,7 @@ import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_
 import { withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
 import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
+export { parseResultPageQuery } from '@i-harness/session-executor'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"

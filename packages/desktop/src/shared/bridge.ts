@@ -22,6 +22,7 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | import("./result-pages.ts").ResultReadRequest
   | import("./runtime-diagnostics.ts").RuntimeDiagnosticsRequest
   | import("./runtime-diagnostics.ts").GlobalRetryRequest
   | import("./runtime-diagnostics.ts").GlobalModelWaitRequest

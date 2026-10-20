@@ -1,3 +1,4 @@
+import type { RecordedResultReader } from "./result-pages.ts"
 import { useState } from "react"
 import { Braces, FileSearch, FileText, Globe, PencilLine, Plug, Terminal, Wrench } from "lucide-react"
 import { ToolSummaryRow } from "../vendor/zcode/ToolSummaryRow.tsx"
@@ -15,6 +16,7 @@ const titles: Record<ToolFamily, [string, string]> = { command: ["終端", "Term
 const statuses: Record<ToolState, [string, string]> = { unknown: ["結果未知", "Unknown result"], pending: ["尚未回報結果", "No result recorded yet"], dispatched: ["已派發，等待結果", "Dispatched, awaiting result"], received: ["已收到結果", "Result received"], running: ["執行中", "Running"], failed: ["執行失敗", "Failed"], cancelled: ["已取消", "Cancelled"], stopped: ["已停止", "Stopped"], interrupted: ["已中斷", "Interrupted"] }
 
 export interface ToolActivityProps {
+  resultReader?: RecordedResultReader
   name: string
   args?: unknown
   envelope?: RecordedResultEnvelope
@@ -32,7 +34,7 @@ export interface ToolActivityProps {
 }
 
 /** Read-only presentation of captured calls. Opening a card never runs a tool. */
-export function ToolActivity({ name, args, output, envelope, resultReceived, isError, dispatched, cellId, parentCallId, resultRefs, expanded: controlled, onToggle, navigation, onPreview }: ToolActivityProps) {
+export function ToolActivity({ name, args, output, envelope, resultReceived, isError, dispatched, cellId, parentCallId, resultRefs, expanded: controlled, onToggle, navigation, onPreview, resultReader }: ToolActivityProps) {
   const t = useText(), tt = useToolText()
   const [localExpanded, setExpanded] = useState(false)
   const expanded = controlled ?? localExpanded
@@ -46,7 +48,7 @@ export function ToolActivity({ name, args, output, envelope, resultReceived, isE
     </div>
     {expanded ? <div className="tool-expanded-content">
       {cellId || parentCallId ? <div className="tool-result-metadata">{cellId ? <span>{tt("執行單元", "Cell")} <code>{cellId}</code></span> : null}{parentCallId ? <span>{tt("父呼叫", "Parent call")} <code>{parentCallId}</code></span> : null}</div> : null}
-      <RecordedToolOutput name={name} args={args} output={output} envelope={envelope} resultReceived={resultReceived} navigation={navigation} resultRefs={resultRefs} onPreview={onPreview} />
+      <RecordedToolOutput resultReader={resultReader} name={name} args={args} output={output} envelope={envelope} resultReceived={resultReceived} navigation={navigation} resultRefs={resultRefs} onPreview={onPreview} />
     </div> : null}
   </div>
 }

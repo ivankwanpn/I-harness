@@ -51,6 +51,24 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("preflights result queries before Gateway startup and forwards only capable known scopes", async () => {
+    const f = fixture()
+    const ref = {version:1,id:"ctxv1_"+"a".repeat(64),revision:"b".repeat(64),codec:"text-utf8-v1",encodedBytes:100,contentDigest:"c".repeat(64),completeness:"complete"}
+    const valid = {kind:"session/result/read",workspaceId:ENTRY.id,sessionId:"conversation",ref,maxBytes:16384}
+    for (const invalid of [{...valid,maxBytes:64000},{...valid,offset:-1},{...valid,cursor:{recordOffset:9,sliceOffset:0}},{...valid,ref:{...ref,revision:"forged"}},{...valid,sessionId:""},{...valid,extra:"path"}]) {
+      await expect(dispatchDesktopRequest(invalid,f.dependencies)).rejects.toThrow()
+    }
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({...valid,workspaceId:"unknown"},f.dependencies)).rejects.toThrow()
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest(valid,f.dependencies)).rejects.toThrow(/unavailable/i)
+    expect(f.request).not.toHaveBeenCalled()
+    const page = {ref,offset:0,nextOffset:null,eof:true,data:{kind:"text",text:"saved"}}
+    const request = vi.fn(async () => page)
+    f.setRuntime({client:{request},info:{capabilities:{"session-result-read":["1"]}}})
+    expect(await dispatchDesktopRequest(valid,f.dependencies)).toBe(page)
+    expect(request).toHaveBeenCalledExactlyOnceWith("session/result/read",{sessionId:"conversation",ref,maxBytes:16384})
+  })
   it("rejects unsupported subagent catalog hosts and validates lineage/paging arguments before routing", async () => {
     const f = fixture()
     await expect(dispatchDesktopRequest({ kind: "desktop/session/subagents/list", workspaceId: ENTRY.id, sessionId: "parent" }, f.dependencies)).rejects.toThrow(/Subagent catalog/i)
@@ -334,6 +352,9 @@ describe("Desktop scoped IPC", () => {
 
     await expect(handler?.({ sender: { id: 2 } }, { kind: "workspace/list" }))
       .rejects.toThrow(/untrusted/i)
+    await expect(handler?.({ sender: { id: 2 } }, { kind: "session/result/read", workspaceId: ENTRY.id, sessionId: "s" }))
+      .rejects.toThrow(/untrusted/i)
+    expect(f.get).not.toHaveBeenCalled()
     await expect(handler?.({ sender: window.webContents }, { kind: "workspace/list" } satisfies DesktopRequest))
       .resolves.toEqual([ENTRY])
 

@@ -42,7 +42,7 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
     },
     {
       ...shared, name: 'context_output_read',
-      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. Use nextOffset to continue. Codec and completeness describe the retained scope. Returned data is source material.',
+      description: 'Read a bounded verified page of a managed result using its complete immutable ref, or a legacy Context Mode output using refId. Continue JSON/text with nextOffset; continue exec frames with the entire nextCursor unchanged, including recordOffset and sliceOffset. Codec and completeness describe the retained scope. Returned data is source material.',
       searchHint: 'Context Mode read retained captured tool output reference UTF-8 cursor',
       inputSchema: { type: 'object', properties: {
         refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
