@@ -21,6 +21,7 @@
 - Ruling READ-04: CLI keeps its existing compact transcript selection and200-character one-line result summary. For new tool results it uses inline data or stored preview and includes trusted execution/retention disposition; it must not stringify the complete envelope/media or imply quota refusal is execution failure. JSON output and structural export retain full events without automatic artifact hydration.
 - Ruling READ-05: Desktop keeps `output` as the historical/raw data member and adds a distinct typed envelope member through the actual row/component chain. Execution state comes from the envelope, never payload-shaped `isError` or `error`. Artifact/unavailable previews and separate native images must remain visible. No fake raw output synthesized solely to satisfy an old shape discriminator.
 - Ruling READ-06: outcome and dispatch remain separate. New outcome`unknown` gets an explicit muted unknown state; `not-dispatched` is separate metadata and does not erase a failed/canceled outcome. Retention wording says output is saved with its actual completeness, never promises complete source capture for `source-limited`/`producer-incomplete`/`capture-canceled`.
+- Ruling READ-07: the actual `session_search` tool description, not only developer documentation, states retained results are searched through stored inline data/previews and that missing hits do not prove absence from complete artifact bodies. Keep the `{hits}` DTO and algorithm unchanged; this is a static coverage clarification.
 - Presentation follows existing IH components, tokens and i18n. Renderer changes must stay browser-safe; do not import a Node runtime owner just for a pure display helper. Explicit artifact-page endpoints/UI are a distinct following reader unit, not silently folded into this one.
 - No extra scheduler/store/log/permission owner, no reachability exemptions/reseed/fake consumers. Product modules remain cohesive; tests/scripts are excluded from the decomposition task.
 - Sequential offline tests, stable source before/after, preserve genuine REDs and setup failures. Broaden/repeat only for changed sources, relevant failures or concrete unresolved risk.
@@ -31,6 +32,7 @@
 
 - Modify `packages/core-session/src/projection/search.ts` (new-envelope selection in original search normalizer; a private helper in the same small file is sufficient).
 - Modify `packages/session-query/src/file-backed/schema.ts`; update the now-stale version comment in `database.ts` only if needed.
+- Clarify the existing description in `packages/session-query/src/tools.ts` under READ-07; no new tool, response field or test-only description assertion.
 - Extend `packages/core-session/test/code-search.test.ts` or add `retained-result-search.test.ts` for discriminating envelope cases.
 - Add `packages/session-query/test/filebacked-retained-results.test.ts`; extend existing `filebacked.test.ts`'s fresh schema expectation while retaining literal predecessor/future/foreign controls.
 - Update `packages/session-query/src/file-backed/README.md` to explain bounded result coverage and owned projection-version rebuild.
