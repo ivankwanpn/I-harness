@@ -10,6 +10,7 @@ import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harn
 import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createHostFixtureModel } from "./host-fixture-model.ts"
+import { validResultEnvelope } from '@i-harness/core-session'
 
 it("the real Desktop host registers authority for spawned child and teammate ordinary and Code Mode tool dispatch", async () => {
   const trace = createHostFixtureTrace('desktop-child-authority-host')
@@ -68,12 +69,25 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     const catalog = await rpc("desktop/session/subagents/list", { sessionId }) as { agents: { path: string; sessionId: string }[] }
     expect(catalog.agents.map(agent => agent.path).sort()).toEqual(["lead/helper-team", "root/helper"])
     for (const agent of catalog.agents) {
-      const { events } = await rpc("desktop/session/subagents/history", { sessionId, childSessionId: agent.sessionId }) as { events: { type: string; name?: string; output?: unknown; isError?: boolean }[] }
+      const { events } = await rpc("desktop/session/subagents/history", { sessionId, childSessionId: agent.sessionId }) as { events: { type: string; name?: string; envelope?: unknown; isError?: boolean }[] }
       const results = events.filter(event => event.type === "tool/result")
       expect(results.some(event => event.isError)).toBe(false)
-      expect(results.find(event => event.name === "read")).toMatchObject({ output: { content: "Desktop host fixture" } })
-      expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("Desktop host fixture")
-      if (agent.path.startsWith("lead/")) expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("helper-team")
+      for (const result of results) {
+        expect(validResultEnvelope(result.envelope)).toBe(true)
+        if (!validResultEnvelope(result.envelope)) throw new Error('Expected valid child result envelope')
+        expect(result.envelope.execution).toEqual({ outcome: 'succeeded', dispatch: 'dispatched' })
+      }
+      const inlineValue = (name: string) => {
+        const envelope = results.find(event => event.name === name)?.envelope
+        if (!validResultEnvelope(envelope) || envelope.retention.kind !== 'inline') throw new Error(`Expected complete inline ${name} fixture value`)
+        return envelope.retention.value
+      }
+      expect(inlineValue('read')).toEqual({ content: 'Desktop host fixture' })
+      const text = agent.path.startsWith('lead/') ? 'Desktop host fixture\n["lead","helper-team"]\n{"tasks":[]}' : 'Desktop host fixture'
+      // The complete small observation is inline. Its nested text index has
+      // separate retained-code qualification; this test exercises tool authority.
+      expect(inlineValue('code_exec')).toMatchObject({ status: 'completed', text, truncated: false,
+        textRetention: { stored: true, complete: true, omittedBytes: 0, truncated: false, admittedBytes: Buffer.byteLength(text) } })
     }
   } finally {
     try { await trace.run('host/close', async () => { await host?.close() }) }

@@ -1,11 +1,10 @@
 import { expect, it, vi } from 'vitest'
-import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
-import { resolve, join } from 'node:path'
+import { join } from 'node:path'
 import type { TaskRecord, TaskSubmissionInput, TaskProtocolDocument } from '../src/task-protocol.ts'
+import { structureEvidence } from '../../context-output/test/structure-evidence.ts'
 
-const evidence = resolve(process.env.IH_STRUCTURE_EVIDENCE_ROOT ?? '.tmp/task-structure')
-if (!process.env.IH_CONFIG_DIR || existsSync(join(evidence, 'evidence-seal.json'))) throw Error('Choose isolated unsealed structure evidence')
+const evidence = structureEvidence('.tmp/task-structure')
 const { createTaskRegistry, TaskConcurrencyLimitError } = await import('../src/task-protocol.ts')
 const { SHIPPING_REPORT_POLICY } = await import('../src/index.ts')
 const { createSessionCoordinator } = await import('@i-harness/session-persistence')
@@ -101,12 +100,14 @@ it.each([false, true])('held actual coordinator preserves strict=%s snapshot tim
 it.each([false, true])('terminal callback follows the original retention success/failure once (failure=%s)', async failure => {
   const release = Promise.withResolvers<void>(), callback = vi.fn(), observations: unknown[] = []
   const tasks = createTaskRegistry({ stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, coordinator: { putDocumentStrict: async () => { await release.promise; if (failure) throw Error('retention failed') } } as never, onTerminalized: callback })
-  const task = tasks.submit(input); tasks.subscribe(task.id, value => observations.push(value.retention))
-  expect(tasks.terminalize({ taskId: task.id, outcome: 'completed' })).toBe(true)
-  expect(callback).not.toHaveBeenCalled(); expect(observations).toEqual(['pending'])
-  release.resolve(); await tasks.flushPersistence(); await Promise.resolve()
-  expect(task.retention).toBe(failure ? 'failed' : 'durable'); expect(callback).toHaveBeenCalledTimes(1)
-  expect(callback.mock.calls[0]![0]).toBe(task)
-  expect(tasks.terminalize({ taskId: task.id, outcome: 'error' })).toBe(false)
-  expect(callback).toHaveBeenCalledTimes(1)
+  try {
+    const task = tasks.submit(input); tasks.subscribe(task.id, value => observations.push(value.retention))
+    expect(tasks.terminalize({ taskId: task.id, outcome: 'completed' })).toBe(true)
+    expect(callback).not.toHaveBeenCalled(); expect(observations).toEqual(['pending'])
+    release.resolve(); await tasks.flushPersistence(); await Promise.resolve()
+    expect(task.retention).toBe(failure ? 'failed' : 'durable'); expect(callback).toHaveBeenCalledTimes(1)
+    expect(callback.mock.calls[0]![0]).toBe(task)
+    expect(tasks.terminalize({ taskId: task.id, outcome: 'error' })).toBe(false)
+    expect(callback).toHaveBeenCalledTimes(1)
+  } finally { release.resolve(); await tasks.flushPersistence() }
 })

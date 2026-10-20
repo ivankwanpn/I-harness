@@ -10,6 +10,7 @@ import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { registerExec } from "@i-harness/exec"
 import { registerSubagent, SHIPPING_REPORT_POLICY, createTaskRegistry, createNotificationDrain, isSessionCancelledChain } from "../src/index.ts"
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
 
 it("bounds aggregate reports and reconstructs owned multilingual results with digest cursors", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
@@ -70,11 +71,11 @@ it("bounds aggregate reports and reconstructs owned multilingual results with di
 
 it("actual followup changes a job digest and stale result/list pages refuse mixed generations", async () => {
   const root = await mkdtemp(join(tmpdir(), "owned-result-pages-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession()
   const first = "FIRST 中文🙂".repeat(4000), second = "SECOND 中文🙂".repeat(5000)
-  const sub = registerSubagent(ctx, tools, { parentSession: session, parentModel: createMockClient([{ role: "assistant", text: first }, { role: "assistant", text: second }]), exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
+  const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: session, parentModel: createMockClient([{ role: "assistant", text: first }, { role: "assistant", text: second }]), exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
   try {
     await sub.ready
     sub.roles.register({ name: "bare", description: "controlled no-tool fixture", systemPrompt: "Answer", tools: [] })
@@ -163,7 +164,7 @@ it("missing strict persistence capability never labels a completed owned result 
 
 it("a real completed child tool is never replayed when its full task document retention fails", async () => {
   const root = await mkdtemp(join(tmpdir(), "child-retention-failure-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   const strict = coordinator.putDocumentStrict!.bind(coordinator)
   coordinator.putDocumentStrict = async (key, data) => {
@@ -173,13 +174,13 @@ it("a real completed child tool is never replayed when its full task document re
   const ctx = createContext(), tools = createToolRegistry(ctx), admissions: string[] = []
   let sideeffects = 0, modelCalls = 0
   tools.register({ name: "effect", description: "controlled effect", inputSchema: {}, execute: async () => { sideeffects++; return { committed: true } } })
-  const model = { async *stream() {
+  const model = controlledModel(async function* () {
     modelCalls++
     if (modelCalls === 1) yield { type: "tool_call" as const, call: { id: "effect-once", name: "effect", args: {} } }
     else yield { type: "text/chunk" as const, text: "effect actually completed" }
     yield { type: "end" as const }
-  } }
-  const sub = registerSubagent(ctx, tools, { parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" }, parentNotify: { admit: async input => { admissions.push(input.text) }, wake: () => {} } })
+  })
+  const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" }, parentNotify: { admit: async input => { admissions.push(input.text) }, wake: () => {} } })
   try {
     await sub.ready
     sub.roles.register({ name: "effect-worker", description: "controlled worker", systemPrompt: "Use effect then report", tools: ["effect"] })
@@ -199,7 +200,7 @@ it("a real completed child tool is never replayed when its full task document re
 
 it("cancellation during strict result retention suppresses admission without replaying the completed child effect", async () => {
   const root = await mkdtemp(join(tmpdir(), "child-retention-cancellation-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
   let release!: () => void, entered!: () => void, checked!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
@@ -216,13 +217,13 @@ it("cancellation during strict result retention suppresses admission without rep
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let sideeffects = 0, modelCalls = 0
   tools.register({ name: "effect", description: "controlled effect", inputSchema: {}, execute: async () => { sideeffects++; return { committed: true } } })
-  const model = { async *stream() {
+  const model = controlledModel(async function* () {
     modelCalls++
     if (modelCalls === 1) yield { type: "tool_call" as const, call: { id: "effect-before-cancel", name: "effect", args: {} } }
     else yield { type: "text/chunk" as const, text: "completed child effect" }
     yield { type: "end" as const }
-  } }
-  const sub = registerSubagent(ctx, tools, { parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
+  })
+  const sub = registerSubagent(ctx, tools, { generationFactoryFor: fixtureGenerationFor, parentSession: createSession(), parentModel: model, exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY, persist: { coordinator, stateId: "parent", parentSessionId: "parent" } })
   try {
     await sub.ready
     const parent = sub.tasks.submit({ identity: { parentSessionId: "root", callEventSeq: 1 }, agentPath: "root", description: "parent", prompt: "p", agent: "general", delivery: "tool" })
