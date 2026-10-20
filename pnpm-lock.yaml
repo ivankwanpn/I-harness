@@ -212,6 +212,10 @@ importers:
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+    devDependencies:
+      '@i-harness/core-session':
+        specifier: workspace:*
+        version: link:../core-session
 
   packages/agent-team:
     dependencies:
