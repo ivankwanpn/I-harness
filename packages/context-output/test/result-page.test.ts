@@ -77,4 +77,3 @@ it('keeps raw exec slices exact at binary and multibyte cursor edges without inv
     expect(await output.readManagedResultPage(service, { sessionId: 's' }, { ref, cursor: { recordOffset: 10, sliceOffset: 0 } })).toEqual({ kind: 'unavailable', reason: 'range' })
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
 })
-

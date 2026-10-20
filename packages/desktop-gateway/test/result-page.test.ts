@@ -101,4 +101,3 @@ it.each(['archive', 'fence'] as const)('discards an admitted page when %s revoke
     if (mode === 'fence') expect(managed).toBe(true)
   } finally { resume.resolve(); await management; await f.close() }
 })
-
