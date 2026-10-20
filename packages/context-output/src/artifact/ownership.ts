@@ -103,7 +103,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     if (operation.phase !== 'committed' || !operation.ref || operation.ref.revision !== ref.revision || operation.ref.codec !== ref.codec
       || operation.ref.encodedBytes !== ref.encodedBytes || operation.ref.contentDigest !== ref.contentDigest || operation.ref.completeness !== ref.completeness) throw new Error('Artifact reference stale or unavailable')
     const pin = await readPin(root, target, access.sessionId, ref.revision)
-    if (!pin) throw new Error('Artifact reference unavailable or unauthorized')
+    if (!pin || pin.operationId !== operation.owner.operationId) throw new Error('Artifact reference unavailable or unauthorized')
     const witness = viaCatalog === undefined ? undefined : await membership.witness(access.sessionId, operation, pin, viaCatalog)
     if (witness && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: witness.owner, ref: witness.ref }))) throw new Error('Dependency catalog unavailable or unauthorized')
     const visibleVia = witness?.ref
@@ -183,9 +183,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')
-      const target = directory(id), operation = await boundedJson(resolve(target, 'operation.json')) as ArtifactOperation
-      if (operation.owner.operationId !== operationId) throw new Error('Artifact operation mismatch')
-      return reconcileArtifact(target)
+      return reconcileArtifact(root, directory(id), options.workspaceId, operationId, id)
     }),
     close: async () => { closed = true; await serial; for (const writer of writers) await writer.suspend(); writers.clear() },
   }

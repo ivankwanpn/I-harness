@@ -6,7 +6,7 @@ import { validateManifest } from './manifest.ts'
 import { CHUNK, dimensions, indexHeader, verifyChunk } from './index.ts'
 import type { ManagedArtifactPage } from './types.ts'
 
-/** One rooted range, at most one64KiB body chunk plus bounded output/proof. */
+/** One rooted range may intersect two64KiB body chunks plus bounded output/proof. */
 export async function readVerifiedArtifactBytes(root: string, directory: string, ref: ManagedArtifactRef, offset: number, length: number): Promise<Buffer> {
   if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length < 0 || length > 65536 || !Number.isSafeInteger(offset + length) || offset + length > ref.encodedBytes) throw new Error('Artifact range unavailable')
   const paths = ['manifest.json', 'index', 'body'].map(name => resolve(directory, name))
