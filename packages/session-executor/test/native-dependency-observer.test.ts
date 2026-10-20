@@ -35,17 +35,18 @@ const { controlledModel } = await import('./controlled-model.ts')
 const { currentToolResultProducer } = await import('@i-harness/core-tools')
 const { committedFactSeqs } = await import('@i-harness/core-session')
 const { sessionArtifactManifest } = await import('../../desktop-gateway/src/session-artifacts.ts')
+const { physicalBytes } = await import('../../context-output/src/artifact/quota.ts')
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 
 it('makes an actual child native frame readable to its genuine parent job_output observer', async () => {
   const root = await mkdtemp(resolve(evidence, 'observer-'))
-  const settings = resolve(root, 'settings.json'), release = resolve(root, 'release')
+  const settings = resolve(root, 'settings.json'), release = resolve(root, 'release'), nativeLedger = resolve(root, 'native-effects.jsonl')
   await writeFile(settings, JSON.stringify({ contextSubsystems: { contextOutput: { enabled: false, maxDiskBytes: 16777216 } } }))
   const worker = resolve(root, 'worker.mjs')
-  await writeFile(worker, `import {existsSync} from 'node:fs';process.stdout.write(Buffer.alloc(40000,97));while(!existsSync(process.argv[2]))await new Promise(r=>setTimeout(r,10));process.stderr.write('child-end');`)
+  await writeFile(worker, `import {existsSync,appendFileSync} from 'node:fs';appendFileSync(process.argv[3],${JSON.stringify('native-child\n')});process.stdout.write(Buffer.alloc(40000,97));while(!existsSync(process.argv[2]))await new Promise(r=>setTimeout(r,10));process.stderr.write('child-end');`)
   const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } })
   const { id } = await coordinator.create()
-  let sends = 0, launches = 0, exec!: ExecService, jobId = '', childId = '', siblingId = '', siblingDenied = false
+  let sends = 0, launches = 0, nativeBodies = 0, exec!: ExecService, jobId = '', childId = '', siblingId = '', siblingDenied = false
   let frameRef: ManagedArtifactRef | undefined, catalogRef: ManagedArtifactRef | undefined
   const model = controlledModel(async function* () {
     const n = ++sends
@@ -56,15 +57,16 @@ it('makes an actual child native frame readable to its genuine parent job_output
     else if (n === 9) yield { type: 'tool_call', call: { id: 'actual-member-read', name: 'context_output_read', args: { ref: frameRef, viaCatalog: catalogRef, maxBytes: 4096 } } }
     else if (n === 11) yield { type: 'tool_call', call: { id: 'spawn-sibling', name: 'spawn_agent', args: { task_name: 'sibling', agent_type: 'sibling-worker', message: 'inspect', fork_turns: 'none', background: false } } }
     else if (n === 12) yield { type: 'tool_call', call: { id: 'sibling-probe', name: 'sibling_probe', args: {} } }
-    else if (n === 15) yield { type: 'tool_call', call: { id: 'parent-observe-second', name: 'job_output', args: { job_id: jobId } } }
+    else if (n === 15) yield { type: 'tool_call', call: { id: 'parent-observe-refused', name: 'job_output', args: { job_id: jobId } } }
+    else if (n === 17) yield { type: 'tool_call', call: { id: 'parent-observe-second', name: 'job_output', args: { job_id: jobId } } }
     else yield { type: 'text/chunk', text: 'done' }
     yield { type: 'end' }
   })
   const assembly = await createSessionAssembly({ sessionId: id, coordinator, workspace: root, contextOutputSettingsPath: settings,
     model, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access',
     additionalTools: [{ name: 'native_child', description: 'controlled native job', inputSchema: {}, async execute() {
-      launches++
-      const result = await exec.runBackground({ argv: [process.execPath, worker, release] })
+      nativeBodies++; launches++
+      const result = await exec.runBackground({ argv: [process.execPath, worker, release, nativeLedger] })
       jobId = result.jobId
       childId = exec.getOutput(jobId).receipt!.owner.sessionId
       return result
@@ -171,6 +173,56 @@ it('makes an actual child native frame readable to its genuine parent job_output
     await assembly.agent.run('verify an actual sibling cannot observe the native job')
     expect(siblingDenied).toBe(true); expect(siblingId).not.toBe(childId)
     expect(await reader.readResultPage!(siblingId, { ref: frame, viaCatalog: catalogRef })).toMatchObject({ kind: 'unavailable' })
+    // Known later refusal seam: the genuine later catalog commits normally,
+    // then actual configured quota refuses its first membership reservation.
+    // C1 already has a usable immutable companion and original target pin.
+    const c1Membership = resolve(managed, 'pin-memberships', sha(id), sha(JSON.stringify([catalogRef.id, catalogRef.revision])) + '.json')
+    const c1Pin = resolve(managed, 'pins', sha(id) + '.json')
+    const c1BeforeRefusal = { membership: await readFile(c1Membership), pin: await readFile(c1Pin), frame: structuredClone(frame), catalog: structuredClone(catalogRef) }
+    const registerDependency = lease.service!.registerResultDependencyScope.bind(lease.service!)
+    const beginCatalog = lease.service!.beginResult.bind(lease.service!)
+    let refusedScope: string | undefined, refusedCatalog: ManagedArtifactRef | undefined, refusalCalibration: unknown
+    const selectedScope = vi.spyOn(lease.service!, 'registerResultDependencyScope').mockImplementation((owner, current, entries) => {
+      const scope = registerDependency(owner, current, entries)
+      if (owner.callId === 'parent-observe-refused') { expect(entries).toEqual([terminal.retained]); expect(owner.sessionId).toBe(id); refusedScope = scope.operationId }
+      return scope
+    })
+    const selectedFinish = vi.spyOn(lease.service!, 'beginResult').mockImplementation(async (scope, codec) => {
+      const sink = await beginCatalog(scope, codec)
+      if (scope.operationId === refusedScope) {
+        expect(codec).toBe('json-utf8-v1')
+        const finish = sink.finish.bind(sink)
+        sink.finish = async completeness => {
+          const saved = await finish(completeness)
+          if (!refusedCatalog && saved.kind === 'committed') {
+            refusedCatalog = saved.ref
+            const physical = await physicalBytes(resolve(managed, '../..')), quota = physical + 1
+            await lease.service!.configure({ maxDiskBytes: quota })
+            refusalCalibration = { seam: 'later genuine catalog committed; first original membership metadata reservation', physical, quota, reserveAtLeast: 131072, catalog: saved.ref, operationId: scope.operationId }
+          }
+          return saved
+        }
+      }
+      return sink
+    })
+    try { await assembly.agent.run('observe the same completed child with known membership quota refusal') }
+    finally { selectedFinish.mockRestore(); selectedScope.mockRestore(); await lease.service!.configure({ maxDiskBytes: 16777216 }) }
+    const refusedResult = assembly.session.events.find(e => e.type === 'tool/result' && e.callId === 'parent-observe-refused')
+    if (refusedResult?.type !== 'tool/result' || !refusedResult.envelope || !refusedCatalog || !refusedScope) throw new Error('Missing actual later refusal boundary')
+    expect(refusedResult.envelope.dependencies).toEqual({ kind: 'unavailable', reason: 'quota', count: 1 })
+    expect(refusedResult.envelope.execution).toEqual(result.envelope.execution)
+    expect(refusedResult.envelope.retention).toEqual(result.envelope.retention)
+    expect(await readFile(c1Membership)).toEqual(c1BeforeRefusal.membership)
+    expect(await readFile(c1Pin)).toEqual(c1BeforeRefusal.pin)
+    expect(frame).toEqual(c1BeforeRefusal.frame); expect(catalogRef).toEqual(c1BeforeRefusal.catalog)
+    await typedBytes(reader, catalogRef)
+    expect(await reader.readResultPage!(id, { ref: frame, viaCatalog: refusedCatalog })).toMatchObject({ kind: 'unavailable' })
+    const refusedMembership = resolve(managed, 'pin-memberships', sha(id), sha(JSON.stringify([refusedCatalog.id, refusedCatalog.revision])) + '.json')
+    await expect(readFile(refusedMembership)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await exec.getOutput(jobId)).retained).toEqual(terminal.retained)
+    expect(await readFile(nativeLedger, 'utf8')).toBe('native-child\n')
+    expect({ nativeBodies, launches }).toEqual({ nativeBodies: 1, launches: 1 })
+    await writeFile(resolve(root, 'later-refusal-receipt.json'), JSON.stringify({ refusalCalibration, refusedResult, c1BeforeRefusal: { frame, catalog: catalogRef, membershipSha256: createHash('sha256').update(c1BeforeRefusal.membership).digest('hex'), pinSha256: createHash('sha256').update(c1BeforeRefusal.pin).digest('hex') }, c1Preserved: true, laterCompanionAbsent: true, nativeBodies, launches, nativeLedger: await readFile(nativeLedger, 'utf8') }, null, 2))
     // A later genuine observer has its own immutable witness. Its unknown
     // acknowledgement cannot replace or revoke the already visible first one.
     const settleMembership = lease.service!.settleResultDependencyMembership.bind(lease.service!)
@@ -263,6 +315,7 @@ it('makes an actual child native frame readable to its genuine parent job_output
     Object.assign(receipt, { toolRead, siblingId, siblingDenied, secondCatalog, secondScope, secondAttempts, secondResult, distinctFreshStore: true, childManifest, parentManifest, archiveDuringRead, rewindDuringRead, selectiveRewind: true, deletionInterrupted, targetDeletedFrameAbsent: true })
     await writeFile(resolve(root, 'observer-receipt.json'), JSON.stringify(receipt, null, 2))
     expect(launches).toBe(1)
+    expect(nativeBodies).toBe(1); expect(await readFile(nativeLedger, 'utf8')).toBe('native-child\n')
   } finally {
     observerCuts.afterVerifiedRead = undefined; observerCuts.afterRemove = undefined
     secondReleased = true; membershipSpy?.mockRestore()
