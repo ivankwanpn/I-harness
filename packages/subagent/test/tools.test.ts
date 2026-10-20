@@ -274,18 +274,24 @@ describe("subagent tools", () => {
     table.add(entry.path, entry)
     append(entry.session, { type: "subagent/inbox", message: "next", messageId: "next-1" })
     const seen: unknown[] = []
-    table.subscribe(change => seen.push({ status: change.entry.status, finalText: change.entry.finalText, error: change.entry.error, startedAt: change.entry.startedAt, controller: change.entry.controller }))
+    const running = Promise.withResolvers<void>()
+    const unsubscribe = table.subscribe(change => {
+      seen.push({ status: change.entry.status, finalText: change.entry.finalText, error: change.entry.error, startedAt: change.entry.startedAt, controller: change.entry.controller })
+      if (change.entry === entry && change.entry.status === "running") running.resolve()
+    })
     const previousController = entry.controller
     const waiting = driveFollowups({ table, jobs, agents }, entry, "child")
     try {
-      await Promise.resolve()
+      await running.promise
       expect(seen[0]).toMatchObject({ status: "running", finalText: undefined, error: undefined, startedAt: expect.any(Number) })
       expect(entry.controller).not.toBe(previousController)
+      expect(seen).toHaveLength(1)
+      expect(entry.status).toBe("running")
       release.resolve({ finalText: "new", turns: 1, reasoning: [] })
       await waiting
       expect(seen[1]).toMatchObject({ status: "waiting", finalText: "new", error: undefined })
       expect(seen).toHaveLength(2)
-    } finally { release.resolve({ finalText: "cleanup", turns: 1, reasoning: [] }); await waiting }
+    } finally { release.resolve({ finalText: "cleanup", turns: 1, reasoning: [] }); await waiting; unsubscribe() }
   })
   it("registers spawn_agent, wait_agent, list_agents", () => {
     const { tools } = setup()
@@ -1080,9 +1086,31 @@ describe("M26-D2 background delivery", () => {
     const tasks = createTaskRegistry()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
-    const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 })
-    expect(out).toMatchObject({ agent_path: "root/helper", task_id: "task-1", status: "completed", outcome: "completed", resultText: "child done" })
-    expect(table.get("root/helper")?.status).toBe("waiting")
+    const terminal: string[] = [], resident: string[] = []
+    let unsubscribeJob = () => {}
+    const unsubscribeTable = table.subscribe(change => {
+      if (change.path !== "root/helper") return
+      if (change.kind === "add") unsubscribeJob = jobs.subscribe(change.entry.jobId!, view => { if (view.status !== "running") terminal.push(view.status) })
+      if (change.kind === "update" && change.entry.status === "waiting") resident.push(change.entry.finalText!)
+    })
+    try {
+      const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 })
+      expect(out).toMatchObject({ agent_path: "root/helper", task_id: "task-1", status: "completed", outcome: "completed", resultText: "child done" })
+      // The summary belongs to TaskRecord. This exact initial lifecycle owns the
+      // resident/job mirrors; future followups must not extend the promise we join.
+      const initialCompletion = table.get("root/helper")!.followupChain
+      expect(initialCompletion).toBeDefined()
+      await initialCompletion
+      expect(table.get("root/helper")?.status).toBe("waiting")
+      expect(table.get("root/helper")?.finalText).toBe("child done")
+      expect(jobs.list("root")).toEqual([expect.objectContaining({ status: "completed", output: "child done" })])
+      expect(resident).toEqual(["child done"])
+      expect(terminal).toEqual(["completed"])
+      const childEvents = table.get("root/helper")!.session.events
+      expect(childEvents.filter(event => event.type === "turn/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "step/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "assistant/message")).toEqual([expect.objectContaining({ text: "child done" })])
+    } finally { unsubscribeTable(); unsubscribeJob() }
   }, 15_000)
 
   // W12: this drives a REAL timeout — the injected bound (50ms) is passed to the
@@ -1207,10 +1235,28 @@ describe("M26-D1 spawn_agent task records", () => {
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const jobOut = all.find((t) => t.name === "job_output")!
-    const spawned = await spawn.execute({ message: "do it", task_name: "h" }, { sessionId: "s", callEventSeq: 1 }) as { task_id: string; job_id: string }
-    await tasks.wait(spawned.task_id, 10_000)
-    const out = await jobOut.execute({ job_id: spawned.job_id }, {}) as { status: string }
-    expect(out.status).toBe("completed")
+    const terminal: string[] = []
+    let unsubscribeJob = () => {}
+    const unsubscribeTable = table.subscribe(change => {
+      if (change.path === "root/h" && change.kind === "add") unsubscribeJob = jobs.subscribe(change.entry.jobId!, view => { if (view.status !== "running") terminal.push(view.status) })
+    })
+    try {
+      const spawned = await spawn.execute({ message: "do it", task_name: "h" }, { sessionId: "s", callEventSeq: 1 }) as { task_id: string; job_id: string }
+      const initialCompletion = table.get("root/h")!.followupChain
+      expect(initialCompletion).toBeDefined()
+      await tasks.wait(spawned.task_id, 10_000)
+      expect(tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "child done", parentSessionId: "s", callEventSeq: 1 })
+      // tasks.wait observes TaskRecord outcome, not JobRegistry completion.
+      await initialCompletion
+      const out = await jobOut.execute({ job_id: spawned.job_id }, {}) as { status: string; text: string }
+      expect(out.status).toBe("completed")
+      expect(out.text).toBe("child done\n[status: completed]")
+      expect(terminal).toEqual(["completed"])
+      const childEvents = table.get("root/h")!.session.events
+      expect(childEvents.filter(event => event.type === "turn/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "step/start")).toHaveLength(1)
+      expect(childEvents.filter(event => event.type === "assistant/message")).toEqual([expect.objectContaining({ text: "child done" })])
+    } finally { unsubscribeTable(); unsubscribeJob() }
   }, 15_000)
 
   it("exact-retry adopts the existing task (no re-spawn); conflicting reuse throws", async () => {
