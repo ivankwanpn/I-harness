@@ -1,6 +1,6 @@
 # R4A — Artifact publication and original document pins
 
-Approved execution plan, 2026-10-21, following accepted physical-crash qualification `db6c5d1f25759d80272e5c47adfe5796e8609ba5`. This unit is part of the approved retained-results A5 matrix. The [source map](../../research/context-r4a-publication-pins-preflight-20261021/source-map.md) and [independent preflight/re-review](../../research/context-r4a-publication-pins-preflight-20261021/review.md) are preserved. All four preflight findings were corrected before promotion; readiness is PASS, not implementation qualification. Use subagent-driven-development with one GPT6.1Sol writer and a fresh GPT6.1Sol reviewer; root pins clean BASE in the task brief.
+Approved execution plan, 2026-10-21, following accepted physical-crash qualification `db6c5d1f25759d80272e5c47adfe5796e8609ba5`. This unit is part of the approved retained-results A5 matrix. The [source map](../../research/context-r4a-publication-pins-preflight-20261021/source-map.md) and [independent preflight/re-review](../../research/context-r4a-publication-pins-preflight-20261021/review.md) are preserved. All four preflight findings were corrected before promotion. **Completed and accepted** for the bounded test-only range `5e4f6038..32c88704`; see [root acceptance](../../research/2026-10-21-context-r4a-publication-pins-acceptance.md) for independent review, original evidence and precise limits. Do not rerun this completed unit from the historical instructions below.
 
 ## Goal and boundary
 

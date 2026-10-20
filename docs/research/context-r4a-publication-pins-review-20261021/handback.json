@@ -1,0 +1,13 @@
+{
+  "base": "5e4f6038a98a5363babda0c9a15bbbef4dc80f1b",
+  "head": "32c88704a56c15094d793717a1d0150799db67b1",
+  "report": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-publication-pins\\task-1-report.md",
+  "reportSha256": "976a05fd0b1906443241e45a0463e2f4becad0160496bff7db0255ec8838e0ef",
+  "evidenceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-publication-pins-20261021-implementation",
+  "closureManifestSha256": "989a4476dce47cb06d4e543fc8a596d5aea4ee6068e5408b8824286f6a81785d",
+  "sealedFiles": 1418,
+  "delivery": "D:\\I-harness-main\\docs\\research\\2026-10-21-context-r4a-publication-pins-delivery.md",
+  "deliverySha256": "64042980d3aca22d5629b1ab5926cc9538b6dfd3dae3f278503e08c83301b9ec",
+  "sourceQualifiedSha256": "2476a38c3289446592c29447290a28c30aa9bd5e04191b06b06554795ced7903",
+  "status": "FROZEN for fresh independent review"
+}

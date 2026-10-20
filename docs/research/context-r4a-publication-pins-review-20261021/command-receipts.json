@@ -1,0 +1,331 @@
+{
+  "node": "v24.15.0",
+  "platform": "win32",
+  "architecture": "x64",
+  "pnpm": "12.3.4",
+  "receipts": [
+    {
+      "gate": "positive",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "positively qualifies",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-01-positive.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "live-ten",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "reconciles",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-02-live.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "physical-ten",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins-physical.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-03-cold.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "coupled-seven",
+      "exit": 1,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "coordinator documents|real original|permanently closes",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-04-coupled.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "quota-corrected-oracle",
+      "exit": 1,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "real original",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-05-quota.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "quota-fixed-budget",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "real original",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-06-quota-fixed-budget.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "explicit-mts-types",
+      "exit": 2,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-executor/tsconfig.publication-pins.json"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-07-types.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "explicit-mts-types-corrected",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-executor/tsconfig.publication-pins.json"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-08-types.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "positive-final-observers",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "positively qualifies",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-09-positive-final.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "focused-final-28",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "packages/session-executor/test/publication-pins-physical.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-10-focused-final.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "positive-seal-source",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "-t",
+        "positively qualifies",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-11-positive-seal-source.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "focused-seal-source-28",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/session-executor/test/publication-pins.test.ts",
+        "packages/session-executor/test/publication-pins-physical.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-12-focused-seal-source.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "original-controls",
+      "exit": 1,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/context-output/test/managed-artifacts.test.ts",
+        "packages/context-output/test/managed-ownership.test.ts",
+        "packages/context-output/test/original-owner-pin.test.ts",
+        "packages/session-executor/test/retained-child-pins.test.ts",
+        "packages/session-executor/test/result-store-read.test.ts",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-13-original-controls.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "original-controls-exact",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "vitest",
+        "run",
+        "packages/context-output/test/managed-artifacts.test.ts",
+        "packages/context-output/test/managed-ownership.test.ts",
+        "packages/context-output/test/original-owner-pin.test.ts",
+        "packages/session-executor/test/retained-child-pins.test.ts",
+        "packages/session-executor/test/result-store-read.test.ts",
+        "--exclude",
+        "**/.tmp/**",
+        "--maxWorkers=1",
+        "--no-file-parallelism"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-14-original-controls-exact.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    },
+    {
+      "gate": "types-seal-source",
+      "exit": 0,
+      "executable": "pnpm",
+      "arguments": [
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "packages/session-executor/tsconfig.publication-pins.json"
+      ],
+      "cwd": "D:/I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/context-r4a-publication-pins-20261021-implementation/gate-config"
+      },
+      "log": "gate-15-types-seal-source.log",
+      "output": "combined stdout/stderr",
+      "nativeExitCheckedByPowerShell": true
+    }
+  ]
+}
