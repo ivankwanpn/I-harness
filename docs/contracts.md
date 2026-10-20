@@ -183,7 +183,9 @@
 
 ### 與 SDK 的界線
 
-`i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。二者只用 `--session-dir` 旗標（M29 起 `--session-backend` 已移除——JSONL 是唯一持久化後端，旗標傳入即 fail-loud 拒絕）、stdout 純幀紀律一致。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
+`i-harness sdk`（NDJSON JSON-RPC v0 自家協議）是原生宿主協議；`i-harness acp` 是標準外部 ACP。兩者都支援 `--session-dir`，SDK 另有 `--yes`，ACP 保留原 `--no-auto-approve` prompt admission 選項；stdout 純幀紀律一致。M29 起 `--session-backend` 已移除——JSONL 是唯一持久化後端，旗標傳入即 fail-loud 拒絕。ACP v1 下 `session/prompt` 是 request（回 `PromptResponse`）——舊版「fire-and-forget + `sessionUpdate{messageId}` admission 回執」的設計由「await submit + stopReason」取代（SDK 1.4 高階 client 面即此形狀）。
+
+`i-harness sdk [--session-dir DIR] [--yes]` 的 `--yes` 是該 SDK server process 生命週期內對既有工具 approval requests 的廣泛同意，包括格式正確、帶理由的明確 per-call sandbox escalation。普通呼叫仍受已設定的 sandbox 約束；批准的 escalation 只適用於該次呼叫，不持久化 sandbox mode 或下一次呼叫的權限。沒有 `--yes` 時，需 approval 的工具仍因 stdio host 沒有互動 answerer 而 fail-closed；Desktop `approvalMode` 設定不會替 SDK 安裝 answerer。這個選項不覆蓋 deny、dispatch authority、guards 或 role tool restrictions，不回答 user questions，也不把同意保存到 settings、session、另一個 SDK process 或 ACP。SDK 沒有 `-y` alias。
 
 ## M29 變更註記（2026-09-02，SQLite 持久化分離）
 

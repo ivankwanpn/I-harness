@@ -34,6 +34,7 @@ import { PROVIDER_PROTOCOLS, runProviderCommand, type CliProtocol } from "./prov
 import { runModelsCommand } from "./models.ts"
 import { runRolesCommand } from "./roles.ts"
 import { failureReport, diagnosticSessionId } from "./run.ts"
+import { sdkApprovesTools } from "./sdk-options.ts"
 
 // W6 T5: the phase handles this file's call sites log through.
 //
@@ -74,7 +75,9 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--windows-sandbox legacy|psec|wsl] [--wsl-distribution NAME] [--wsl-network allow|deny] [--wsl-workspace-dependencies true|false] [--code-mode off|mixed|only] |\n" +
-  "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "  sdk [--session-dir DIR] [--yes] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "    sdk --yes approves tool approval requests for this process, including valid explicit per-call sandbox escalation; ordinary calls keep the configured sandbox.\n" +
+  "    Without --yes, SDK tool approval requests fail closed because this stdio host has no interactive approval channel.\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
   "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh> | roles <list|set|unset> |\n" +
@@ -661,6 +664,9 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
     ...executionServiceOptionsFor(settings),
+    // Explicit process consent uses the existing answerer; no flag preserves
+    // this stdio host's unanswered asks, independently of Desktop settings.
+    ...(sdkApprovesTools(args) ? { approveAll: true } : {}),
     codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",
