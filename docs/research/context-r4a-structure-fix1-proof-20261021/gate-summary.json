@@ -1,0 +1,149 @@
+{
+  "gates": [
+    {
+      "id": "01-red",
+      "start": "2026-10-20T21:44:10.720Z",
+      "end": "2026-10-20T21:44:12.426Z",
+      "code": 1,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "exact": true,
+        "total": 3,
+        "passed": 1,
+        "failed": 2
+      }
+    },
+    {
+      "id": "02-base",
+      "start": "2026-10-20T21:44:40.357Z",
+      "end": "2026-10-20T21:44:42.038Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "exact": true,
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": "03-green",
+      "start": "2026-10-20T21:44:55.274Z",
+      "end": "2026-10-20T21:44:56.945Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+        ],
+        "exact": true,
+        "total": 3,
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "id": "04-related",
+      "start": "2026-10-20T21:45:32.543Z",
+      "end": "2026-10-20T21:45:45.212Z",
+      "code": 0,
+      "sourceUnchanged": true,
+      "collection": {
+        "expected": [
+          "D:/I-harness-main/packages/context-output/test/cold-lookup-integrity.test.ts",
+          "D:/I-harness-main/packages/context-output/test/disabled-grant.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-codecs.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-corruption.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-vectors.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-witness.test.ts",
+          "D:/I-harness-main/packages/context-output/test/service.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-native.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-quota.test.ts"
+        ],
+        "collected": [
+          "D:/I-harness-main/packages/context-output/test/cold-lookup-integrity.test.ts",
+          "D:/I-harness-main/packages/context-output/test/disabled-grant.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-operation-boundaries.test.ts",
+          "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-codecs.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-corruption.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-vectors.test.ts",
+          "D:/I-harness-main/packages/context-output/test/result-integrity-witness.test.ts",
+          "D:/I-harness-main/packages/context-output/test/service.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-native.test.ts",
+          "D:/I-harness-main/packages/session-executor/test/mixed-retention-quota.test.ts"
+        ],
+        "exact": true,
+        "total": 87,
+        "passed": 87,
+        "failed": 0
+      }
+    },
+    {
+      "id": "05-types",
+      "start": "2026-10-20T21:46:05.342Z",
+      "end": "2026-10-20T21:46:08.596Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "06-executor",
+      "start": "2026-10-20T21:46:15.381Z",
+      "end": "2026-10-20T21:46:23.254Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "07-mts",
+      "start": "2026-10-20T21:46:24.325Z",
+      "end": "2026-10-20T21:46:29.808Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "08-gateway",
+      "start": "2026-10-20T21:46:30.874Z",
+      "end": "2026-10-20T21:46:38.311Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "09-equivalence",
+      "start": "2026-10-20T21:46:46.021Z",
+      "end": "2026-10-20T21:46:46.267Z",
+      "code": 0,
+      "sourceUnchanged": true
+    },
+    {
+      "id": "10-freeze",
+      "start": "2026-10-20T21:48:30.262Z",
+      "end": "2026-10-20T21:48:30.583Z",
+      "code": 0,
+      "sourceUnchanged": true
+    }
+  ],
+  "sequential": true,
+  "allQualifiedProductTestConfigBytesUnchanged": true,
+  "qualifiedInputs": 2671,
+  "finalInputs": 2676,
+  "evidenceOnlyHelperDriftAfterGate16": [
+    ".tmp/r4as-fix1-1021/finalize.mjs"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "08-gateway",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\node_modules\\typescript\\bin\\tsc",
+    "--noEmit"
+  ],
+  "cwd": "D:\\I-harness-main\\packages\\desktop-gateway",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-fix1-1021/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\08-gateway\\fixtures\\structure"
+  },
+  "head": "f9b0dcd79e628e8776a717937a7df126481b1f51",
+  "start": "2026-10-20T21:46:30.874Z",
+  "pid": 4172,
+  "end": "2026-10-20T21:46:38.311Z",
+  "code": 0,
+  "signal": null,
+  "sourceUnchanged": true
+}

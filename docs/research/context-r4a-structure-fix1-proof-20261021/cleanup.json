@@ -1,0 +1,630 @@
+{
+  "at": "2026-10-20T21:48:29.8018889Z",
+  "matchingTaskProcesses": [],
+  "finalMixedCleanup": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\mixed\\c-iyd9Xm\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\mixed\\n-YmzHPU\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 4,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\mixed\\q-5tpbOF\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\mixed\\r-69MKaN\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\mixed\\u-fja8YC\\cleanup.json",
+      "actual": {
+        "nativeCloseResolved": true,
+        "brokerCloseResolved": true,
+        "coordinatorCloseResolved": true,
+        "open": false,
+        "retirements": 1,
+        "activeContextJobs": 0,
+        "activeCodeJobs": 0,
+        "activeResourceTypes": [
+          "CloseReq",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap",
+          "PipeWrap"
+        ]
+      }
+    }
+  ],
+  "publicTimingObservations": [
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\structure\\constructor-6hDadW\\observations.json",
+      "actual": {
+        "constructorReads": [
+          "before",
+          "before",
+          "before"
+        ],
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\structure\\mutated-WP4c6W\\observations.json",
+      "actual": {
+        "mutate": true,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [
+          {
+            "value": "before",
+            "phase": "before-producer-release",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "reads": [
+          {
+            "value": "before",
+            "phase": "before-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137452222
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+        ],
+        "coldError": "Invalid context artifact identity",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\structure\\ordinary-CNEYUb\\observations.json",
+      "actual": {
+        "mutate": false,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [
+          {
+            "value": "before",
+            "phase": "before-producer-release",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "reads": [
+          {
+            "value": "before",
+            "phase": "before-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137452097
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\02-base\\fixtures\\structure\\constructor-alEvfk\\observations.json",
+      "actual": {
+        "constructorReads": [
+          "before",
+          "before",
+          "before"
+        ],
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\02-base\\fixtures\\structure\\mutated-99KvP6\\observations.json",
+      "actual": {
+        "mutate": true,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_6f198559c680c125d4f47b9a964603a23ecd63d250c33544beeb1c1e987c40f2",
+          "workspaceId": "after",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137481834
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\02-base\\fixtures\\structure\\ordinary-V2owto\\observations.json",
+      "actual": {
+        "mutate": false,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137481699
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\03-green\\fixtures\\structure\\constructor-sNloWx\\observations.json",
+      "actual": {
+        "constructorReads": [
+          "before",
+          "before",
+          "before"
+        ],
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\03-green\\fixtures\\structure\\mutated-amOapj\\observations.json",
+      "actual": {
+        "mutate": true,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_6f198559c680c125d4f47b9a964603a23ecd63d250c33544beeb1c1e987c40f2",
+          "workspaceId": "after",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137496728
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\03-green\\fixtures\\structure\\ordinary-PMfGX9\\observations.json",
+      "actual": {
+        "mutate": false,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137496604
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\structure\\constructor-V0SsAh\\observations.json",
+      "actual": {
+        "constructorReads": [
+          "before",
+          "before",
+          "before"
+        ],
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\structure\\mutated-zHT5mG\\observations.json",
+      "actual": {
+        "mutate": true,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "after",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_6f198559c680c125d4f47b9a964603a23ecd63d250c33544beeb1c1e987c40f2",
+          "workspaceId": "after",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137544504
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "f39592393ef0859cb196a52693d2cea00fb2df784b3c04ae54aa7cadb8e562f8"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    },
+    {
+      "path": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\04-related\\fixtures\\structure\\ordinary-ky3NlK\\observations.json",
+      "actual": {
+        "mutate": false,
+        "constructorReads": [
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "constructor",
+            "legacyDirectoryExists": false
+          }
+        ],
+        "beforeReleaseReads": [],
+        "reads": [
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": false
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          },
+          {
+            "value": "before",
+            "phase": "after-producer-release",
+            "legacyDirectoryExists": true
+          }
+        ],
+        "producerCalls": 1,
+        "ref": {
+          "id": "ctx_d769cb594e2e993a38367b237a7b19f9f024351620efd4e31f7ed7c834993a03",
+          "workspaceId": "before",
+          "sessionId": "owner",
+          "callId": "call",
+          "label": "literal",
+          "revision": "b6a5c4cd2139fc487d29f1621dfed9bfab6235b94e748ba9a225e2f197ee8104",
+          "bytes": 30,
+          "originalBytes": 30,
+          "complete": true,
+          "expiresAt": 1793137544329
+        },
+        "liveText": "literal original producer body",
+        "directories": [
+          "6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+        ],
+        "coldText": "literal original producer body",
+        "activeJobsAfterClose": 0
+      }
+    }
+  ],
+  "scope": "Services/producer promises joined in finally; preserved fixture files remain intentional evidence. Process query is task-root scoped, not universal handle audit."
+}

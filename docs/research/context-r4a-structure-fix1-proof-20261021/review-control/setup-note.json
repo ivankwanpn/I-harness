@@ -1,0 +1,9 @@
+{
+  "earlierRoot": "D:/I-harness-main/.tmp/r4as-rv1",
+  "preservedFailures": [
+    "First launch could not resolve @i-harness/core-tools from the fresh copied package, before product imports or control spawns.",
+    "Second launch still could not resolve the relative core-tools workspace symlink through a node_modules junction; native exit 1, before product imports or control spawns. Raw output remains in tool transcript."
+  ],
+  "correction": "Fresh r4as-rv2 uses actual node_modules/@i-harness directories with explicit absolute junctions to each unchanged dependency package. No failed root was deleted and no original/sealed/product source was written.",
+  "scope": "Copied context-output source with the original BASE service.ts buffer versus frozen candidate service.ts. Other context-output files copied unchanged; three new private leaves remain unreferenced by BASE service. External @i-harness package closure and tsx are explicitly shared current unchanged repository inputs. This is not a full BASE checkout or bundled/copy qualification."
+}

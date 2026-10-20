@@ -1,0 +1,56 @@
+{
+  "id": "01-red",
+  "executable": "C:\\Program Files\\nodejs\\node.exe",
+  "node": "v24.15.0",
+  "argv": [
+    "D:\\I-harness-main\\node_modules\\vitest\\vitest.mjs",
+    "run",
+    "--dir",
+    "packages",
+    "packages/context-output/test/legacy-workspace-timing.test.ts",
+    "--exclude",
+    "**/.tmp/**",
+    "--exclude",
+    "**/.worktrees/**",
+    "--exclude",
+    "**/release*/**",
+    "--exclude",
+    "**/build/**",
+    "--exclude",
+    "**/dist/**",
+    "--maxWorkers=2",
+    "--minWorkers=1",
+    "--reporter=default",
+    "--reporter=json",
+    "--outputFile.json=D:/I-harness-main/.tmp/r4as-fix1-1021/01-red/tests.json"
+  ],
+  "cwd": "D:\\I-harness-main",
+  "env": {
+    "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-fix1-1021/config",
+    "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\mixed",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\integrity",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\native",
+    "IH_PUBLICATION_PINS_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\publication",
+    "IH_PHYSICAL_CRASH_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\physical",
+    "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021\\01-red\\fixtures\\structure"
+  },
+  "head": "f9b0dcd79e628e8776a717937a7df126481b1f51",
+  "start": "2026-10-20T21:44:10.720Z",
+  "pid": 27264,
+  "end": "2026-10-20T21:44:12.426Z",
+  "code": 1,
+  "signal": null,
+  "collection": {
+    "expected": [
+      "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+    ],
+    "collected": [
+      "D:/I-harness-main/packages/context-output/test/legacy-workspace-timing.test.ts"
+    ],
+    "exact": true,
+    "total": 3,
+    "passed": 1,
+    "failed": 2
+  },
+  "sourceUnchanged": true
+}
