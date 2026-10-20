@@ -4,6 +4,8 @@
 
 **Goal:** Make existing search and transcript/timeline consumers correctly observe the accepted ResultEnvelope representation without reading complete artifacts implicitly.
 
+**Status2026-10-20:** Task1 accepted through product42bbaebc/delivery541cd063 after original-reviewer closure of the plan-mandated child-preview defect. [Acceptance](../../research/2026-10-20-context-r4a-a4b-search-acceptance.md) preserves the original failures, corrected oracle and exact final evidence. Continue Task2; the overall plan is not paused.
+
 **Architecture:** F1 remains the result fact authority. Pure readers select the closed envelope or explicit historical branch. Search indexes only the bounded fact representation and rebuilds its existing derived cache when the projection changes. CLI and Desktop retain execution/storage/media distinctions; original history/export readers preserve complete descriptors without creating an execution assembly.
 
 **Tech Stack:** Existing TypeScript, Node24, SQLite FTS5, Vitest, React/Electron renderer, actual JSONL coordinator and SDK/Gateway paths. No new dependency or store.
@@ -42,14 +44,14 @@
 
 Consume existing `ResultEnvelope`, `SessionEventView`, `stringifyJsonData`, `deriveSearchText(event): string`, `createFileBackedSessionQuery(options): SessionQuery`. Do not add a public result-search type or service. Public `INDEX_DB_SCHEMA_VERSION` becomes2; the application ID and existing query DTO stay unchanged. A small private `retainedSearchText(envelope): string` implements READ-01 for the three ordinary/code branches; child completion uses READ-08's actual aggregate preview.
 
-- [ ] Read original producer→search→SQLite paths and relevant tests. Establish a real behavior RED before product edits: genuine format10 envelope-only tool/code results currently produce empty FTS text; a preexisting version1 index remains stale on unchanged JSONL.
-- [ ] Add tests for inline, artifact preview and unavailable; inline data with ordinary `images`/`error`/`ref` fields; typed media excluded; dependency/ref metadata excluded; existing code/output and actual subagent/end aggregate-preview cases; explicit legacy raw behavior. Child coverage must include a genuine producer with empty descriptor preview and both original bounded fields; a fabricated nonempty descriptor cannot substitute for it.
-- [ ] Use actual framed JSONL and the file-backed query for hit/event seq/snippet assertions. Keep literal9/8 read controls, current10 and future11 rejection. New envelopes in a predecessor format remain rejected.
-- [ ] Build an actual persisted owned index, close connections, seed the historical empty result projection with literal `PRAGMA user_version=1` while retaining the real source revision/fingerprint, then reopen against unchanged JSONL. Verify expected hits return after the version2 rebuild. A second unchanged query must keep the normal skip path. Preserve exact JSONL bytes before/after.
-- [ ] Retain foreign application-id and literal future derived-version3 refusals without resetting their tables. Verify derived rebuild is transactional through existing owner tests; do not migrate the legacy persistence database behind `createSessionQuery`.
-- [ ] Implement explicit envelope branches plus version2 rebuild. Do not alter indexing policy for unrelated status/control events or fetch artifact bodies.
-- [ ] Run focused RED/GREEN, core-session search/result owners, full session-query suite and affected types. Build a fresh isolated Gateway copy and exercise the actual copied query path with fixed source and QA-import mapping; record exact tested scope. No CLI/renderer qualification claim from this task.
-- [ ] Commit coherent local changes, update task ledger/report and return to root for independent review. After acceptance root continues Task2.
+- [x] Read original producer→search→SQLite paths and relevant tests. Establish a real behavior RED before product edits: genuine format10 envelope-only tool/code results currently produce empty FTS text; a preexisting version1 index remains stale on unchanged JSONL.
+- [x] Add tests for inline, artifact preview and unavailable; inline data with ordinary `images`/`error`/`ref` fields; typed media excluded; dependency/ref metadata excluded; existing code/output and actual subagent/end aggregate-preview cases; explicit legacy raw behavior. Child coverage must include a genuine producer with empty descriptor preview and both original bounded fields; a fabricated nonempty descriptor cannot substitute for it.
+- [x] Use actual framed JSONL and the file-backed query for hit/event seq/snippet assertions. Keep literal9/8 read controls, current10 and future11 rejection. New envelopes in a predecessor format remain rejected.
+- [x] Build an actual persisted owned index, close connections, seed the historical empty result projection with literal `PRAGMA user_version=1` while retaining the real source revision/fingerprint, then reopen against unchanged JSONL. Verify expected hits return after the version2 rebuild. A second unchanged query must keep the normal skip path. Preserve exact JSONL bytes before/after.
+- [x] Retain foreign application-id and literal future derived-version3 refusals without resetting their tables. Verify derived rebuild is transactional through existing owner tests; do not migrate the legacy persistence database behind `createSessionQuery`.
+- [x] Implement explicit envelope branches plus version2 rebuild. Do not alter indexing policy for unrelated status/control events or fetch artifact bodies.
+- [x] Run focused RED/GREEN, core-session search/result owners, full session-query suite and affected types. Build a fresh isolated Gateway copy and exercise the actual copied query path with fixed source and QA-import mapping; record exact tested scope. No CLI/renderer qualification claim from this task.
+- [x] Commit coherent local changes, update task ledger/report and return to root for independent review. After acceptance root continues Task2.
 
 Concrete regression shape, using fixture-owned valid refs/events rather than fabricated execution permission:
 
