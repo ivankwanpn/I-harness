@@ -1,0 +1,24 @@
+{
+  "name": "17-executor-read-lifecycle",
+  "cwd": "D:\\I-harness-main\\packages\\session-executor",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/result-reader.test.ts",
+    "test/result-reader-lifetime.test.ts",
+    "test/result-store-read.test.ts",
+    "test/retained-child-pins.test.ts",
+    "--maxWorkers=1",
+    "--minWorkers=1"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:08:03.3332570Z",
+  "finishedUtc": "2026-10-20T20:08:12.0085012Z",
+  "nativeExit": 0,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

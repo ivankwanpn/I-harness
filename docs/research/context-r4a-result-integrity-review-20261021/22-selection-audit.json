@@ -1,0 +1,40 @@
+{
+  "gate": "22-all-runtime-sources-final",
+  "classification": "Invalid root discovery: current75tests plus historical20tests and5historical transform failures; no final qualification claim",
+  "historicalExecuted": [
+    {
+      "path": ".tmp/context-r4a-fix-baseline-f362c638/packages/context-output/test/managed-artifacts.test.ts",
+      "sha256": "3fafc767b306aa04daa1502a7ada77f5f1ecdb129b9658a1ea559934e61341a4"
+    },
+    {
+      "path": ".tmp/context-r4a-fix-baseline-f362c638/packages/context-output/test/managed-ownership.test.ts",
+      "sha256": "c1a02df51e65cadaeb329a88f3aa51359e0d725cd87d023cc7630294822b4692"
+    },
+    {
+      "path": ".tmp/context-r4a-fix-baseline-f362c638/packages/context-output/test/exec-frame-pages.test.ts",
+      "sha256": "5ac14967b02ddb90a60a190fb0a89c8edaa2390bbb184e33d6e5782c62096816"
+    },
+    {
+      "path": ".tmp/context-r4a-fix-baseline-f362c638/packages/context-output/test/original-owner-pin.test.ts",
+      "sha256": "8069dd9885d25a6a3b02dfda1244fd96ce3265aff5ae6cfec384a81c82b4f914"
+    },
+    {
+      "path": ".tmp/context-r4a-fix-baseline-f362c638/packages/session-executor/test/retained-child-pins.test.ts",
+      "sha256": "9c9514234dc441d5b9b9c3cf067ea2e5c88eef029de09443f6191a896a593ff3"
+    }
+  ],
+  "fixtureRoots": [
+    "snapshot/build/context-output-tests/<fresh-mkdtemp>",
+    "snapshot/build/r4a-ownership-tests/<fresh-mkdtemp>",
+    "snapshot/build/r4a-frame-pages/<fresh-mkdtemp>",
+    "OS tmpdir/original-owner-pin-<fresh>",
+    "OS tmpdir/owner-pin-quota-delete-<fresh>",
+    "OS tmpdir/child-source-snapshot-<fresh>",
+    "OS tmpdir/child-result-pins-<fresh>",
+    "OS tmpdir/child-passive-lifetime-<fresh>",
+    "OS tmpdir/child-pin-disposition-<fresh>"
+  ],
+  "audit": "Read executed fixture sources: fresh mkdtemp roots, explicit service/coordinator closes and fresh-root rm finally; no prior seal/evidence path literals or environment selection; transformed138copies never executed fixture bodies.",
+  "limit": "Historical dynamic OS tmp names were not logged; no retroactive before/after inventory or global old-evidence unchanged claim.",
+  "correction": "23/25 dir=packages,25 additionally excludes temporary/worktree/release/dist copies; exact final collected18currentfiles checked."
+}

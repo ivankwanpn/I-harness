@@ -1,0 +1,22 @@
+{
+  "name": "13-complete-manifest-red",
+  "cwd": "D:\\I-harness-main\\packages\\context-output",
+  "executable": "C:/Program Files/nodejs/node.exe",
+  "arguments": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/cold-lookup-integrity.test.ts",
+    "test/result-integrity-corruption.test.ts",
+    "--maxWorkers=1",
+    "--minWorkers=1"
+  ],
+  "environment": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\shell-config",
+    "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:/I-harness-main/.tmp/r4ai-1021-01",
+    "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.tmp\\r4ai-1021-01\\native"
+  },
+  "startedUtc": "2026-10-20T20:06:51.0774771Z",
+  "finishedUtc": "2026-10-20T20:06:54.4765982Z",
+  "nativeExit": 1,
+  "head": "0df518e7042039ef0f312c53aa565abf314bef3a"
+}

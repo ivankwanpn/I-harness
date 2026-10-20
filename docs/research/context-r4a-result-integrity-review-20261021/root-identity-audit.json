@@ -1,0 +1,187 @@
+{
+  "status": "PASS",
+  "base": "0df518e7042039ef0f312c53aa565abf314bef3a",
+  "head": "c9f41bd974f8940381d0f04748b19acc8647f4f3",
+  "inventory": {
+    "files": 3006,
+    "links": 75,
+    "bytes": 28509779
+  },
+  "inventoryEntries": 3081,
+  "sourceFiles": 4271,
+  "exactCurrentTestFiles": 18,
+  "exactTests": 75,
+  "nonoverlappingGates": [
+    {
+      "name": "01-cold-red",
+      "exit": 1,
+      "sources": 602,
+      "drift": []
+    },
+    {
+      "name": "02-independent-vectors",
+      "exit": 1,
+      "sources": 602,
+      "drift": []
+    },
+    {
+      "name": "03-independent-vectors",
+      "exit": 0,
+      "sources": 602,
+      "drift": []
+    },
+    {
+      "name": "04-vectors-io",
+      "exit": 0,
+      "sources": 604,
+      "drift": []
+    },
+    {
+      "name": "05-corruption-red",
+      "exit": 1,
+      "sources": 605,
+      "drift": []
+    },
+    {
+      "name": "06-codecs",
+      "exit": 1,
+      "sources": 606,
+      "drift": []
+    },
+    {
+      "name": "07-cold-green",
+      "exit": 0,
+      "sources": 607,
+      "drift": []
+    },
+    {
+      "name": "08-integrity-controls",
+      "exit": 0,
+      "sources": 607,
+      "drift": []
+    },
+    {
+      "name": "09-context-types",
+      "exit": 2,
+      "sources": 607,
+      "drift": []
+    },
+    {
+      "name": "10-cold-phase-edges",
+      "exit": 0,
+      "sources": 607,
+      "drift": []
+    },
+    {
+      "name": "11-context-types",
+      "exit": 0,
+      "sources": 607,
+      "drift": []
+    },
+    {
+      "name": "12-save-base-owners",
+      "exit": 0,
+      "sources": 616,
+      "drift": [
+        "packages/context-output/src/artifact/ownership.ts",
+        "packages/context-output/src/artifact/reader.ts",
+        "packages/context-output/src/artifact/recovery.ts"
+      ]
+    },
+    {
+      "name": "13-complete-manifest-red",
+      "exit": 1,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "14-restore-fixed-owners",
+      "exit": 0,
+      "sources": 616,
+      "drift": [
+        "packages/context-output/src/artifact/ownership.ts",
+        "packages/context-output/src/artifact/reader.ts",
+        "packages/context-output/src/artifact/recovery.ts"
+      ]
+    },
+    {
+      "name": "15-final-context-storage",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "16-gateway-read-lifecycle",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "17-executor-read-lifecycle",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "18-final-context-types",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "19-executor-types",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "20-gateway-types",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "21-sdk-types",
+      "exit": 0,
+      "sources": 616,
+      "drift": []
+    },
+    {
+      "name": "22-all-runtime-sources-final",
+      "exit": 1,
+      "sources": 4222,
+      "drift": []
+    },
+    {
+      "name": "23-contained-final-regressions",
+      "exit": 0,
+      "sources": 4271,
+      "drift": []
+    },
+    {
+      "name": "24-all-sources-context-types",
+      "exit": 0,
+      "sources": 4271,
+      "drift": []
+    },
+    {
+      "name": "25-excluded-final-regressions",
+      "exit": 0,
+      "sources": 4271,
+      "drift": []
+    },
+    {
+      "name": "26-final-types",
+      "exit": 0,
+      "sources": 4271,
+      "drift": []
+    }
+  ],
+  "rawGitObjects": 18,
+  "originalAndAmendedCommitDelta": "one final blank line in constants only; final workspace already qualified",
+  "explicitLimits": [
+    "No retrospective inventory of accidental historical OS temp dirs",
+    "No production runtime execution in root audit",
+    "No scale/package or full R4A acceptance"
+  ]
+}

@@ -1,0 +1,128 @@
+{
+  "status": "ready-for-fresh-independent-review-not-accepted",
+  "workspace": "D:/I-harness-main",
+  "branch": "codex/v0.1.13-development",
+  "base": "0df518e7042039ef0f312c53aa565abf314bef3a",
+  "implementation": "740c515399eebe1c4a27e7367b44ef353b212310",
+  "head": "c9f41bd974f8940381d0f04748b19acc8647f4f3",
+  "reviewRange": "0df518e7042039ef0f312c53aa565abf314bef3a..c9f41bd974f8940381d0f04748b19acc8647f4f3",
+  "version": "0.1.13-rc.1",
+  "sessionFormat": 10,
+  "unrelatedDecomposition": "27/43 unchanged",
+  "evidenceRoot": "D:/I-harness-main/.tmp/r4ai-1021-01",
+  "finalSeal": "D:/I-harness-main/.tmp/r4ai-1021-01/evidence-seal.json",
+  "nativeSeal": "D:/I-harness-main/.tmp/r4ai-1021-01/native/evidence-seal.json",
+  "report": {
+    "path": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-21-context-r4a-result-integrity\\task-1-report.md",
+    "sha256": "30398387773e20cd40e58411b5d15d5c1273163a772e301de30b71f25023366c"
+  },
+  "delivery": {
+    "path": "D:/I-harness-main/docs/research/2026-10-21-context-r4a-result-integrity-delivery.md",
+    "sha256": "5c525a56fc2aa414848c3e5be7956f6ea5da60d622acdd37259a5ff490ae3242"
+  },
+  "source": {
+    "path": "D:/I-harness-main/.tmp/r4ai-1021-01/final-workspace-sources.json",
+    "sha256": "5762ce5f6dc519ba2b2ff8a0793a701c2c0b08fba0e004058f84939a63b9f398",
+    "files": 4271,
+    "scope": "all package/app/root config + current hidden task inputs; excludes mutable progress/report/handback and generated build roots",
+    "scopeExpansion": "Early hidden omission preserved;13/15-21 named616 then4271transitive/app/root",
+    "drift": 0
+  },
+  "finalTests": {
+    "receipt": "25-excluded-final-regressions.receipt.json",
+    "files": 18,
+    "tests": 75,
+    "new": 30,
+    "existing": 45,
+    "exit": 0,
+    "exactPaths": [
+      "packages/context-output/test/cold-lookup-integrity.test.ts",
+      "packages/context-output/test/dependency-membership.test.ts",
+      "packages/context-output/test/exec-frame-pages.test.ts",
+      "packages/context-output/test/managed-artifacts.test.ts",
+      "packages/context-output/test/managed-ownership.test.ts",
+      "packages/context-output/test/original-owner-pin.test.ts",
+      "packages/context-output/test/result-dependency-query.test.ts",
+      "packages/context-output/test/result-integrity-codecs.test.ts",
+      "packages/context-output/test/result-integrity-corruption.test.ts",
+      "packages/context-output/test/result-integrity-vectors.test.ts",
+      "packages/context-output/test/result-integrity-witness.test.ts",
+      "packages/context-output/test/result-page.test.ts",
+      "packages/desktop-gateway/test/result-page-host.test.ts",
+      "packages/desktop-gateway/test/result-page.test.ts",
+      "packages/session-executor/test/result-reader-lifetime.test.ts",
+      "packages/session-executor/test/result-reader.test.ts",
+      "packages/session-executor/test/result-store-read.test.ts",
+      "packages/session-executor/test/retained-child-pins.test.ts"
+    ],
+    "discovery": [
+      "--dir packages",
+      "--exclude **/.tmp/**",
+      "--exclude **/.worktrees/**",
+      "--exclude **/release*/**",
+      "--exclude **/dist/**"
+    ]
+  },
+  "types": [
+    "26-final-types",
+    "19-executor-types",
+    "20-gateway-types",
+    "21-sdk-types"
+  ],
+  "red": [
+    "01-cold-red",
+    "05-corruption-red",
+    "13-complete-manifest-red"
+  ],
+  "sourceControl": [
+    "12-save-base-owners",
+    "14-restore-fixed-owners"
+  ],
+  "preservedFailures": [
+    "02-independent-vectors setup",
+    "06-codecs oracle reason",
+    "09-context-types test discriminator",
+    "22-all-runtime-sources-final accidental historical substring discovery/setup"
+  ],
+  "nativeCounters": {
+    "emptyStored": 96,
+    "emptyActualIndex": 128,
+    "boundaryBody": 131072,
+    "boundaryIndex": 288,
+    "shortNativeBodyReads": 18,
+    "execOneLeafBodyPasses": 3,
+    "execOneLeafIndex": 384,
+    "witnessSelectedCompanionReads": 2,
+    "catalogBodyIndexOpens": 0
+  },
+  "auditFiles": [
+    "qualification-audit.json",
+    "22-selection-audit.json",
+    "process-cleanup.json",
+    "literal-vector-constants.json",
+    "commit-identity.json",
+    "original-commit-objects/"
+  ],
+  "ownedProcesses": 0,
+  "noPublish": true,
+  "outsideScope": [
+    "A6 scale/100MiB/packaged",
+    "mixed legacy-managed retention",
+    "whole R4A",
+    "R4B-R6",
+    "unrelated decomposition",
+    "new execution authority/F1 inference/ACL/journal",
+    "cryptographic authenticity against rewriting all trusted records",
+    "full revoke-restore ABA"
+  ],
+  "selfReview": "No unresolved actionable product findings; rooted single checked snapshot and pin operation binding confined to original owners. Fresh reviewer and root audit pending.",
+  "commitTiming": {
+    "originalGateHead": "96b0bae10f2017220c25e8c7e7d0e5058b9b1597",
+    "amendedImplementation": "740c515399eebe1c4a27e7367b44ef353b212310",
+    "delta": "Only one trailing blank line removed from integrity-vectors.ts; product owners identical",
+    "workspace": "Final25/26 manifests already capture cleaned constants bytes",
+    "auditCreatedAt": "2dca85136ff24810f91224b1fae5a9193b2b8123",
+    "finalDocAddendum": "c9f41bd974f8940381d0f04748b19acc8647f4f3",
+    "originalObjects": "original-commit-objects/*.raw, hashable as recorded Git object types"
+  }
+}
