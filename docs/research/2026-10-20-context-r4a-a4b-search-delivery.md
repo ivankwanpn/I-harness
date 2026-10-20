@@ -8,7 +8,7 @@ The existing file-backed derived schema/projection advances from1 to2. The origi
 
 - Checkout/branch: `D:/I-harness-main`, `codex/v0.1.13-development`.
 - BASE: `4b0f949c4aa0e44b9061686cdc357dcb39f2218e`; clean working tree at dispatch.
-- Product HEAD: `d2b624edb46c75000079e8867d2794631b61ce38` (`fix(session-query): index retained result facts and rebuild old cache`). This report/ledger are a following documentation commit.
+- Initial behavior commit: `d2b624edb46c75000079e8867d2794631b61ce38` (`fix(session-query): index retained result facts and rebuild old cache`). Final product HEAD after root's READ-07 wording ruling: `8f93fc026fcf13d5ea8cf6820b782233192940b4`. Delivery reports are committed separately; SDD task report/ledger remain in the existing ignored local plan workspace.
 - Sole product writer: Task1 implementer agent `/root/a4b_search_implementation_20261020`; no recursive delegation or checkout switch. Root retains design/integration/acceptance ownership.
 - Approved basis: [Task1 and READ-01/02/03](../superpowers/plans/2026-10-20-context-r4a-a4b-result-consumers.md). Applied TDD, systematic debugging and verification-before-completion workflows.
 - Product remains0.1.13-rc.1; Session format10 and decomposition27/43 are unchanged. No push, merge, tag, release, live provider/account or user-session work.
@@ -54,3 +54,20 @@ Fresh copy: `D:/I-harness-main/.tmp/context-r4a-a4b-search-20261020-gateway/`. T
 Self-review inspected the complete product diff, test discrimination and exact evidence. The implementation changes only the existing projection and derived version; no new public API, dependency, service, store, permission owner, reachability exemption, reseed or fake consumer is introduced. Source tests use valid fixture descriptors; the additional copied-runtime control uses an actually committed immutable artifact from the existing owner. `residual-processes-final.json` is `[]`: no task-labelled Node/Vitest process remains. The query and artifact fixtures close their owners and remove only their own temporary roots.
 
 Independent root/reviewer acceptance is pending. Product writes stop at handback. This unit establishes bounded search/cache behavior and copied-library runtime behavior. It does not qualify Gateway IPC, Electron renderer, CLI transcript rendering, six live protocols, full-artifact search, explicit artifact paging, all R4A, or release readiness. Task2 and the following artifact-page reader remain the next approved units after root resolves review findings.
+
+## READ-07 wording follow-up and final copy
+
+After the initial seal, root ruled that the model-facing `session_search` tool description must expose the same bounded coverage as the README. Commit `8f93fc026fcf13d5ea8cf6820b782233192940b4` adds: “Retained results search stored previews or inline data only; missing hits do not prove absence from full artifact bodies.” The existing `{ hits }` DTO, API and search algorithm are unchanged. No new tests were added for prose; existing tools tests were reused as directed.
+
+The original13 receipts, first copy, `seal.json` and `inventory.json` remain preserved. Follow-up receipts use the wording working tree after documentation HEAD `8b1500d7bf38322d8d6a832451d87a72833024af`:
+
+| Receipt | Observed outcome |
+| --- | --- |
+| `14-tools-coverage-wording` | Existing tools3/3 pass; source stable. |
+| `15-gateway-build-wording` | New `.tmp/context-r4a-a4b-search-20261020-gateway-b/` build exits0;242 packages shipped. |
+| `16-copy-prepare-wording` | Final923 source/manifest matches;280 in-copy dependency edges;5 QA fixtures/16 production import edits. |
+| `17-copy-runtime-wording` |36/36 tests across5 files pass against final copied entries, including existing tool registry tests and the actual1MiB artifact-boundary control. |
+
+Follow-up started `2026-10-20T11:56:13.8709037Z`; final copied runtime completed `2026-10-20T11:57:02.0622514Z`. Node runtime is `v24.15.0`. Types and the full62-test source suite were run before this description-only change; the follow-up reran only the affected existing tools gate plus the refreshed copied controls. No broader type/runtime claim is inferred from the prose edit.
+
+Final mapping is `copied-qa-b-before.json`; final QA is `copied-qa-b/`. `seal-wording.mjs`/`seal-wording.json` verify all17 receipt exits/stability, final2,664 source inputs and final copied/QA hashes, mapping bytes to final product HEAD. Final source-manifest SHA256 is `79c5c76806a4f29668bfc80f5c2b79601d63d61472cceed0be5bcd17f1a14011`. `inventory-wording.json` retains110 evidence files with digest `743ffd3feadab931d751d0e8b0133fa4ece49374af41923bf2cac87e99639c30`. Seal time: `2026-10-20T11:57:15.870Z`. Final task-labelled Node/Vitest processes are again `[]` in `residual-processes-wording-final.json`. Product writes stop again at this final handback; independent acceptance remains pending.
