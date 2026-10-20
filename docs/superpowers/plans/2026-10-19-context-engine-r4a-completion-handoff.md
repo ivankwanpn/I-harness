@@ -1,6 +1,6 @@
 # R4A Retained Results Completion Implementation Plan
 
-> **For agentic workers:** Use `superpowers:executing-plans` for this batch. The user selected **deepseek-flash-1017** as the separate implementation agent and **Codex** as reviewer. Use one product writer, no recursive delegation. Follow checkbox steps; the explicit workflow applies if the skill is unavailable.
+> **For agentic workers:** The latest2026-10-20 user instruction supersedes the original DeepSeek handoff: Codex root leads continuous development, with GPT6.1Sol implementation/review subagents. Use the approved subagent-driven-development workflow, one product writer and no recursive delegation. Subagents hand back each bounded task for independent review; root then continues the approved remaining work. Historical unchecked steps are not a request to redo accepted A3/A4a.
 
 **Goal:** 在現有未驗收R4A程式上完成所有真實producer／reader／恢復／生命週期接線，提供一個可由Codex完整驗收的交付包。
 
