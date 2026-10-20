@@ -1,0 +1,87 @@
+{
+  "head": "382864914331931f6b04502501a86153cce02204",
+  "failures": [],
+  "handbackSha256": "7113354bdc8167bc2e5ce2c607d1fd11bf43f958bb8e27f83c668fbfa4a5ead8",
+  "seal": {
+    "files": 176,
+    "bytes": 5056413,
+    "sha256": "442127da8ff7804537e8ea3d1e057a33859096c915f48d189c504b0528fc531b"
+  },
+  "oldSeal": {
+    "files": 2103,
+    "bytes": 28496267,
+    "sha256": "547b65cbe233bd03ccdc5d4bbb4447bb5156186f8c6bc8c9b349a3658be3142f"
+  },
+  "source": {
+    "files": 2541,
+    "changedTests": [
+      "packages/sdk/test/result-page-cli.test.ts",
+      "packages/session-executor/test/native-dependency-observer.test.ts"
+    ],
+    "addedManifestInputs": [
+      ".superpowers/sdd/2026-10-21-context-r4a-native-dependencies/task-1-brief.md",
+      ".superpowers/sdd/2026-10-21-context-r4a-native-dependencies/task-1-review.md",
+      "packages/desktop-gateway/test/fixtures/official-plugins/.claude-plugin/marketplace.json",
+      "packages/desktop-gateway/test/fixtures/official-plugins/plugins/explanatory-output-style/.claude-plugin/plugin.json",
+      "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/.claude-plugin/plugin.json",
+      "packages/plugin-registry/test/fixtures/marketplace-a/.claude-plugin/marketplace.json",
+      "packages/plugin-registry/test/fixtures/marketplace-a/plugins/proxy/.mcp.json",
+      "packages/plugin-registry/test/fixtures/official-playwright/.mcp.json"
+    ],
+    "preexistingHiddenFixtureContentsVerified": 6,
+    "productChanges": 0
+  },
+  "gates": [
+    {
+      "name": "fix1-observer-final",
+      "nativeExit": 0,
+      "start": "2026-10-20T19:35:14.6189539Z",
+      "end": "2026-10-20T19:35:37.9052095Z",
+      "sourceChanges": 0
+    },
+    {
+      "name": "fix1-cli-final",
+      "nativeExit": 0,
+      "start": "2026-10-20T19:33:56.1083001Z",
+      "end": "2026-10-20T19:34:00.0410893Z",
+      "sourceChanges": 0
+    },
+    {
+      "name": "fix1-types",
+      "nativeExit": 0,
+      "start": "2026-10-20T19:34:15.1003529Z",
+      "end": "2026-10-20T19:34:28.7995164Z",
+      "sourceChanges": 0
+    }
+  ],
+  "laterRefusal": {
+    "physical": 65871,
+    "quota": 65872,
+    "count": 1,
+    "nativeEffects": 1,
+    "seam": "Genuine later membership quota after committed catalog; preserved C1 original assertions/bytes and receipt"
+  },
+  "cli": {
+    "pid": 16036,
+    "exit": {
+      "code": 0,
+      "signal": null
+    },
+    "pages": 5,
+    "stdoutBytes": 12007,
+    "stderrBytes": 7,
+    "stdoutSha256": "acc82707047d177b951f6b79d6293cd84b6772f3f4079fb30cc9e411b2e081a9",
+    "stderrSha256": "afcbe972df52198257b4c69380ff5c4b251699b0b1f026ec4cae3aa8180a5757",
+    "rawArtifactBodiesRehashed": 3
+  },
+  "cleanup": {
+    "receipts": 4,
+    "matchingOwnedNodeProcesses": 0
+  },
+  "limits": [
+    "Earlier 98-test/nine-type gates are preserved, not repeated or summed as new tests.",
+    "Six hidden fixtures are newly covered manifest inputs; original groups did not independently hash those paths. Their current content matches the prior Git revision apart from permitted EOL representation.",
+    "Actual CLI is cold transport/storage-owner qualification, separate from genuine native producer observer.",
+    "Original profile-isolation and deep-root SQLite limitations remain."
+  ]
+}

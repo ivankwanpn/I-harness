@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "status": "ready-for-independent-review",
+  "workspace": "D:/I-harness-main",
+  "branch": "codex/v0.1.13-development",
+  "base": "afec9bb6034378207ac18a44fd9d6b2c3af70445",
+  "head": "cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a",
+  "range": "afec9bb6034378207ac18a44fd9d6b2c3af70445..cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a",
+  "productRepairHead": "139bf7779a00d84e9dbea84836077497e7f43649",
+  "testIsolationHead": "5237c3de7ba7695246e027dbe966ac463b5eb238",
+  "productSourceUnchangedAfterRepair": true,
+  "trackedTreeClean": true,
+  "productVersion": "0.1.13-rc.1",
+  "sessionFormat": 10,
+  "decomposition": "27/43",
+  "report": {
+    "path": "D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-native-dependencies/task-1-report.md",
+    "sha256": "f66b061b5ea0f75b8c6bf259498d9d15a0488eb9f443a3549143e6f9be2f46f7"
+  },
+  "delivery": {
+    "path": "D:/I-harness-main/docs/research/2026-10-21-context-r4a-native-dependencies-delivery.md",
+    "sha256": "3bb47ef9f2bd949fb1b0e8c7a66a15c0d29159b1b95efda0bd9ac2af54e8e17a"
+  },
+  "evidence": {
+    "sourceManifestSha256": "957de1d5f0e6836257c6ba8ee18993d006e635a78c1f0d7de83c92cbdbd0e933",
+    "verifiedFiles": 2103,
+    "index": "evidence-index.json",
+    "root": "D:/I-harness-main/.tmp/context-r4a-native-dependencies-20261021-implementation",
+    "externalCopiedFiles": 299,
+    "seal": "evidence-seal.json",
+    "externalCopyManifest": "external-evidence-copy.json",
+    "sourceManifest": "final-freeze-manifest.json",
+    "sealSha256": "547b65cbe233bd03ccdc5d4bbb4447bb5156186f8c6bc8c9b349a3658be3142f",
+    "commands": "commands.json",
+    "sourceFiles": 2533,
+    "integrityVerified": true,
+    "sealedFiles": 2103
+  },
+  "verification": {
+    "productSuites": 27,
+    "testOnlyFocusedTypeProjects": 2,
+    "productTests": 98,
+    "sealedGuardGates": [
+      "sealed-guard-session",
+      "sealed-guard-context"
+    ],
+    "testOnlyFocusedTests": 12,
+    "testOnlyGates": [
+      "final-isolated-session-short",
+      "final-isolated-context",
+      "final-isolated-types"
+    ],
+    "typeProjects": 9,
+    "allProductNativeExits": 0,
+    "allTestOnlyNativeExits": 0,
+    "sealedGuardExpectedNativeExit": 1,
+    "allLatestProductSourceDeltas": 0,
+    "latestProductGates": [
+      "final-session-policy",
+      "final-context-policy",
+      "final-sdk-policy",
+      "final-gateway-policy",
+      "final-desktop-policy",
+      "final-tool-owner",
+      "final-exec-owner",
+      "final-types"
+    ]
+  },
+  "cleanup": {
+    "inventory": "owned-process-inventory.json",
+    "originalFixtureDisposalReceipts": 75,
+    "unrelatedProcessesTerminated": 0,
+    "matchingOwnedNodeProcesses": 0
+  },
+  "limitations": [
+    "Original bare cross-owner member query remains denied; explicit viaCatalog is the deliberate new contract",
+    "Catalog-policy RED is original same-session owner/policy seam with literal captured B, not full Agent project switching or demonstrated cross-session leak",
+    "Earlier static-import baseline lacked shell IH_CONFIG_DIR; retrospective process-wide absence of profile writes UNKNOWN; no user config/credentials inspected; final gates isolate before startup",
+    "Deep chosen override SQLite unable-to-open remains environment/setup with root cause unproved; resolved database length256, parent present, potential journal264; short sibling route passes",
+    "Live acknowledgement uncertainty is not physical crash qualification",
+    "No R4B semantic seed/bootstrap, all A5/A6, packaged build/export, scale completion or future-batch completion claim",
+    "Native sourceId/ordinal are trusted original semantic metadata, not independently rederived or protected against wholesale local metadata rewriting"
+  ],
+  "reviewer": {
+    "readOnlyFreeze": true,
+    "suggestedShortFreshRoot": "D:/I-harness-main/.tmp/r4a-native-review-<unique>",
+    "requireFreshRoot": true,
+    "doNotUseWriterRunGate": true,
+    "setConfigBeforeProcess": "IH_CONFIG_DIR",
+    "runExplicitPackageTestPaths": true,
+    "sealedRootGuard": "evidence-seal.json",
+    "evidenceOverride": "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT"
+  },
+  "publishing": {
+    "release": false,
+    "tag": false,
+    "merge": false,
+    "push": false
+  },
+  "frozenAt": "2026-10-20T19:19:55.6075396Z"
+}

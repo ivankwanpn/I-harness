@@ -1,0 +1,39 @@
+{
+  "head": "382864914331931f6b04502501a86153cce02204",
+  "failures": [
+    {
+      "message": "The expression evaluated to a falsy value:\n\n  assert(log.includes('session-executor')&&log.includes('packages/sdk')&&log.includes('Done'))\n",
+      "stack": "AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:\n\n  assert(log.includes('session-executor')&&log.includes('packages/sdk')&&log.includes('Done'))\n\n    at file:///D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-native-dependencies/root-fix1-audit.mjs:61:10\n    at ModuleJob.run (node:internal/modules/esm/module_job:437:25)\n    at async node:internal/modules/esm/loader:639:26\n    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)"
+    }
+  ],
+  "handbackSha256": "7113354bdc8167bc2e5ce2c607d1fd11bf43f958bb8e27f83c668fbfa4a5ead8",
+  "seal": {
+    "files": 176,
+    "bytes": 5056413,
+    "sha256": "442127da8ff7804537e8ea3d1e057a33859096c915f48d189c504b0528fc531b"
+  },
+  "oldSeal": {
+    "files": 2103,
+    "bytes": 28496267,
+    "sha256": "547b65cbe233bd03ccdc5d4bbb4447bb5156186f8c6bc8c9b349a3658be3142f"
+  },
+  "source": {
+    "files": 2541,
+    "changedTests": [
+      "packages/sdk/test/result-page-cli.test.ts",
+      "packages/session-executor/test/native-dependency-observer.test.ts"
+    ],
+    "addedManifestInputs": [
+      ".superpowers/sdd/2026-10-21-context-r4a-native-dependencies/task-1-brief.md",
+      ".superpowers/sdd/2026-10-21-context-r4a-native-dependencies/task-1-review.md",
+      "packages/desktop-gateway/test/fixtures/official-plugins/.claude-plugin/marketplace.json",
+      "packages/desktop-gateway/test/fixtures/official-plugins/plugins/explanatory-output-style/.claude-plugin/plugin.json",
+      "packages/desktop-gateway/test/fixtures/official-plugins/plugins/feature-dev/.claude-plugin/plugin.json",
+      "packages/plugin-registry/test/fixtures/marketplace-a/.claude-plugin/marketplace.json",
+      "packages/plugin-registry/test/fixtures/marketplace-a/plugins/proxy/.mcp.json",
+      "packages/plugin-registry/test/fixtures/official-playwright/.mcp.json"
+    ],
+    "preexistingHiddenFixtureContentsVerified": 6,
+    "productChanges": 0
+  }
+}

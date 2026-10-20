@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "status": "ready-for-scoped-rereview",
+  "workspace": "D:/I-harness-main",
+  "branch": "codex/v0.1.13-development",
+  "base": "cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a",
+  "head": "382864914331931f6b04502501a86153cce02204",
+  "deltaRange": "cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a..382864914331931f6b04502501a86153cce02204",
+  "fullRange": "afec9bb6034378207ac18a44fd9d6b2c3af70445..382864914331931f6b04502501a86153cce02204",
+  "productUnchangedFrom": "139bf7779a00d84e9dbea84836077497e7f43649",
+  "productSourceDiffExit": 0,
+  "trackedTreeClean": true,
+  "changedPaths": [
+    "packages/session-executor/test/native-dependency-observer.test.ts",
+    "packages/sdk/test/result-page-cli.test.ts"
+  ],
+  "report": {
+    "path": "D:/I-harness-main/.superpowers/sdd/2026-10-21-context-r4a-native-dependencies/fix1-report.md",
+    "sha256": "81d19a1fac8db89cfb468f95764c90c2837674a7cbd52de05538070113351dee"
+  },
+  "evidence": {
+    "root": "D:/I-harness-main/.tmp/r4a-native-fix1-20261021",
+    "sealSha256": "442127da8ff7804537e8ea3d1e057a33859096c915f48d189c504b0528fc531b",
+    "sourceManifestSha256": "46534268aea349f8db462774161b2056c374223b8a7d834962c207d0e2189920",
+    "seal": "evidence-seal.json",
+    "sourceFiles": 2541,
+    "verified": true,
+    "sourceDelta": "source-delta.json",
+    "files": 176,
+    "bytes": 5056413.0,
+    "index": "fix1-index.json",
+    "sourceManifest": "fix1-observer-final-after-sources.json"
+  },
+  "findings": [
+    {
+      "finalReceipt": "observer-xL77sR/later-refusal-receipt.json",
+      "priority": "P2",
+      "seam": "Actual later original catalog committed then configured physical quota refuses first membership metadata reservation",
+      "count": 1,
+      "nativeBodyCount": 1,
+      "nativeLaunchCount": 1,
+      "name": "C1 preservation during later genuine known refusal",
+      "scopeLimit": "Later catalog-body quota with usable C1 is not separately claimed",
+      "addressed": true
+    },
+    {
+      "cliNativeExit": {
+        "code": 0,
+        "signal": null
+      },
+      "finalReceipt": "result-cli-GpxpXk/cli-witness-receipt.json",
+      "boundary": "HarnessClient.spawn actual CLI cold transport and original storage-owner scopes plus real closed managed facts; not native-producer/full-Agent qualification",
+      "priority": "P2",
+      "stderrBytes": 7,
+      "pages": 5,
+      "name": "Actual CLI witnessed native read",
+      "stdoutBytes": 12007,
+      "addressed": true
+    }
+  ],
+  "verification": {
+    "typeProjects": 2,
+    "nativeExit": 0,
+    "runtimeSetupFailures": [],
+    "initialSuccessfulAttemptsRetained": [
+      "later-refusal-attempt1",
+      "cli-witness-attempt1"
+    ],
+    "sourceDelta": 0,
+    "old98Test9TypeProductGatesNotRepeated": true,
+    "focusedTests": 2,
+    "unexpectedRuntimeFailures": [],
+    "finalGates": [
+      "fix1-observer-final",
+      "fix1-cli-final",
+      "fix1-types"
+    ]
+  },
+  "cleanup": {
+    "inventory": "cleanup-inventory.json",
+    "matchingOwnedNodeProcesses": 0,
+    "originalFixtureReceipts": 4,
+    "unrelatedProcessesTerminated": 0
+  },
+  "oldImmutable": {
+    "hashes": {
+      "handback": "3a5e2b4b981fd060723fa25043bec449478a14946971734f1299f173b4249400",
+      "report": "f66b061b5ea0f75b8c6bf259498d9d15a0488eb9f443a3549143e6f9be2f46f7",
+      "seal": "547b65cbe233bd03ccdc5d4bbb4447bb5156186f8c6bc8c9b349a3658be3142f"
+    },
+    "bytes": 28496267.0,
+    "verified": true,
+    "files": 2103
+  },
+  "reviewer": {
+    "reuseSameFreshReviewer": true,
+    "doNotUseSealedWriterRunner": true,
+    "setBothBeforeProcessStartup": true,
+    "requireFreshShortRoot": true,
+    "environment": [
+      "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT",
+      "IH_CONFIG_DIR"
+    ]
+  },
+  "scope": {
+    "broaderAcceptance": false,
+    "publishing": false,
+    "newProductDefectObserved": false,
+    "decomposition": "27/43",
+    "sessionFormat": 10,
+    "productVersion": "0.1.13-rc.1"
+  },
+  "limits": [
+    "Prior retrospective profile-isolation uncertainty is unchanged",
+    "Prior deep-root SQLite setup root cause is unproved and unchanged",
+    "No packaged/A6 scale or R4B/bootstrap-wide claim",
+    "Host-created CLI frame scopes are accurately cold transport/storage-owner evidence; genuine native producer evidence remains separate"
+  ],
+  "frozenAt": "2026-10-20T19:44:21.2290858Z"
+}

@@ -2,6 +2,8 @@
 
 Approved scoped execution plan, 2026-10-21. Continues the approved R4A DEP/A5 contract after publication/original-pin acceptance e67db43bb8b85d8caa9f6c1751702a9cbfe124a2. Independent preflight and scoped re-review pass after four fixture/lifecycle corrections; this is readiness, not behavior qualification. Root pins the clean BASE in the task brief. Use one GPT6.1Sol writer, then a fresh GPT6.1Sol reviewer; no recursive agents. Version 0.1.13-rc.1, Session format 10 and unrelated decomposition 27/43 remain unchanged. No push, merge, tag, release, real provider, user profile or unrelated event-runtime work.
 
+**Status: completed and accepted for this bounded unit**, range `afec9bb6..38286491`. [Root acceptance](../../research/2026-10-21-context-r4a-native-dependencies-acceptance.md) records the deliberate viaCatalog contract, fresh review/fix1 closure, source/evidence audit and remaining scope. Historical instructions below describe the completed work; do not rerun it from an unchecked excerpt.
+
 ## Outcome and scope
 
 A genuine prepared tool can produce primary JSON plus multiple native output streams. Its final result must preserve every genuinely registered source, distinguish unavailable from uncertain storage, retain exact native bytes, and give an authorized later observer a usable result without replaying the command. Serialized reference-looking JSON is data; it is not registration or authority.

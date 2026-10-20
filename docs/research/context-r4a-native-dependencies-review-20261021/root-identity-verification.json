@@ -1,0 +1,184 @@
+{
+  "head": "cfa3d5ee8b899e4b31f9870ff1cb1cb86eadd87a",
+  "checkedAt": "2026-10-20T19:26:35.838Z",
+  "failures": [],
+  "base": "afec9bb6034378207ac18a44fd9d6b2c3af70445",
+  "handbackSha256": "3a5e2b4b981fd060723fa25043bec449478a14946971734f1299f173b4249400",
+  "seal": {
+    "files": 2103,
+    "bytes": 28496267,
+    "sha256": "547b65cbe233bd03ccdc5d4bbb4447bb5156186f8c6bc8c9b349a3658be3142f"
+  },
+  "source": {
+    "files": 2533,
+    "manifestSha256": "957de1d5f0e6836257c6ba8ee18993d006e635a78c1f0d7de83c92cbdbd0e933",
+    "mismatches": 0,
+    "productRepairHead": "139bf7779a00d84e9dbea84836077497e7f43649",
+    "productSourcePaths": 1195,
+    "onlyLaterFixtureChanges": [
+      "packages/context-output/test/dependency-membership.test.ts",
+      "packages/session-executor/test/native-dependency-fixture.ts",
+      "packages/session-executor/test/native-dependency-observer.test.ts"
+    ]
+  },
+  "external": {
+    "copies": 299,
+    "sourceAndCopyMismatches": 0,
+    "guardFiles": [
+      "evidence-seal.json"
+    ],
+    "newDefaultRootFixtures": 0
+  },
+  "gates": [
+    {
+      "label": "final-session-policy",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 33,
+      "nativeStart": "2026-10-20T19:02:35.8550483Z",
+      "nativeEnd": "2026-10-20T19:03:18.5961939Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-context-policy",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 17,
+      "nativeStart": "2026-10-20T19:04:26.9963689Z",
+      "nativeEnd": "2026-10-20T19:04:31.0465930Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-sdk-policy",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 3,
+      "nativeStart": "2026-10-20T19:04:39.5834343Z",
+      "nativeEnd": "2026-10-20T19:04:44.8001556Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-gateway-policy",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 11,
+      "nativeStart": "2026-10-20T19:04:53.1628298Z",
+      "nativeEnd": "2026-10-20T19:04:59.0161849Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-desktop-policy",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 27,
+      "nativeStart": "2026-10-20T19:05:05.1468118Z",
+      "nativeEnd": "2026-10-20T19:05:10.9445418Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-tool-owner",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 6,
+      "nativeStart": "2026-10-20T19:06:24.1347572Z",
+      "nativeEnd": "2026-10-20T19:06:26.2140809Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-exec-owner",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 1,
+      "nativeStart": "2026-10-20T19:06:40.3192274Z",
+      "nativeEnd": "2026-10-20T19:06:41.7857713Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-types",
+      "nativeExit": 0,
+      "files": 2533,
+      "nativeStart": "2026-10-20T19:05:22.2200177Z",
+      "nativeEnd": "2026-10-20T19:06:15.6815480Z",
+      "finalSourceDelta": [
+        "packages/context-output/test/dependency-membership.test.ts",
+        "packages/session-executor/test/native-dependency-fixture.ts",
+        "packages/session-executor/test/native-dependency-observer.test.ts"
+      ]
+    },
+    {
+      "label": "final-isolated-session-short",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 11,
+      "nativeStart": "2026-10-20T19:11:46.3276012Z",
+      "nativeEnd": "2026-10-20T19:12:18.2554883Z",
+      "finalSourceDelta": []
+    },
+    {
+      "label": "final-isolated-context",
+      "nativeExit": 0,
+      "files": 2533,
+      "tests": 1,
+      "nativeStart": "2026-10-20T19:12:56.3399380Z",
+      "nativeEnd": "2026-10-20T19:12:58.4110730Z",
+      "finalSourceDelta": []
+    },
+    {
+      "label": "final-isolated-types",
+      "nativeExit": 0,
+      "files": 2533,
+      "nativeStart": "2026-10-20T19:13:32.1668131Z",
+      "nativeEnd": "2026-10-20T19:13:43.3133404Z",
+      "finalSourceDelta": []
+    }
+  ],
+  "productTestTotal": 98,
+  "guardProbes": [
+    {
+      "label": "sealed-guard-session",
+      "nativeExit": 1
+    },
+    {
+      "label": "sealed-guard-context",
+      "nativeExit": 1
+    }
+  ],
+  "cleanup": {
+    "receipts": 75,
+    "matchingOwnedNodeProcesses": 0,
+    "scope": "Recorded task-root scan plus original awaited disposal receipts, not a new system-wide scan"
+  },
+  "receiptIndex": {
+    "receipts": 130,
+    "hashMismatches": 0
+  },
+  "commandLedgerEntries": 51
+}
