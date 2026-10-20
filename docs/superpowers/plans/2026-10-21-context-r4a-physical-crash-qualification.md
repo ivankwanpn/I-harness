@@ -2,6 +2,8 @@
 
 Approved execution sequence, promoted by root on 2026-10-21 after Desktop Task2 acceptance through ae5fbf63. Fresh independent plan review and scoped re-review addressed all findings before dispatch. This is design readiness, not a claim that the physical controls have run. Root pins the clean acceptance BASE in the task brief. Use subagent-driven-development with one GPT6.1Sol writer and a fresh GPT6.1Sol reviewer; continue after acceptance within the already authorized ContextEngine redesign.
 
+**Status 2026-10-21:** accepted through test-only commit `d41813518be99fcd41c4709108ed942e9810fba4` after fresh independent PASS and root source/physical-evidence audit. [Acceptance](../../research/2026-10-21-context-r4a-physical-crash-acceptance.md) records 62 tests, two type gates, exact cut evidence, setup corrections and the fresh guest-counter/IPC qualifications. No production defect or repair was found. Remaining publication/pin/catalog/quota/integrity, A6 and later ContextEngine work remain open.
+
 ## Goal and scope
 
 Prove what a fresh host can and cannot know after the original ordinary-tool or nested Code Mode tool producer has executed and the process is killed at four storage/publication boundaries. Recover only from the original journal/artifact evidence. Do not recreate a settlement source, replay a body/getter/hook/guest, synthesize successful completion from an orphan artifact, or add a recovery journal.

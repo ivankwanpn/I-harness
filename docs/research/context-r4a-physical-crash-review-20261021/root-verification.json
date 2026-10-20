@@ -1,0 +1,112 @@
+{
+  "status": "PASS",
+  "head": "d41813518be99fcd41c4709108ed942e9810fba4",
+  "sourceFiles": 2475,
+  "evidenceFiles": 1033,
+  "evidenceBytes": 73734220,
+  "handbackFiles": 9,
+  "recordedRuns": 18,
+  "qualifiedRuns": 7,
+  "fixtures": [
+    {
+      "mode": "code",
+      "cut": "before-issue",
+      "originalFrames": 0,
+      "prefixBytes": 16941,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "code",
+      "cut": "complete-unknown",
+      "originalFrames": 1,
+      "prefixBytes": 26142,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "code",
+      "cut": "install",
+      "originalFrames": 1,
+      "prefixBytes": 26142,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "code",
+      "cut": "partial-unknown",
+      "originalFrames": 0,
+      "prefixBytes": 16941,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "code",
+      "cut": "receipt-withheld",
+      "originalFrames": 1,
+      "prefixBytes": 26142,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "code",
+      "cut": "setup",
+      "positiveSetup": true
+    },
+    {
+      "mode": "normal",
+      "cut": "before-issue",
+      "originalFrames": 0,
+      "prefixBytes": 15097,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "normal",
+      "cut": "complete-unknown",
+      "originalFrames": 1,
+      "prefixBytes": 24228,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "normal",
+      "cut": "install",
+      "originalFrames": 1,
+      "prefixBytes": 24228,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "normal",
+      "cut": "partial-unknown",
+      "originalFrames": 0,
+      "prefixBytes": 15097,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "normal",
+      "cut": "receipt-withheld",
+      "originalFrames": 1,
+      "prefixBytes": 24228,
+      "bodyDigest": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3",
+      "noReplay": true
+    },
+    {
+      "mode": "normal",
+      "cut": "setup",
+      "positiveSetup": true
+    }
+  ],
+  "checks": [
+    "Sealed raw evidence and handback identities",
+    "All recorded source boundaries, settings and sequential runs",
+    "New helper/typecheck source coverage",
+    "Independent fixed artifact bytes/digest and authority inventories",
+    "Actual frame/key/physical suffix and conservative recovery prefix",
+    "Original and fresh callback/effect/request counters"
+  ],
+  "failures": [],
+  "limits": "Source selection is the recorded packages/scripts ts,mts,tsx,json,mjs plus root package/lock/tsconfig set; this is no new binary/dependency build qualification."
+}

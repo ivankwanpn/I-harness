@@ -1,0 +1,1475 @@
+{
+  "base": "5c399cbb55a64fdd37b0cab0b30250871103e9d2",
+  "node": "v24.15.0",
+  "platform": "win32",
+  "arch": "x64",
+  "gates": [
+    {
+      "name": "helper-types-final2",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit",
+          "-p",
+          "tsconfig.retained-crash.json"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:08:14.866Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:08:20.180Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "matrix-final2",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/retained-physical-crash.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1",
+          "--reporter=verbose"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:08:20.550Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:09:31.944Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "executor-regressions",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/physical-crash.test.ts",
+          "test/retained-result-flow.test.ts",
+          "test/retained-hook-recovery.test.ts",
+          "test/retained-hook-stop.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:09:32.318Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:09:49.542Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "jsonl-owner",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-persistence-jsonl",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/fact-batch-journal.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:09:49.910Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:09:52.166Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "persistence-owner",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-persistence",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/managed-fact-batch.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:09:52.551Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:09:53.880Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "core-owner",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\core-session",
+        "args": [
+          "../../node_modules/vitest/vitest.mjs",
+          "run",
+          "test/fact-journal.test.ts",
+          "test/managed-session-view.test.ts",
+          "--maxWorkers=1",
+          "--minWorkers=1"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:09:54.272Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:09:55.727Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    },
+    {
+      "name": "executor-types",
+      "command": {
+        "executable": "C:\\Program Files\\nodejs\\node.exe",
+        "cwd": "D:\\I-harness-main\\packages\\session-executor",
+        "args": [
+          "../../node_modules/typescript/bin/tsc",
+          "--noEmit"
+        ],
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\gate-config",
+        "started": "2026-10-20T17:09:56.133Z"
+      },
+      "exit": {
+        "status": 0,
+        "signal": null,
+        "finished": "2026-10-20T17:10:02.906Z"
+      },
+      "sourceCount": 2475,
+      "sourceManifestDigest": "7d73e2b9af66a0be27c3c6fe7a78778318dca779a439bdcc1e251e109ede4674"
+    }
+  ],
+  "fixtures": [
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-before-issue-SVeqQh",
+      "mode": "code",
+      "cut": "before-issue",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "f7942fe55363592005b0d8cfd33eae19592126125cf53145c75c4b637358c493",
+      "key": {
+        "batchId": "bbf50d11-59fe-4337-bcc3-dc7fb85f9042",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "87b3d2eb6c6960c43aaa37ef9f15d84215d13068a009dbc6d016d7cab59b73e5",
+        "batchDigest": "ad563b70a31dbe0a22d4b8d3b27d5eda3e9b1997b69fafff13efdb2a6429063e"
+      },
+      "physical": {
+        "writes": 0,
+        "writtenBytes": 0,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 16941,
+        "originalFrameCount": 0,
+        "originalFrameOffsets": [],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 27
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 25
+          },
+          {
+            "type": "turn/end",
+            "seq": 26
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 27
+          }
+        ],
+        "interruptedCells": [
+          {
+            "type": "code/cell",
+            "cellId": "a96be3e6-8873-427b-81de-991e7dc21e7a",
+            "sessionId": "retained-crash-owner",
+            "parentCallId": "fixture-original",
+            "state": "interrupted",
+            "error": "Code Mode execution was interrupted; restart does not restore its continuation",
+            "seq": 31
+          }
+        ],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-before-issue-SVeqQh",
+            "workspaceKey": "f23456e4efe6002c7c6d63fe0ac4626640fe6c4f8878a54c4a9078f0161234fd",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-before-issue-SVeqQh\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/operation.json": {
+              "bytes": 1062,
+              "sha256": "90f7b8247775baa8303752bf2448faade2573a170ae91e06c49d8c519626c295",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"bd069468-8fc6-46c3-aaa1-e2177338372e\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"a96be3e6-8873-427b-81de-991e7dc21e7a:1\",\"source\":{\"sourceId\":\"session-scope:9ac86ae4235aa9653c7a62f1ffa31b48f1346edb13dea878d95fb18743b59705\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/482b51a88a35fec21554464847b672d08f2e6693bf829011339f1cdea0fe7193/managed-v1/ctxv1_21fb928e9b8111f03afd453033c7eb286fc6b155a809f4e5fc430ec53a26a6aa/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "a85fddc7302ed0c5e3a0212012d7dc3fae820ed8d2fb7f89d58c836373e27e79",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"bd069468-8fc6-46c3-aaa1-e2177338372e\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 749
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-complete-unknown-Y7P3oh",
+      "mode": "code",
+      "cut": "complete-unknown",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "567dbf5a11e7e6400637fa7d2da31a213d987d03c234f50aaf9118ed2153831d",
+      "key": {
+        "batchId": "175a6aeb-34c3-4174-8fef-2456689b54c2",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "1bdff4654cea28c3488a7aa9effae9535f2ae03bcc495f69aea9354c6643896f",
+        "batchDigest": "d95ecd074ab27111c323bffbb0eba9b9bae3044d922aa5070d434c5b1994c9d2"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9201,
+        "nativeSyncs": 1,
+        "refusedRollbacks": 1
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 26142,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          16941
+        ],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 26
+          },
+          {
+            "type": "turn/end",
+            "seq": 27
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "interruptedCells": [
+          {
+            "type": "code/cell",
+            "cellId": "b5dbf71d-84c7-4c3d-bdcd-21c1e78d843e",
+            "sessionId": "retained-crash-owner",
+            "parentCallId": "fixture-original",
+            "state": "interrupted",
+            "error": "Code Mode execution was interrupted; restart does not restore its continuation",
+            "seq": 32
+          }
+        ],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-complete-unknown-Y7P3oh",
+            "workspaceKey": "f365a883a89e66966e8196c670ee01c7ed997d85440c6fe69e56677f6c32cdcd",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-complete-unknown-Y7P3oh\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/operation.json": {
+              "bytes": 1062,
+              "sha256": "985722e65f57e5508041f4c803dadc19bcacabb9a19a1a9da59d4bc63fa884c0",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"b5fbe4ff-19ec-484e-b84e-eee1e527edf7\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"b5dbf71d-84c7-4c3d-bdcd-21c1e78d843e:1\",\"source\":{\"sourceId\":\"session-scope:14692bb1b9529351bb280e4cd6e7ba5e16991c94f0b5e7b271df2dd2c4400fa9\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/ad79f4b6e3ea8946883b237837fd521ff7e12e76fa5db8dd709ca48f552c0986/managed-v1/ctxv1_ca25e27c023ee8d77ef3ce5e9d80c90ed03c4ad5ba4299500b7f68fdcead4e8f/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "32f4791669a1b0c521d056030b3c14fd2a340ff0887cf584e8456ed9ff8e86de",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"b5fbe4ff-19ec-484e-b84e-eee1e527edf7\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 749
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-install-6trOMB",
+      "mode": "code",
+      "cut": "install",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "98c56713f2190897750f748687c8a16f5298384ba74e7096c38e3bbf0e6e2faa",
+      "key": {
+        "batchId": "344d466d-f356-4912-b04a-321025b5556e",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "d99cf3fc50ed253dd75370cae1c9acf744f590ea1c97c32cad24919fd01d9643",
+        "batchDigest": "07cda0df6145b0496f5fae414b54ba46b7503b585f8e6642a2290240bdd4f5c6"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9201,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 26142,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          16941
+        ],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 26
+          },
+          {
+            "type": "turn/end",
+            "seq": 27
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "interruptedCells": [
+          {
+            "type": "code/cell",
+            "cellId": "7e4827f2-56c9-4cff-a46c-e1b0a0786d7d",
+            "sessionId": "retained-crash-owner",
+            "parentCallId": "fixture-original",
+            "state": "interrupted",
+            "error": "Code Mode execution was interrupted; restart does not restore its continuation",
+            "seq": 32
+          }
+        ],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-install-6trOMB",
+            "workspaceKey": "6311403591e19e80d11d844056fc1f4ce055967fa31e9eb59106a42b59020960",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-install-6trOMB\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/operation.json": {
+              "bytes": 1062,
+              "sha256": "b4ac68b8efbf46400b36275f65e9794cb829d383322a7c2bc67e673cce5da155",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"834c000e-e62f-426a-bb18-b5d9869943fa\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"7e4827f2-56c9-4cff-a46c-e1b0a0786d7d:1\",\"source\":{\"sourceId\":\"session-scope:d2b817e1fcf7d6bb7ef5a85e02e7fb92bf34e9761a6c6ab4e87cbb2c96f6c8e0\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/08ab75845322ffc95b28b7d97e4c99af316e2af791e02176eda0bc126f37ae3f/managed-v1/ctxv1_ff4624a5ae2d1fe38f991d2dafb2ad96e547a17aa7f7c28019f1240c3ad2844b/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "c57eb36ddc030fa80762dae4af450c8ba726f59fb9bb0b822a14f29ae255a8e3",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"834c000e-e62f-426a-bb18-b5d9869943fa\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 749
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-partial-unknown-O5yc2P",
+      "mode": "code",
+      "cut": "partial-unknown",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "a5725df82a0be652d6dd035f079c0657380335dbbe5d9eaa8433919f3d6c2e93",
+      "key": {
+        "batchId": "7f2a3d23-5d27-41ec-98b6-5402cb178fe0",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "4b324d92d77687b1fb2fd805d967336ad2edf891015e328181cfed8c232fe999",
+        "batchDigest": "c13e43d0cb5454626157f6f09835ae4819c1d0d8a7480de4bfdab5f3b1678e89"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 17,
+        "nativeSyncs": 1,
+        "refusedRollbacks": 1
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 16941,
+        "originalFrameCount": 0,
+        "originalFrameOffsets": [],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 27
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 25
+          },
+          {
+            "type": "turn/end",
+            "seq": 26
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 27
+          }
+        ],
+        "interruptedCells": [
+          {
+            "type": "code/cell",
+            "cellId": "57cfd8d3-498e-4202-b7e3-9ed268c700c0",
+            "sessionId": "retained-crash-owner",
+            "parentCallId": "fixture-original",
+            "state": "interrupted",
+            "error": "Code Mode execution was interrupted; restart does not restore its continuation",
+            "seq": 31
+          }
+        ],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-partial-unknown-O5yc2P",
+            "workspaceKey": "166e9fc4def1483da416f48746920b208033dfc5892ca311a89499f77db717d4",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-partial-unknown-O5yc2P\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/operation.json": {
+              "bytes": 1062,
+              "sha256": "f14be4f4fbcd8468c06316dd6977de2c721b37e5151bef4c3ae5b160957b8308",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"3dc5d78f-ca53-4e68-b0fe-6537ea425126\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"57cfd8d3-498e-4202-b7e3-9ed268c700c0:1\",\"source\":{\"sourceId\":\"session-scope:999949956a2a0b17892d4ad146cef79d6ec0514e51445ce009a23a9a270157b5\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/386c238e675039a58e5bbe6d2e641e6871c2410bba4ddeb98b081c8a3d9435b1/managed-v1/ctxv1_637c85a1ebbd557d1426a796aae1e879a7c89291c9601ffeecbe0ecd338fac33/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "8d22810856b897bded4b8f035cc17cec829cd224c8cc5c6b08cbb791c8048f5f",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"3dc5d78f-ca53-4e68-b0fe-6537ea425126\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 749
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-receipt-withheld-K3lWWp",
+      "mode": "code",
+      "cut": "receipt-withheld",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "dfbd6e4fbb77da08f1228ee6ca3ef35b163579795aecea7c548b814f17eb4c72",
+      "key": {
+        "batchId": "cf528d2b-3e8e-4b91-89b4-d5becccd9898",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "7629aa67440cacda0ceffe6c0ea8c1dfc4a5091f11808769d235ce60ea2e8e92",
+        "batchDigest": "a0139dcd09f61ea0219eac30e9a3930d7a079633941723c61f0afafa86206064"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9201,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 26142,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          16941
+        ],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 26
+          },
+          {
+            "type": "turn/end",
+            "seq": 27
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "code_exec",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 28
+          }
+        ],
+        "interruptedCells": [
+          {
+            "type": "code/cell",
+            "cellId": "dcdd43f5-39a7-43e6-b304-84ac0945fb17",
+            "sessionId": "retained-crash-owner",
+            "parentCallId": "fixture-original",
+            "state": "interrupted",
+            "error": "Code Mode execution was interrupted; restart does not restore its continuation",
+            "seq": 32
+          }
+        ],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-receipt-withheld-K3lWWp",
+            "workspaceKey": "ac8998a738a38f5601c13ef0b0b59a40ed9e45c86f25642e243e965e6b8ce475",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-receipt-withheld-K3lWWp\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/operation.json": {
+              "bytes": 1062,
+              "sha256": "80d4c8e50d3beeff8bd284d70f59af201b39117797cb9ded8b15f3ab2fa4c10e",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"ab65da7e-071b-4331-99a8-ecc66a1baced\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"dcdd43f5-39a7-43e6-b304-84ac0945fb17:1\",\"source\":{\"sourceId\":\"session-scope:ff15be72cdb743271c4a5889e19f6f8b2ee3ecc28ae836f975c971f29084c645\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/f4e46bf965b35eafdbfbc36f9df11f3d0c8e0d0befc6d402f794c18ebbba88b8/managed-v1/ctxv1_6964a41262109dc29d5fbe159ea4e95b4d57db83cb6fff66a2b2e88ee3c50887/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "5cbb9d86c6df4f0f6735f92b7fc7236ca5765b27a50a85198c102beeade993ce",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"ab65da7e-071b-4331-99a8-ecc66a1baced\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 749
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\code-setup-HUuuVj",
+      "mode": "code",
+      "cut": "setup",
+      "close": {
+        "code": 0,
+        "signal": null
+      },
+      "requests": 2,
+      "selectedFrameDigest": "cdf49ffc22a69d275751965e7f213beba020985d9481ced5dd39242789e2f4b0",
+      "key": {
+        "batchId": "56d62954-8156-4ed1-964e-918dd28fbf77",
+        "firstSeq": 25,
+        "count": 1,
+        "previousPrefixDigest": "6e196d7d884666a10a7e42ac6dfb2904f609efbb6c0b133409571e2a813bd913",
+        "batchDigest": "1db3b07ffd225794654404d648438c18f3c4db620014f4ddabcc658469ba8019"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9201,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 1,
+        "assemblies": 1,
+        "guestFulfilled": 1
+      },
+      "operationCount": 2
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-before-issue-LvJFXI",
+      "mode": "normal",
+      "cut": "before-issue",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "4425725cc9a721adac3abe6285f0a75f6c080f873758b6f866efb5bcc40b6e78",
+      "key": {
+        "batchId": "9256bc28-febb-4477-b837-d1bc63ba6db8",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "06cd8b81b2d0969b8d8958ad1309af74850207254ac26c6bd96b5b6f892079bd",
+        "batchDigest": "ddcc27660430a76480d50378535fbf776078c50f3c2783d71ba96992d715d770"
+      },
+      "physical": {
+        "writes": 0,
+        "writtenBytes": 0,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 15097,
+        "originalFrameCount": 0,
+        "originalFrameOffsets": [],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "fixture_result",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 24
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 22
+          },
+          {
+            "type": "turn/end",
+            "seq": 23
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "fixture_result",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 24
+          }
+        ],
+        "interruptedCells": [],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-before-issue-LvJFXI",
+            "workspaceKey": "09dda01ab6e648068e9418873b6db92c92f47381aa0936e00ebd5b40ee9d3308",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-before-issue-LvJFXI\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/operation.json": {
+              "bytes": 1040,
+              "sha256": "7a9a48529a708bf304812f1013a80d8226635fdcd71dab24ac65efb3ee3a29b5",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"88b93f18-6afe-4c67-b9d8-1bf3f8b4d40e\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"fixture-original\",\"source\":{\"sourceId\":\"session-scope:278742a70a4bcccf8387cd90c8010271846c6f3d405444e2405cb28ae4a85057\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/5ecfd776328ade448654c5b8ffbd1580c158ece360e9fc63fe03592a04860a0c/managed-v1/ctxv1_7fedeae74225f26653fd71e99c0caebf5b865ed6b1e0a15afbe31b678c288fb4/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "ebbf162afac5c97c57394e01ef604bc1cd496dca16af6d8e521c7024bea42f4e",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"88b93f18-6afe-4c67-b9d8-1bf3f8b4d40e\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 748
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-complete-unknown-YvpKhS",
+      "mode": "normal",
+      "cut": "complete-unknown",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "679dd2ff31b1b821429c019a689c3a11b269e02ff89aa00c141d6c57344ffb90",
+      "key": {
+        "batchId": "39ba21fe-0f70-4d9d-a617-44ddab3c9160",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "0cdc459c1248a6f95f365f3b437641dd9d3f36dd8398de9558ba98d4983c7d3a",
+        "batchDigest": "8d5f78dd54907105589d11fb0b9702d2cadcec571d73e7d40fb15aa86a1f5f83"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9131,
+        "nativeSyncs": 1,
+        "refusedRollbacks": 1
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 24228,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          15097
+        ],
+        "recovery": [],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 23
+          },
+          {
+            "type": "turn/end",
+            "seq": 24
+          }
+        ],
+        "interruptedCells": [],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-complete-unknown-YvpKhS",
+            "workspaceKey": "0999ca008676bc9bfd1928f4279629c7cd104afe692448d9dc933f02bf45d871",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-complete-unknown-YvpKhS\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/operation.json": {
+              "bytes": 1040,
+              "sha256": "de014a1d22e454f7ddfce7164fab4f152c2c27575124ec3b5286ccfabb512d92",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"13c9f2f1-80f7-4f9f-b658-ce2527e3eabc\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"fixture-original\",\"source\":{\"sourceId\":\"session-scope:936bd35d18b2d2d9d086fa98ae055d66760258fcf93e09d7db303f637f1cc81f\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/80dab35e42612b08a8cadc2f9b66879b757547678a26f5aaf986441b696128fd/managed-v1/ctxv1_6693c1ed8d6448cf4f79bc5ee37e49f04e3a44e4fff1e0560f8cbf7073384656/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "15bb4ba214dc018d1d4dfb839061b4a9d52fcda0ac71227ca2fb0cc1b1b63f76",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"13c9f2f1-80f7-4f9f-b658-ce2527e3eabc\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 746
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-install-I0l4os",
+      "mode": "normal",
+      "cut": "install",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "edfc8a12b08b7e891b438335706cda0973498895453f1bc63751dcd55939df8d",
+      "key": {
+        "batchId": "17bb35cb-6c31-43fb-91e0-7c0177910e9e",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "953f297aa30f0750a81a18c5a3e62eb3e1a9b354d0ffd9e930f223d4a431fce7",
+        "batchDigest": "c431c02d069b74ea6ba3702c1b787792a72b0a82a0311e89d550a9e2c63650ad"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9131,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 24228,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          15097
+        ],
+        "recovery": [],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 23
+          },
+          {
+            "type": "turn/end",
+            "seq": 24
+          }
+        ],
+        "interruptedCells": [],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-install-I0l4os",
+            "workspaceKey": "8efb8951231cdf4dc76b8d91b4725ade30b0d7d03f94990432f59dece8408720",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-install-I0l4os\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/operation.json": {
+              "bytes": 1040,
+              "sha256": "46e17f37834dac169f07fae91aa930875b3451f86624415313f9751206f5b62e",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"6f09401d-bac3-4820-8585-d0483c4f60f1\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"fixture-original\",\"source\":{\"sourceId\":\"session-scope:f9db0a9447fc62c61475306d24285d59c2925c0bfda8e2e858f47efa4ba7e319\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/3f9d547e230dea2db508b5bd97269142155f335a27371afb966007ff93c7dd63/managed-v1/ctxv1_2a296a56b64ed871309b3cb40392a6e14b21f6bb978f8166bc161374a654397d/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "d8a335f7e029d21a5ca88328d307080f7086fb5704d9b61181e9ccbc4445d4d5",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"6f09401d-bac3-4820-8585-d0483c4f60f1\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 746
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-partial-unknown-25PNLm",
+      "mode": "normal",
+      "cut": "partial-unknown",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "20eb0aa20c4c2b5bd2611080c32d876b799ea447e5d5c8231c2478cb94b3a344",
+      "key": {
+        "batchId": "c9e11332-eb4d-47e2-9a0e-ac4f332b3239",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "9691232cc4108a5632a9ba801175a730bfa82fc27bf08072525e4cdd9428ef87",
+        "batchDigest": "fde2d008d46523eb633a75d8a957cfdc811e661b35c40af538cadd8b3749b211"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 17,
+        "nativeSyncs": 1,
+        "refusedRollbacks": 1
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 15097,
+        "originalFrameCount": 0,
+        "originalFrameOffsets": [],
+        "recovery": [
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "fixture_result",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 24
+          }
+        ],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 22
+          },
+          {
+            "type": "turn/end",
+            "seq": 23
+          },
+          {
+            "type": "tool/result",
+            "callId": "fixture-original",
+            "name": "fixture_result",
+            "isError": true,
+            "output": {
+              "error": "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+              "code": "TOOL_OUTCOME_UNKNOWN",
+              "replay": false
+            },
+            "seq": 24
+          }
+        ],
+        "interruptedCells": [],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-partial-unknown-25PNLm",
+            "workspaceKey": "63da78d04a7c63376214baf04db202ecf6c46ac888818ab8980aefe4c6410bd1",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-partial-unknown-25PNLm\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/operation.json": {
+              "bytes": 1040,
+              "sha256": "66252589225bc33bdc65acf092d8f10331b04d93a4c8038eef4c69a09da55cf3",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"9ce78e26-520d-41e1-9167-125cf09ee38e\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"fixture-original\",\"source\":{\"sourceId\":\"session-scope:42d672c049265d00164d294b3e9b18520a0086750d3d5b0fe9184a5306b26a8f\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/c87d1012845eddee399411bfb78e869a9b3b81504ce4dabb52b7ab11444c6d37/managed-v1/ctxv1_40c0533cf29c574a0da51d2fdcd1b3e14075cdb864f0e1689c6ab0c9ef2dae71/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "6e98d483dd0fcc4ab7509c1ca3490cef90121d133cdf9793b7ed8bf17609935e",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"9ce78e26-520d-41e1-9167-125cf09ee38e\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 748
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-receipt-withheld-nWBk4h",
+      "mode": "normal",
+      "cut": "receipt-withheld",
+      "close": {
+        "code": null,
+        "signal": "SIGKILL"
+      },
+      "requests": 2,
+      "selectedFrameDigest": "ad9f59396d29acb9bacd2242c817d90a6a94b5f40c488058322c86ac4edb957c",
+      "key": {
+        "batchId": "b9b24578-03c4-4c60-8fb5-bd40d37dc97d",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "68fc1aecffad79289798fa575b8a66ca383b1a1571f8377aa4f93736731449c4",
+        "batchDigest": "6272ada5dcfbb375a520a6c2acc8f65b792b3db0f03a9c8fbe39ed528f63d3fa"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9131,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1,
+      "recovery": {
+        "headerBytes": 267,
+        "validPrefixBytes": 24228,
+        "originalFrameCount": 1,
+        "originalFrameOffsets": [
+          15097
+        ],
+        "recovery": [],
+        "appendedRecoveryEvents": [
+          {
+            "type": "step/end",
+            "seq": 23
+          },
+          {
+            "type": "turn/end",
+            "seq": 24
+          }
+        ],
+        "interruptedCells": [],
+        "fresh": {
+          "bodies": 0,
+          "getters": 0,
+          "hooks": 0,
+          "outerHooks": 0,
+          "assemblies": 1,
+          "guestFulfilled": 0
+        },
+        "requests": 2,
+        "effectEntries": 1,
+        "operationInventory": {
+          "location": {
+            "canonical": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-receipt-withheld-nWBk4h",
+            "workspaceKey": "ae2a7357a55614961a30687f13ac67d161eff4daae057505a2cf5f45544fd499",
+            "serviceRoot": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-receipt-withheld-nWBk4h\\sessions\\native-context\\context-output"
+          },
+          "files": {
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/access/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 201,
+              "sha256": "0e8fce4e123936292bcb6d579bab4f9ba64c6884b93a1ca81a5a56f4e1d09cd9",
+              "text": "{\"version\":1,\"sessionId\":\"retained-crash-owner\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"pinId\":\"7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6\"}"
+            },
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/body": {
+              "bytes": 1048587,
+              "sha256": "52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3"
+            },
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/index": {
+              "bytes": 2080,
+              "sha256": "cc69c26ab70f70302fcd5184d1c1193d1953b9ec42ab14c72a1acc85479b4222"
+            },
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/manifest.json": {
+              "bytes": 295,
+              "sha256": "536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9",
+              "text": "{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"}"
+            },
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/operation.json": {
+              "bytes": 1040,
+              "sha256": "e50a0114d2a2792128e88e193d19e9f0e66ddbcc73beb76d019b30ec3a4571af",
+              "text": "{\"version\":1,\"owner\":{\"operationId\":\"f82763df-6c75-4dd8-9a82-705882def67b\",\"sessionId\":\"retained-crash-owner\",\"callId\":\"fixture-original\",\"source\":{\"sourceId\":\"session-scope:d5a0b5fa86198eaacf2b293b0011b3b8542817e13d25a0600502351c331c3222\",\"readonly\":true}},\"codec\":\"json-utf8-v1\",\"id\":\"ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f\",\"phase\":\"committed\",\"encodedBytes\":1048587,\"manifest\":{\"version\":1,\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\",\"chunkBytes\":65536,\"leaves\":17,\"paddedLeaves\":32,\"treeRoot\":\"779fcfeff888cf473915da1b730e4cef38aef72ea52f08ecf32aaba6447f2e1c\"},\"ref\":{\"version\":1,\"id\":\"ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\",\"codec\":\"json-utf8-v1\",\"encodedBytes\":1048587,\"contentDigest\":\"52017bca0e8df9e8b588e3be733ff6dcf94e8b9a0f9c249ebe56e20a06c1c0d3\",\"completeness\":\"complete\"}}"
+            },
+            "context-output/a235585d72d7b7de225ce993cce32f202f0132f9e1725ece225645532f706dfa/managed-v1/ctxv1_eb72a6cc356cbe9bf8a324638d3ce76745936532289d1bf1a53af77c9d54ba1f/pins/7238114dabe9da491f884ef2615c80d9e9411d19c35a4c33e7da7fa5e87892f6.json": {
+              "bytes": 233,
+              "sha256": "64bd8d4cafdf70d1695c899023f567f02941e8021912e9de7b97003b8798a9e9",
+              "text": "{\"version\":1,\"documentId\":\"retained-crash-owner\",\"sessionId\":\"retained-crash-owner\",\"state\":\"pending\",\"operationId\":\"f82763df-6c75-4dd8-9a82-705882def67b\",\"revision\":\"536a38189ffc9f5af8f4f48e96b2632cf4fa4a70d48ab0d986c91288c673a8c9\"}"
+            }
+          }
+        },
+        "bodyOpens": 66,
+        "metadataOpens": 746
+      }
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\context-r4a-physical-crash-20261021-implementation\\normal-setup-F2IjoA",
+      "mode": "normal",
+      "cut": "setup",
+      "close": {
+        "code": 0,
+        "signal": null
+      },
+      "requests": 2,
+      "selectedFrameDigest": "9355ab6ed0157f35ce7710155414d3b50d9ddb805d41a17130b171e1d823e169",
+      "key": {
+        "batchId": "cbaae346-ec77-4f15-b630-80d832254c94",
+        "firstSeq": 22,
+        "count": 1,
+        "previousPrefixDigest": "58294a6cad0bf6e2695b0cc6bc02692f25872f6e09c012557b6b8d474f294300",
+        "batchDigest": "9a8a2ffcd4c34d0f3039e310bab9429777fb19e1d0ac955301dad242bc58833c"
+      },
+      "physical": {
+        "writes": 1,
+        "writtenBytes": 9131,
+        "nativeSyncs": 0,
+        "refusedRollbacks": 0
+      },
+      "counters": {
+        "bodies": 1,
+        "getters": 1,
+        "hooks": 1,
+        "outerHooks": 0,
+        "assemblies": 1,
+        "guestFulfilled": 0
+      },
+      "operationCount": 1
+    }
+  ]
+}
