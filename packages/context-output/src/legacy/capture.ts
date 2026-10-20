@@ -5,7 +5,7 @@ import type { ContextCapture, ContextOutputConfig, ContextOutputService, Context
 /** Execute one prepared legacy capture inside the service's admitted mutation
  * lane. Configuration remains live at the original reads/await boundaries. */
 export async function captureLegacy(
-  workspaceId: string,
+  getWorkspaceId: () => string,
   captured: ContextCapture,
   producer: Parameters<ContextOutputService['capture']>[2],
   getConfig: () => ContextOutputConfig,
@@ -30,8 +30,8 @@ export async function captureLegacy(
   if (original.length > 0 && bytes.length === 0) return undefined
   const revision = digest(bytes)
   const ref: ContextResultRef = {
-    id: referenceId(workspaceId, captured.sessionId, captured.callId, revision),
-    workspaceId: workspaceId, sessionId: captured.sessionId, callId: captured.callId,
+    id: referenceId(getWorkspaceId(), captured.sessionId, captured.callId, revision),
+    workspaceId: getWorkspaceId(), sessionId: captured.sessionId, callId: captured.callId,
     label: captured.label, revision, bytes: bytes.length, originalBytes: produced?.originalBytes ?? original.length,
     complete: captured.complete && bytes.length === (produced?.originalBytes ?? original.length),
     expiresAt: Date.now() + getConfig().retentionDays * 86400000,

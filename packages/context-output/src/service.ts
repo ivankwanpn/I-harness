@@ -125,7 +125,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       if (!config.enabled && !closed && !closing && controls === 0) return undefined
       // Snapshot caller objects before admitting asynchronous work.
       const captured = structuredClone(input)
-      return run(signal, owned => captureLegacy(options.workspaceId, captured, producer, () => config, getStore, owned), true)
+      return run(signal, owned => captureLegacy(() => options.workspaceId, captured, producer, () => config, getStore, owned), true)
     },
     async read(access, query) {
       identity(access.sessionId, 'sessionId')
