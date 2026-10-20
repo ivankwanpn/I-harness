@@ -95,10 +95,13 @@ it.each([false, true])("child context reader preserves its owner and current par
     expect(liveChildWire).toMatchObject({ result: liveChildState })
     expect(await service.contextState(childId)).toMatchObject({ kind: "unavailable", observation: { ownerSessionId: childId, freshness: 'awaiting-projection' } })
     const tool = child.events.find(event => event.type === "tool/result" && event.name === "get_context_remaining")
-    if (revoked) expect(tool).toMatchObject({ output: { code: "TOOL_FAILED", error: "Execution caller unavailable: unknown registry or durable owner" } })
-    else expect(tool).toMatchObject({ output: { kind: "unavailable", observation: {
+    if (tool?.type !== "tool/result" || tool.envelope?.retention.kind !== "inline") throw new Error("Missing complete inline context result")
+    expect(tool.envelope.execution.outcome).toBe(revoked ? "failed" : "succeeded")
+    const value = tool.envelope.retention.value
+    if (revoked) expect(value).toMatchObject({ code: "TOOL_FAILED", error: "Execution caller unavailable: unknown registry or durable owner" })
+    else expect(value).toMatchObject({ kind: "unavailable", observation: {
       ownerSessionId: childId, freshness: 'awaiting-projection', components: { system: measurements[0]!.input.components.system.heuristicTokens,
-      schema: measurements[0]!.input.components.toolSchemas.heuristicTokens } } } })
+      schema: measurements[0]!.input.components.toolSchemas.heuristicTokens } } })
     expect(measurements.length).toBeGreaterThanOrEqual(2)
     await parentEntered
     const beforeInspection = measurements.length

@@ -78,3 +78,5 @@ button.tool-result-image-button { cursor: zoom-in; }
   .tool-activity-recorded .tool-expanded-content { padding-left: 10px; }
   .recorded-code-content { padding-left: 10px; }
 }
+
+.tool-summary-status[data-state="unknown"] { color: var(--ih-muted); }

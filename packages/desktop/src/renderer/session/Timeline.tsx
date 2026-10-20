@@ -63,7 +63,7 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
     if (row.codeActivity) return <RecordedCodeActivity event={row.codeActivity} expanded={expanded} onToggle={() => toggle(row.id)} onPreview={onPreview} />
     return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{row.title ?? activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{row.title ?? activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} args={row.args} output={row.output} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
+  return <ToolActivity name={row.name} args={row.args} output={row.output} envelope={row.envelope} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */

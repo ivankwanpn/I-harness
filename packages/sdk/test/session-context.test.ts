@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "../src/server.ts"
 import { decodeFrame, encodeFrame, makeRequest } from "../src/protocol.ts"
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { toJSONL, type SessionEvent } from '@i-harness/core-session'
@@ -51,4 +51,25 @@ it("reports estimated active context against the resolved model window", async (
     expect(result.observation.estimate.value).toBeGreaterThan(0)
     expect(result.observation.components.user).toBeGreaterThan(0)
   } finally { await server.close(); await service.close() }
+})
+
+it('cold SDK history preserves complete retained descriptors without preparation or assembly', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-retained-sdk-'))
+  const envelope = {version:1 as const,execution:{outcome:'failed' as const,dispatch:'not-dispatched' as const},preview:'cold retained preview',media:[{mediaType:'image/png' as const,dataBase64:'iVBORw0KGgo=',name:'cold.png'}],retention:{kind:'artifact' as const,ref:{version:1 as const,id:'ctxv1_'+'a'.repeat(64),revision:'b'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:1000000,contentDigest:'c'.repeat(64),completeness:'capture-canceled' as const}},dependencies:{kind:'artifact-set' as const,ref:{version:1 as const,id:'ctxv1_'+'d'.repeat(64),revision:'e'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:300,contentDigest:'f'.repeat(64),completeness:'complete' as const},count:2}}
+  const events: SessionEvent[] = [{type:'tool/result',callId:'retained',name:'fixture',envelope,seq:0},{type:'code/result',cellId:'cell',callId:'nested',name:'fixture',envelope,seq:1},{type:'code/output',cellId:'cell',envelope,seq:2}]
+
+  const path=join(root,'retained.jsonl'), lines=toJSONL({formatVersion:10,events}).split('\n')
+  lines[0]=JSON.stringify({...JSON.parse(lines[0]!),sessionId:'retained',createdAt:'literal'})
+  const raw=lines.join('\n'); await writeFile(path,raw)
+  const coordinator=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  let preparations=0,assemblies=0
+  const service=createSessionService({workspace:root,coordinator,modelBindingFor:async()=>{preparations++;return {status:'unconfigured',reason:'read fixture'}}})
+  const off=service.onAssembly(()=>{assemblies++}), server=createSdkServer(service,{coordinator})
+  try {
+    await server.handleLine(encodeFrame(makeRequest(1,'initialize',{})))
+    const history=decodeFrame((await server.handleLine(encodeFrame(makeRequest(2,'session/history',{sessionId:'retained'}))))!)
+    expect(history).toMatchObject({result:{events,nextSeq:3}})
+    expect(preparations).toBe(0); expect(assemblies).toBe(0); expect(service.liveAssembly('retained')).toBeUndefined()
+    expect(await readFile(path,'utf8')).toBe(raw)
+  } finally {off();await server.close();await service.close();await coordinator.close();await rm(root,{recursive:true,force:true})}
 })

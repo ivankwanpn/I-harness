@@ -5,8 +5,10 @@
  */
 import type { TextDiff } from "../../../../text-diff/src/index.ts"
 
+import type { RecordedResultEnvelope } from "./project.ts"
+
 export type ToolFamily = "command" | "read" | "write" | "search" | "web" | "code" | "mcp" | "other"
-export type ToolState = "pending" | "dispatched" | "received" | "running" | "failed" | "cancelled" | "stopped" | "interrupted"
+export type ToolState = "unknown" | "pending" | "dispatched" | "received" | "running" | "failed" | "cancelled" | "stopped" | "interrupted"
 export const record = (value: unknown): Record<string, unknown> | undefined => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined
 export function stringField(value: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
   for (const key of keys) if (typeof value?.[key] === "string") return value[key]
@@ -33,7 +35,11 @@ export function toolSummary(name: string, args: unknown, output: unknown): strin
   return summary?.slice(0, 240)
 }
 /** A dispatch marker precedes execution; it can never establish running. */
-export function toolState(name: string, output: unknown, resultReceived?: true, isError?: true, dispatched?: true): ToolState {
+export function toolState(name: string, output: unknown, resultReceived?: true, isError?: true, dispatched?: true, envelope?: RecordedResultEnvelope): ToolState {
+  if (envelope) {
+    const outcome = envelope.execution.outcome
+    return outcome === "succeeded" ? "received" : outcome === "canceled" ? "cancelled" : outcome
+  }
   const row = record(output)
   if (row?.status === "cancelled" || row?.cancelled === true) return "cancelled"
   if (row?.status === "terminated" || row?.status === "killed") return "stopped"

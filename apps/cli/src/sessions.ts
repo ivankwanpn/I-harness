@@ -179,7 +179,12 @@ function transcriptLine(ev: SessionEvent): string | undefined {
     }
     case "assistant/message": return ev.text
     case "tool/call": return `  ◆ ${ev.name} ${oneLine(ev.args)}`
-    case "tool/result": return `  → ${oneLine(ev.output).slice(0, 200)}`
+    case "tool/result": {
+      if (!ev.envelope) return `  → ${oneLine(ev.output).slice(0, 200)}`
+      const { execution, retention, preview } = ev.envelope
+      const storage = retention.kind === "unavailable" ? `unavailable:${retention.reason}` : retention.kind === "artifact" ? `artifact:${retention.ref.completeness}` : "inline"
+      return `  → ${`[${execution.outcome} · ${execution.dispatch} · ${storage}] ${oneLine(retention.kind === "inline" ? retention.value : preview)}`.slice(0, 200)}`
+    }
     // M3 §3.4: the durable run-end record, in the transcript `show` prints.
     case "operator/run-end":
       return `── run end: exit ${ev.exitCode} · ${(ev.durationMs / 1000).toFixed(1)}s${ev.error !== undefined ? ` — ${ev.error}` : ""}`

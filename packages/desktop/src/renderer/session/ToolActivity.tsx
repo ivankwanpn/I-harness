@@ -3,7 +3,7 @@ import { Braces, FileSearch, FileText, Globe, PencilLine, Plug, Terminal, Wrench
 import { ToolSummaryRow } from "../vendor/zcode/ToolSummaryRow.tsx"
 import { useText } from "../design/i18n.ts"
 import type { FileNavigation } from "./file-navigation.ts"
-import type { ToolResultReference } from "./project.ts"
+import type { RecordedResultEnvelope, ToolResultReference } from "./project.ts"
 import { RecordedFileLink } from "./RecordedFileLink.tsx"
 import { RecordedToolOutput } from "./RecordedToolOutput.tsx"
 import { toolFamily, toolState, toolSummary, type ToolFamily, type ToolState } from "./tool-presentation.ts"
@@ -12,11 +12,12 @@ import "./tool-output.css"
 
 const icons = { command: Terminal, read: FileText, write: PencilLine, search: FileSearch, web: Globe, code: Braces, mcp: Plug, other: Wrench }
 const titles: Record<ToolFamily, [string, string]> = { command: ["終端", "Terminal"], read: ["讀取", "Read"], write: ["檔案變更", "File changes"], search: ["搜尋", "Search"], web: ["網頁", "Web"], code: ["Code Mode", "Code Mode"], mcp: ["MCP", "MCP"], other: ["工具", "Tool"] }
-const statuses: Record<ToolState, [string, string]> = { pending: ["尚未回報結果", "No result recorded yet"], dispatched: ["已派發，等待結果", "Dispatched, awaiting result"], received: ["已收到結果", "Result received"], running: ["執行中", "Running"], failed: ["執行失敗", "Failed"], cancelled: ["已取消", "Cancelled"], stopped: ["已停止", "Stopped"], interrupted: ["已中斷", "Interrupted"] }
+const statuses: Record<ToolState, [string, string]> = { unknown: ["結果未知", "Unknown result"], pending: ["尚未回報結果", "No result recorded yet"], dispatched: ["已派發，等待結果", "Dispatched, awaiting result"], received: ["已收到結果", "Result received"], running: ["執行中", "Running"], failed: ["執行失敗", "Failed"], cancelled: ["已取消", "Cancelled"], stopped: ["已停止", "Stopped"], interrupted: ["已中斷", "Interrupted"] }
 
 export interface ToolActivityProps {
   name: string
   args?: unknown
+  envelope?: RecordedResultEnvelope
   output?: unknown
   resultReceived?: true
   isError?: true
@@ -31,11 +32,11 @@ export interface ToolActivityProps {
 }
 
 /** Read-only presentation of captured calls. Opening a card never runs a tool. */
-export function ToolActivity({ name, args, output, resultReceived, isError, dispatched, cellId, parentCallId, resultRefs, expanded: controlled, onToggle, navigation, onPreview }: ToolActivityProps) {
+export function ToolActivity({ name, args, output, envelope, resultReceived, isError, dispatched, cellId, parentCallId, resultRefs, expanded: controlled, onToggle, navigation, onPreview }: ToolActivityProps) {
   const t = useText(), tt = useToolText()
   const [localExpanded, setExpanded] = useState(false)
   const expanded = controlled ?? localExpanded
-  const family = toolFamily(name), state = toolState(name, output, resultReceived, isError, dispatched), Icon = icons[family]
+  const family = toolFamily(name), state = toolState(name, output, resultReceived, isError, dispatched, envelope), Icon = icons[family]
   const summary = toolSummary(name, args, output) ?? (family === "other" || family === "mcp" ? name : undefined)
   return <div className="tool-activity tool-activity-recorded" data-tool-family={family} data-tool-state={state}>
     <div className="tool-activity-heading">
@@ -45,7 +46,7 @@ export function ToolActivity({ name, args, output, resultReceived, isError, disp
     </div>
     {expanded ? <div className="tool-expanded-content">
       {cellId || parentCallId ? <div className="tool-result-metadata">{cellId ? <span>{tt("執行單元", "Cell")} <code>{cellId}</code></span> : null}{parentCallId ? <span>{tt("父呼叫", "Parent call")} <code>{parentCallId}</code></span> : null}</div> : null}
-      <RecordedToolOutput name={name} args={args} output={output} resultReceived={resultReceived} navigation={navigation} resultRefs={resultRefs} onPreview={onPreview} />
+      <RecordedToolOutput name={name} args={args} output={output} envelope={envelope} resultReceived={resultReceived} navigation={navigation} resultRefs={resultRefs} onPreview={onPreview} />
     </div> : null}
   </div>
 }

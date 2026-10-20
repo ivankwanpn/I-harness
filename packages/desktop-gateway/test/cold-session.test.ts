@@ -1,3 +1,4 @@
+import * as executorModule from "@i-harness/session-executor"
 import { it, expect, vi } from "vitest"
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -129,4 +130,34 @@ it("waits for both owned policy refreshes before closing even when one refresh r
     vi.restoreAllMocks()
     await rm(root, { recursive: true, force: true })
   }
+})
+
+it('cold Gateway history preserves retained facts without building providers or assemblies', async()=>{
+  const root=await mkdtemp(join(tmpdir(),'ih-retained-gateway-')), workspace=join(root,'workspace'),sessionDir=join(root,'sessions')
+  await mkdir(workspace);await mkdir(sessionDir)
+  const envelope = {version:1 as const,execution:{outcome:'failed' as const,dispatch:'not-dispatched' as const},preview:'cold retained preview',media:[{mediaType:'image/png' as const,dataBase64:'iVBORw0KGgo=',name:'cold.png'}],retention:{kind:'artifact' as const,ref:{version:1 as const,id:'ctxv1_'+'a'.repeat(64),revision:'b'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:1000000,contentDigest:'c'.repeat(64),completeness:'capture-canceled' as const}},dependencies:{kind:'artifact-set' as const,ref:{version:1 as const,id:'ctxv1_'+'d'.repeat(64),revision:'e'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:300,contentDigest:'f'.repeat(64),completeness:'complete' as const},count:2}}
+  const events: SessionEvent[] = [{type:'tool/result',callId:'retained',name:'fixture',envelope,seq:0},{type:'code/result',cellId:'cell',callId:'nested',name:'fixture',envelope,seq:1},{type:'code/output',cellId:'cell',envelope,seq:2}]
+
+  const path=join(sessionDir,'retained.jsonl'),lines=toJSONL({formatVersion:10,events}).split('\n')
+  lines[0]=JSON.stringify({...JSON.parse(lines[0]!),sessionId:'retained',createdAt:'literal'})
+  const raw=lines.join('\n');await writeFile(path,raw)
+  const settingsPath=join(root,'settings.json'),credentialsPath=join(root,'credentials.json')
+  await writeFile(settingsPath,'{}');await writeFile(credentialsPath,'{}')
+  let assemblies=0,preparations=0,providers=0
+  const actualCreate=executorModule.createSessionService
+  const spy=vi.spyOn(executorModule,'createSessionService').mockImplementation(options=>{
+    const original=options.modelBindingFor
+    const service=actualCreate({...options,modelBindingFor:async(...args)=>{preparations++;return original!(...args)}})
+    service.onAssembly(()=>{assemblies++})
+    return service
+  })
+  const frames:RpcMessage[]=[]
+  const host=await createDesktopHost({workspace,sessionDir,settingsPath,credentialsPath,onWrite:frame=>frames.push(frame),buildProviderClient:()=>{providers++;throw new Error('unexpected provider preparation')}})
+  try {
+    await host.handleLine(JSON.stringify({jsonrpc:'2.0',id:1,method:'initialize',params:{}}))
+    await host.handleLine(JSON.stringify({jsonrpc:'2.0',id:2,method:'session/history',params:{sessionId:'retained'}}))
+    expect(frames.find(frame=>'id'in frame&&frame.id===2)).toMatchObject({result:{events,nextSeq:3}})
+    expect(preparations).toBe(0);expect(providers).toBe(0);expect(assemblies).toBe(0)
+    expect(await readFile(path,'utf8')).toBe(raw)
+  } finally {await host.close();spy.mockRestore();await rm(root,{recursive:true,force:true})}
 })

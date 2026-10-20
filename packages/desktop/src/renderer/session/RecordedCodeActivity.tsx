@@ -10,6 +10,7 @@ import type { RecordedCodeEvent } from "./project.ts"
 import { OutputBlock } from "./OutputBlock.tsx"
 import { CapturedValueBlock, RawRecordedRecord } from "./RawRecordedData.tsx"
 import { RecordedImages } from "./RecordedToolOutput.tsx"
+import { RecordedResultEnvelope } from "./RecordedResultEnvelope.tsx"
 import { record, resultImages } from "./tool-presentation.ts"
 import { useToolText } from "./tool-text.ts"
 import "./tool-output.css"
@@ -45,14 +46,7 @@ function CodeActivityBody({ event, onPreview }: Pick<RecordedCodeActivityProps, 
     {event.error !== undefined ? <OutputBlock label={t("錯誤記錄", "Recorded error")} text={event.error} defaultWrap /> : null}
   </>
   if (event.type === "code/store") return <><p className="tool-result-note">{t("此記錄包含儲存候選資料。", "This record contains candidate store values.")}</p><CapturedValueBlock label={t("儲存候選資料", "Candidate store values")} value={event.writes} /></>
-  if (event.envelope?.retention.kind === 'inline') return <CapturedValueBlock label={t("Code Mode 輸出", "Code Mode output")} value={event.envelope.retention.value} />
-  if (event.envelope) return <>
-    <OutputBlock label={t("Code Mode 輸出預覽", "Code Mode output preview")} text={event.envelope.preview} />
-    <p className="tool-result-note">{event.envelope.retention.kind === 'artifact'
-      ? t("完整輸出已保存，可使用下方參照讀取。", "The complete output is saved and can be read using the reference below.")
-      : t("此輸出沒有可讀取的完整保存副本。", "A complete retained copy is unavailable for this output.")}</p>
-    <CapturedValueBlock label={t("輸出保存記錄", "Output retention record")} value={event.envelope.retention} />
-  </>
+  if (event.envelope) return <RecordedResultEnvelope envelope={event.envelope} onPreview={onPreview} />
   const content = record(event.content)
   if (content?.type === "text" && typeof content.text === "string") return <OutputBlock label={t("Code Mode 輸出", "Code Mode output")} text={content.text} />
   if (content?.type === "image") {

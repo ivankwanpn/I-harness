@@ -1,4 +1,4 @@
-import { validBudgetSnapshot, type BudgetRead, type RequestBudgetSnapshot } from "./events/context.ts"
+import { validBudgetSnapshot, type BudgetRead, type RequestBudgetSnapshot } from "./events/context-scalars.ts"
 import { validAdmissionObservation, type RequestBudgetSnapshotV2 } from './events/admission.ts'
 
 /** Additive v1 wire contract. A snapshot may be known while admission is unavailable. */

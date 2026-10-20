@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path'
 import type { ExecService } from '@i-harness/exec'
-import type { Tool, ToolExec } from '@i-harness/core-tools'
+import { declareToolResultOutcome, type Tool, type ToolExec } from '@i-harness/core-tools'
 import type { SearchQuery, SearchResult, SearchMatch } from './search-types.ts'
 import { normalizeSearchQuery, createSearchStats, createSearchResult, markSearchResult, addDiagnostic, finishSearchResult } from './options.mjs'
 import { runScopedModelSearch } from './model-search.ts'
@@ -54,6 +54,12 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
   return (['glob','grep'] as const).map((kind): Tool<ModelSearchArgs, SearchResult | GlobResult> => ({
     name: kind, description: kind === 'glob' ? 'Find files by glob with bounded discovery, cancellation, filtering and partial-result metadata. Discovery order; default 100 files and 32KiB result.' : 'Search admitted file snapshots using Rust regex or literal text. Typed case/context/globs/hidden/ignore/PCRE2/multiline/encoding options; cancellable 30s, 1000 candidates, 32MiB reads, 1MiB/file, default 250 rows and 32KiB result. Inspect status/reasons before treating empty or partial results as exhaustive.',
     inputSchema: { type: 'object', properties, required: ['pattern'], additionalProperties: false }, exposure: 'deferred', searchHint: kind === 'glob' ? 'find files by pattern' : 'search file contents by pattern', isReadOnly: true, isConcurrencySafe: true,
-    execute: (args, execution) => search(kind, args, execution, deps),
+    async execute(args, execution) {
+      const result = await search(kind, args, execution, deps)
+      // This producer owns SearchResult's closed status. Arbitrary tool data
+      // cannot declare execution facts through the registry's generic path.
+      declareToolResultOutcome(execution, result.status === 'cancelled' ? 'canceled' : result.status === 'error' || result.status === 'timed-out' ? 'failed' : 'succeeded')
+      return result
+    },
   }))
 }

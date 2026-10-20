@@ -4,11 +4,12 @@ import { mergeReasoningChunks, type ReasoningChunk } from "./reasoning-progress.
 
 export type WireEvent = HistoryRange["events"][number]
 export type ToolResultReference = Extract<WireEvent, { type: "context/result-ref" }>["ref"]
+export type RecordedResultEnvelope = NonNullable<Extract<WireEvent, { type: "tool/result" }>["envelope"]>
 export type RecordedCodeEvent = Extract<WireEvent, { type: "code/cell" | "code/output" | "code/store" }>
 
 export type TimelineRow = (
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
-  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; dispatched?: true; cellId?: string; parentCallId?: string; resultRefs?: ToolResultReference[]; groupScope?: string }
+  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; envelope?: RecordedResultEnvelope; resultReceived?: true; isError?: true; dispatched?: true; cellId?: string; parentCallId?: string; resultRefs?: ToolResultReference[]; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; title?: string; detail?: string; codeActivity?: RecordedCodeEvent; transient?: true }
 ) & { turn?: { id: string; complete: boolean }; seqs?: number[] }
@@ -84,11 +85,12 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       const id = nested ? `code-tool:${event.cellId}:${event.callId}` : `tool:${event.callId}`
       const rowIndex = toolIndex.get(id)
       const previous = rowIndex === undefined ? undefined : rows[rowIndex]
-      if (previous?.kind === "tool") rows[rowIndex!] = { ...previous, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}) }
+      const result = event.envelope ? { envelope: event.envelope, output: undefined, isError: undefined } : { envelope: undefined, output: event.output, isError: event.isError }
+      if (previous?.kind === "tool") rows[rowIndex!] = { ...previous, ...result, resultReceived: true }
       else {
         toolIndex.set(id, rows.length)
         const calls = referenceCalls.get(event.callId) ?? new Set<number>(); calls.add(rows.length); referenceCalls.set(event.callId, calls)
-        appendRow({ id, kind: "tool", name: event.name, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}),
+        appendRow({ id, kind: "tool", name: event.name, ...result, resultReceived: true,
           ...(nested ? { cellId: event.cellId, groupScope: `${groupScope ?? "recorded"}:cell:${event.cellId}` } : groupScope ? { groupScope } : {}) })
       }
     } else if (event.type === "context/result-ref") {

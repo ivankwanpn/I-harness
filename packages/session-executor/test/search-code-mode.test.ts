@@ -3,9 +3,32 @@ import { expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExecService, ExecCommand, ExecStreamRunOptions } from '@i-harness/exec'
+import { createHash } from 'node:crypto'
+import { createContextOutputService, type ContextOutputService } from '@i-harness/context-output'
+import type { ResultEnvelope } from '@i-harness/core-session'
 import { deriveMessages } from '@i-harness/core-session'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { rmWorkspaceSync } from './helpers.ts'
+
+async function retainedValue(service: ContextOutputService, envelope: ResultEnvelope | undefined): Promise<unknown> {
+  expect(envelope).toBeDefined()
+  if (!envelope) throw new Error('missing retained fact')
+  if (envelope.retention.kind === 'inline') return envelope.retention.value
+  expect(envelope.retention.kind).toBe('artifact')
+  if (envelope.retention.kind !== 'artifact') throw new Error('retained full value unavailable')
+  const ref = envelope.retention.ref, pieces: Buffer[] = []
+  let offset = 0
+  for (;;) {
+    const page = await service.readResult({ sessionId: 'search-fixture' }, { ref, offset })
+    pieces.push(page.data.kind === 'text' ? Buffer.from(page.data.text) : Buffer.from(page.data.base64, 'base64'))
+    if (page.eof) break
+    offset = page.nextOffset!
+  }
+  const bytes = Buffer.concat(pieces)
+  expect(bytes.length).toBe(ref.encodedBytes)
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(ref.contentDigest)
+  return JSON.parse(bytes.toString('utf8'))
+}
 
 const parent = join(process.cwd(), '.tmp')
 mkdirSync(parent, { recursive: true })
@@ -22,7 +45,8 @@ it.each(['mixed','only'] as const)('keeps full mounted %s search traces while JS
     const folder = join(root, `group-${n}`); mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, `file-${n}.txt`),Array.from({length:24},(_,line)=>`needle ${n} row ${line+1}`).join('\n')+'\n')
   }
-  const assembly = await createSessionAssembly({ workspace: root, sandbox: 'workspace-write', modelPolicy: 'test-mock', approveAll: true, codeMode: { mode } })
+  const retained = createContextOutputService({root:join(root, "retained"),workspaceId:"fixture",config:{enabled:true}})
+  const assembly = await createSessionAssembly({ contextOutput:retained, sessionId:"search-fixture", workspace: root, sandbox: 'workspace-write', modelPolicy: 'test-mock', approveAll: true, codeMode: { mode } })
   try {
     expect(assembly.tools.deferredSearchIndex().find((t) => t.name === 'grep')).toBeDefined()
     append(assembly.session, { type: 'tool/call', callId: 'outer', name: 'code_exec', args: {} })
@@ -31,24 +55,26 @@ it.each(['mixed','only'] as const)('keeps full mounted %s search traces while JS
     while (output.status === 'running') output = (await assembly.tools.execute({ name: 'code_wait', args: { cell_id: output.cell_id, yield_time_ms: 1000 } })).output as typeof output
     expect(output.status).toBe('completed')
     const nested = assembly.session.events.find((e) => e.type === 'code/result' && e.name === 'grep')
-    expect(nested?.type === 'code/result' && nested.output).toMatchObject({ status: 'completed', matches: expect.any(Array), limits: { maxResultBytes: 262144 } })
+    const full = await retainedValue(retained, nested?.type === 'code/result' ? nested.envelope : undefined)
+    expect(full).toMatchObject({ status: 'completed', matches: expect.any(Array), limits: { maxResultBytes: 262144 } })
     const refs = JSON.parse(output.text)
     expect(refs).toHaveLength(10)
     expect(refs.every((ref: {line:number}) => ref.line === 2)).toBe(true)
-    expect(nested?.type === 'code/result' && (nested.output as {matches:unknown[]}).matches).toHaveLength(240)
+    expect(nested?.type === 'code/result' && (full as {matches:unknown[]}).matches).toHaveLength(240)
     append(assembly.session, { type: 'tool/result', callId: 'outer', name: 'code_exec', output })
     const visible = JSON.stringify(deriveMessages(assembly.session))
     expect(visible).toContain(refs[0].path)
     expect(visible).not.toContain('needle 9 row 24')
     expect(visible).not.toContain('engineRawBytes')
     expect(Buffer.byteLength(output.text)).toBeLessThan(1000)
-  } finally { await assembly.dispose(); rmWorkspaceSync(root) }
+  } finally { await assembly.dispose(); await retained.close(); rmWorkspaceSync(root) }
 }, 15000)
 
 it.each(['human','code_wait'] as const)('%s stop drains the mounted search before closing and prevents follow-on calls', async (stopKind) => {
   const root = mkdtempSync(join(parent, 'sandbox-redesign-search-stop-'))
   for (let n = 0; n < 300; n++) writeFileSync(join(root, `${n}.txt`), `needle ${n}\n`)
-  const assembly = await createSessionAssembly({ workspace: root, sandbox: 'danger-full-access', modelPolicy: 'test-mock', approveAll: true, codeMode: { mode: 'only' } })
+  const retained = createContextOutputService({root:join(root, "retained"),workspaceId:"fixture",config:{enabled:true}})
+  const assembly = await createSessionAssembly({ contextOutput:retained, sessionId:"search-fixture", workspace: root, sandbox: 'danger-full-access', modelPolicy: 'test-mock', approveAll: true, codeMode: { mode: 'only' } })
   const raw=assembly.ctx.services.get<ExecService>('exec/service'), original=raw.run.bind(raw)
   let startedReaders=0, activeOwned=0
   raw.run=((command:ExecCommand,options?:ExecStreamRunOptions|{backgroundAfterMs?:number})=>{
@@ -66,10 +92,11 @@ it.each(['human','code_wait'] as const)('%s stop drains the mounted search befor
     else await assembly.tools.execute({ name: 'code_wait', args: { cell_id: id, terminate: true } })
     const nested = assembly.session.events.filter((e) => e.type === 'code/result' && e.name === 'grep')
     expect(nested).toHaveLength(1)
-    expect(nested[0]?.type === 'code/result' && nested[0].output).toMatchObject({ status: 'cancelled', partial: true })
+    expect(await retainedValue(retained, nested[0]?.type === 'code/result' ? nested[0].envelope : undefined)).toMatchObject({ status: 'cancelled', partial: true })
     expect(activeOwned).toBe(0)
     expect(assembly.liveResources!().codeCells).toEqual([])
     expect(assembly.session.events.some((e) => e.type === 'code/call' && e.name === 'glob')).toBe(false)
     expect(JSON.stringify(assembly.session.events.filter((e) => e.type === 'code/output'))).not.toContain('RESURRECTED')
-  } finally { await assembly.dispose(); rmWorkspaceSync(root) }
+    expect(nested[0]?.type === 'code/result' && nested[0].envelope?.execution.outcome).toBe('canceled')
+  } finally { await assembly.dispose(); await retained.close(); rmWorkspaceSync(root) }
 }, 10000)

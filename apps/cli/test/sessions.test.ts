@@ -2,7 +2,7 @@
 // listing (a live store with blank rows, a corrupt file, a missing dir), the
 // transcript renderer (context snapshots stay out of it), and the argument
 // parsing (`--session-dir` / `--last` / `--json`).
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -297,4 +297,40 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+it("shows retained snapshot summaries and preserves full envelopes in structural JSON without source writes", async () => {
+  const root=storeRoot(), coordinator=createSessionCoordinator(createJsonlBackend(root), {lock:{enabled:false}})
+  const envelope = {version:1 as const,execution:{outcome:"succeeded" as const,dispatch:"not-dispatched" as const},preview:"stored preview",media:[{mediaType:"image/png" as const,dataBase64:"iVBORw0KGgo="}],retention:{kind:"artifact" as const,ref:{version:1 as const,id:"ctxv1_"+"b".repeat(64),revision:"c".repeat(64),codec:"json-utf8-v1" as const,encodedBytes:10000,contentDigest:"a".repeat(64),completeness:"producer-incomplete" as const}},dependencies:{kind:"unavailable" as const,reason:"quota" as const,count:2}}
+  const value={error:"ordinary payload",status:"failed"}; const inline={...envelope,preview:"",media:[],retention:{kind:"inline" as const,value,encodedBytes:Buffer.byteLength(JSON.stringify(value))}}
+  const unavailable={...envelope,media:[],retention:{kind:"unavailable" as const,reason:"quota" as const}}
+  const events=[{type:"tool/result" as const,callId:"one",name:"fixture",envelope},{type:"tool/result" as const,callId:"two",name:"fixture",envelope:inline},{type:"tool/result" as const,callId:"three",name:"fixture",envelope:unavailable}]
+  await coordinator.create({sessionId:"retained"}); await coordinator.append("retained",events); await coordinator.close()
+  const path=join(root,"retained.jsonl"), before=readFileSync(path)
+  const log=vi.spyOn(console,"log").mockImplementation(()=>{})
+  try {
+    expect(await runSessionsCommand(["sessions","show","retained","--session-dir",root])).toBe(0)
+    const text=String(log.mock.calls.at(-1)![0])
+    expect(text).toContain("stored preview")
+    expect(text).toContain("succeeded")
+    expect(text).toContain("artifact")
+    expect(text).toContain("ordinary payload")
+    expect(text).toContain("unavailable:quota")
+    expect(text).not.toContain("descriptor-only")
+    expect(text).not.toContain("iVBOR")
+    for(const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(204)
+    expect(await runSessionsCommand(["sessions","show","retained","--session-dir",root,"--json"])).toBe(0)
+    const exported=JSON.parse(String(log.mock.calls.at(-1)![0]))
+    expect(exported.events.map(({seq,...event}: any)=>event)).toEqual(events)
+    expect(readFileSync(path)).toEqual(before)
+  } finally {log.mockRestore()}
+})
+
+it("bounds the full retained disposition and one-line value to the original 200 characters", () => {
+  const value = "long captured value\n".repeat(100)
+  const session = createSession()
+  append(session, {type:"tool/result",callId:"long",name:"fixture",envelope:{version:1,execution:{outcome:"unknown",dispatch:"unknown"},preview:"",media:[],retention:{kind:"inline",value,encodedBytes:Buffer.byteLength(JSON.stringify(value))}}})
+  const text = renderTranscript(session, 20)
+  expect(text).toBe("  → " + ("[unknown · unknown · inline] " + value.replace(/\s+/g," ").trim()).slice(0,200))
+  expect(text).toHaveLength(204)
 })

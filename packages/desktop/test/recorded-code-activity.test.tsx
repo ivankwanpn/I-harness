@@ -13,7 +13,8 @@ it('renders a retained Code Mode fact as a bounded preview and reference without
   expect(screen.queryByText('saved preview')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Code Mode 輸出 retained' }))
   expect(screen.getByText('saved preview')).toBeTruthy()
-  expect(screen.getByText('完整輸出已保存，可使用下方參照讀取。')).toBeTruthy()
+  expect(screen.getByText('輸出已保存')).toBeTruthy()
+  expect(screen.getByText('完整保留 · complete')).toBeTruthy()
 })
 
 it("keeps 150k Code Mode text out of the closed DOM and copies the full historical output", async () => {
