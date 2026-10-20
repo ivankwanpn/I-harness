@@ -1,0 +1,416 @@
+{
+  "head": "583bc11fff2905778b0c983f1887a75de61d380c",
+  "finalSourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+  "sourceInputs": 2583,
+  "sourceCopies": 845,
+  "dependencyEdges": 280,
+  "copiedTests": 5,
+  "copiedFixtures": 7,
+  "importsRewritten": 38,
+  "cliSha256": "5b8f10f464dbb50b572e91c43d0edd6a7c5954c4ba36a9ade397373397e219b9",
+  "cliBytes": 6755585,
+  "reviewSha256": "117a675afa6fe56bd2f7b8d4dd85036d7a14ec6d8a8f669131140a95b16c5375",
+  "verifiedReceipts": [
+    {
+      "label": "a3-boundaries-red",
+      "exitCode": 1,
+      "sourceDigest": "45c887bb92cd209972fe7393b44fdc7b302898dbfd00ea2578821e8883facf16",
+      "started": "2026-10-19T04:49:07.540Z",
+      "ended": "2026-10-19T04:49:09.915Z"
+    },
+    {
+      "label": "a3-boundaries-first-green",
+      "exitCode": 0,
+      "sourceDigest": "4288a5e2d8bb277caad708ce60ecb9242367b7dfb0875ec8add78abed040c8bb",
+      "started": "2026-10-19T04:52:33.973Z",
+      "ended": "2026-10-19T04:52:36.404Z"
+    },
+    {
+      "label": "a3-first-types",
+      "exitCode": 0,
+      "sourceDigest": "4288a5e2d8bb277caad708ce60ecb9242367b7dfb0875ec8add78abed040c8bb",
+      "started": "2026-10-19T04:53:38.388Z",
+      "ended": "2026-10-19T04:53:44.965Z"
+    },
+    {
+      "label": "a3-managed-and-escaped-red",
+      "exitCode": 1,
+      "sourceDigest": "7b3c00ab803a1c4852c3517d1cf98f0bf787f3f3f4d9894219e2c9a610db49cc",
+      "started": "2026-10-19T04:55:07.908Z",
+      "ended": "2026-10-19T04:55:12.862Z"
+    },
+    {
+      "label": "a3-managed-and-escaped-green",
+      "exitCode": 0,
+      "sourceDigest": "d3d1e71d789fed571f752394c5a8552e834eee0897a5975910d4582272324b91",
+      "started": "2026-10-19T04:56:05.540Z",
+      "ended": "2026-10-19T04:56:10.559Z"
+    },
+    {
+      "label": "a3-executor-integration-first",
+      "exitCode": 1,
+      "sourceDigest": "d3d1e71d789fed571f752394c5a8552e834eee0897a5975910d4582272324b91",
+      "started": "2026-10-19T04:56:49.269Z",
+      "ended": "2026-10-19T04:57:20.563Z"
+    },
+    {
+      "label": "a3-intake-red",
+      "exitCode": 1,
+      "sourceDigest": "6b2012e03d524292cd2e85577f0fcd0a50687013c1bf3d9a44f56a3080e1d7d0",
+      "started": "2026-10-19T04:59:32.008Z",
+      "ended": "2026-10-19T04:59:33.724Z"
+    },
+    {
+      "label": "a3-live-source-red",
+      "exitCode": 1,
+      "sourceDigest": "6b2012e03d524292cd2e85577f0fcd0a50687013c1bf3d9a44f56a3080e1d7d0",
+      "started": "2026-10-19T04:59:34.960Z",
+      "ended": "2026-10-19T04:59:36.818Z"
+    },
+    {
+      "label": "a3-intake-green",
+      "exitCode": 0,
+      "sourceDigest": "0fe3ba22b7ac83499b47deec6fac6f19dcbf9ade58a7059dc5aa6fb55a8e5c50",
+      "started": "2026-10-19T05:00:19.265Z",
+      "ended": "2026-10-19T05:00:20.914Z"
+    },
+    {
+      "label": "a3-live-source-green",
+      "exitCode": 0,
+      "sourceDigest": "0fe3ba22b7ac83499b47deec6fac6f19dcbf9ade58a7059dc5aa6fb55a8e5c50",
+      "started": "2026-10-19T05:00:21.853Z",
+      "ended": "2026-10-19T05:00:23.379Z"
+    },
+    {
+      "label": "a3-index-fence-and-stop",
+      "exitCode": 1,
+      "sourceDigest": "a4b499ad2033e5e9ad53eb729c7f59d7878bf6407cf80907b6704753a2db44e8",
+      "started": "2026-10-19T05:02:17.719Z",
+      "ended": "2026-10-19T05:02:27.567Z"
+    },
+    {
+      "label": "a3-index-and-media-red",
+      "exitCode": 1,
+      "sourceDigest": "5f45474d63fbe9bebb6779ac1992a8e4bad43b2734306ca00ffac8bb45f31102",
+      "started": "2026-10-19T05:04:40.625Z",
+      "ended": "2026-10-19T05:04:44.994Z"
+    },
+    {
+      "label": "a3-index-and-media-green",
+      "exitCode": 0,
+      "sourceDigest": "79991addac9b5fb32a9327ed7e9c9403b0be3fe9de8ad4f28d33042ae268cfe2",
+      "started": "2026-10-19T05:05:04.889Z",
+      "ended": "2026-10-19T05:05:09.354Z"
+    },
+    {
+      "label": "a3-connected-child-and-size",
+      "exitCode": 1,
+      "sourceDigest": "748959925a537394672d31a4204c8606a2f651e09fb1318ca2cbbe1c2d787b61",
+      "started": "2026-10-19T05:09:03.431Z",
+      "ended": "2026-10-19T05:09:18.453Z"
+    },
+    {
+      "label": "a3-code-mode-suite",
+      "exitCode": 1,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:11:18.677Z",
+      "ended": "2026-10-19T05:11:36.171Z"
+    },
+    {
+      "label": "a3-core-tools-suite",
+      "exitCode": 0,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:11:36.967Z",
+      "ended": "2026-10-19T05:11:42.682Z"
+    },
+    {
+      "label": "a3-core-session-suite",
+      "exitCode": 0,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:11:43.506Z",
+      "ended": "2026-10-19T05:11:54.353Z"
+    },
+    {
+      "label": "a3-executor-final",
+      "exitCode": 1,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:13:36.402Z",
+      "ended": "2026-10-19T05:14:09.571Z"
+    },
+    {
+      "label": "a3-subagent-code-mode",
+      "exitCode": 0,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:14:10.402Z",
+      "ended": "2026-10-19T05:14:14.313Z"
+    },
+    {
+      "label": "a3-renderer-code-activity",
+      "exitCode": 0,
+      "sourceDigest": "5a103ff5e366cf9cf212ae3dfa67144c7c6796eef68bc466e77f71247ff8d795",
+      "started": "2026-10-19T05:14:15.122Z",
+      "ended": "2026-10-19T05:14:17.568Z"
+    },
+    {
+      "label": "a3-agent-retained",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:08.771Z",
+      "ended": "2026-10-19T05:15:11.955Z"
+    },
+    {
+      "label": "a3-gateway-projection",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:12.798Z",
+      "ended": "2026-10-19T05:15:17.584Z"
+    },
+    {
+      "label": "a3-types-code-mode",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:18.429Z",
+      "ended": "2026-10-19T05:15:21.933Z"
+    },
+    {
+      "label": "a3-types-core-session",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:22.751Z",
+      "ended": "2026-10-19T05:15:25.492Z"
+    },
+    {
+      "label": "a3-types-core-tools",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:26.285Z",
+      "ended": "2026-10-19T05:15:29.627Z"
+    },
+    {
+      "label": "a3-types-session-executor",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:30.443Z",
+      "ended": "2026-10-19T05:15:37.069Z"
+    },
+    {
+      "label": "a3-types-desktop-gateway",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:37.908Z",
+      "ended": "2026-10-19T05:15:45.473Z"
+    },
+    {
+      "label": "a3-types-desktop",
+      "exitCode": 0,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:15:46.312Z",
+      "ended": "2026-10-19T05:15:59.969Z"
+    },
+    {
+      "label": "a3-child-followup-close",
+      "exitCode": 1,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:17:16.559Z",
+      "ended": "2026-10-19T05:17:24.113Z"
+    },
+    {
+      "label": "a3-reachability",
+      "exitCode": 1,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:17:24.930Z",
+      "ended": "2026-10-19T05:17:35.242Z"
+    },
+    {
+      "label": "a3-child-followup-repeat",
+      "exitCode": 1,
+      "sourceDigest": "46adb5b23c51acb64b7d6c394adcc08b9ae5f047442b30541ce2ac3f824f94e8",
+      "started": "2026-10-19T05:19:17.092Z",
+      "ended": "2026-10-19T05:19:24.595Z"
+    },
+    {
+      "label": "a3-child-close-after-receipt",
+      "exitCode": 1,
+      "sourceDigest": "05e43bf0898701f3f47022b63e4027488685f1d33aeecf6cd1aac83f818e76af",
+      "started": "2026-10-19T05:20:22.144Z",
+      "ended": "2026-10-19T05:20:31.409Z"
+    },
+    {
+      "label": "a3-child-phase-diagnostic",
+      "exitCode": 1,
+      "sourceDigest": "f197cd1ab564683e3fb8621fa230a9094d1f0a8385f5dbe872f9244341ba4052",
+      "started": "2026-10-19T05:21:56.102Z",
+      "ended": "2026-10-19T05:22:05.227Z"
+    },
+    {
+      "label": "a3-child-receipt-events",
+      "exitCode": 0,
+      "sourceDigest": "1e9df03534623c5e57c5cf299cda7535dd3cb36593117d8406add6f1efd889ba",
+      "started": "2026-10-19T05:23:53.399Z",
+      "ended": "2026-10-19T05:24:03.194Z"
+    },
+    {
+      "label": "a3-stop-order-red",
+      "exitCode": 1,
+      "sourceDigest": "b729784bd45d35609cc1cba4437d5a930b1248f1ff0b55508c25996bd83bac6a",
+      "started": "2026-10-19T05:25:08.565Z",
+      "ended": "2026-10-19T05:25:13.486Z"
+    },
+    {
+      "label": "a3-stop-order-green",
+      "exitCode": 0,
+      "sourceDigest": "0d1df6121d64719511c08e3791acce96fdd0219207db2ee95b523f28be175296",
+      "started": "2026-10-19T05:25:30.568Z",
+      "ended": "2026-10-19T05:25:35.591Z"
+    },
+    {
+      "label": "a3-final-owned-controls",
+      "exitCode": 0,
+      "sourceDigest": "0d1df6121d64719511c08e3791acce96fdd0219207db2ee95b523f28be175296",
+      "started": "2026-10-19T05:25:36.380Z",
+      "ended": "2026-10-19T05:25:54.169Z"
+    },
+    {
+      "label": "a3-close-predrain-red",
+      "exitCode": 1,
+      "sourceDigest": "cf9a58140e0e91e428df579af558c568957730056b4d05ff4d280e26b3e20db3",
+      "started": "2026-10-19T05:28:19.746Z",
+      "ended": "2026-10-19T05:28:21.325Z"
+    },
+    {
+      "label": "a3-close-predrain-green",
+      "exitCode": 0,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:28:45.342Z",
+      "ended": "2026-10-19T05:28:46.967Z"
+    },
+    {
+      "label": "a3-post-order-controls",
+      "exitCode": 0,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:28:47.785Z",
+      "ended": "2026-10-19T05:29:05.661Z"
+    },
+    {
+      "label": "a3-code-mode-post-order",
+      "exitCode": 1,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:30:31.627Z",
+      "ended": "2026-10-19T05:30:48.942Z"
+    },
+    {
+      "label": "a3-types-executor-post-order",
+      "exitCode": 2,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:30:49.774Z",
+      "ended": "2026-10-19T05:30:56.472Z"
+    },
+    {
+      "label": "a3-build-gateway",
+      "exitCode": 0,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:30:57.311Z",
+      "ended": "2026-10-19T05:31:01.914Z"
+    },
+    {
+      "label": "a3-build-cli",
+      "exitCode": 0,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:31:02.777Z",
+      "ended": "2026-10-19T05:31:03.644Z"
+    },
+    {
+      "label": "a3-verify-cli",
+      "exitCode": 0,
+      "sourceDigest": "86350bb5147224b08d7bacb519223f91a19cfd5d12a2ebf78b799c7fd202daf3",
+      "started": "2026-10-19T05:31:04.528Z",
+      "ended": "2026-10-19T05:31:07.305Z"
+    },
+    {
+      "label": "a3-backlog-red",
+      "exitCode": 1,
+      "sourceDigest": "6e053091c0e692dd3f28f5d605ac86d9070d120bdac4fd65e999bca6913282d8",
+      "started": "2026-10-19T05:36:14.370Z",
+      "ended": "2026-10-19T05:36:16.020Z"
+    },
+    {
+      "label": "a3-backlog-green",
+      "exitCode": 0,
+      "sourceDigest": "29f66b17648e31d002ccbff0f2d2cebdfbee338dec6ac8216ed7c97ccdd69cb6",
+      "started": "2026-10-19T05:36:44.896Z",
+      "ended": "2026-10-19T05:36:46.495Z"
+    },
+    {
+      "label": "a3-real-backlog",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:39:17.367Z",
+      "ended": "2026-10-19T05:39:22.257Z"
+    },
+    {
+      "label": "a3-code-mode-cohort-final",
+      "exitCode": 1,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:40:39.013Z",
+      "ended": "2026-10-19T05:40:56.259Z"
+    },
+    {
+      "label": "a3-executor-cohort-final",
+      "exitCode": 1,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:40:57.053Z",
+      "ended": "2026-10-19T05:41:34.709Z"
+    },
+    {
+      "label": "a3-final-types-executor",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:41:35.560Z",
+      "ended": "2026-10-19T05:41:42.273Z"
+    },
+    {
+      "label": "a3-final-build-gateway",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:41:43.080Z",
+      "ended": "2026-10-19T05:41:47.718Z"
+    },
+    {
+      "label": "a3-final-build-cli",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:41:48.597Z",
+      "ended": "2026-10-19T05:41:49.499Z"
+    },
+    {
+      "label": "a3-final-verify-cli",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:41:50.368Z",
+      "ended": "2026-10-19T05:41:53.148Z"
+    },
+    {
+      "label": "a3-copied-controls",
+      "exitCode": 1,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:42:54.738Z",
+      "ended": "2026-10-19T05:42:55.123Z"
+    },
+    {
+      "label": "a3-copied-controls-b",
+      "exitCode": 0,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:43:48.493Z",
+      "ended": "2026-10-19T05:44:00.727Z"
+    },
+    {
+      "label": "a3-reachability-final",
+      "exitCode": 1,
+      "sourceDigest": "48a8a627ca0bb87d852820c48639f85fdd9dcd91d9d94e497f267d655ee7a192",
+      "started": "2026-10-19T05:48:23.901Z",
+      "ended": "2026-10-19T05:48:34.379Z"
+    }
+  ],
+  "errors": [],
+  "limits": "Scoped A3 correction; copied library controls and CLI distribution smoke do not qualify whole R4A, live providers, IPC or full session flows. Failed and earlier-source runs remain explicit."
+}
