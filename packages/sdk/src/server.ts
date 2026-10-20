@@ -74,6 +74,7 @@ import { modelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import { createNondurableFactOwner, isNondurableSession, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type SessionView as Session, type SessionEventView as SessionEvent, type SessionEvent as MutableSessionEvent } from "@i-harness/core-session"
 import { withRewindFacts } from '@i-harness/session-executor'
 import { transportSessionEvents } from "./image-transport.ts"
+import { dispatchResultPage, type ResultPageHost } from './result-page.ts'
 export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -121,6 +122,8 @@ const HISTORY_DEFAULT_LIMIT = 500
 const HISTORY_LIMIT_CAP = 1000
 
 export interface SdkServerOptions {
+  /** Visibility is supplied by the host; never falls back to SessionService. */
+  readResultPage?: ResultPageHost
   /** Server → client writer (responses AND notifications both flow here when
    * provided; see also onNotify for notifications only). */
   onWrite?: (message: RpcMessage) => void
@@ -413,6 +416,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             "prompt-context": ["1"],
             "prompt-images": ["1"],
             "session-context": ["1"],
+            ...(opts.readResultPage ? { 'session-result-read': ['1'] } : {}),
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
@@ -788,6 +792,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         try { return makeSuccess(id, await service.contextState(p.sessionId)) }
         catch (error) { return hostMethodFailure(id, "session/context", error) }
       }
+      case 'session/result/read': return dispatchResultPage(id, params, opts.readResultPage)
       case "session/prompt": {
         const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {

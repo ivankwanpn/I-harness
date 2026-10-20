@@ -27,3 +27,5 @@ export type { AgentTaskStatus, AgentTaskView } from "@i-harness/subagent"
 export type { ReasoningEffort } from "@i-harness/core-agent"
 
 export { openLiteralInputExecution } from './lifecycle/literal-input.ts'
+export { parseResultPageQuery } from '@i-harness/context-output'
+export type { ResultPageQuery, ResultPageResult } from '@i-harness/context-output'

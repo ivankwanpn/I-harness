@@ -36,6 +36,8 @@ import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { createContextStateReader } from "./service/context-state.ts"
+import { createResultPageReader } from './service/result-reader.ts'
+import type { ResultPageQuery, ResultPageResult } from '@i-harness/context-output'
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
 // `session`: the message is about THIS session's resolved model binding (a
@@ -202,6 +204,7 @@ export interface SessionService {
   modelState(sessionId: string): Promise<SessionModelState>
   /** Actual owned prepared budget or validated saved facts; no provider request. */
   contextState(sessionId: string): Promise<SessionContextState>
+  readResultPage?(sessionId: string, query: ResultPageQuery): Promise<ResultPageResult>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -983,6 +986,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   const failedClose = new Set<string>()
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
+  const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
     opts.coordinator?.revokeManagedDocumentNewWork(sessionId)
     ;(assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId))?.revokeNewWork()
@@ -997,12 +1001,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0) return
+    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size) return
     closed = true
     for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
       revokeSession(id); stopNotifications(id)
     }
     await Promise.allSettled([
+      resultReader.join(),
       ...active,
       ...creating.values(),
       ...loadingWriters.values(),
@@ -1039,6 +1044,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (existing !== undefined) return existing
     let pending!: Promise<void>
     pending = (async () => {
+      await resultReader.join(sessionId)
       const turn = chains.get(sessionId)
       if (turn !== undefined) await Promise.allSettled([turn])
       const build = creating.get(sessionId)
@@ -1120,6 +1126,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     assemblyFor: getOrCreate,
     modelState,
     contextState,
+    ...(opts.contextOutput || opts.coordinator?.storageRoot ? { readResultPage: resultReader.read } : {}),
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     writableSessionFor,

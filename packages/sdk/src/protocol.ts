@@ -696,3 +696,4 @@ export class JsonRpcLineTransport {
     this.listeners.clear()
   }
 }
+export type { ResultPageQuery, ResultPageResult } from '@i-harness/session-executor'

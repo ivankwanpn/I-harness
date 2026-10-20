@@ -7,26 +7,35 @@ interface Registration {
   sessionId: string; coordinator: SessionCoordinator
   projectContext?(): { id: string; roots: string[] } | undefined
   available?(): boolean
+  mode: 'producer' | 'reader'
   lastScopeId?: string
 }
 interface StoreEntry { service: ContextOutputService; registrations: Set<Registration>; users: number; sourceFor(sessionId: string): Promise<ContextCapture['source']>; observeDeletion(coordinator: SessionCoordinator): void; stopObserving(): void }
 const stores = new Map<string, Promise<StoreEntry>>()
 
-interface ResultStoreOptions {
+export interface ResultStoreOptions {
   workspace: string; coordinator?: SessionCoordinator; sessionId?: string
   contextOutput?: ContextOutputService; contextOutputSourceFor?(sessionId: string): Promise<ContextCapture['source']>
   contextOutputSettingsPath?: string
   projectContext?: Registration['projectContext']; executionCallerAvailable?: Registration['available']
 }
-export async function acquireAssemblyResultStore(options: ResultStoreOptions) {
+export function acquireAssemblyResultStore(options: ResultStoreOptions) { return acquireResultStore(options, 'producer') }
+export function acquireResultReadStore(options: ResultStoreOptions & { readCallerAvailable(): boolean }) {
+  return acquireResultStore({ ...options, projectContext: undefined, executionCallerAvailable: options.readCallerAvailable }, 'reader')
+}
+async function acquireResultStore(options: ResultStoreOptions, mode: Registration['mode']) {
   if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, release: async () => {} }
   if (!options.coordinator?.storageRoot || !options.sessionId) return { service: undefined, sourceFor: undefined, release: async () => {} }
   const location = await contextWorkspaceLocation(options.workspace, options.coordinator.storageRoot)
-  let config
-  try { config = await loadContextOutputConfiguration(location.workspaceKey, options.contextOutputSettingsPath) }
-  catch { return { service: undefined, sourceFor: undefined, release: async () => {} } }
   const key = JSON.stringify([contextPathKey(location.serviceRoot), location.workspaceKey])
+  for (;;) {
   let pending = stores.get(key)
+  let config: Awaited<ReturnType<typeof loadContextOutputConfiguration>> | undefined
+  if (mode === 'producer' || !pending) {
+    try { config = await loadContextOutputConfiguration(location.workspaceKey, options.contextOutputSettingsPath) }
+    catch { return { service: undefined, sourceFor: undefined, release: async () => {} } }
+    pending = stores.get(key)
+  }
   if (!pending) {
     pending = Promise.resolve().then(() => {
       const registrations = new Set<Registration>()
@@ -35,14 +44,15 @@ export async function acquireAssemblyResultStore(options: ResultStoreOptions) {
         const candidates = [...registrations]
         const coordinator = candidates.at(-1)?.coordinator
         if (!coordinator) throw new Error('Result source owner unavailable')
-        let cursor = sessionId, selected: Registration | undefined, projectId: string | undefined, bindingSeen = false
+        let cursor = sessionId, selected: Registration | undefined, reader: Registration | undefined, projectId: string | undefined, bindingSeen = false
         const visited = new Set<string>()
         for (;;) {
           if (visited.has(cursor) || visited.size >= 64) throw new Error('Result source lineage unavailable')
           visited.add(cursor)
           const { meta } = await coordinator.profile(cursor)
           if (meta.archived) throw new Error('Result source session archived')
-          selected ??= candidates.findLast(owner => owner.sessionId === cursor)
+          selected ??= candidates.findLast(owner => owner.sessionId === cursor && owner.mode === 'producer')
+          reader ??= candidates.findLast(owner => owner.sessionId === cursor && owner.mode === 'reader')
           if (!bindingSeen) {
             const binding = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(cursor).digest('hex'))
             if (binding !== undefined) {
@@ -55,6 +65,7 @@ export async function acquireAssemblyResultStore(options: ResultStoreOptions) {
           if (!meta.parentSession || !['subagent', 'team'].includes(meta.origin ?? '')) break
           cursor = meta.parentSession
         }
+        selected ??= reader
         if (!selected || selected.available?.() === false) throw new Error('Result source host unavailable')
         const scope = selected.projectContext?.()
         if (projectId && scope?.id !== projectId || !scope && selected.lastScopeId) throw new Error('Result project scope unconfirmed')
@@ -87,17 +98,26 @@ export async function acquireAssemblyResultStore(options: ResultStoreOptions) {
     void pending.catch(() => { if (stores.get(key) === pending) stores.delete(key) })
   }
   const entry = await pending
-  entry.observeDeletion(options.coordinator)
-  if (JSON.stringify(entry.service.status().config) !== JSON.stringify(config)) await entry.service.configure(config)
-  const registration: Registration = { sessionId: options.sessionId, coordinator: options.coordinator, projectContext: options.projectContext, available: options.executionCallerAvailable }
+  // A last owner can retire the instance while creation is awaited.
+  if (stores.get(key) !== pending) continue
+  const registration: Registration = { mode, sessionId: options.sessionId, coordinator: options.coordinator,
+    ...(mode === 'producer' ? { projectContext: options.projectContext } : {}), available: options.executionCallerAvailable }
   entry.registrations.add(registration); entry.users++
   // Read the existing owner's current source resolver, which consults all
   // actual registrations rather than capturing the first assembly's scope.
   const sourceFor = entry.sourceFor
   let released = false
-  return { service: entry.service, sourceFor, async release() {
+  async function release() {
     if (released) return
     released = true; entry.registrations.delete(registration); entry.users--
     if (!entry.users && stores.get(key) === pending) { stores.delete(key); entry.stopObserving(); await entry.service.close() }
-  } }
+  }
+  try {
+    // Reserve before configure or any other subsequent await. Readers never
+    // configure an active writer or initialize the optional legacy index.
+    entry.observeDeletion(options.coordinator)
+    if (mode === 'producer' && JSON.stringify(entry.service.status().config) !== JSON.stringify(config)) await entry.service.configure(config!)
+    return { service: entry.service, sourceFor, release }
+  } catch (cause) { await release(); throw cause }
+  }
 }

@@ -6,6 +6,7 @@ import { readSessionContextState } from "@i-harness/core-session"
 import { spawn, type ChildProcess } from "node:child_process"
 import type { Readable, Writable } from "node:stream"
 import type { SessionEvent } from "@i-harness/core-session"
+import type { ResultPageQuery, ResultPageResult } from './protocol.ts'
 import { safeModelFailureFacts, type ModelFailureFacts } from "@i-harness/llm-seam"
 import {
   JsonRpcLineTransport,
@@ -217,6 +218,10 @@ export class HarnessClient {
   async contextState(sessionId: string): Promise<SessionContextState> {
     return readSessionContextState(await this.request("session/context", { sessionId }), sessionId)
   }
+  async readResultPage(sessionId: string, query: ResultPageQuery): Promise<ResultPageResult> {
+    if (!this.serverInfo?.capabilities?.['session-result-read']?.includes('1')) throw new Error('Result pages are not supported; initialize a capable server first')
+    return await this.request('session/result/read', { ...query, sessionId }) as ResultPageResult
+  }
 
   async setSessionModel(
     sessionId: string,
@@ -422,6 +427,7 @@ export class HarnessClient {
 }
 
 export class HarnessSession {
+  readResultPage(query: ResultPageQuery): Promise<ResultPageResult> { return this.client.readResultPage(this.sessionId, query) }
   constructor(private readonly client: HarnessClient, readonly sessionId: string) {}
 
   run(prompt: string): Promise<RunResult> {

@@ -758,6 +758,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
     boundBytes: DEFAULT_WRITE_BOUND_BYTES,
   })
   const server = createSdkServer(service, {
+    ...(service.readResultPage ? { readResultPage: service.readResultPage } : {}),
     coordinator,
     ...(coordinator !== undefined
       ? {
