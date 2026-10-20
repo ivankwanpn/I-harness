@@ -30,7 +30,6 @@ import { runPostSubmit } from './service/post-submit.ts'
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import { modelFailureFacts, type ModelClient } from "@i-harness/llm-seam"
-import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -165,24 +164,6 @@ export interface SessionServiceOptions extends AssemblyOptions {
    * When defined it ALWAYS wins over the static AssemblyOptions.
    * reasoningEffort; absent → the static value (or never set). */
   reasoningEffortFor?: (sessionId: string, meta: SessionMeta | undefined) => ReasoningEffort | undefined
-  /** M5 T4 block ③ B1: the registry-level tool-output bound. Declared here —
-   * although AssemblyOptions already carries it — because THIS interface is the
-   * host contract for `i-harness sdk` and `i-harness acp`: those hosts own no
-   * assembly call of their own, so this option is how the bound reaches them,
-   * and it is named where a host reads its surface. The assembly keeps its own
-   * ruling (absent = the guard is NOT mounted); the call sites opt in.
-   *
-   * BOTH `createSessionAssembly` calls below carry it through their `...opts`
-   * spread, so there is no second line to find: the spread IS the threading.
-   * Each call site is pinned by a case of its OWN in
-   * `packages/session-executor/test/service-output-spill.test.ts` — the
-   * binding-path call by the tests that supply `modelBindingFor`, the legacy
-   * call by the third case (`modelBuilder`, which is what routes a build to it).
-   * Verified at execution one site at a time: shadowing the field at a site
-   * reddens THAT site's case and leaves the others green, and each case drives
-   * a real over-cap tool result into the durable record. NARROWING a spread to
-   * an explicit field list therefore has to list `outputSpill`. */
-  outputSpill?: OutputSpillGuardConfig
 }
 
 interface SessionSubmitOptions {

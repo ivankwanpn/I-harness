@@ -110,9 +110,6 @@ importers:
       '@i-harness/mcp-client':
         specifier: workspace:*
         version: link:../../packages/mcp-client
-      '@i-harness/output-retention':
-        specifier: workspace:*
-        version: link:../../packages/output-retention
       '@i-harness/plan-mode':
         specifier: workspace:*
         version: link:../../packages/plan-mode
@@ -1016,15 +1013,9 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
-      '@i-harness/core-plugin':
-        specifier: workspace:*
-        version: link:../core-plugin
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
-      '@i-harness/diagnostics':
-        specifier: workspace:*
-        version: link:../diagnostics
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../exec

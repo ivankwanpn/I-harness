@@ -34,7 +34,6 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
 import { installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
 import { createCodeTextRetention } from "./lifecycle/code-text-retention.ts"
@@ -238,7 +237,6 @@ export interface AssemblyOptions {
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
   guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean; allowModelSelection?: boolean; execution?: "subagent" | "isolated"; isolated?: GuardianIsolatedConfig | ((sessionId: string, session: Session) => GuardianIsolatedConfig) } // R-A9
-  outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
   detachedSession?: import('@i-harness/core-session').Session
   detachedPolicySession?: Session

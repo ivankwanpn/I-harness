@@ -222,7 +222,5 @@ export function spillNotice(omittedBytes: number, path: string): string {
   return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use grep with this path to search within it.)`
 }
 
-export { createOutputSpillGuard, gcSpillStore, createUnifiedSpillStore } from "./spill-guard.ts"
-export type { OutputSpillGuardConfig } from "./spill-guard.ts"
 export { createResultCapture } from './result/capture.ts'
 export { createExecFrameCapture } from './result/exec-frames.ts'

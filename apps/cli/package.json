@@ -40,7 +40,6 @@
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/lsp": "workspace:*",
     "@i-harness/mcp-client": "workspace:*",
-    "@i-harness/output-retention": "workspace:*",
     "@i-harness/plan-mode": "workspace:*",
     "@i-harness/plugin-registry": "workspace:*",
     "@i-harness/preset": "workspace:*",

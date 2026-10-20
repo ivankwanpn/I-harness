@@ -353,7 +353,6 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     loadMeta: async (sessionId) => (await coordinator.profile(sessionId)).meta,
     coordinator,
     sessionFor: createDurableSessionLoader(coordinator),
-    outputSpill: {},
     compact: { auto: settings.get().compaction.auto },
   })
   const codeSettings = createCodeModeSettings(settingsPath, service)
