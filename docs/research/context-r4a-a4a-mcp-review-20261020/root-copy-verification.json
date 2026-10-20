@@ -1,0 +1,11 @@
+{
+  "checkedAt": "2026-10-20T11:16:43.202Z",
+  "manifest": "D:\\I-harness-main\\.tmp\\context-r4a-a4a-mcp-20261020-implementation\\copied-qa-b-before.json",
+  "manifestSha256": "043470044c8b799024451c68d8149b0c6adb721f7284ee80f728e2fc34c2029c",
+  "sourceCopies": 846,
+  "fixtures": 4,
+  "importRewrites": 20,
+  "dependencyEdges": 280,
+  "literalImportGaps": [],
+  "failures": []
+}

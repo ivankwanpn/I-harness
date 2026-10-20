@@ -1,0 +1,12 @@
+{
+  "checkedAt": "2026-10-20T11:17:21.765Z",
+  "evidence": "D:\\I-harness-main\\.tmp\\context-r4a-a4a-mcp-20261020-implementation",
+  "productHead": "fd84e6eaab3357bc79ea1d3b4a73f763661c9466",
+  "receiptCount": 32,
+  "sealedArtifacts": 184,
+  "sourceEntries": 2603,
+  "sourceDigest": "8a53b64d1b66dfbb903ad2cd25615141e5e88c88175917f9b443bb615caca419",
+  "inventoryDigest": "10dec13468a890acc59e39cc8c6b1dc83402be8b54b39ab942113321c60eda15",
+  "sealSha256": "8cc6876b2624c70bcdfe12967dd44737ee7b316332bfd401398b370e7242449f",
+  "failures": []
+}

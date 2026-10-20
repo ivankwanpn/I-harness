@@ -4,6 +4,8 @@
 
 **Goal:** Preserve the complete normalized MCP result and expose useful bounded text/media/resource descriptions through genuine registry, managed store and Code Mode paths.
 
+**Status2026-10-20:** Task1 accepted within this scope through product`fd84e6ea`/delivery`e0e6a8d1`; independent GPT6.1Sol spec/quality PASS and root source/copy/evidence verification are recorded in the [acceptance](../../research/2026-10-20-context-r4a-a4a-mcp-acceptance.md). Remaining A4/A5/A6 and broader qualifications stay open.
+
 **Architecture:** The existing private registered ToolExec metadata identifies an actual MCP producer. The original retention owner passes that presentation hint into the existing once-lowered result capture. A focused MCP presenter reads only the immutable owned value, produces bounded descriptions, and leaves original program/artifact data and native image extraction intact. No payload-shaped object grants execution status or presentation authority.
 
 **Tech Stack:** Existing TypeScript/Node24, MCP SDK/local stdio fixture, Vitest, managed Session/F1, ContextOutput and QuickJS/WASM. No new dependency or external service.
@@ -58,13 +60,13 @@ The presenter recognizes the normalized top-level content array only after this 
 
 ## Task 1 — Connected implementation and evidence
 
-- [ ] Read the actual owners and establish narrow baseline controls at the current HEAD. Record raw normalized versus direct compatibility versus genuine retained behavior separately.
-- [ ] Extend the local stdio fixture and actual client test for explicit `isError:false/true`, `structuredContent:null` and a structured object, ordered text/image/audio/resource/resource_link blocks. Use existing PNG/JPEG fixtures for two distinct supported images. Raw top-level extras remain outside the normalized contract.
-- [ ] Add a genuine managed registry/Agent control before product changes. It should currently fail because an image replaces useful content with a generic sentence, and because leading binary JSON hides later descriptors. A missing new export/import error is setup failure, not a behavioral RED.
-- [ ] Add the private presentation metadata declaration/getter to the existing owner and wire bridge→actual prepared capture. Keep legacy direct execute behavior and no-retention genuine registry behavior. Verify an ordinary unmarked lookalike does not get MCP-specific presentation or failure status.
-- [ ] Build the presenter on the owned immutable value, with capped fields and block positions. Reuse existing image extraction. Skip encoded-prefix preview accumulation only when the explicit presenter supplies preview; use that same preview for artifact and unavailable outcomes. Force retained representation for normalized non-text MCP content, without changing ordinary tools' inline semantics.
-- [ ] Add source/quota/unknown recovery and Code Mode controls below. Correct real failures in their original owners, preserve old failures and document scope changes before expanding.
-- [ ] Run targeted and affected package suites/types, then a fresh copy/build control for the changed path. Record exact source and test fixture hashes, commands, exits and immutable raw output. Commit coherent changes locally, update this task's ledger, and return for independent spec/quality review.
+- [x] Read the actual owners and establish narrow baseline controls at the current HEAD. Record raw normalized versus direct compatibility versus genuine retained behavior separately.
+- [x] Extend the local stdio fixture and actual client test for explicit `isError:false/true`, `structuredContent:null` and a structured object, ordered text/image/audio/resource/resource_link blocks. Use existing PNG/JPEG fixtures for two distinct supported images. Raw top-level extras remain outside the normalized contract.
+- [x] Add a genuine managed registry/Agent control before product changes. It should currently fail because an image replaces useful content with a generic sentence, and because leading binary JSON hides later descriptors. A missing new export/import error is setup failure, not a behavioral RED.
+- [x] Add the private presentation metadata declaration/getter to the existing owner and wire bridge→actual prepared capture. Keep legacy direct execute behavior and no-retention genuine registry behavior. Verify an ordinary unmarked lookalike does not get MCP-specific presentation or failure status.
+- [x] Build the presenter on the owned immutable value, with capped fields and block positions. Reuse existing image extraction. Skip encoded-prefix preview accumulation only when the explicit presenter supplies preview; use that same preview for artifact and unavailable outcomes. Force retained representation for normalized non-text MCP content, without changing ordinary tools' inline semantics.
+- [x] Add source/quota/unknown recovery and Code Mode controls below. Correct real failures in their original owners, preserve old failures and document scope changes before expanding.
+- [x] Run targeted and affected package suites/types, then a fresh copy/build control for the changed path. Record exact source and test fixture hashes, commands, exits and immutable raw output. Commit coherent changes locally, update this task's ledger, and return for independent spec/quality review.
 
 ### Discriminating fixture and assertions
 
