@@ -37,4 +37,3 @@ export function RecordedImages({ output, onPreview }: { output: unknown; onPrevi
     <CapturedValueBlock label={t("圖片資料", "Image metadata")} value={metadata} />
   </>
 }
-
