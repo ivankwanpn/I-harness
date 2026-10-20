@@ -126,6 +126,7 @@ it('retains an actual native timeout partial, trusted failed outcome and ordered
         expect(original).toMatchObject({ timedOut: true, exitCode: 0, stderr: '', detail: full, images, code: TOOL_FAILED, error: 'payload data' })
         expect(original.truncated).toEqual({ stdout: true, stderr: false })
         expect(Buffer.byteLength(original.stdout)).toBeLessThanOrEqual(1024)
+        expect(original.stdout).toBe('native partial 中文🙂'.repeat(40) + 'native partial 中文')
       } else expect(original).toEqual({ code: 'TOOL_TIMEOUT', error: 'payload data', images: { mediaType: 'lookalike' }, detail: full })
     }
     const messages = deriveMessages(f.document.view).filter(message => message.role === 'tool')
