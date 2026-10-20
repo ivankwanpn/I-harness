@@ -43,7 +43,7 @@ export function validManagedArtifactRef(value: unknown): value is ManagedArtifac
     && hash(ref.revision) && hash(ref.contentDigest) && size(ref.encodedBytes) && codecs.includes(ref.codec) && completeness.includes(ref.completeness)
 }
 
-export function validResultEnvelope(value: unknown): value is ResultEnvelope {
+function validResultEnvelope(value: unknown): value is ResultEnvelope {
   try {
     if (!data(value) || value === null || typeof value !== 'object' || Array.isArray(value)) return false
     const result = value as ResultEnvelope, retention = result.retention

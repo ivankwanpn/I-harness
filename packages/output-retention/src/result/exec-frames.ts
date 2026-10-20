@@ -2,7 +2,7 @@ import type { ExecFrameCapture, ExecFramePart } from '@i-harness/exec'
 import type { ResultArtifactSink } from '@i-harness/context-output'
 import { encodeExecFrameRecord, type ResultCompleteness, type ResultDependency } from '@i-harness/core-session'
 
-export interface ExecFrameCaptureOptions { sourceId: string; openArtifact(): Promise<ResultArtifactSink> }
+interface ExecFrameCaptureOptions { sourceId: string; openArtifact(): Promise<ResultArtifactSink> }
 const header = Buffer.from('IHEXEC01\n', 'ascii')
 /** Canonical, bounded frame encoding. Raw bytes never become preview prose. */
 export function createExecFrameCapture(options: ExecFrameCaptureOptions): ExecFrameCapture {

@@ -224,5 +224,5 @@ export function spillNotice(omittedBytes: number, path: string): string {
 
 export { createOutputSpillGuard, gcSpillStore, createUnifiedSpillStore } from "./spill-guard.ts"
 export type { OutputSpillGuardConfig } from "./spill-guard.ts"
-export { createResultCapture, type ResultCaptureOptions } from './result/capture.ts'
-export { createExecFrameCapture, type ExecFrameCaptureOptions } from './result/exec-frames.ts'
+export { createResultCapture } from './result/capture.ts'
+export { createExecFrameCapture } from './result/exec-frames.ts'

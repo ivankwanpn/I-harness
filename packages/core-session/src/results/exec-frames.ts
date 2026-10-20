@@ -1,4 +1,4 @@
-export interface ExecFrameRecord { channel: 'stdout' | 'stderr'; frame: number; offset: number; end: boolean; data: string }
+interface ExecFrameRecord { channel: 'stdout' | 'stderr'; frame: number; offset: number; end: boolean; data: string }
 export interface ExecFrameCursor { recordOffset: number; sliceOffset: number }
 export function encodeExecFrameRecord(record: ExecFrameRecord): string {
   return JSON.stringify({ channel: record.channel, frame: record.frame, offset: record.offset, end: record.end, data: record.data }) + '\n'

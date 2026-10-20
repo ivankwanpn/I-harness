@@ -5,7 +5,7 @@ import { boundedPreview } from './preview.ts'
 import { resultMedia } from './media.ts'
 import { mcpPresentation } from './mcp-presentation.ts'
 
-export interface ResultCaptureOptions { openArtifact(): Promise<ResultArtifactSink>; forceArtifact?: boolean; completeness?: ResultCompleteness; presentation?: 'mcp' }
+interface ResultCaptureOptions { openArtifact(): Promise<ResultArtifactSink>; forceArtifact?: boolean; completeness?: ResultCompleteness; presentation?: 'mcp' }
 
 /** R4A-ENC-01: callback-bearing lowering is synchronous. Only owned immutable
  * data reaches the streaming encoder; one64KiB write and one bounded token may

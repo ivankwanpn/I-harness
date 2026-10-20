@@ -96,7 +96,7 @@ export type { RequestBudgetSnapshotV2, AdmissionPurpose, AdmissionEstimate, Admi
 export { validAdmissionObservation } from './events/admission.ts'
 
 export type * from './results/types.ts'
-export { validResultEnvelope, validManagedArtifactRef, validRetainedResultRevision } from './results/validate.ts'
+export { validManagedArtifactRef, validRetainedResultRevision } from './results/validate.ts'
 export { resultText, resultIsError, resultDisposition, managedResultRefs } from './results/projection.ts'
-export { streamJsonData, lowerJsonData, containsNativeRawJson, type JsonStreamOptions } from './serialization/json-stream.ts'
-export { encodeExecFrameRecord, decodeExecFrameRecord, type ExecFrameRecord, type ExecFrameCursor } from './results/exec-frames.ts'
+export { streamJsonData, lowerJsonData, containsNativeRawJson } from './serialization/json-stream.ts'
+export { encodeExecFrameRecord, decodeExecFrameRecord, type ExecFrameCursor } from './results/exec-frames.ts'

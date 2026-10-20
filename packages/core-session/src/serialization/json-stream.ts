@@ -1,5 +1,5 @@
 /** Iterative native JSON property semantics and bounded string escaping. */
-export interface JsonStreamOptions { lexical?: boolean; lower?: boolean; emit?: boolean; dataOnly?: boolean }
+interface JsonStreamOptions { lexical?: boolean; lower?: boolean; emit?: boolean; dataOnly?: boolean }
 export class UnsupportedJsonData extends TypeError { constructor() { super('Canonical encoding requires JSON data') } }
 const nativeJson = JSON as typeof JSON & { isRawJSON?(value: unknown): boolean; rawJSON?(text: string): object }
 const isNativeRawJSON = nativeJson.isRawJSON, createNativeRawJSON = nativeJson.rawJSON
