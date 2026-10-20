@@ -80,6 +80,8 @@ Potential issue, not yet a finding: current closed-fact reference discovery expo
 
 ## Phase 2: repair only a reproduced original-owner defect
 
+**Root decision after controlled reproduction:** the actual live child→parent observer has a committed frame and target pin but cannot read through the catalog under current visibility. The [native catalog witness design](../specs/2026-10-21-native-result-catalog-witness.md) now governs this repair: original pin-owned immutable membership, explicit viaCatalog selector, current visibility, pre-F1 publication and v1/v2 transport compatibility. Root read the genuine RED and independent design review before authorizing product changes. The original bare cross-owner query stays denied; the new documented witness query is the deliberate usable route. The original checkpoint instructions below explain how further distinct findings must be handled.
+
 The writer reports any controlled counterexample to root with exact source, before evidence, expected contract and minimal original-owner remedy before changing product behavior. Root can refine the design within the user's already approved redesign; this is an engineering checkpoint, not a new user approval request.
 
 Prefer an existing trustworthy original ownership/closed-fact link. If a durable catalog-membership relation is required, root must define its exact writer, immutable identity, publication timing, bounded membership read, recovery and revoke/rewind/delete semantics before implementation. No scanning arbitrary JSON, granting every embedded ref, global ACL relaxation, full-catalog scan on every frame page, imported ToolExec/host authority, or hidden second authority map.
