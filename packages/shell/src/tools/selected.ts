@@ -1,5 +1,5 @@
 import type { Tool } from "@i-harness/core-tools"
-import { userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
 import { SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ResolvedAgentShell, ShellToolDeps } from "../types.ts"
 import { capturedShell, agentShellPrompt, shellFlags, boundShellEnvironment } from "../command/resolve.ts"
@@ -8,6 +8,7 @@ import type { VersionIdentity } from "../command/identity.ts"
 import { sandboxUnavailableFailure, type ResolveShellCall } from "./policy.ts"
 import { promotedResult } from "./background.ts"
 import type { RetainedRunResult } from "./retention.ts"
+import { declareNativeResult } from './outcome.ts'
 
 type SelectedDeps = Pick<ShellToolDeps, "agentShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs">
 
@@ -47,10 +48,16 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
     execute: async (args, exec) => {
       const binding = bindingFor(args)
       bindings.delete(args)
-      if ("error" in binding) return { stdout: "", stderr: binding.error, exitCode: -1 }
+      if ("error" in binding) {
+        declareToolResultOutcome(exec, 'failed')
+        return { stdout: "", stderr: binding.error, exitCode: -1 }
+      }
       const selected = binding.shell
       try { selected.validate?.() }
-      catch (error) { return { stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: -1 } }
+      catch (error) {
+        declareToolResultOutcome(exec, 'failed')
+        return { stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: -1 }
+      }
       const flags = shellFlags(selected)
       const argv = [selected.command, ...flags, selected.dialect === "cmd" ? `"${args.command}"` : args.command]
       const ladder = await resolveCall("shell", exec, args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}${selected.executionContext ? `; target ${selected.executionTarget}, captured options ${selected.executionContext}` : ""}`)
@@ -67,9 +74,14 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
           ...(promotionWake === undefined ? {} : { promotionWake }),
         }
         const result = await deps.exec.run(command, runOptions)
-        return "promoted" in result ? promotedResult(result, "shell", deps.timeoutMs) : retainedRunResult(result, "shell-stdout")
+        if ('promoted' in result) return promotedResult(result, 'shell', deps.timeoutMs)
+        declareNativeResult(exec, result)
+        return retainedRunResult(result, 'shell-stdout')
       } catch (error) {
-        if (error instanceof SandboxUnavailableError) return sandboxUnavailableFailure("shell", "shell", sandbox, error.kind, error.detail ?? error.message)
+        if (error instanceof SandboxUnavailableError) {
+          declareToolResultOutcome(exec, 'failed')
+          return sandboxUnavailableFailure("shell", "shell", sandbox, error.kind, error.detail ?? error.message)
+        }
         throw error
       }
     },

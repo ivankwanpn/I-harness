@@ -1,4 +1,5 @@
 import type { ToolExec } from "@i-harness/core-tools"
+import { declareToolResultOutcome } from '@i-harness/core-tools'
 import type { EscalationContext, SandboxDenial, SandboxExecutionPolicy, SandboxSurface, SandboxUnavailableKind } from "@i-harness/sandbox"
 import { denialFor, resolveCallPolicy } from "@i-harness/sandbox"
 import type { ShellToolDeps } from "../types.ts"
@@ -52,6 +53,7 @@ export async function resolveShellCall(
     ...(escalation !== undefined ? { escalation } : {}),
   })
   if (resolution.kind === "refused") {
+    declareToolResultOutcome(exec, 'failed')
     return { kind: "refused", refusal: { stdout: "", stderr: JSON.stringify(resolution.denial), exitCode: -1 } }
   }
   // The GRANTED policy when an escalation was approved, the session's otherwise.

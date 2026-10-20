@@ -13,7 +13,7 @@ export interface ToolResultRetention {
   captureSynthetic(context: SyntheticResultContext, output: unknown, execution: ResultExecution): ResultFinalization
 }
 const prepared = new WeakMap<PreparedCall, { exec: ToolExec; call: PreparedCall['call']; tool: PreparedCall['tool']; name: string; view?: SessionView; callId?: string; source?: SettlementFacts<ProducerFactOutcome> }>()
-const execution = new WeakMap<ToolExec, ResultExecution & { presentation?: 'mcp' }>()
+const execution = new WeakMap<ToolExec, ResultExecution & { declared?: true; presentation?: 'mcp' }>()
 const finalizations = new WeakMap<PreparedCall, ResultFinalization>()
 const syntheticFinalizations = new WeakMap<ResultFinalization, Readonly<SyntheticResultContext>>()
 export function bindSyntheticFinalization(context: SyntheticResultContext, handle: ResultFinalization): ResultFinalization { syntheticFinalizations.set(handle, Object.freeze({ ...context })); return handle }
@@ -55,7 +55,7 @@ export function declareToolResultOutcome(exec: ToolExec, outcome: ResultExecutio
   const current = execution.get(exec)
   if (!current) return false
   if (current.dispatch !== 'dispatched' || !['succeeded', 'failed', 'canceled', 'unknown'].includes(outcome)) throw new FactRecoveryRequiredError()
-  execution.set(exec, { ...current, outcome })
+  execution.set(exec, { ...current, outcome, declared: true })
   return true
 }
 /** Presentation is runtime metadata of the genuine dispatched producer. */
@@ -77,5 +77,5 @@ export function resultExecution(call: PreparedCall): ResultExecution {
 }
 export function dispatchResultReturned(exec: ToolExec): void {
   const value = execution.get(exec)
-  if (value?.outcome === 'unknown') declareToolResultOutcome(exec, 'succeeded')
+  if (value && !value.declared) declareToolResultOutcome(exec, 'succeeded')
 }

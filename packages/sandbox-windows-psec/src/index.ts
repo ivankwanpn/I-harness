@@ -500,6 +500,7 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Wi
             return Object.freeze({
               receipt: lease.receipt, rootExited: lease.rootExited,
               get settled() { return lease.settled },
+              terminationObservation: lease.terminationObservation,
               cancel: lease.cancel, pid: Number(started.pid), io: session.ioObject(preparedSpec),
               async release() {
                 try { await session.release() }

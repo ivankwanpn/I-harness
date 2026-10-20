@@ -1,11 +1,21 @@
-import type { ExecutionSettlement, RootExit, TransportExecutionHandle } from "@i-harness/sandbox"
+import type { ExecutionSettlement, RootExit, TerminationObservation, TransportExecutionHandle } from "@i-harness/sandbox"
+import type { ResultExecution } from '@i-harness/core-session'
 import { SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
-import { execOutputReader, registerRetainedOutput } from "../retained-output.ts"
+import { execOutputReader, registerRetainedOutput, registerExecResultOutcome } from "../retained-output.ts"
 import type { ExecResult } from "../index.ts"
 import type { Capture, StreamMetadata } from "./contracts.ts"
 
 export function clean(text: string): string { return text.replace(/\r\n/g, "\n") }
 function unknownExit(root: RootExit): number { return root.exitCode ?? -1 }
+
+function nativeOutcome(root: RootExit, termination: Readonly<TerminationObservation> | undefined): ResultExecution['outcome'] {
+  if (termination?.kind === 'confirmed') {
+    return termination.reason === 'timeout' || termination.reason === 'output-limit' ? 'failed' : 'canceled'
+  }
+  if (termination?.kind !== 'none' || root.observationError !== undefined
+    || root.exitCode === null || !Number.isFinite(root.exitCode) || !Number.isInteger(root.exitCode)) return 'unknown'
+  return root.exitCode === 0 ? 'succeeded' : 'failed'
+}
 
 // Live owner queries preserve reads after awaits; this does not copy capture
 // stop, cancellation, failure or output state into another completion owner.
@@ -67,6 +77,7 @@ export async function completeCapture({
     if (failures.length === 1) throw failures[0]
     if (failures.length > 1) throw new AggregateError(failures, "Execution and cleanup failed")
     const root = (outcomes[0] as PromiseFulfilledResult<RootExit>).value
+    const outcome = nativeOutcome(root, handle.terminationObservation?.())
     const { stdout: sOut, stderr: sErr } = output()
     const driverDiagnostics = handle.io.diagnostics?.()
     const discardedOutputBytes = discardedAfterStop() + (driverDiagnostics?.discardedOutputBytes ?? 0)
@@ -79,6 +90,7 @@ export async function completeCapture({
         outputAbandoned: driverDiagnostics?.outputAbandoned ?? false, discardedOutputBytes,
       } } : {}),
     }
+    registerExecResultOutcome(result, outcome)
     if (!metadata) registerRetainedOutput(result, execOutputReader([sOut, sErr]))
     const runner = handle.runner
     if (stop() !== "timeout" && result.exitCode !== 0 && runner?.runnerFailureRules.length && execution.policy.mode !== "danger-full-access") {

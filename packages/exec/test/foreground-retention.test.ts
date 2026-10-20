@@ -2,15 +2,16 @@ import { expect, it } from 'vitest'
 import { resolve } from 'node:path'
 import type { TransportExecutionBackend } from '@i-harness/sandbox'
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
-import { createExecService, retainedOutputReader, type ExecutionSupervisor } from '../src/index.ts'
+import { createExecService, retainedOutputReader, execResultOutcome, type ExecutionSupervisor } from '../src/index.ts'
 import { createExecFrameCapture } from '../../output-retention/src/index.ts'
 
-function foreground(exitCode: number, rejectObserver: boolean, unknownStorage = false) {
+function foreground(exitCode: number | null, rejectObserver: boolean, unknownStorage = false) {
   const owner = { sessionId: 'foreground-retention' }
   const policy = compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'foreground', workspaceRoot: resolve('.') } })
   let launches = 0, observations = 0
   const root = { exitCode }
   const handle = {
+    terminationObservation: () => ({ kind: 'none' as const }),
     pid: 123, receipt: { executionId: 'foreground-retention', backendId: 'controlled', policyFingerprint: policy.fingerprint, owner, assurance: 'unverified' as const },
     io: { async write() {}, async endInput() {}, output: (async function* () { yield { channel: 'stdout' as const, data: Buffer.from('original') } })() },
     rootExited: Promise.resolve(root),
@@ -41,16 +42,27 @@ function foreground(exitCode: number, rejectObserver: boolean, unknownStorage = 
   return { exec, releaseRetention() { unknownStorage = false }, counts: () => ({ launches, observations }) }
 }
 
-it.each([0, 7])('reports observation recovery without rewriting the original native exit %s or leaking rejection', async exitCode => {
+it.each([0, 7, null])('reports observation recovery without rewriting the original native exit %s or leaking rejection', async exitCode => {
   const { exec, counts } = foreground(exitCode, true)
   try {
     const result = await exec.run({ argv: ['controlled-foreground'] })
-    expect(result).toMatchObject({ stdout: 'original', stderr: '', exitCode, timedOut: false, retentionFailure: 'recovery-required' })
+    expect(result).toMatchObject({ stdout: 'original', stderr: '', exitCode: exitCode ?? -1, timedOut: false, retentionFailure: 'recovery-required' })
+    expect(execResultOutcome(result)).toBe(exitCode === null ? 'unknown' : exitCode === 0 ? 'succeeded' : 'failed')
     const reader = retainedOutputReader(result)
     expect(reader, 'Observation metadata must preserve the original producer reader').toBeTypeOf('function')
     expect(await reader!({ maxBytes: 1024, signal: new AbortController().signal })).toMatchObject({ text: 'stdout:\noriginal\nstderr:\n', complete: true })
     await new Promise<void>(done => setImmediate(done))
     expect(counts()).toEqual({ launches: 1, observations: 1 })
+  } finally { await exec.dispose() }
+})
+
+it('transfers outcome-only streaming metadata when retention failure rewraps original null exit', async () => {
+  const { exec } = foreground(null, true)
+  try {
+    const result = await exec.run({ argv: ['controlled-foreground'] }, { stream: { maxBytes: 128, onStdout() {} } })
+    expect(result).toMatchObject({ exitCode: -1, retentionFailure: 'recovery-required' })
+    expect(retainedOutputReader(result)).toBeUndefined()
+    expect(execResultOutcome(result)).toBe('unknown')
   } finally { await exec.dispose() }
 })
 

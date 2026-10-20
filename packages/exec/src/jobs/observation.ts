@@ -1,7 +1,7 @@
 import type { ExecCommand, ExecResult, ExecRunOptions, ExecStreamRunOptions, PromotedRun } from "../index.ts"
 import type { Capture } from "../capture/contracts.ts"
 import { validateInput } from "../capture/input.ts"
-import { registerRetainedOutput, retainedOutputReader } from '../retained-output.ts'
+import { registerExecResultOutcome, transferExecutionMetadata } from '../retained-output.ts'
 
 interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
@@ -16,8 +16,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
     const retentionFailure = await observe?.(capture)
     if (!retentionFailure) return result
     const observation = { ...result, retentionFailure }
-    const reader = retainedOutputReader(result)
-    if (reader) registerRetainedOutput(observation, reader)
+    transferExecutionMetadata(result, observation)
     return observation
   }
   async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
@@ -30,7 +29,9 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
     if (command.abortSignal?.aborted) {
       const metadata = runOptions && "stream" in runOptions
         ? { stream: { bytesRead: { stdout: 0, stderr: 0 }, bytesAdmitted: { stdout: 0, stderr: 0 }, stopReason: "aborted" as const } } : {}
-      return { stdout: "", stderr: "", exitCode: -1, timedOut: false, ...metadata }
+      const result = { stdout: "", stderr: "", exitCode: -1, timedOut: false, ...metadata }
+      registerExecResultOutcome(result, 'canceled')
+      return result
     }
     const streaming = runOptions && "stream" in runOptions ? runOptions : undefined
     const threshold = runOptions && "backgroundAfterMs" in runOptions ? runOptions.backgroundAfterMs : undefined

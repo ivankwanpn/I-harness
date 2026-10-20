@@ -11,7 +11,7 @@ export { launchExecution } from "./execution-admission.ts"
 export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
-export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
+export { registerRetainedOutput, retainedOutputReader, execResultOutcome } from "./retained-output.ts"
 export type { ExecFrameObservation, ExecFramePart, ExecFrameCapture, ExecResultRetention } from './capture/frames.ts'
 
 export interface ExecCommand {

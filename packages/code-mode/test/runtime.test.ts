@@ -4,6 +4,7 @@ import { userSteerForTool } from '@i-harness/core-tools'
 import { createCodeModeRuntime } from '../src/runtime.js'
 import type { CodeModeOrigin, CodeModeRuntimeEvent, CodeModeRuntimeOptions } from '../src/types.js'
 import { PNG } from '../../image-validation/test/fixtures.ts'
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import { readFileSync } from 'node:fs'
 const read = {name:'read',description:'read',inputSchema:{type:'object'}}
 const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRuntime({tools:()=>[read],invoke:async()=>({value:7}), ...options})
@@ -402,6 +403,31 @@ describe('isolated Code Mode runtime', () => {
     try {
       const out = await r.exec({code:`text('x')`})
       expect(out.status).toBe('failed'); expect(out.error).toContain('event sink failed')
+    } finally { await r.dispose() }
+  })
+  it('holds terminal callback admission until a genuine asynchronous acknowledgement returns', async () => {
+    const entered = Promise.withResolvers<void>(), acknowledgement = Promise.withResolvers<void>()
+    const r = make({ config: { maxActiveCells: 1 }, onEvent(event) {
+      if (event.type === 'closed' && event.status === 'completed') { entered.resolve(); return acknowledgement.promise }
+    } })
+    try {
+      const first = await r.exec({ code: 'text("original")', yield_time_ms: 0 })
+      await entered.promise
+      await expect(r.exec({ code: 'text("must not start")' })).rejects.toThrow('Active cell limit exceeded')
+      acknowledgement.resolve()
+      expect(await r.wait({ cell_id: first.cellId, yield_time_ms: 60000 })).toMatchObject({ status: 'completed', text: 'original' })
+      expect(await r.exec({ code: 'text("next")' })).toMatchObject({ status: 'completed', text: 'next' })
+    } finally { acknowledgement.resolve(); await r.dispose() }
+  })
+  it.each(['failure', 'recovery'] as const)('preserves original asynchronous terminal callback %s instead of committing completed', async kind => {
+    const original = kind === 'failure' ? new Error('original terminal callback failed') : new FactRecoveryRequiredError()
+    const r = make({ onEvent(event) {
+      if (event.type === 'closed' && event.status === 'completed') return Promise.reject(original)
+    } })
+    try {
+      const result = r.exec({ code: 'text("original")', yield_time_ms: 60000 })
+      if (kind === 'recovery') await expect(result).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      else expect(await result).toMatchObject({ status: 'failed', error: expect.stringContaining('original terminal callback failed') })
     } finally { await r.dispose() }
   })
   it('bounds retained completed cells and truthfully refuses evicted observations', async () => {

@@ -68,12 +68,19 @@ export interface RootExit {
 export type ExecutionSettlement =
   | { kind: "settled"; root: RootExit; treeEmpty: true; ioSettled: true; resourcesReleased: true }
   | { kind: "incomplete"; phase: "tree" | "io" | "release"; detail: string }
+export type TerminationObservation =
+  | { kind: "none" }
+  | { kind: "pending"; reason: StopReason }
+  | { kind: "confirmed"; reason: StopReason }
+  | { kind: "failed"; reason: StopReason }
 export interface ExecutionHandle {
   readonly receipt: ExecutionReceipt
   readonly rootExited: Promise<RootExit>
   readonly settled: Promise<ExecutionSettlement>
   cancel(reason: StopReason): Promise<ExecutionSettlement>
   release(): Promise<ExecutionSettlement>
+  /** Snapshot of the original lease's native termination action, without cleanup. */
+  terminationObservation?(): Readonly<TerminationObservation>
 }
 export interface ExecutionOutput {
   channel: "stdout" | "stderr" | "pty"

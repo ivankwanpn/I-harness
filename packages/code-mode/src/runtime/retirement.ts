@@ -144,12 +144,13 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             };
             const pending = (async () => {
                 try {
-                    await event({
+                    const receipt = event({
                         type: 'closed', cellId: cell.id, status: 'completed', origin: cell.origin, committed, retainOutcome() {
                             cell.completionRetained = true;
                             cell.terminalReceiptPending = true;
                         }
                     });
+                    if (receipt) await receipt;
                     committed();
                 }
                 catch (error) {

@@ -1,5 +1,5 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
-import { userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
 import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ShellToolDeps } from "../types.ts"
 import { getArgv } from "../command/argv.ts"
@@ -10,6 +10,7 @@ import { sandboxUnavailableFailure, type ResolveShellCall } from "./policy.ts"
 import { promotedResult } from "./background.ts"
 import type { RetainedRunResult } from "./retention.ts"
 import type { VersionIdentity } from "../command/identity.ts"
+import { declareNativeResult } from './outcome.ts'
 
 type NativeDeps = Pick<ShellToolDeps, "wslShell" | "exec" | "cwd" | "backgroundAfterMs" | "timeoutMs">
 
@@ -51,6 +52,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       // M59: legible failure instead of a silent spawn-fail (-1 with empty
       // output) — the model can then pick the pwsh tool immediately.
       if (!deps.wslShell && !bashAvailable()) {
+        declareToolResultOutcome(exec, 'failed')
         return {
           stdout: "",
           stderr:
@@ -88,12 +90,16 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
         }
         const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
+        declareNativeResult(exec, result)
         return retainedRunResult(result, "bash-stdout")
       } catch (err) {
         // M62 Step 7: exec refuses this command because no backend is composed
         // for the confined mode now in force. Returning the refusal keeps the
         // turn alive so the model can adapt; see sandboxUnavailableFailure.
-        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("bash", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
+        if (err instanceof SandboxUnavailableError) {
+          declareToolResultOutcome(exec, 'failed')
+          return sandboxUnavailableFailure("bash", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
+        }
         throw err
       }
     },
@@ -139,10 +145,14 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
         }
         const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)
+        declareNativeResult(exec, result)
         return retainedRunResult(result, "pwsh-stdout")
       } catch (err) {
         // M62 Step 7 — see the bash tool above.
-        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
+        if (err instanceof SandboxUnavailableError) {
+          declareToolResultOutcome(exec, 'failed')
+          return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
+        }
         throw err
       }
     },

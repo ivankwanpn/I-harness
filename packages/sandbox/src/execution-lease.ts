@@ -1,10 +1,11 @@
 import type {
-  ExecutionHandle, ExecutionReceipt, ExecutionSettlement, RootExit, StopReason,
+  ExecutionHandle, ExecutionReceipt, ExecutionSettlement, RootExit, StopReason, TerminationObservation,
 } from "./execution.ts"
 
 type Observation<T> = { ok: true; value: T } | { ok: false; detail: string }
 type Incomplete = Extract<ExecutionSettlement, { kind: "incomplete" }>
 interface Termination {
+  reason: StopReason
   promise: Promise<Observation<void>>
   result?: Observation<void>
 }
@@ -136,7 +137,7 @@ export function createExecutionLease(input: {
       }
       let resolve!: (result: Observation<void>) => void
       // Reserve ownership before a hook can synchronously reenter cancel.
-      const termination: Termination = { promise: new Promise(done => { resolve = done }) }
+      const termination: Termination = { reason, promise: new Promise(done => { resolve = done }) }
       nativeTermination = termination
       current.termination = termination
       void observe(() => input.terminate(reason)).then(result => {
@@ -155,5 +156,10 @@ export function createExecutionLease(input: {
     receipt, rootExited: root,
     get settled() { return current.promise },
     cancel, release,
+    terminationObservation(): Readonly<TerminationObservation> {
+      if (terminatedReason !== undefined) return Object.freeze({ kind: 'confirmed', reason: terminatedReason })
+      if (!nativeTermination) return Object.freeze({ kind: 'none' })
+      return Object.freeze({ kind: nativeTermination.result === undefined ? 'pending' : 'failed', reason: nativeTermination.reason })
+    },
   })
 }

@@ -3,7 +3,7 @@ export type {
   ExecutionTransport, ExecutionLifetime, BackendAssurance, StopReason, ExecutionOwner,
   BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
   ExecutionFileIdentity, MsysPtyBinding,
-  CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
+  CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement, TerminationObservation,
   ExecutionHandle, PreparedExecution, ExecutionBackend, ExecutionOutput, ExecutionIo,
   TransportExecutionHandle, PreparedTransportExecution, TransportExecutionBackend,
 } from "./execution.ts"

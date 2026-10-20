@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
-import { userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
+import { declareToolResultOutcome, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
@@ -81,6 +81,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       const retained = retainedObservation(exec, refreshObservation)
       await ready
       const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage }, { userSteer: userSteerForTool(exec), retained })
+      declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
       return observationOutput(out)
     },
   }

@@ -3,6 +3,25 @@ import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry, isOriginalResultFinalization, declareToolResultPresentation, declareToolResultOutcome, resultPresentation, resultExecution } from '../src/index.ts'
 import { registerResultPrepared } from '../src/registry/result-finalization.ts'
 
+it('preserves explicitly declared unknown on a normal public registry return', async () => {
+  const registry = createToolRegistry(createContext())
+  registry.register({ name: 'unknown', description: '', inputSchema: {}, async execute(_args, exec) {
+    declareToolResultOutcome(exec, 'unknown')
+    declareToolResultPresentation(exec, 'mcp')
+    return { exitCode: 0, status: 'succeeded', outcome: 'succeeded' }
+  } })
+  registry.register({ name: 'ordinary', description: '', inputSchema: {}, execute: async () => ({ error: true, status: 'failed', exitCode: 8 }) })
+  const call = await registry.prepare({ name: 'unknown', args: {} })
+  const output = await registry.dispatch(call)
+  await registry.finalize(call, output)
+  expect(resultExecution(call)).toEqual({ outcome: 'unknown', dispatch: 'dispatched' })
+  expect(resultPresentation(call)).toBe('mcp')
+  expect(JSON.stringify(resultExecution(call))).toBe('{"outcome":"unknown","dispatch":"dispatched"}')
+  const ordinary = await registry.prepare({ name: 'ordinary', args: {} })
+  await registry.dispatch(ordinary)
+  expect(resultExecution(ordinary)).toEqual({ outcome: 'succeeded', dispatch: 'dispatched' })
+})
+
 it('binds presentation only to registered dispatched identity, preserving it across outcome declaration without serialization', async () => {
   expect(declareToolResultPresentation({}, 'mcp')).toBe(false)
   const registry = createToolRegistry(createContext())
