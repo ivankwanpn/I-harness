@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-20T21:41:11.063Z",
+  "files": 80,
+  "links": 8,
+  "inventorySha256": "d4f5a7bce9031c215f6d244a0fd08a507aca0ff055100e35484d0d7ebd80727c",
+  "excludes": [
+    "review-control-inventory.json",
+    "evidence-seal.json"
+  ]
+}

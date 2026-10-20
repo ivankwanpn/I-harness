@@ -1,0 +1,51 @@
+{
+  "receipts": [
+    {
+      "variant": "base",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "node": "v24.15.0",
+      "argv": [
+        "--import",
+        "tsx",
+        "D:\\I-harness-main\\.tmp\\r4as-rv2\\control.mjs",
+        "base"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-rv2/config"
+      },
+      "start": "2026-10-20T21:40:31.568Z",
+      "end": "2026-10-20T21:40:32.129Z",
+      "pid": 5376,
+      "nativeExit": 0,
+      "signal": null,
+      "stdoutSha256": "f52032082976bbd077f78bc0ea71bde0d0aeddd2caf15418aa2c6107fcf14e2c",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "variant": "candidate",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "node": "v24.15.0",
+      "argv": [
+        "--import",
+        "tsx",
+        "D:\\I-harness-main\\.tmp\\r4as-rv2\\control.mjs",
+        "candidate"
+      ],
+      "cwd": "D:\\I-harness-main",
+      "env": {
+        "IH_CONFIG_DIR": "D:/I-harness-main/.tmp/r4as-rv2/config"
+      },
+      "start": "2026-10-20T21:40:32.130Z",
+      "end": "2026-10-20T21:40:32.686Z",
+      "pid": 25188,
+      "nativeExit": 1,
+      "signal": null,
+      "stdoutSha256": "57c5633406f4117876e2888b82e46ce65c6873967bdcb63b6f3b30a82fc870f9",
+      "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "sourceUnchanged": true,
+  "sameControlHash": "f6a7997cfde37c4bd9693d849bee15b53be1fe3ecd3095dd94886039735e0554",
+  "sourceMapHash": "05391da21bfa44d361cc0ddd10f12569bba9f28f264db23c90a415dfa0759857"
+}

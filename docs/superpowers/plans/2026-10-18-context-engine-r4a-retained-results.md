@@ -16,6 +16,8 @@
 
 **Latest bounded progress, 2026-10-21:** [mixed legacy/managed retention, quota and derived index qualification](../../research/2026-10-21-context-r4a-mixed-retention-acceptance.md) is also accepted, with no product repair. Cohesive task/ContextOutput owner structure and the complete S25 mapping precede final A6 scale/copied/bundled qualification. Those final obligations remain open; this update supersedes the earlier status paragraph's mixed-lifecycle pending entry only.
 
+**Subsequent structural checkpoint:** [cohesive task/legacy-result structure and S25 responsibility map](../../research/2026-10-21-context-r4a-structure-acceptance.md) is accepted through ae56ce09 after the independently reproduced workspace-read-timing P2 was repaired. Unused private surfaces/inactive registry spill retirement, the six normal-graph findings and final A6 scale/copied/bundled qualification remain. Original27/43 credit and whole R4A acceptance are not inferred from this checkpoint.
+
 ## Global constraints
 
 - Existing branch `codex/v0.1.13-development`, workspace `D:/I-harness-main`, version0.1.13-rc.1. One product writer; all delegated work GPT6.1Sol. Root owns architectural rulings, review, evidence and checkpoints. No recursive agents, unrelated refactoring, live accounts/providers, merge/release or version change.

@@ -1,0 +1,327 @@
+{
+  "status": "PASS",
+  "head": "ae56ce0996e4cc5f9738c798d200b89ee5032f0e",
+  "sealed": [
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "files": 1432,
+      "links": 24,
+      "bytes": 33625065,
+      "sealSha256": "6965b347e3eb85580c49097c3dc51c414553236f87f5b65aa6a1a7b14fc24705"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "files": 748,
+      "links": 12,
+      "bytes": 14253339,
+      "sealSha256": "a1a638494fd7568ecb674f1fa8a15b3d8dfc7eea831806cd1428bc107353027c"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-rv2",
+      "files": 80,
+      "links": 8,
+      "bytes": 953256,
+      "sealSha256": "027f582f3881152e861cefb27cffc15e7d3a94c799efe36292debb988b06d8d2"
+    }
+  ],
+  "portableOriginals": 164,
+  "finalSourceInputs": 2676,
+  "originalSourceDrift": [
+    "packages/context-output/src/legacy/capture.ts",
+    "packages/context-output/src/service.ts"
+  ],
+  "oldSourceValidatedAgainstImmutableReviewerCopies": true,
+  "gates": [
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "01-baseline-characterization",
+      "exit": 1,
+      "start": "2026-10-20T21:08:31.684Z",
+      "end": "2026-10-20T21:08:34.031Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "02-baseline-characterization",
+      "exit": 0,
+      "start": "2026-10-20T21:09:01.895Z",
+      "end": "2026-10-20T21:09:04.243Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "03-task-connected-baseline",
+      "exit": 1,
+      "start": "2026-10-20T21:09:26.432Z",
+      "end": "2026-10-20T21:09:39.674Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "04-legacy-s25-baseline",
+      "exit": 1,
+      "start": "2026-10-20T21:10:09.161Z",
+      "end": "2026-10-20T21:10:29.578Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "05-task-equivalence",
+      "exit": 1,
+      "start": "2026-10-20T21:11:40.513Z",
+      "end": "2026-10-20T21:11:52.746Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "06-subagent-types",
+      "exit": 2,
+      "start": "2026-10-20T21:12:09.722Z",
+      "end": "2026-10-20T21:12:14.236Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "07-subagent-types",
+      "exit": 2,
+      "start": "2026-10-20T21:12:30.613Z",
+      "end": "2026-10-20T21:12:35.197Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "08-subagent-types",
+      "exit": 0,
+      "start": "2026-10-20T21:12:57.175Z",
+      "end": "2026-10-20T21:13:01.831Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "09-task-characterization-desktop-observation",
+      "exit": 1,
+      "start": "2026-10-20T21:13:22.538Z",
+      "end": "2026-10-20T21:13:32.256Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "10-bounded-owned-fixture",
+      "exit": 1,
+      "start": "2026-10-20T21:16:32.133Z",
+      "end": "2026-10-20T21:16:35.699Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "11-fixture-observation",
+      "exit": 1,
+      "start": "2026-10-20T21:17:30.377Z",
+      "end": "2026-10-20T21:17:39.667Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "12-context-types",
+      "exit": 0,
+      "start": "2026-10-20T21:18:52.528Z",
+      "end": "2026-10-20T21:18:55.795Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "13-guard-calibration",
+      "exit": 0,
+      "start": "2026-10-20T21:19:01.546Z",
+      "end": "2026-10-20T21:19:02.013Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "14-final-fixtures-extracted",
+      "exit": 0,
+      "start": "2026-10-20T21:19:31.545Z",
+      "end": "2026-10-20T21:19:41.681Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "15-final-fixtures-base",
+      "exit": 0,
+      "start": "2026-10-20T21:20:23.170Z",
+      "end": "2026-10-20T21:20:33.063Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "16-final-connected",
+      "exit": 0,
+      "start": "2026-10-20T21:21:16.630Z",
+      "end": "2026-10-20T21:21:47.700Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "17-subagent-types-final",
+      "exit": 0,
+      "start": "2026-10-20T21:22:20.710Z",
+      "end": "2026-10-20T21:22:25.293Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "18-context-types-final",
+      "exit": 0,
+      "start": "2026-10-20T21:22:34.851Z",
+      "end": "2026-10-20T21:22:38.113Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "19-executor-types-final",
+      "exit": 0,
+      "start": "2026-10-20T21:22:39.185Z",
+      "end": "2026-10-20T21:22:47.199Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "20-executor-mts-types-final",
+      "exit": 0,
+      "start": "2026-10-20T21:22:48.290Z",
+      "end": "2026-10-20T21:22:53.859Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "21-gateway-types-final",
+      "exit": 0,
+      "start": "2026-10-20T21:22:54.924Z",
+      "end": "2026-10-20T21:23:02.445Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "22-equivalence-census",
+      "exit": 0,
+      "start": "2026-10-20T21:23:20.610Z",
+      "end": "2026-10-20T21:23:20.862Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "23-normal-reachability",
+      "exit": 1,
+      "start": "2026-10-20T21:23:26.369Z",
+      "end": "2026-10-20T21:23:36.646Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "24-normal-reachability-base-entries",
+      "exit": 1,
+      "start": "2026-10-20T21:24:37.145Z",
+      "end": "2026-10-20T21:24:47.640Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "25-public-graph",
+      "exit": 0,
+      "start": "2026-10-20T21:24:57.255Z",
+      "end": "2026-10-20T21:24:58.552Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "26-reachability-comparison",
+      "exit": 0,
+      "start": "2026-10-20T21:27:09.471Z",
+      "end": "2026-10-20T21:27:09.522Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "27-reachability-label-correction",
+      "exit": 0,
+      "start": "2026-10-20T21:29:18.644Z",
+      "end": "2026-10-20T21:29:18.690Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-1021-01",
+      "name": "28-frozen-census",
+      "exit": 0,
+      "start": "2026-10-20T21:30:29.179Z",
+      "end": "2026-10-20T21:30:29.509Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "01-red",
+      "exit": 1,
+      "start": "2026-10-20T21:44:10.720Z",
+      "end": "2026-10-20T21:44:12.426Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "02-base",
+      "exit": 0,
+      "start": "2026-10-20T21:44:40.357Z",
+      "end": "2026-10-20T21:44:42.038Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "03-green",
+      "exit": 0,
+      "start": "2026-10-20T21:44:55.274Z",
+      "end": "2026-10-20T21:44:56.945Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "04-related",
+      "exit": 0,
+      "start": "2026-10-20T21:45:32.543Z",
+      "end": "2026-10-20T21:45:45.212Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "05-types",
+      "exit": 0,
+      "start": "2026-10-20T21:46:05.342Z",
+      "end": "2026-10-20T21:46:08.596Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "06-executor",
+      "exit": 0,
+      "start": "2026-10-20T21:46:15.381Z",
+      "end": "2026-10-20T21:46:23.254Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "07-mts",
+      "exit": 0,
+      "start": "2026-10-20T21:46:24.325Z",
+      "end": "2026-10-20T21:46:29.808Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "08-gateway",
+      "exit": 0,
+      "start": "2026-10-20T21:46:30.874Z",
+      "end": "2026-10-20T21:46:38.311Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "09-equivalence",
+      "exit": 0,
+      "start": "2026-10-20T21:46:46.021Z",
+      "end": "2026-10-20T21:46:46.267Z"
+    },
+    {
+      "root": "D:\\I-harness-main\\.tmp\\r4as-fix1-1021",
+      "name": "10-freeze",
+      "exit": 0,
+      "start": "2026-10-20T21:48:30.262Z",
+      "end": "2026-10-20T21:48:30.583Z"
+    }
+  ],
+  "tests": {
+    "original": 210,
+    "originalFiles": 30,
+    "sameBaseAndExtracted": 25,
+    "fixAffected": 87,
+    "fixFiles": 11,
+    "newRegression": 3,
+    "reusedUnaffected": 126,
+    "fresh213Claim": false
+  },
+  "timingControls": {
+    "constructor": 4,
+    "red": 2,
+    "green": 6
+  },
+  "normalReachability": {
+    "exit": 1,
+    "sameSixFindings": true
+  },
+  "limitations": [
+    "Original whole-range candidate was rejected; current repair only accepted after review",
+    "Body-token equality is not argument timing proof",
+    "No new product runtime in root audit",
+    "Scale, packaging, whole R4A and counters remain separate"
+  ]
+}

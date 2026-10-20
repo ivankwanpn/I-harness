@@ -1,6 +1,8 @@
 # R4A — Cohesive owner structure before final qualification
 
-Approved bounded execution plan, 2026-10-21. [Mixed retention is accepted](../../research/2026-10-21-context-r4a-mixed-retention-acceptance.md) at88b24b513a5bfb7538b8540d3ed63205f44e4b93. The [fresh preflight/re-review](../../research/context-r4a-structure-preflight-20261021/review.md) passes after four precise amendments; [root accepted-source rebase](../../research/context-r4a-structure-preflight-20261021/accepted-source-rebase.md) confirms unchanged product interfaces and44 exact source hashes.
+**Accepted bounded structural unit after review repair, 2026-10-21:** [root acceptance](../../research/2026-10-21-context-r4a-structure-acceptance.md) records bad38c2d..ae56ce09, preserved original rejected P2 evidence, same-reviewer closure and root source/evidence/census audits. Normal graph's six inherited findings and whole R4A/A6 remain open. The executed contract is retained below.
+
+Original readiness: [mixed retention accepted](../../research/2026-10-21-context-r4a-mixed-retention-acceptance.md) at88b24b513a5bfb7538b8540d3ed63205f44e4b93. The [fresh preflight/re-review](../../research/context-r4a-structure-preflight-20261021/review.md) passed after four precise amendments; [root accepted-source rebase](../../research/context-r4a-structure-preflight-20261021/accepted-source-rebase.md) confirmed unchanged product interfaces and44 exact source hashes.
 
 The approved original R4A plan already requires coherent Context Output leaves, full CX2 task responsibility and S25 mapping before final A6 source freeze. This is that overlap, not a restart of the unrelated broad decomposition. Version0.1.13-rc.1 / Session10 remain unchanged. One GPT6.1Sol writer, fresh final reviewer, no recursive agents, no publishing/profile/provider/installed-app actions.
 
