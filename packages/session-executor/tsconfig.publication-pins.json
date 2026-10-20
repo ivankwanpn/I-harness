@@ -1,0 +1,4 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src/**/*.ts", "test/publication-pins*.test.ts", "test/helpers/publication-*.mts"]
+}
