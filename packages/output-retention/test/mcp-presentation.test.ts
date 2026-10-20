@@ -26,6 +26,7 @@ it.each([
   expect(result.envelope.preview).not.toContain('SECRET_BLOB')
   expect(result.envelope.preview).not.toContain('invalid bytes')
   expect(result.envelope.preview).not.toContain('QUJD')
+  expect(result.envelope.preview).not.toMatch(/retained|available in the full result/)
 })
 
 it('caps escaped fields before composition, discloses remaining blocks, and retains all owned data', async () => {

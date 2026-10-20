@@ -11,18 +11,18 @@ function field(value: unknown, cap = 1024): string {
 }
 function describe(value: unknown, index: number): string {
   const block = record(value), position = `[${index + 1}]`
-  if (!block) return `${position} invalid content block (retained)`
+  if (!block) return `${position} invalid content block (omitted from preview)`
   switch (block.type) {
     case 'text': return `${position} text: ${field(block.text, 2048)}`
     case 'image':
-    case 'audio': return `${position} ${block.type}: ${field(block.mimeType)} (encoded data retained)`
+    case 'audio': return `${position} ${block.type}: ${field(block.mimeType)} (encoded data omitted from preview)`
     case 'resource': {
       const resource = record(block.resource)
       return `${position} resource: ${field(resource?.uri)} (${field(resource?.mimeType)})` +
-        (typeof resource?.text === 'string' ? ` text: ${field(resource.text, 2048)}` : ' (body retained)')
+        (typeof resource?.text === 'string' ? ` text: ${field(resource.text, 2048)}` : ' (body omitted from preview)')
     }
     case 'resource_link': return `${position} resource_link: ${field(block.uri)} name: ${field(block.name)} (${field(block.mimeType)})`
-    default: return `${position} unsupported block type: ${field(block.type)} (retained)`
+    default: return `${position} unsupported block type: ${field(block.type)} (omitted from preview)`
   }
 }
 
@@ -32,7 +32,7 @@ export function mcpPresentation(value: unknown): { preview: string; requiresArti
   const result = record(value)
   if (!result || !Array.isArray(result.content)) return undefined
   const content = result.content
-  const structured = Object.hasOwn(result, 'structuredContent') ? '\nStructured content available in the full result.' : ''
+  const structured = Object.hasOwn(result, 'structuredContent') ? '\nStructured content present in the original result.' : ''
   // Reserve bounded space for an omitted-block count and the structured note.
   const cap = 8192 - 128, parts: string[] = []
   let budget = cap - 2, requiresArtifact = false, index = 0
@@ -48,7 +48,7 @@ export function mcpPresentation(value: unknown): { preview: string; requiresArti
   }
   const remaining = content.length - index
   if (remaining) {
-    parts.push(`${remaining} remaining blocks retained in the full result.`)
+    parts.push(`${remaining} remaining blocks omitted from preview.`)
     // Unvisited blocks may be non-text. They must not enter inline model text.
     requiresArtifact = true
   }
