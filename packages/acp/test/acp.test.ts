@@ -729,7 +729,8 @@ describe("i-harness acp (CLI stdio)", () => {
 
       const { events } = fromJSONL(await readFile(join(sessionDir, `${sessionId}.jsonl`), "utf8"))
       expect(events
-        .filter((event) => event.type === "user/message" && (event.text === "first prompt" || event.text === "second prompt"))
+        .filter((event) => event.type === "user/message")
+        .filter((event) => event.text === "first prompt" || event.text === "second prompt")
         .map((event) => event.text)).toEqual([
         "first prompt",
         "second prompt",
