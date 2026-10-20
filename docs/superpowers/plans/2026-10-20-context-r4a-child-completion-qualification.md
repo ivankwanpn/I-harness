@@ -6,6 +6,8 @@
 
 **Architecture:** Keep the existing separate TaskRecord, foreground summary, resident AgentTable and JobRegistry boundaries. A completed summary is not a promise of an atomic transaction across every mirror. Tests wait the existing event or original completion promise that owns their assertion. No production change is presumed.
 
+**Status2026-10-20:** Accepted tests3c468c70/delivery5de6299c after fresh independent PASS and root source/receipt/seal audit. [Acceptance](../../research/2026-10-20-context-r4a-child-completion-acceptance.md) records the exact owner distinctions and limits. No product change was needed. Continue explicit result pages.
+
 **Predecessor:** [Native outcome acceptance](../../research/2026-10-20-context-r4a-native-outcomes-acceptance.md), product3cf3bc12/handback5a2c60f3, root acceptancec0bd3536. User authorizes continuous root-led GPT6.1Sol work. Product0.1.13-rc.1, Session10 and original27/43 remain unchanged; no publishing.
 
 ## Source-grounded rulings
@@ -27,13 +29,13 @@ Primary file: `packages/subagent/test/tools.test.ts`, the three named tests:
 
 Read original `followup/drive.ts`, `child/lifecycle.ts`, `child/result.ts`, `tools/spawn.ts`, `tools/spawn-source.ts`, `task/registry.ts` and `tools/status.ts` as needed. A small adjacent test file/helper may hold the prior-settlement discriminator. Production owners and public exports remain unchanged unless root approves an evidenced defect.
 
-- [ ] Reuse the saved exact three failures from the native handback; preserve their original oracle and source provenance. A focused unchanged run may confirm this unit's BASE; no repeated whole-baseline loop.
-- [ ] For followup running readiness, use an event-owned deferred signal. Keep old text/error clearing, new controller, startedAt, no early waiting while guest held, exact two patches, and full new result after release. Cleanup releases every held gate and joins the actual drive.
-- [ ] Add a held previous-result settlement control through the actual original capture/settlement handle and drive. A wrapper may hold/delegate the original settle method without replacing its owner identity. While held, no new running patch, guest followup, old-output clearing or second capture; after release, exactly one real followup. A rejected prior settlement must leave its original evidence and prevent starting new guest work. Distinguish this lifecycle control from a claim of complete durable artifact validation.
-- [ ] Foreground summary assertion stays unchanged. Capture the initial completion before any followup is enqueued, join that exact handle, then assert resident waiting/job terminal, full text and one child execution. Do not force atomic mirror visibility or wait future followup work.
-- [ ] The nonblocking job_output test keeps its TaskRecord completed assertion, separately joins the same original initial completion, then reads and asserts full completed output. Count the terminal publication at its real owner and retain single child execution; no generic status stub.
-- [ ] Run the entire tools.test.ts plus the new focused settlement control and existing native-outcomes observation/control test sequentially at stable source; run subagent types. Select existing retained followup/task owner tests where they cover the changed fixture contract, rather than a whole-workspace sweep.
-- [ ] Self-review and commit tests coherently. Write exact delivery/source-time evidence, classify old-oracle versus qualification results, and freeze for fresh independent review. If product stays unchanged, no redundant renderer/build/copy run is required; prior copy proof is not mislabeled as execution of these new tests.
+- [x] Reuse the saved exact three failures from the native handback; preserve their original oracle and source provenance. A focused unchanged run may confirm this unit's BASE; no repeated whole-baseline loop.
+- [x] For followup running readiness, use an event-owned deferred signal. Keep old text/error clearing, new controller, startedAt, no early waiting while guest held, exact two patches, and full new result after release. Cleanup releases every held gate and joins the actual drive.
+- [x] Add a held previous-result settlement control through the actual original capture/settlement handle and drive. A wrapper may hold/delegate the original settle method without replacing its owner identity. While held, no new running patch, guest followup, old-output clearing or second capture; after release, exactly one real followup. A rejected prior settlement must leave its original evidence and prevent starting new guest work. Distinguish this lifecycle control from a claim of complete durable artifact validation.
+- [x] Foreground summary assertion stays unchanged. Capture the initial completion before any followup is enqueued, join that exact handle, then assert resident waiting/job terminal, full text and one child execution. Do not force atomic mirror visibility or wait future followup work.
+- [x] The nonblocking job_output test keeps its TaskRecord completed assertion, separately joins the same original initial completion, then reads and asserts full completed output. Count the terminal publication at its real owner and retain single child execution; no generic status stub.
+- [x] Run the entire tools.test.ts plus the new focused settlement control and existing native-outcomes observation/control test sequentially at stable source; run subagent types. Select existing retained followup/task owner tests where they cover the changed fixture contract, rather than a whole-workspace sweep.
+- [x] Self-review and commit tests coherently. Write exact delivery/source-time evidence, classify old-oracle versus qualification results, and freeze for fresh independent review. If product stays unchanged, no redundant renderer/build/copy run is required; prior copy proof is not mislabeled as execution of these new tests.
 
 ## Evidence and continuation
 

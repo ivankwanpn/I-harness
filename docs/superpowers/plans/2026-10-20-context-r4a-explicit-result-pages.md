@@ -6,7 +6,7 @@
 
 **Architecture:** Use the original ContextOutput artifact owner, immutable ref, caller pin and current source policy. A shared codec query leaf dispatches existing page readers. A short read lease lives in the original result-store registry; host-injected adapters supply actual visibility. Desktop shows one bounded page on demand. No second storage/index/permission owner.
 
-**Status:** Design prepared by root from actual owners and read-only GPT6.1Sol scoping. Not dispatched; rebase against accepted native producer HEAD before dispatch. Existing search/display, child-result pages and owned-version acceptance remain intact.
+**Status2026-10-20:** Design prepared and checked against actual owners, including model maxBytes compatibility, shared producer/read retirement protection and complete service read joins. Native product3cf3bc12 and child tests3c468c70 are accepted. Original reader/store/SDK interfaces remain unchanged by these predecessors. Task1 is ready for dispatch; existing search/display, child-result pages and owned-version acceptance remain intact.
 
 **References:** [retained-results contract](2026-10-18-context-engine-r4a-retained-results.md), [remaining A4–A6](2026-10-19-context-engine-r4a-completion-handoff.md), [display acceptance](../../research/2026-10-20-context-r4a-a4b-display-acceptance.md), [owned version acceptance](../../research/2026-10-20-context-r4a-owned-version-acceptance.md).
 
