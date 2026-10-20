@@ -12,7 +12,6 @@ export class TaskRecords {
   get(taskId: string): TaskRecord | undefined { return this.#records.get(taskId) }
   has(taskId: string): boolean { return this.#records.has(taskId) }
   values(): IterableIterator<TaskRecord> { return this.#records.values() }
-  list(): TaskRecord[] { return [...this.#records.values()] }
   getByIdentity(identity: TaskIdentity): TaskRecord | undefined { return this.#byIdentity.get(this.#identityKey(identity)) }
   getByChildSession(childSessionId: string): TaskRecord | undefined { return this.#byChild.get(childSessionId) }
 
