@@ -1,0 +1,132 @@
+Browser tab: 1, Title: "IH retained result preview", URL: "http://127.0.0.1:47832/".
+0 AXWebArea IH retained result preview, URL: 127.0.0.1:47832/
+	1 container
+		2 heading IH retained result consumers, Value: 1
+			3 text IH retained result consumers
+		4 text Controlled offline fixture · actual ToolActivity / RecordedToolOutput / RecordedResultEnvelope and IH CSS
+		5 button 繁體中文
+		6 button English
+		7 heading Inline · ordinary error-named data, Value: 2
+			8 text Inline · ordinary error-named data
+		9 button (expanded) Description: Tool details bash, Help: bash · offline recorded fixture, Secondary Actions: Collapse
+			10 text Terminal
+			11 text offline recorded fixture
+			12 text Result received
+		13 text Dispatched Output saved in record
+		14 container stdout
+			15 text stdout
+			16 checkbox Description: Wrap lines stdout, Value: 0
+			17 button Copy stdout
+			18 text payload error is ordinary data
+The captured command body remains readable.
+		89 container
+			90 button (expanded) Raw record, Secondary Actions: Collapse
+				91 text Raw record
+			92 text Tool : 
+			93 text bash
+			94 container Invocation arguments
+				95 text Invocation arguments JSON
+				96 checkbox Description: Wrap lines Invocation arguments, Value: 0
+				97 button Copy Invocation arguments
+				98 text {
+  "command": "offline recorded fixture"
+}
+			99 container Raw output
+				100 text Raw output JSON
+				101 checkbox Description: Wrap lines Raw output, Value: 0
+				102 button Copy Raw output
+				103 text {
+  "stdout": "payload error is ordinary data\nThe captured command body remains readable.",
+  "error": "ordinary payload field",
+  "status": "failed",
+  "receipt": "original inline bytes"
+}
+		21 heading Failed · source-limited artifact, Value: 2
+			22 text Failed · source-limited artifact
+		23 button (expanded) Description: Tool details bash, Help: bash · offline recorded fixture, Secondary Actions: Collapse
+			24 text Terminal
+			25 text offline recorded fixture
+			26 text Failed
+		27 text Not dispatched Output saved Partial capture  ·  source-limited
+		28 container Output preview
+			29 text Output preview
+			30 checkbox Description: Wrap lines Output preview, Value: 0
+			31 button Copy Output preview
+			32 text Captured stderr: the requested file was unavailable.
+		33 container Output retention reference
+			34 text Output retention reference JSON
+			35 checkbox Description: Wrap lines Output retention reference, Value: 0
+			36 button Copy Output retention reference
+			37 text {
+  "version": 1,
+  "id": "ctxv1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "codec": "json-utf8-v1",
+  "encodedBytes": 1048576,
+  "contentDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "completeness": "source-limited"
+}
+		38 heading Succeeded · quota refused retention, Value: 2
+			39 text Succeeded · quota refused retention
+		40 button (expanded) Description: Tool details bash, Help: bash · offline recorded fixture, Secondary Actions: Collapse
+			41 text Terminal
+			42 text offline recorded fixture
+			43 text Result received
+		44 text Dispatched Output retention unavailable
+		45 container Output preview
+			46 text Output preview
+			47 checkbox Description: Wrap lines Output preview, Value: 0
+			48 button Copy Output preview
+			49 text Execution returned successfully; retained storage quota was exhausted.
+		50 container
+			51 text Retention reason :  quota  · 250000 bytes
+		52 heading Unknown · not dispatched, Value: 2
+			53 text Unknown · not dispatched
+		54 button (expanded) Description: Tool details bash, Help: bash · offline recorded fixture, Secondary Actions: Collapse
+			55 text Terminal
+			56 text offline recorded fixture
+			57 text Unknown result
+		58 text Not dispatched Output retention unavailable
+		59 container Output preview
+			60 text Output preview
+			61 checkbox Description: Wrap lines Output preview, Value: 0
+			62 button Copy Output preview
+			63 text No trustworthy execution outcome is available.
+		64 container
+			65 text Retention reason :  unsupported-owner
+		66 heading Media · once in recorded order, Value: 2
+			67 text Media · once in recorded order
+		68 button (expanded) Description: Tool details bash, Help: bash · offline recorded fixture, Secondary Actions: Collapse
+			69 text Terminal
+			70 text offline recorded fixture
+			71 text Result received
+		72 text Dispatched Output saved in record
+		73 container stdout
+			74 text stdout
+			75 checkbox Description: Wrap lines stdout, Value: 0
+			76 button Copy stdout
+			77 text Two separately validated media items; original payload image names remain data.
+		78 button (collapsed) Raw record, Secondary Actions: Expand
+			79 text Raw record
+		80 button first captured.png
+			81 image first captured.png
+		82 button second captured.png
+			83 image second captured.png
+		84 container Image metadata
+			85 text Image metadata JSON
+			86 checkbox Description: Wrap lines Image metadata, Value: 0
+			87 button Copy Image metadata
+			88 text [
+  {
+    "mediaType": "image/png",
+    "name": "first captured.png",
+    "bytes": 68
+  },
+  {
+    "mediaType": "image/png",
+    "name": "second captured.png",
+    "bytes": 68
+  }
+]
+
+The focused UI element is 90 button (expanded) Raw record, Secondary Actions: Collapse

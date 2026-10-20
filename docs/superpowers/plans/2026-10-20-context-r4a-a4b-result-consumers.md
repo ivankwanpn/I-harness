@@ -4,7 +4,7 @@
 
 **Goal:** Make existing search and transcript/timeline consumers correctly observe the accepted ResultEnvelope representation without reading complete artifacts implicitly.
 
-**Status2026-10-20:** Task1 accepted through product42bbaebc/delivery541cd063 after original-reviewer closure of the plan-mandated child-preview defect. [Acceptance](../../research/2026-10-20-context-r4a-a4b-search-acceptance.md) preserves the original failures, corrected oracle and exact final evidence. Continue Task2; the overall plan is not paused.
+**Status2026-10-20:** Both consumer tasks accepted. Task1 product42bbaebc/delivery541cd063 includes the corrected child-preview contract; [search acceptance](../../research/2026-10-20-context-r4a-a4b-search-acceptance.md) preserves that finding. Task2 product368d18fa/reviewed46ba1a49 passed independent review, root provenance and actual-component visual inspection; [display acceptance](../../research/2026-10-20-context-r4a-a4b-display-acceptance.md) records READ-09/10 and precise limits. Continue owned-version qualification and the remaining producer/reader work; whole R4A is not complete or paused.
 
 **Architecture:** F1 remains the result fact authority. Pure readers select the closed envelope or explicit historical branch. Search indexes only the bounded fact representation and rebuilds its existing derived cache when the projection changes. CLI and Desktop retain execution/storage/media distinctions; original history/export readers preserve complete descriptors without creating an execution assembly.
 
@@ -118,14 +118,14 @@ The narrow envelope component has props `{ envelope: RecordedResultEnvelope; onP
 
 The public history DTO and Session format remain unchanged. No artifact reading callback, new bridge route or execution capability is introduced by this component.
 
-- [ ] Reproduce missing CLI result summaries and Desktop loss of inline/preview/error/media through actual public render/fold paths, covering tool/result and code/result with and without prior call rows.
-- [ ] Carry closed envelope through renderer, rendering inline value or preview plus honest retention details/media. Use trusted outcome for failed/canceled/unknown/not-dispatched, without reclassifying ordinary payload keys.
-- [ ] Migrate old search-code-mode representation assertions using actual retained full-value read, preserving240matches, guest-selected10references, cancellation/partial, drained native work and zero follow-on effects. Preview assertions cannot replace the original complete-value/Stop oracle.
-- [ ] Close the genuine READ-09 fs-search outcome seam and verify registered producer metadata plus direct-call compatibility, while preserving the original full-value/Stop assertions.
-- [ ] Add snapshot/history/export controls proving full descriptors survive and reads do not instantiate a model/child or mutate source. Existing custom-coordinator compatibility fallback is not silently redefined.
-- [ ] Close READ-10's Node/browser dependency seam without altering scalar validation; verify the public browser bundle, original valid/invalid legacy/v2 decoder cases and actual renderer build. Preserve original failure and source-overlay baseline evidence.
-- [ ] Run affected types, real renderer/component gates, CLI command gate and fresh copied entry controls. Any further unresolved build failure retains exact evidence and scope; it is not labeled passed.
-- [ ] Hand back coherent commit(s), exact evidence/source/copy mapping and limits for independent review. Root then proceeds to the separate authorized artifact-page reader and remaining A4/A5/A6 work.
+- [x] Reproduce missing CLI result summaries and Desktop loss of inline/preview/error/media through actual public render/fold paths, covering tool/result and code/result with and without prior call rows.
+- [x] Carry closed envelope through renderer, rendering inline value or preview plus honest retention details/media. Use trusted outcome for failed/canceled/unknown/not-dispatched, without reclassifying ordinary payload keys.
+- [x] Migrate old search-code-mode representation assertions using actual retained full-value read, preserving240matches, guest-selected10references, cancellation/partial, drained native work and zero follow-on effects. Preview assertions cannot replace the original complete-value/Stop oracle.
+- [x] Close the genuine READ-09 fs-search outcome seam and verify registered producer metadata plus direct-call compatibility, while preserving the original full-value/Stop assertions.
+- [x] Add snapshot/history/export controls proving full descriptors survive and reads do not instantiate a model/child or mutate source. Existing custom-coordinator compatibility fallback is not silently redefined.
+- [x] Close READ-10's Node/browser dependency seam without altering scalar validation; verify the public browser bundle, original valid/invalid legacy/v2 decoder cases and actual renderer build. Preserve original failure and source-overlay baseline evidence.
+- [x] Run affected types, real renderer/component gates, CLI command gate and fresh copied entry controls. Any further unresolved build failure retains exact evidence and scope; it is not labeled passed.
+- [x] Hand back coherent commit(s), exact evidence/source/copy mapping and limits for independent review. Root then proceeds to the separate authorized artifact-page reader and remaining A4/A5/A6 work.
 
 Representative existing-component regression (populate the literal through the existing valid-event fixture):
 
