@@ -1,5 +1,5 @@
 import type { Tool, ToolExec, ToolRegistry } from "@i-harness/core-tools"
-import { declareToolResultOutcome } from '@i-harness/core-tools'
+import { declareToolResultOutcome, declareToolResultPresentation } from '@i-harness/core-tools'
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { publicToolName } from "./naming.ts"
 import type { ConnectedMcpClient, McpTool } from "./client.ts"
@@ -36,7 +36,10 @@ export function createMcpTool(
     ...(exposure !== undefined ? { exposure } : {}),
     async execute(args: unknown, exec: ToolExec) {
       const result = await client.callTool(rawName, args, exec.abortSignal)
-      if (declareToolResultOutcome(exec, result.isError === true ? 'failed' : 'succeeded')) return result
+      if (declareToolResultOutcome(exec, result.isError === true ? 'failed' : 'succeeded')) {
+        declareToolResultPresentation(exec, 'mcp')
+        return result
+      }
       if (result.isError) {
         const text = JSON.stringify(result.content)
         throw new Error(`tool error: ${text}`)

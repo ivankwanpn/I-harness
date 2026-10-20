@@ -13,7 +13,7 @@ export interface ToolResultRetention {
   captureSynthetic(context: SyntheticResultContext, output: unknown, execution: ResultExecution): ResultFinalization
 }
 const prepared = new WeakMap<PreparedCall, { exec: ToolExec; call: PreparedCall['call']; tool: PreparedCall['tool']; name: string; view?: SessionView; callId?: string; source?: SettlementFacts<ProducerFactOutcome> }>()
-const execution = new WeakMap<ToolExec, ResultExecution>()
+const execution = new WeakMap<ToolExec, ResultExecution & { presentation?: 'mcp' }>()
 const finalizations = new WeakMap<PreparedCall, ResultFinalization>()
 const syntheticFinalizations = new WeakMap<ResultFinalization, Readonly<SyntheticResultContext>>()
 export function bindSyntheticFinalization(context: SyntheticResultContext, handle: ResultFinalization): ResultFinalization { syntheticFinalizations.set(handle, Object.freeze({ ...context })); return handle }
@@ -55,12 +55,25 @@ export function declareToolResultOutcome(exec: ToolExec, outcome: ResultExecutio
   const current = execution.get(exec)
   if (!current) return false
   if (current.dispatch !== 'dispatched' || !['succeeded', 'failed', 'canceled', 'unknown'].includes(outcome)) throw new FactRecoveryRequiredError()
-  execution.set(exec, { outcome, dispatch: current.dispatch })
+  execution.set(exec, { ...current, outcome })
   return true
+}
+/** Presentation is runtime metadata of the genuine dispatched producer. */
+export function declareToolResultPresentation(exec: ToolExec, presentation: 'mcp'): boolean {
+  const current = execution.get(exec)
+  if (!current) return false
+  if (current.dispatch !== 'dispatched' || presentation !== 'mcp') throw new FactRecoveryRequiredError()
+  execution.set(exec, { ...current, presentation })
+  return true
+}
+export function resultPresentation(call: PreparedCall): 'mcp' | undefined {
+  assertResultPrepared(call)
+  return execution.get(call.exec)?.presentation
 }
 export function resultExecution(call: PreparedCall): ResultExecution {
   assertResultPrepared(call)
-  return { ...(execution.get(call.exec) ?? { outcome: 'unknown', dispatch: 'unknown' }) }
+  const { outcome, dispatch } = execution.get(call.exec) ?? { outcome: 'unknown', dispatch: 'unknown' }
+  return { outcome, dispatch }
 }
 export function dispatchResultReturned(exec: ToolExec): void {
   const value = execution.get(exec)

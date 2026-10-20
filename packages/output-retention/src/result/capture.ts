@@ -3,8 +3,9 @@ import type { ResultFinalization } from '@i-harness/core-tools'
 import type { ResultArtifactSink, ArtifactSettlement } from '@i-harness/context-output'
 import { boundedPreview } from './preview.ts'
 import { resultMedia } from './media.ts'
+import { mcpPresentation } from './mcp-presentation.ts'
 
-export interface ResultCaptureOptions { openArtifact(): Promise<ResultArtifactSink>; forceArtifact?: boolean; completeness?: ResultCompleteness }
+export interface ResultCaptureOptions { openArtifact(): Promise<ResultArtifactSink>; forceArtifact?: boolean; completeness?: ResultCompleteness; presentation?: 'mcp' }
 
 /** R4A-ENC-01: callback-bearing lowering is synchronous. Only owned immutable
  * data reaches the streaming encoder; one64KiB write and one bounded token may
@@ -13,11 +14,12 @@ export function createResultCapture(output: unknown, execution: ResultExecution,
   let programValue: unknown, encodingFailed = false
   try { programValue = lowerJsonData(output); if (programValue === undefined) throw new TypeError('No JSON representation'); freezeJsonData(programValue) }
   catch { encodingFailed = true }
-  const requiresArtifact = !encodingFailed && containsNativeRawJson(programValue)
+  const presentation = !encodingFailed && options.presentation === 'mcp' ? mcpPresentation(programValue) : undefined
+  const requiresArtifact = presentation?.requiresArtifact || (!encodingFailed && containsNativeRawJson(programValue))
   const media = resultMedia(programValue), boundExecution = Object.freeze({ ...execution })
   const envelope = (retention: ResultEnvelope['retention'], preview = ''): ResultEnvelope => ({ version: 1, execution: boundExecution, preview, media, retention })
   const iterator = encodingFailed ? undefined : streamJsonData(programValue), buffer = Buffer.alloc(65536)
-  let bytes = 0, preview = '', previewFull = false, used = 0, token: Buffer | undefined, tokenOffset = 0, encodingDone = false, writePending = false
+  let bytes = 0, preview = presentation?.preview ?? '', previewFull = false, used = 0, token: Buffer | undefined, tokenOffset = 0, encodingDone = false, writePending = false
   let sink: ResultArtifactSink | undefined, result: Awaited<ReturnType<ResultFinalization['settle']>> | undefined, running: Promise<Awaited<ReturnType<ResultFinalization['settle']>>> | undefined
   const ready = (value: ResultEnvelope) => ({ kind: 'ready' as const, envelope: value, program: encodingFailed ? { kind: 'unavailable' as const, reason: 'encoding' as const } : { kind: 'value' as const, value: programValue } })
   function fill() {
@@ -27,7 +29,7 @@ export function createResultCapture(output: unknown, execution: ResultExecution,
         if (next.done) { encodingDone = true; break }
         token = Buffer.from(next.value); tokenOffset = 0; bytes += token.length
         if (!Number.isSafeInteger(bytes)) throw new Error('Encoded result exceeds safe byte domain')
-        if (!media.length && !previewFull) {
+        if (!presentation && !media.length && !previewFull) {
           const candidate = preview + next.value
           preview = boundedPreview(candidate); previewFull = preview.length < candidate.length
         }
@@ -65,7 +67,7 @@ export function createResultCapture(output: unknown, execution: ResultExecution,
       const settlement: ArtifactSettlement = await sink!.finish(options.completeness ?? 'complete')
       if (settlement.kind === 'recovery-required') return { kind: 'recovery-required' as const }
       if (settlement.kind === 'refused') return result = ready(envelope({ kind: 'unavailable', reason: settlement.reason, observedEncodedBytes: settlement.observedEncodedBytes }, preview))
-      return result = ready(envelope({ kind: 'artifact', ref: settlement.ref }, media.length ? 'Result includes retained structured data and supported media.' : preview))
+      return result = ready(envelope({ kind: 'artifact', ref: settlement.ref }, presentation ? preview : media.length ? 'Result includes retained structured data and supported media.' : preview))
     } catch { return { kind: 'recovery-required' as const } }
   }
   return { settle() {

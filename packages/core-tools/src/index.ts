@@ -6,7 +6,7 @@ import { createDispatcher } from "./registry/dispatch.ts"
 import { createFinalizer } from "./registry/finalize.ts"
 import { installPreExecuteDecision } from "./approval/decision.ts"
 import { assertSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
-export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, resultExecution, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
+export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
 export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext } from './registry/result-finalization.ts'
 export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
 export type { ToolResultDependency } from './registry/result-dependencies.ts'

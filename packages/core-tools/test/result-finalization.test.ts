@@ -1,6 +1,28 @@
 import { expect, it } from 'vitest'
 import { createContext } from '@i-harness/core-plugin'
-import { createToolRegistry, isOriginalResultFinalization } from '../src/index.ts'
+import { createToolRegistry, isOriginalResultFinalization, declareToolResultPresentation, declareToolResultOutcome, resultPresentation, resultExecution } from '../src/index.ts'
+import { registerResultPrepared } from '../src/registry/result-finalization.ts'
+
+it('binds presentation only to registered dispatched identity, preserving it across outcome declaration without serialization', async () => {
+  expect(declareToolResultPresentation({}, 'mcp')).toBe(false)
+  const registry = createToolRegistry(createContext())
+  registry.register({ name: 'producer', description: '', inputSchema: {}, async execute(_args, exec) {
+    expect(declareToolResultPresentation(exec, 'mcp')).toBe(true)
+    declareToolResultOutcome(exec, 'failed')
+    return { isError: false }
+  } })
+  const prepared = await registry.prepare({ name: 'producer', args: {} })
+  expect(resultPresentation(prepared)).toBeUndefined()
+  expect(() => declareToolResultPresentation(prepared.exec, 'mcp')).toThrow()
+  await registry.dispatch(prepared)
+  expect(resultPresentation(prepared)).toBe('mcp')
+  expect(resultExecution(prepared)).toEqual({ outcome: 'failed', dispatch: 'dispatched' })
+  expect(JSON.stringify(resultExecution(prepared))).not.toContain('presentation')
+  expect(() => resultPresentation({ ...prepared, exec: { ...prepared.exec } })).toThrow()
+  registerResultPrepared(prepared)
+  expect(resultPresentation(prepared)).toBeUndefined()
+  expect(resultExecution(prepared)).toEqual({ outcome: 'unknown', dispatch: 'not-dispatched' })
+})
 
 it('retains the original finalized value and retries only storage after an uncertain commit', async () => {
   const ctx = createContext()

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { settlementSourceSessionId } from '@i-harness/core-session'
-import { assertResultPrepared, assertSyntheticResult, toolResultDependencies, type ToolResultRetention } from '@i-harness/core-tools'
+import { assertResultPrepared, assertSyntheticResult, resultPresentation, toolResultDependencies, type ToolResultRetention } from '@i-harness/core-tools'
 import { createResultCapture } from '@i-harness/output-retention'
 import type { ContextCapture, ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
 import { bindResultSource, resultSourceBinding } from './result-sources.ts'
@@ -26,7 +26,7 @@ export function createToolResultRetention(service: ContextOutputService | undefi
       const sessionId = prepared.exec.sessionId
       let scope: ResultArtifactScope | undefined, catalogScope: ResultArtifactScope | undefined
       const descriptor = resultSourceBinding(prepared.exec)?.descriptor
-      const primary = createResultCapture(output, execution, { async openArtifact() {
+      const primary = createResultCapture(output, execution, { presentation: resultPresentation(prepared), async openArtifact() {
         if (!service || !sessionId || !original.view || !original.source) throw Object.assign(new Error('Result owner unavailable'), { code: 'ARTIFACT_OWNER_UNSUPPORTED' })
         scope ??= service.registerResultScope({ operationId, sessionId, callId: prepared.exec.callId!, ...(descriptor ? { source: descriptor } : {}) }, () => {
           assertResultPrepared(prepared)
