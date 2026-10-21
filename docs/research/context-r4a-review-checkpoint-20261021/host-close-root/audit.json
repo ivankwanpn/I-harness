@@ -1,0 +1,98 @@
+{
+  "status": "PASS",
+  "utc": "2026-10-21T14:23:03.221Z",
+  "scope": "Independent root read-only full sealed-tree/source/proof/receipt/copy/runtime-observation audit; no product/test/build reruns. Native/schema semantics separately source-reviewed.",
+  "productHead": "678af03dd54659e22dd5f941112c06ec9917e812",
+  "sealSha256": "80b58ae2e74ec03004ab7233e663f3e634f37bbdd007f1ee365173b8c5a99d2b",
+  "files": 14358,
+  "bytes": 537142279,
+  "links": 0,
+  "sourceInputs": 2784,
+  "proofRecords": 206,
+  "sequentialGates": 41,
+  "preservedFailedGates": [
+    "01-red-service",
+    "02-red-lifetime",
+    "05-witness-owner",
+    "07-red-default-order",
+    "10-red-closed-boundaries",
+    "12-types-persistence",
+    "16-executor-connected",
+    "21-red-native-origin",
+    "36-public-gateway"
+  ],
+  "gatewayCopies": {
+    "total": 8835,
+    "identical": 8834,
+    "generated": 1
+  },
+  "bundleRows": 558,
+  "cliSha256": "1a6336970714c9752fb3ad87f9dc6fbea05a7146dd6ffd1f70d010d211b91daa",
+  "publicEntries": [
+    {
+      "label": "PG",
+      "requests": 0,
+      "notifications": 0,
+      "exits": [
+        {
+          "phase": "cold",
+          "pid": 20848,
+          "code": 0,
+          "signal": null
+        }
+      ],
+      "rows": [
+        "current",
+        "pending",
+        "legacy",
+        "migrated",
+        "qualified",
+        "missing"
+      ]
+    },
+    {
+      "label": "PS",
+      "requests": 12,
+      "notifications": 282,
+      "exits": [
+        {
+          "phase": "cold",
+          "pid": 22076,
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "explicit",
+          "pid": 28644,
+          "code": 0,
+          "signal": null
+        }
+      ],
+      "rows": [
+        "current",
+        "pending",
+        "legacy",
+        "migrated",
+        "qualified",
+        "missing"
+      ]
+    }
+  ],
+  "policy": {
+    "starts": 22,
+    "nativeLoads": 11,
+    "deliberateDenials": 3
+  },
+  "censusUnique": 227,
+  "graph": {
+    "workspacePackages": 82,
+    "imports": 1547,
+    "cycles": 0
+  },
+  "limits": [
+    "Gate19 original maintained host precedes final native-origin guard; final-byte controlled copied A/B covers that change.",
+    "Method-level serial controls are distinct from actual owned journals.",
+    "Public SDK cold reads are empty/unmounted; explicit user input accounts for12 requests.",
+    "Historical100MiB/fan qualification reused only under stated changed-owner/branch comparisons; no new whole-history/renderer/installer/provider stress qualification."
+  ]
+}

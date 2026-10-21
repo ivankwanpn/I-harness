@@ -1,0 +1,62 @@
+{
+  "scope": "Independent read-only portable/source/receipt/copied-candidate identity audit; no product imports/runtime; not full evidence-inventory closure scan",
+  "productFreeze": "678af03dd54659e22dd5f941112c06ec9917e812",
+  "proofRecords": 206,
+  "proofSha256": "a244304d86ab436c784037b85295762d6915947f97c0178fb0a6faa0f6efc779",
+  "gateCount": 41,
+  "failed": [
+    {
+      "id": "01-red-service",
+      "nativeExit": 1
+    },
+    {
+      "id": "02-red-lifetime",
+      "nativeExit": 1
+    },
+    {
+      "id": "05-witness-owner",
+      "nativeExit": 1
+    },
+    {
+      "id": "07-red-default-order",
+      "nativeExit": 1
+    },
+    {
+      "id": "10-red-closed-boundaries",
+      "nativeExit": 1
+    },
+    {
+      "id": "12-types-persistence",
+      "nativeExit": 2
+    },
+    {
+      "id": "16-executor-connected",
+      "nativeExit": 1
+    },
+    {
+      "id": "21-red-native-origin",
+      "nativeExit": 1
+    },
+    {
+      "id": "36-public-gateway",
+      "nativeExit": 1
+    }
+  ],
+  "sourceInputs": 2784,
+  "sourceManifestSha256": "e2ca48bf72e04736b5bb45eaa2f04225ad14a8d4f4e57f42567129e80f0e2c66",
+  "gatewayPairs": 8835,
+  "sourceIdentical": 8834,
+  "generated": [
+    {
+      "candidate": "D:\\I-harness-main\\.tmp\\r4hc-02\\g\\node_modules\\@i-harness\\sandbox-wsl\\worker\\manifest.json",
+      "sha256": "c939674f71e75c918d0a31d1bc19b88ca07c1df0ba78fcf244ca7019a917cb84"
+    }
+  ],
+  "bundleFiles": 558,
+  "cli": {
+    "candidate": "D:\\I-harness-main\\.tmp\\r4hc-02\\b\\ih.mjs",
+    "sha256": "1a6336970714c9752fb3ad87f9dc6fbea05a7146dd6ffd1f70d010d211b91daa",
+    "bytes": 6791198,
+    "kind": "Actual builder output; inlined code bound to native repair build28 and its exact source-before manifest, no per-function runtime filename/metafile invented"
+  }
+}

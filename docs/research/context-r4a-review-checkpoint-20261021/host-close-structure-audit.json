@@ -1,0 +1,298 @@
+{
+  "scope": "Static current-source AST/identity inspection before final handback, no product imports",
+  "productFreeze": "678af03dd54659e22dd5f941112c06ec9917e812",
+  "rows": [
+    {
+      "path": "packages/session-persistence/src/coordinator/managed-document.ts",
+      "bytes": 20756,
+      "sha256": "c7c0fc4763f0338dcc0e1f25f0605080b82313dd1aaa7918e4acf45b882f1bdf",
+      "physicalLines": 402,
+      "functions": [
+        {
+          "name": "createManagedDocument",
+          "lines": 354,
+          "characters": 18755
+        },
+        {
+          "name": "admit",
+          "lines": 27,
+          "characters": 1739
+        }
+      ]
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/settlement-fact.ts",
+      "bytes": 4198,
+      "sha256": "d7cd7af5c64d2953ad4d1eb12be9a6943aed3a9c9d28fa8485ccdcb101f7eb83",
+      "physicalLines": 79,
+      "functions": [
+        {
+          "name": "captureSettlementFact",
+          "lines": 9,
+          "characters": 485
+        },
+        {
+          "name": "retainSettlementCapture",
+          "lines": 63,
+          "characters": 3182
+        }
+      ]
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/source-facts.ts",
+      "bytes": 1753,
+      "sha256": "112c7254c22aacad4a8c2892b2475ba602554921bb1d2805f0a1080db6b243ec",
+      "physicalLines": 37,
+      "functions": [
+        {
+          "name": "createSourceFacts",
+          "lines": 32,
+          "characters": 1385
+        }
+      ]
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/received-input-source.ts",
+      "bytes": 2686,
+      "sha256": "f2554ef83db04232a6bf99c39d9bd7e61b9359bc0f0154bdd15afb461a665921",
+      "physicalLines": 53,
+      "functions": [
+        {
+          "name": "createReceivedInputSource",
+          "lines": 47,
+          "characters": 2196
+        }
+      ]
+    },
+    {
+      "path": "packages/session-persistence/src/coordinator/received-input-cancellation.ts",
+      "bytes": 2174,
+      "sha256": "5d060ec346165efe12e00917ae7519f31a82794c4af9cee504d0edf636692884",
+      "physicalLines": 24,
+      "functions": [
+        {
+          "name": "cancellationRetirementFor",
+          "lines": 19,
+          "characters": 1843
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/session-subagents.ts",
+      "bytes": 1510,
+      "sha256": "8ca1c61c69c0a5e452031043f2d95be31588be4169ece9867d873c948cb409c5",
+      "physicalLines": 20,
+      "functions": [
+        {
+          "name": "createDesktopSubagents",
+          "lines": 8,
+          "characters": 662
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/changes.ts",
+      "bytes": 2117,
+      "sha256": "1127ff62596bcdf666aac415f985568c0814a46b729138181ce40eeb2a8d8729",
+      "physicalLines": 44,
+      "functions": [
+        {
+          "name": "createSubagentChanges",
+          "lines": 43,
+          "characters": 2033
+        },
+        {
+          "name": "cancelChanged",
+          "lines": 3,
+          "characters": 110
+        },
+        {
+          "name": "changed",
+          "lines": 7,
+          "characters": 309
+        },
+        {
+          "name": "detach",
+          "lines": 5,
+          "characters": 169
+        },
+        {
+          "name": "attach",
+          "lines": 18,
+          "characters": 808
+        },
+        {
+          "name": "open",
+          "lines": 1,
+          "characters": 80
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/scope.ts",
+      "bytes": 3515,
+      "sha256": "08e34e77180fbb2ff5638e5111855a6e9c55b0dd3594f78204fe139f537fe462",
+      "physicalLines": 60,
+      "functions": [
+        {
+          "name": "createSubagentScope",
+          "lines": 54,
+          "characters": 3022
+        },
+        {
+          "name": "parent",
+          "lines": 6,
+          "characters": 259
+        },
+        {
+          "name": "lineage",
+          "lines": 15,
+          "characters": 718
+        },
+        {
+          "name": "snapshot",
+          "lines": 10,
+          "characters": 603
+        },
+        {
+          "name": "live",
+          "lines": 5,
+          "characters": 269
+        },
+        {
+          "name": "authority",
+          "lines": 11,
+          "characters": 626
+        },
+        {
+          "name": "liveChild",
+          "lines": 3,
+          "characters": 213
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/catalog.ts",
+      "bytes": 12695,
+      "sha256": "ceaed951e8901164847291ab38869a4d2da5e5ee6620765acfbc9e8390300aad",
+      "physicalLines": 137,
+      "functions": [
+        {
+          "name": "createSubagentCatalog",
+          "lines": 128,
+          "characters": 11925
+        },
+        {
+          "name": "list",
+          "lines": 124,
+          "characters": 11704
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/read.ts",
+      "bytes": 4023,
+      "sha256": "2b1cca433bfbf5009a622ff11ffbdf7fa6902028c5d93fb52cfa0e92f029f6ce",
+      "physicalLines": 52,
+      "functions": [
+        {
+          "name": "createSubagentReader",
+          "lines": 45,
+          "characters": 3534
+        },
+        {
+          "name": "history",
+          "lines": 11,
+          "characters": 982
+        },
+        {
+          "name": "result",
+          "lines": 30,
+          "characters": 2318
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/control.ts",
+      "bytes": 4220,
+      "sha256": "6d366fc5c171ecf644c46d14ce564f2886c0b8d95e261441fa86a60709444e7c",
+      "physicalLines": 50,
+      "functions": [
+        {
+          "name": "createSubagentControls",
+          "lines": 45,
+          "characters": 3857
+        },
+        {
+          "name": "control",
+          "lines": 40,
+          "characters": 3492
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/types.ts",
+      "bytes": 4526,
+      "sha256": "9627e3bb9ddbc27ebed9a737bf76eeca2b5dce92cc396637874bdeff6d825a7c",
+      "physicalLines": 63,
+      "functions": [
+        {
+          "name": "object",
+          "lines": 1,
+          "characters": 202
+        },
+        {
+          "name": "id",
+          "lines": 1,
+          "characters": 168
+        },
+        {
+          "name": "errorText",
+          "lines": 1,
+          "characters": 132
+        },
+        {
+          "name": "records",
+          "lines": 9,
+          "characters": 783
+        },
+        {
+          "name": "jobRecords",
+          "lines": 8,
+          "characters": 467
+        },
+        {
+          "name": "status",
+          "lines": 3,
+          "characters": 304
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/result-proof.ts",
+      "bytes": 810,
+      "sha256": "0593db4ed459cbeb5fc80b2270ccf26780e8dad7ca6feb7eab1385016e5f4bcb",
+      "physicalLines": 10,
+      "functions": [
+        {
+          "name": "committedChildResultStatus",
+          "lines": 4,
+          "characters": 457
+        }
+      ]
+    },
+    {
+      "path": "packages/desktop-gateway/src/subagents/catalog-provenance.ts",
+      "bytes": 1032,
+      "sha256": "2e89c7360595a58303fd945bfde151a2580de4a558026d3700c50316f96a6b74",
+      "physicalLines": 11,
+      "functions": [
+        {
+          "name": "currentTaskFormat",
+          "lines": 7,
+          "characters": 800
+        }
+      ]
+    }
+  ]
+}

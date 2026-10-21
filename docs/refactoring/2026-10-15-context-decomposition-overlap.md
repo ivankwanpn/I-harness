@@ -4,6 +4,8 @@
 
 本文件是範圍／驗收整合，沒有將規劃標成完成。設計依據：[ContextEngine](../superpowers/specs/2026-10-15-context-engine-redesign.md)；架構約束：[完整框架補充](../superpowers/specs/2026-10-15-context-engine-framework.md)。舊台帳：[43 檔追蹤](v0.1.13-decomposition-map.md)。
 
+**2026-10-21更新：R4A已驗收，S25完整原責任正式計入一檔，進度28/43，剩餘15檔／12組。** [驗收與限制](../research/2026-10-21-context-r4a-acceptance.md)區分S25拆分、CX2原清單外結構及尚未實作的R4C交付語義。下列10月15日量測仍是原始範圍基線，不是新的全庫普查。
+
 ## 1. 精確進度與本次量測
 
 - 原清單 **43 檔／32 組**；S1–S19 的 **27 檔／19 組**有既有拆分與獨立審查紀錄。
@@ -26,7 +28,7 @@
 | **S25** | `desktop-gateway/session-subagents.ts` **316／257** | live/durable child identity、context read、lineage、結果與父子可見性 | `session-subagents/{projection,visibility,bindings,controls,observation}.ts`；R4/R5，不為 UI read 建新的 child／assembly，也不繞過 lineage authority |
 | **S28** | `desktop/main/runtime-diagnostics.ts` **375／333** | admission／summary／attempt 的安全診斷，info／failure分類、scope與訂閱 | `runtime-diagnostics/{classification,redaction,buffer,projection,subscriptions}.ts`；R5，bounded log、安全 scalar 與原始錯誤不外洩 |
 
-這 **9 檔實際驗收後**，原台帳可由 **27/43 → 36/43**。現在仍是 **27/43**；新增設計／目錄或只將新功能寫進別檔，均不構成原大檔完成。
+這 **9 檔全部實際驗收後**，原台帳可達 **36/43**。2026-10-21已驗收其中S25一檔，現為 **28/43**，此完整收編集合尚餘8檔；新增設計／目錄或只將新功能寫進別檔，均不構成原大檔完成。
 
 ## 3. 部分責任重合：5 組、5 個原檔
 
@@ -96,4 +98,4 @@ CX1／CX2不是原S9／S18已完成原檔的重複數字；它們是當前新量
 
 ## 9. 當前狀態
 
-本輪完成範圍映射與設計框架，產品拆分完成數仍為27/43。規劃收編9個pending原檔＋2個新候選，5個partial依實際觸及責任記錄，2個原任務保持獨立。原完整事件驅動與AGENTS／CLAUDE計畫仍暫停；這次收編的是context必要的拆分，不宣稱那些功能已完成。
+2026-10-21，R4A通過同一審查代理複驗與root完整證據核對；S25完整原責任計入後，產品拆分為28/43。原完整收編9檔集合尚餘8檔，5個partial依實際責任追蹤，2個獨立原任務仍保留。CX2結構已有其獨立驗收記錄，但不增加原43分母／完成數，也不代表R4C的新持久交付已實作。原完整事件驅動與AGENTS／CLAUDE計畫仍暫停；下一步為R4B上下文繼承／bootstrap設計與預檢，不能用R4A完成宣稱整體重構或原大檔全部完成。

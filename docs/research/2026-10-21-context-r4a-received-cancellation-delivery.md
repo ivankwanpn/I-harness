@@ -36,7 +36,7 @@ Fresh implementation evidence is **`D:/I-harness-main/.tmp/r4hc-02`**, sealed im
 |21 RED →22 GREEN|Fresh `retryAbsent` cannot retire from its locally synthesized fallback; authentic native latest identity is required. Final persistence gate passes**36/36 across5files**, including16 method controls,8 real-owner controls, input persistence, fact capacity and managed fact batch.|
 |17 strict source/backend controls|**32/32**: required-source ports, recoverable source hold and fact-batch journal. Existing intentional file-close warning remains in raw logs.|
 |16 connected executor gate|**37/38**, preserved failure solely at the old ticket `output` oracle. Six new service cases, input promotion, generation lifecycle and Code child close pass.|
-|23 exact ticket + final service|**7/7** after the approved exact envelope assertion correction. Preserves the actual65-second unknown outcome, original once result and full close.|
+|23 exact ticket + final service|**7/7** after the approved exact envelope assertion correction. Preserves the actual ticket65 unknown-outcome boundary, original once result and full close.|
 |19 actual maintained live host|**3/3 across2files**: new controlled B modes and the original unchanged Desktop child-authority test, run once. Parent-side raw reporter, no worker setup; raw unhandled errors empty. This precedes only the final authentic-native identity guard and is not claimed as a final-byte rerun.|
 |24/25/26 final types|Persistence, executor and Gateway types all native0 after the final origin guard and ticket assertion.|
 |20 reachability /35 final copy graph|Reachability391 historical rows/no new rows; final production graph82workspace packages,1547 declared imports, no cycle.|

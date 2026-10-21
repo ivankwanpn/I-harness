@@ -1,0 +1,49 @@
+{
+  "scope": "Independent read-only scalar/journal/receipt validation of immutable causal A/B; no product imports/runtime",
+  "rows": [
+    {
+      "name": "before-install-v2",
+      "nativeExit": 1,
+      "inputs": 2743,
+      "receiptSha256": "a38cd57c7ade0817539cfc83f6b146404daca66152b4b98f2887101d87183dc2",
+      "observationsSha256": "38bcd19119e5456753e1d020075a6091796310b1a25a187be4022e699b7feee7",
+      "close": "rejected",
+      "cancellations": 1,
+      "promotions": 1,
+      "requests": 0
+    },
+    {
+      "name": "after-install",
+      "nativeExit": 0,
+      "inputs": 2743,
+      "receiptSha256": "c71fba2169535b9b08986ca874d0287d739a1ad99b2cb07519043d32b8412350",
+      "observationsSha256": "6714117b54cf31b42c931034a13fbf2c3caf0fc93bb2ee93c06bf59bcfad2e05",
+      "close": "fulfilled",
+      "cancellations": 0,
+      "promotions": 1,
+      "requests": 0
+    },
+    {
+      "name": "B-before-install-v2",
+      "nativeExit": 1,
+      "inputs": 2747,
+      "receiptSha256": "9ac33af32d30a071da6e1db8afde092686d77a50a3f51b09c513c07b32ed796d",
+      "observationsSha256": "19992e20f679cd3d498f5484649fab63dbd55254046a176e7f206e00e57df249",
+      "close": "rejected",
+      "cancellations": 1,
+      "promotions": 1,
+      "requests": 9
+    },
+    {
+      "name": "B-after-install",
+      "nativeExit": 0,
+      "inputs": 2747,
+      "receiptSha256": "b3943d38bed299a1bf2ddf088ddc62f47ef17dcc8493df133bec7433f3ad256d",
+      "observationsSha256": "b537992d5835ec474c38a604f1eddf69365992ecc1d1bc134eaa5b27360057f1",
+      "close": "fulfilled",
+      "cancellations": 0,
+      "promotions": 1,
+      "requests": 9
+    }
+  ]
+}
