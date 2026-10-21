@@ -1,0 +1,28 @@
+# R4A review checkpoint — cold result corrections closed, live host cleanup open
+
+2026-10-21. This corrects the stale progress location; it is not whole R4A or release acceptance. Product/test is `cef5c6e2fdf50000bd8d074af1f918dc19ab48d9`; delivery is `06c4abe4e0d7011f67f329bd8dd37a971b0022fa`, with no further product/test change. Original review begins at `91d8fef04253272a437c68f5f2f84a657fa53d3b`. Product0.1.13-rc.1, Session10 and original decomposition27/43 remain unchanged.
+
+The original independent review of A1–A10 found two current-format cold publication defects after A6 delivery. Root read both reports, source paths and genuine failing probes. The coherent correction and the **same reviewer** now close both:
+
+- F1/P1: current accepted/running/no-result or pending tasks could fall through the historical classifier, minting a new successful capture/callback/notification/wake from child-only assistant/turn-end evidence with no original parent completion. They now remain unqualified observations; exact original result revision/parent proof is still required. Current no-result tasks cannot gain durable-body status from auxiliary-save success.
+- F2/P2: the public Gateway catalog independently interpreted no-result as permission to infer completion from child history. Current header/task/state provenance and rejected current/future/corrupt metadata now fence this fallback. Explicit legacy migration and unmarked historical behavior remain separately supported; current history is still explicitly readable.
+
+See [repair delivery](2026-10-21-context-r4a-cold-current-delivery.md), [original review](context-r4a-review-checkpoint-20261021/review.md), [complete source/evidence assessment](context-r4a-review-checkpoint-20261021/supporting-source-evidence-notes.md), and [same-reviewer correction report](context-r4a-review-checkpoint-20261021/fix-review.md). Root accepts the **closure of those two findings**, not the whole stage.
+
+The final corrected source has passing task82/8 and focused Gateway51/5 scopes, affected types, normal reachability (391 historical rows/zero new), acyclic production graph, fresh actual Gateway/CLI builds and verify-dist. Public-entry current/pending/missing-proof versus literal/migrated legacy/qualified-current cases pass. SDK pure cold reads cause0 requests; its separately authorized explicit input/mount/tool observations cause12 controlled requests total. These are controlled local providers and expressly scoped fixtures, not live-provider or whole-history proof.
+
+Root independently audited all22,393 correction evidence files/934,948,606bytes/0links,2,756 final source/helper inputs,105 decoded portable originals,37 sequential stable receipts and8,833 source-identical copies plus1 generated manifest. The earlier A6 audit separately covered21,601files/1,237,041,147bytes and48receipts at its own freeze. Read-only audits do not replace semantic tests and do not establish the remaining cleanup cause. Scripts/results are [preserved here](context-r4a-review-checkpoint-20261021/README.md).
+
+## Remaining P2: actual host close qualification
+
+The existing `desktop-child-authority-host.test.ts` exercises actual ordinary/Code child and teammate tools and then closes the Desktop host. Correction gates12/13 failed that teardown with `Desktop host cleanup incomplete: session service`; the preceding behavior assertions passed. Earlier source-timed attempts passed, and later instrumented attempts also passed, but that variability does not prove the failure fixed or unrelated. No lifecycle repair has been made.
+
+The reviewer inspected the old remaining journals and ran exactly two fresh authorized diagnostics. Both passed and recorded an adjacent `Input preparation requires recovery` chain: action revocation causes FACT_CLOSED after preparation completion, followed by inbox cancellation returning FACT_INVALID_GROUP. Neither recorded the original host/service cleanup aggregate. Root then performed one deferred-error-buffer diagnostic and one parent-process raw-reporter diagnostic; both passed as well. Their successful receipts are not counted as resolution of the earlier failures. The raw reporter is based on the installed Vitest3.2.7 serializer retaining nested errors while its stock JSON reporter emits only the top-level stack/message; it adds no worker setup or product hook.
+
+Further work must establish the originating cleanup condition with an owned source/capture/disposition, or a deterministic source-qualified schedule that explains the actual failure and preserves Stop/settlement/close. It must not continue arbitrary repeat-until-green testing, suppress the error, add a second cleanup owner or begin R4B as though this gate passed. Root is continuing this investigation under the existing development authorization.
+
+## Progress boundaries
+
+R4A's completed artifact1MiB/100MiB and100-child controls remain their recorded scopes. They do not certify a100MiB conversation archive, heavy-parent cases or R6 streaming/cold-memory behavior. R4B semantic child seed/bootstrap, R4C durable receiver claim/epoch/wake, R5 integration/recovery/observation/decomposition and R6 complete history/platform/provider qualification remain required. Broad event-driven/AGENTS.md/CLAUDE.md work and unrelated original splits remain paused.
+
+Maintainability census wording is corrected: the old260 raw entries represent222 unique Windows-normalized paths; fresh262 represent223. Other source/copy manifests have no corresponding duplicates. The old sealed rows are unchanged; this count correction does not advance the original43-file task ledger. Structural exceptions remain scoped, not a claim that every product function is small.

@@ -1,0 +1,72 @@
+{
+  "kind": "Read-only proof/source/log identity audit; no product imports or runtime/test/build",
+  "proofSha256": "6ba26db88f76c869deff08363d6a25ca981195e0f791388e1cc499ae547a18a0",
+  "records": 105,
+  "gates": 37,
+  "failed": [
+    {
+      "id": "01-red-task",
+      "nativeExit": 1,
+      "receiptHasLogHashes": false
+    },
+    {
+      "id": "02-red-catalog",
+      "nativeExit": 1,
+      "receiptHasLogHashes": false
+    },
+    {
+      "id": "04-green-catalog",
+      "nativeExit": 1,
+      "receiptHasLogHashes": false
+    },
+    {
+      "id": "06-red-intake",
+      "nativeExit": 1,
+      "receiptHasLogHashes": false
+    },
+    {
+      "id": "07-final-task",
+      "nativeExit": 1,
+      "receiptHasLogHashes": false
+    },
+    {
+      "id": "12-final-catalog",
+      "nativeExit": 1,
+      "receiptHasLogHashes": true
+    },
+    {
+      "id": "13-host-cleanup-control",
+      "nativeExit": 1,
+      "receiptHasLogHashes": true
+    },
+    {
+      "id": "20-cli-entry",
+      "nativeExit": 1,
+      "receiptHasLogHashes": true
+    },
+    {
+      "id": "22-red-live-no-body",
+      "nativeExit": 1,
+      "receiptHasLogHashes": true
+    },
+    {
+      "id": "32-policy-controls",
+      "nativeExit": 1,
+      "receiptHasLogHashes": true
+    }
+  ],
+  "sourceInputs": 2756,
+  "sourceManifestSha256": "f184f3339d59fd6fc7f096ab5729d969b20a18ecf36f0681cb155048422fce33",
+  "censusRows": [
+    {
+      "path": ".tmp/r4v1/final-closed-audit/product-census.json",
+      "raw": 260,
+      "unique": 222
+    },
+    {
+      "path": ".tmp/r4cf-1021-01/product-census.json",
+      "raw": 262,
+      "unique": 223
+    }
+  ]
+}

@@ -1,0 +1,167 @@
+{
+  "status": "PASS",
+  "scope": "independent read-only identity/closure/receipt/selected native oracle checks; not product test reruns or whole-stage acceptance",
+  "files": 21601,
+  "bytes": 1237041147,
+  "links": 0,
+  "finalInputs": 2772,
+  "portableOriginals": 53,
+  "sealSha256": "aa4c47da3f5ed453250f0db83c47db318e9f84717f6fed5624689928c0d3cfa7",
+  "receipts": 48,
+  "failedReceiptsPreserved": [
+    {
+      "name": "05-normal-1",
+      "exit": 1
+    },
+    {
+      "name": "06-normal-1",
+      "exit": 1
+    },
+    {
+      "name": "07-native-policy-probe",
+      "exit": 1
+    },
+    {
+      "name": "14-gateway-entry",
+      "exit": 1
+    },
+    {
+      "name": "15-gateway-entry",
+      "exit": 1
+    },
+    {
+      "name": "16-gateway-entry",
+      "exit": 1
+    },
+    {
+      "name": "18-cli-entry",
+      "exit": 1
+    },
+    {
+      "name": "22-deny-fallback",
+      "exit": 1
+    },
+    {
+      "name": "30-sdk-yes-red",
+      "exit": 1
+    },
+    {
+      "name": "31-sdk-yes-green",
+      "exit": 1
+    },
+    {
+      "name": "33-cli-final-focused",
+      "exit": 1
+    },
+    {
+      "name": "38-cli-final-flow",
+      "exit": 1
+    }
+  ],
+  "tests": [
+    {
+      "name": "01-p3-native",
+      "passed": 2,
+      "paths": [
+        "D:/I-harness-main/packages/session-executor/test/synthetic-result-retention.test.ts"
+      ]
+    },
+    {
+      "name": "20-current-executor",
+      "passed": 33,
+      "paths": [
+        "D:/I-harness-main/packages/session-executor/test/native-dependency-observer.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/native-producer-outcomes.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-background-exec.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-code-output.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-exec-flow.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-mcp-result.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-result-flow.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/retained-state-cold.test.ts",
+        "D:/I-harness-main/packages/session-executor/test/service-result-retention.test.ts"
+      ]
+    },
+    {
+      "name": "34-cli-final-focused",
+      "passed": 22,
+      "paths": [
+        "D:/I-harness-main/apps/cli/test/bin.test.ts",
+        "D:/I-harness-main/apps/cli/test/sdk-approval.test.ts",
+        "D:/I-harness-main/apps/cli/test/sdk-wire-v11.test.ts"
+      ]
+    },
+    {
+      "name": "40-bundle-consent-controls",
+      "passed": 9,
+      "paths": [
+        "D:/I-harness-main/.tmp/r4v1/f/sdk-approval-bundle.test.ts"
+      ]
+    },
+    {
+      "name": "41-final-bundle-witness",
+      "passed": 1,
+      "paths": [
+        "D:/I-harness-main/.tmp/r4v1/f/result-page-bundle.test.ts"
+      ]
+    },
+    {
+      "name": "42-guards-role",
+      "passed": 16,
+      "paths": [
+        "D:/I-harness-main/packages/core-tools/test/dispatch-authority.test.ts",
+        "D:/I-harness-main/packages/core-tools/test/registry-contracts.test.ts",
+        "D:/I-harness-main/packages/core-tools/test/role-tool-exposure.test.ts"
+      ]
+    },
+    {
+      "name": "43-headless-routing",
+      "passed": 22,
+      "paths": [
+        "D:/I-harness-main/apps/cli/test/headless-result-retention.test.ts",
+        "D:/I-harness-main/apps/cli/test/run-flag-routing.test.ts"
+      ]
+    }
+  ],
+  "sourceIdenticalGatewayCopies": 8832,
+  "generatedGatewayCopies": 1,
+  "ordinary": {
+    "originalBytes": 104857600,
+    "encodedBytes": 104857602,
+    "digest": "212b068a946b118f722488cfa54c487c1e767986033a038d91ebfeac8d1636c3",
+    "modelBytes": 8742,
+    "pages": 3242
+  },
+  "native": {
+    "originalBytes": 104857600,
+    "encodedBytes": 140075144,
+    "rawDigest": "6b0bbd380db78bd97be1a07223b3205e7c49116e73122598e3c4066c793ea3d2",
+    "encodedDigest": "f1287202674eecf55babd3f8ad0144efcff94f684956db1f5a3ef3b96dd2054f",
+    "records": 3840,
+    "pages": 6540,
+    "insideBody": 65536,
+    "crossingBody": 131072
+  },
+  "fanKeys": [
+    "kind",
+    "controlSourceSha",
+    "children",
+    "sourceBytes",
+    "encodedBytes",
+    "distinctRefs",
+    "distinctResultRevisions",
+    "originalF1Facts",
+    "childProviderRequests",
+    "parentProviderRequests",
+    "outboxWakeRecords",
+    "readOnlyWorkIncrements",
+    "quotaMetadataIo",
+    "reportPages",
+    "maxReport",
+    "bodyPages",
+    "maxBodyPage",
+    "stateBytes",
+    "taskDocumentBytes",
+    "captureMs",
+    "totalMs"
+  ]
+}
