@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "sourceHead": "5f95ce1825168b2f49cbe83df209cdc2806267cd",
+  "reports": [
+    {
+      "path": "docs/research/context-r4b-design-20261022/bootstrap-preflight.md",
+      "bytes": 32059,
+      "sha256": "f6e40f2ca7c90275811d2e3fa500c40323940a3e289c15c46d6330be023c3c6e"
+    },
+    {
+      "path": "docs/research/context-r4b-design-20261022/native-replay-preflight.md",
+      "bytes": 28643,
+      "sha256": "dc3231d774ec7ff1f7b1c2bedafd9d17dc646ebd62f6a1a1d6e1628567095e37"
+    },
+    {
+      "path": "docs/research/context-r4b-design-20261022/design-preflight-review.md",
+      "bytes": 15585,
+      "sha256": "854f77e4a95bd90e35226e8e0b5754337057a9f44d513c36c1425b2c39a04237"
+    },
+    {
+      "path": "docs/research/context-r4b-design-20261022/root-corrections.md",
+      "bytes": 4949,
+      "sha256": "fa59d114310dfb616da6b7b9949d388e90b015b15249d80512233e38e4344e00"
+    }
+  ]
+}
