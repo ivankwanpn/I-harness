@@ -131,7 +131,7 @@ export class Inbox {
   }
 }
 
-function validateAdmitted(input: AdmittedInput): void {
+export function validateAdmitted(input: AdmittedInput): void {
   if (typeof input.inputId !== "string" || input.inputId.length === 0) throw new Error("agent/input admitted: inputId must be a non-empty string")
   if (input.clientToken !== undefined && (typeof input.clientToken !== "string" || input.clientToken.length < 8 || input.clientToken.length > 128)) throw new Error("agent/input admitted: invalid clientToken")
   if (typeof input.text !== "string" || input.text.length === 0) throw new Error("agent/input admitted: text must be a non-empty string")

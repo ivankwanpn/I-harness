@@ -58,18 +58,18 @@ describe.each([8, 9] as const)('literal predecessor%s owned migration', version 
   it.each([false, true])('preserves the body, reservation and unknown result through one append and fresh reopen (explicit=%s)', async explicit => {
     const raw = predecessor(version), original = fromJSONL(raw), header = headerOf(raw), body = bodyOf(raw)
     expect(header.formatVersion).toBe(version)
-    expect(original.formatVersion).toBe(10)
+    expect(original.formatVersion).toBe(11)
     const { root, path, backend } = await store(raw), fetch = forbidExecution()
     const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     let afterAppend = ''
     try {
       await coordinator.snapshot!('legacy')
       expect(await readFile(path, 'utf8')).toBe(raw)
-      if (explicit) expect((await backend.upgradeSessionFormat!('legacy', version, 10)).formatVersion).toBe(10)
+      if (explicit) expect((await backend.upgradeSessionFormat!('legacy', version, 11)).formatVersion).toBe(11)
       const document = await coordinator.openManagedDocument('legacy')
       expect(coordinator.ownerOf('legacy')).toBe(true)
       const opened = await readFile(path, 'utf8')
-      expect(headerOf(opened)).toEqual({ ...header, formatVersion: 10 })
+      expect(headerOf(opened)).toEqual({ ...header, formatVersion: 11 })
       expect(bodyOf(opened)).toBe(body)
       expect(document.view.events).toEqual(original.events)
       expect(readGenerationActions(document.view.events)[0]!.attempts).toMatchObject([{ reservation: { attemptId: 'old-attempt' }, rebinds: 0 }])
@@ -91,7 +91,7 @@ describe.each([8, 9] as const)('literal predecessor%s owned migration', version 
       expect(unknown).toEqual({ type: 'tool/result', callId: 'old-unknown', name: 'write', isError: true, output: { code: 'TOOL_OUTCOME_UNKNOWN', replay: false }, seq: 8 })
       expect(unknown).not.toHaveProperty('envelope')
       expect(reopened.view.events.some(event => event.type === 'tool/dispatch' || event.type === 'subagent/start' || event.type === 'subagent/end')).toBe(false)
-      expect(headerOf(await readFile(path, 'utf8'))).toEqual({ ...header, formatVersion: 10 })
+      expect(headerOf(await readFile(path, 'utf8'))).toEqual({ ...header, formatVersion: 11 })
       expect(headerOf(afterAppend)).not.toHaveProperty('subagentProtocolVersion')
       expect(await readFile(path, 'utf8')).toBe(afterAppend)
       expect(fetch).not.toHaveBeenCalled()
@@ -117,13 +117,13 @@ function currentFixture(events: readonly SessionEvent[]) {
   for (const event of events) append(session, event)
   const framed = toJSONL(session)
   const raw = JSON.stringify({ ...headerOf(framed), sessionId: 'legacy', createdAt: 'synthetic-owned-current' }) + framed.slice(framed.indexOf('\n'))
-  // Every negative starts as a fully validated, framed current10 fixture.
-  expect(fromJSONL(raw)).toMatchObject({ formatVersion: 10, events: session.events })
+  // Every negative starts as a fully validated, framed current11 fixture.
+  expect(fromJSONL(raw)).toMatchObject({ formatVersion: 11, events: session.events })
   return raw
 }
 
 describe.each(slots)('$name version ownership', ({ events }) => {
-  it('keeps current10 retained facts through an actual owned append, close and fresh reopen', async () => {
+  it('keeps current11 retained facts through an actual owned append, close and fresh reopen', async () => {
     const raw = currentFixture(events), original = fromJSONL(raw)
     const { root, path, backend } = await store(raw), fetch = forbidExecution()
     const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -148,7 +148,7 @@ describe.each(slots)('$name version ownership', ({ events }) => {
       expect(fetch).not.toHaveBeenCalled()
     } finally { await fresh.close() }
   })
-  it.each([8, 9, 11])('refuses header%s before any source mutation while preserving every body byte', async version => {
+  it.each([8, 9, 12])('refuses header%s before any source mutation while preserving every body byte', async version => {
     const current = currentFixture(events), wrong = withVersion(current, version)
     expect(wrong).not.toBe(current)
     expect(bodyOf(wrong)).toBe(bodyOf(current))
@@ -156,9 +156,9 @@ describe.each(slots)('$name version ownership', ({ events }) => {
     const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
     try {
       const error = await coordinator.openManagedDocument('legacy').then(() => undefined, error => error)
-      if (version === 11) {
+      if (version === 12) {
         expect(error).toBeInstanceOf(SessionFormatUnsupportedError)
-        expect(error.message).toMatch(/format version 11.*newer/i)
+        expect(error.message).toMatch(/format version 12.*newer/i)
       } else {
         expect(error).toBeInstanceOf(TypeError)
         expect(error.message).toMatch(/^Invalid (result envelope|retained job result) or session format$/)

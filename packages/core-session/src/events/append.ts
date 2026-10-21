@@ -1,7 +1,7 @@
 import { CURRENT_FORMAT_VERSION } from "./types.ts"
 import type { Session, SessionEvent } from "./types.ts"
 import { appendHooks, subscribers, conversationIndexes, managedSessions } from "./state.ts"
-import { createConversationIndex } from "../conversation/validation.ts"
+import { createConversationIndex, conversationScopeKey } from "../conversation/validation.ts"
 import { prepareSessionEvent } from "./intake.ts"
 
 export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
@@ -16,7 +16,7 @@ export function append(session: Session, event: SessionEvent): void {
   let cached = conversationIndexes.get(session)
   const header = session.header as typeof session.header & { sessionId?: string }
   if (!cached || cached.formatVersion !== session.formatVersion || cached.events !== session.events || cached.index.eventCount !== session.events.length
-    || cached.index.generationScope !== JSON.stringify([header?.sessionId, header?.parentSession, header?.seedLength])) {
+    || cached.index.generationScope !== conversationScopeKey(header)) {
     cached = { formatVersion: session.formatVersion, events: session.events, index: createConversationIndex(session.events, index => session.events[index], session.formatVersion, header) }
     conversationIndexes.set(session, cached)
   }

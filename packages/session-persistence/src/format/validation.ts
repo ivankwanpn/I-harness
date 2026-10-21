@@ -3,7 +3,7 @@ import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validate
 import type { SessionMeta } from "../coordinator/types.ts"
 import { upgrades, isKnownEventType, SessionFormatUnsupportedError } from "./registry.ts"
 
-export async function migrate(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength'>): Promise<SessionEvent[]> {
+export async function migrate(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength' | 'semanticSeed'>): Promise<SessionEvent[]> {
   let v = version
   let result = events
   while (v < CURRENT_FORMAT_VERSION) {
@@ -38,7 +38,7 @@ export function assertVersionSupported(version: number): void {
 }
 
 /** Validate the committed prefix before any structural repair, and again under ownership. */
-export function preflightSessionFormat(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength'>): void {
+export function preflightSessionFormat(version: number, events: SessionEvent[], header?: Pick<SessionMeta, 'sessionId' | 'parentSession' | 'seedLength' | 'semanticSeed'>): void {
   preflightBatchShape(version, events)
   try { validateConversationHistory(events, version, header) }
   catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation history", { cause }) }
@@ -73,11 +73,12 @@ export function guardIgnorable(events: SessionEvent[], retainIgnorable = false):
 export function buildSession(meta: SessionMeta | undefined, events: SessionEvent[]): Session {
   validateSubagentHeader(meta)
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events }
-  if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined
+  if (meta && (meta.parentSession !== undefined || meta.seedLength !== undefined || meta.semanticSeed !== undefined
     || meta.delegationDepth !== undefined || meta.origin !== undefined)) {
     session.header = {
       ...(meta.parentSession !== undefined ? { parentSession: meta.parentSession } : {}),
       ...(meta.seedLength !== undefined ? { seedLength: meta.seedLength } : {}),
+      ...(meta.semanticSeed !== undefined ? { semanticSeed: meta.semanticSeed } : {}),
       ...(meta.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
       ...(meta.delegationDepth !== undefined ? { delegationDepth: meta.delegationDepth } : {}),
       ...(meta.origin !== undefined ? { origin: meta.origin } : {}),

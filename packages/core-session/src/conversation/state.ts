@@ -2,6 +2,7 @@ import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationProjection, ConversationCall } from "./types.ts"
 import { conversationSources } from "./sources.ts"
 import { conversationVisibility } from "./visibility.ts"
+import { validateBootstrapReadiness } from './bootstrap-validation.ts'
 
 export interface ConversationState {
   archive: { eventCount: number; lastSeq?: number }
@@ -16,9 +17,10 @@ export type ConversationStateRead = { kind: "available"; state: ConversationStat
 
 /** Replay facts only: no claim, execution, scheduling or delivery authority. */
 export function readConversationState(session: Session, projection: ConversationProjection): ConversationStateRead {
+  validateBootstrapReadiness(session.events, session.formatVersion, session.header ?? {})
   const visibility = conversationVisibility(session)
   const sources = conversationSources(session, projection.ownerSessionId, [])
-  const seedEnd = session.header?.parentSession === undefined ? 0 : session.header.seedLength ?? 0
+  const seedEnd = session.header?.parentSession === undefined && session.header?.semanticSeed === undefined ? 0 : session.header.seedLength ?? 0
   let turn: number | undefined
   let physicalUnit: string | undefined
   const pending = new Map<string, { inputId: string; state: "admitted" | "promoted"; sourceIds: string[] }>()

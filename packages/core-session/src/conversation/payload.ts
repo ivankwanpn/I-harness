@@ -31,6 +31,10 @@ export function outcomeField(output: unknown, key: string): unknown {
 /** Preflight exactly the retained result components before any JSON serializer. */
 export function projectToolResult(event: Extract<SessionEvent, { type: "tool/result" }>, record: PruneRecord | undefined, source: ConversationSourceRef, imageSource: ConversationSourceRef, capture?: ConversationPayloadCapture): { content: string; images?: ImageInput[] } {
   if (event.envelope) {
+    if (record !== undefined) {
+      const media = readConversationPayload(event.envelope, 'media', imageSource, capture)
+      return { content: renderPruneSubstitute(capture ? capture(record, source) as PruneRecord : record), ...(media.length ? { images: [...media] } : {}) }
+    }
     const envelope = readConversationPayload<{ envelope?: unknown }, 'envelope'>(event, 'envelope', source, capture) as ResultEnvelope
     return { content: resultText(envelope), ...(envelope.media.length ? { images: [...envelope.media] } : {}) }
   }

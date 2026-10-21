@@ -1,12 +1,14 @@
 import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./usage-validation.ts"
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
-import { conversationFormatError as fail, conversationSeq, validateConversationEventShape } from "../events/conversation.ts"
+import { conversationFormatError as fail, conversationSeq, validateConversationEventShape, validateSemanticSourceEventShape } from "../events/conversation.ts"
 import type { projectHistory } from './history/replacements.ts'
 import { createHistoryIndex } from './history/index.ts'
 import { createGenerationIndex, type GenerationHistoryScope } from './generation.ts'
 import { createInputPreparationIndex } from './input-preparation.ts'
 import { createSoftReductionIndex } from './soft-reduction.ts'
+import { bootstrapStaging, semanticSourceStructure, conversationScopeKey, validateBootstrapReadiness } from './bootstrap-validation.ts'
+export { conversationScopeKey } from './bootstrap-validation.ts'
 
 interface Address { index: number; type: SessionEvent["type"]; step?: number; callId?: string; actionId?: string; attemptId?: string; ambiguous?: boolean }
 
@@ -30,6 +32,17 @@ export function createConversationValidationIndex(events: readonly SessionEvent[
 
 /** Internal append-owner port: re-read referenced structural fields, without retaining a second archive. */
 export function createConversationIndex(events: readonly SessionEvent[], read?: (index: number) => SessionEvent | undefined, formatVersion = CURRENT_FORMAT_VERSION, header: GenerationHistoryScope = {}): ConversationValidationIndex {
+  return conversationIndex(events, read, formatVersion, header)
+}
+/** Package-private composition entry; never exported by the public facade. */
+export function createBootstrapConversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope): ConversationValidationIndex {
+  return conversationIndex(events, read, formatVersion, header, bootstrapStaging)
+}
+export function createSemanticSourceConversationIndex(events: readonly SessionEvent[], formatVersion: number, header: GenerationHistoryScope = {}): ConversationValidationIndex {
+  return conversationIndex(events, undefined, formatVersion, header, semanticSourceStructure)
+}
+function conversationIndex(events: readonly SessionEvent[], read: ((index: number) => SessionEvent | undefined) | undefined, formatVersion: number, header: GenerationHistoryScope, capability?: typeof bootstrapStaging | typeof semanticSourceStructure): ConversationValidationIndex {
+  const validateShape = capability === semanticSourceStructure ? validateSemanticSourceEventShape : validateConversationEventShape
   const acceptances = new Map<number, AcceptanceFact>()
   const completions = new Map<number, string>()
   const anchors = new Map<string, UsageAnchorFact>()
@@ -39,8 +52,9 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
   const attempts = new Set<string>()
   const acceptedCalls = new Set<number>()
   const callsById = new Map<string, number | null>()
-  const history = createHistoryIndex(formatVersion)
-  const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength })
+  const history = createHistoryIndex(formatVersion, validateShape)
+  const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength,
+    ...(header.semanticSeed ? { semanticSeed: Object.freeze({ ...header.semanticSeed }) } : {}) })
   const generation = createGenerationIndex(scope)
   const preparations = createInputPreparationIndex(scope)
   const soft = createSoftReductionIndex(scope)
@@ -54,7 +68,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
       || actual.type === "tool/call" && actual.callId !== target.callId) fail("referenced structure was mutated")
   }
   const index: ConversationValidationIndex = {
-    generationScope: JSON.stringify([scope.sessionId, scope.parentSession, scope.seedLength]),
+    generationScope: conversationScopeKey(scope),
     get formatVersion() { return formatVersion },
     get eventCount() { return count },
     get semanticsStartSeq() { return fence },
@@ -63,6 +77,8 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
     softReduction: soft.read,
     stage(suffix, options) {
       const readCurrent = options?.readCurrentEvent ?? read
+      const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0
+      validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability)
       const stagedHistory = history.stage(readCurrent)
       const stagedGeneration = generation.stage()
       const stagedSoft = soft.stage()
@@ -82,7 +98,7 @@ export function createConversationIndex(events: readonly SessionEvent[], read?: 
         return value
       }
       for (const [offset, event] of suffix.entries()) {
-        validateConversationEventShape(event, formatVersion)
+        validateShape(event, formatVersion)
         stagedGeneration.advance(event)
         stagedSoft.advance(event)
         stagedPreparations.advance(event)

@@ -33,6 +33,9 @@ export interface ModelActivityInfo {
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
+    | import('./bootstrap.ts').SeedManifestRecord
+    | import('./bootstrap.ts').SeedGroupRecord
+    | import('./bootstrap.ts').BootstrapCompleteRecord
     | { type: "step/start"; actionId?: string; attemptId?: string; seq?: number }
     | { type: "step/failed"; seq?: number }
     | { type: "model/retry"; version: 1; ts: number; retry: ModelRetryInfo; seq?: number }
@@ -238,6 +241,7 @@ export interface GoalSnapshot extends GoalRef {
 // Lineage/identity carried on a session (M8): who spawned it and how deep in
 // the subagent delegation chain it sits. Optional — a root session has none.
 export interface SessionHeader {
+  semanticSeed?: import('./bootstrap.ts').SeedHeaderV1
   journal?: import('../managed/types.ts').JournalMetadata
   parentSession?: string
   seedLength?: number
@@ -253,4 +257,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 10
+export const CURRENT_FORMAT_VERSION = 11

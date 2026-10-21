@@ -49,11 +49,11 @@ describe('generation accounting through the existing history owner', () => {
     expect(fromJSONL(toJSONL(value)).events).toHaveLength(value.events.length)
     await source.close(); action.finish()
   })
-  it('round trips a bound physical reservation as format 10 without inventing a response', () => {
+  it('round trips a bound physical reservation as format 11 without inventing a response', () => {
     const value = session()
     expect(() => { add(value, open); add(value, bind); add(value, reserve()) }).not.toThrow()
     const cold = fromJSONL(toJSONL(value))
-    expect(cold.formatVersion).toBe(10)
+    expect(cold.formatVersion).toBe(11)
     expect(cold.events.map(event => event.type)).toEqual(['user/message', 'context/action', 'context/action', 'context/attempt'])
   })
 

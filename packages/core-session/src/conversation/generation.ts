@@ -1,6 +1,7 @@
 import { generationLimits, isGenerationEventType, type GenerationActionEvent, type GenerationAttemptEvent, type GenerationEvent } from '../events/generation.ts'
 import { conversationFormatError as fail } from '../events/conversation.ts'
 import type { SessionEventView } from '../managed/types.ts'
+import { validateBootstrapReadiness } from './bootstrap-validation.ts'
 
 export interface GenerationAttemptState {
   readonly reservation: Extract<GenerationAttemptEvent, { op: 'reserve' }>
@@ -28,7 +29,7 @@ interface Reference {
   recovery?: boolean
   inputId?: string; messageId?: string; provenanceKind?: string; producer?: string; originSessionId?: string; intent?: string
 }
-export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number }
+export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number; semanticSeed?: import('../events/bootstrap.ts').SeedHeaderV1 }
 type Action = GenerationActionState
 function source(event: SessionEventView): Reference {
   const reference: Reference = { type: event.type }
@@ -224,6 +225,7 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}) {
 }
 
 export function readGenerationActions(events: readonly SessionEventView[], scope: GenerationHistoryScope = {}): readonly GenerationActionState[] {
+  validateBootstrapReadiness(events, 11, scope)
   const index = createGenerationIndex(scope), staged = index.stage()
   for (const event of events) staged.advance(event)
   staged.commit()

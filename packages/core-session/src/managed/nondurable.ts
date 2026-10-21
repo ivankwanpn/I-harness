@@ -15,7 +15,10 @@ import { validInputPreparationEvent } from '../events/input-preparation.ts'
 import { captureMemorySoftStart } from './memory-soft-reduction.ts'
 import { validContextEvent } from '../events/context.ts'
 import { installMemoryGroup } from './memory-group.ts'
+import { validateBootstrapReadiness } from '../conversation/bootstrap-validation.ts'
 const memoryRecoveryHolds = new WeakMap<Session, Set<object>>()
+/** Package-private observation of the existing standalone owner registration. */
+export function hasNondurableFactOwner(session: Session): boolean { return memoryRecoveryHolds.has(session) }
 
 /** Explicit standalone memory adapter. It has no receipt and makes no durable
  * recovery promise. A managed/frozen Session can never silently enter it. */
@@ -27,7 +30,7 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
   let holds = memoryRecoveryHolds.get(session)
   if (!holds) memoryRecoveryHolds.set(session, holds = new Set())
   const recoveryHolds = holds
-  const assertNewWork = () => { if (recoveryHolds.size) throw Object.assign(new Error('Managed facts require reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' }) }
+  const assertNewWork = () => { validateBootstrapReadiness(session.events, session.formatVersion, session.header ?? {}); if (recoveryHolds.size) throw Object.assign(new Error('Managed facts require reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' }) }
   return {
     view: session,
     registerReceivedInputSource(drain) {

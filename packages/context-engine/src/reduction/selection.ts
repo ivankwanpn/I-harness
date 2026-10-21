@@ -1,5 +1,5 @@
 import { estimateContent, projectionFingerprint } from '@i-harness/token-meter'
-import { renderConversation, type ConversationSourceRef, type ConversationCoverage } from '@i-harness/core-session'
+import { renderConversation, closeSourceIntervals, type ConversationSourceRef, type ConversationCoverage } from '@i-harness/core-session'
 import type { ContextSnapshot } from '../contracts/snapshot.ts'
 import type { ReductionGroup, ReductionPolicy, ReductionRun } from './contracts.ts'
 
@@ -14,20 +14,10 @@ function coverage(item: ContextSnapshot['conversation']['items'][number]): Conve
 }
 /** Physical/evidence sharing closes an interval: no interleaved member may be cut. */
 export function reductionGroups(snapshot: ContextSnapshot, protectedSeqs: readonly number[] = []): readonly ReductionGroup[] {
-  const items = snapshot.conversation.items, parent = items.map((_, i) => i), sourceOwner = new Map<string, number>()
-  const root = (i: number): number => parent[i] === i ? i : parent[i] = root(parent[i]!)
-  for (const [i, item] of items.entries()) for (const ref of refs(item)) {
-    const key = ref.id, prior = sourceOwner.get(key)
-    if (prior !== undefined) parent[root(i)] = root(prior)
-    sourceOwner.set(key, i)
-  }
-  const end = new Map<number, number>()
-  for (let i = 0; i < items.length; i++) end.set(root(i), i)
+  const items = snapshot.conversation.items
   const protectedItems = new Set(snapshot.protection.itemIds), protectedSources = new Set(snapshot.protection.sourceIds), seqs = new Set(protectedSeqs)
   const groups: ReductionGroup[] = []
-  for (let i = 0; i < items.length;) {
-    let last = end.get(root(i))!
-    for (let j = i; j <= last; j++) last = Math.max(last, end.get(root(j))!)
+  for (const { first: i, last } of closeSourceIntervals(items.map(item => refs(item).map(ref => ref.id)))) {
     const members = items.slice(i, last + 1)
     const complete = members.every(item => item.kind !== 'legacy-fragment' && !!item.ref && refs(item).every(safe)
       && (!item.unit || item.unit.state === 'closed') && (!item.exchange || item.exchange.state === 'closed')
@@ -37,7 +27,6 @@ export function reductionGroups(snapshot: ContextSnapshot, protectedSeqs: readon
     const covered = complete ? members.map(coverage) : []
     groups.push(Object.freeze({ id: projectionFingerprint(members), items: Object.freeze(members), coverage: Object.freeze(covered),
       protected: protectedGroup, complete, tokens: estimateContent(renderConversation({ items: members })) }))
-    i = last + 1
   }
   return Object.freeze(groups)
 }

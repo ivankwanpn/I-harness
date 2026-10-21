@@ -6,6 +6,13 @@ import { resultDisposition, resultIsError } from '../../results/projection.ts'
 /** Only structural metadata. No text, arguments, result/native/image bodies,
  * request attribution or receipts are retained by the history index. */
 export interface HistoryFact {
+  readonly seedTurns?: import('../seed-types.ts').SeedTurnDomain
+  readonly seedExtent?: import('../seed-types.ts').TurnExtent
+  readonly seedItems?: readonly {
+    kind: 'input' | 'summary' | 'exchange'; scope: 'turn' | 'session'; extent: import('../seed-types.ts').TurnExtent
+    calls: readonly { id: string; name: string; outcome: 'success' | 'error' | 'not-dispatched'; result: number }[]
+    resultCount: number; mediaCount: number
+  }[]
   readonly index: number; readonly type: SessionEventView['type']; readonly seq?: number
   readonly callId?: string; readonly name?: string; readonly eventSeq?: number
   readonly actionId?: string; readonly attemptId?: string; readonly exchangeId?: string
@@ -21,6 +28,10 @@ export interface HistoryArchive { readonly length: number; get(index: number): H
 export function historyFact(event: SessionEventView, index: number): HistoryFact {
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }) }
   switch (event.type) {
+    case 'conversation/seed-manifest': return { ...base, seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
+    case 'conversation/seed-group': return { ...base, seedExtent: { ...event.group.extent }, seedItems: event.group.items.map(item => ({ kind: item.kind, scope: item.scope, extent: { ...item.extent },
+      calls: item.kind === 'exchange' ? item.calls.map(call => ({ id: call.id, name: call.name, outcome: call.outcome, result: call.result })) : [],
+      resultCount: item.kind === 'exchange' ? item.results.length : 0, mediaCount: item.kind === 'input' ? item.input.media.length : item.kind === 'exchange' ? item.results.reduce((count, result) => count + result.media.length, 0) : 0 })) }
     case 'step/start': return { ...base, actionId: event.actionId, attemptId: event.attemptId }
     case 'model/exchange-accepted': return { ...base, exchangeId: event.exchangeId, stepStartSeq: event.stepStartSeq, assistantSeq: event.assistantSeq, callSeqs: [...event.callSeqs] }
     case 'tool/call': return { ...base, callId: event.callId, name: event.name }

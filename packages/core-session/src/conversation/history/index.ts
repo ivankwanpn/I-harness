@@ -6,7 +6,7 @@ import { projectHistory, validateHistoricalReplacement } from './replacements.ts
 
 /** The existing validation owner's staged logical metadata. This registry is
  * structural only; it neither retains an event array nor renders payloads. */
-export function createHistoryIndex(formatVersion: number) {
+export function createHistoryIndex(formatVersion: number, validateShape = validateConversationEventShape) {
   const facts = new Map<number, HistoryFact>()
   const counts = new Map<number, number>()
   const dependencies = new Map<number, ReadonlySet<number>>()
@@ -24,7 +24,7 @@ export function createHistoryIndex(formatVersion: number) {
       const baseCount = count
       let stagedLength = 0
       return { advance(event: SessionEventView) {
-        validateConversationEventShape(event, formatVersion)
+        validateShape(event, formatVersion)
         const position = baseCount + stagedLength++, fact = historyFact(event, position)
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)
         if (event.type === 'user/message') for (const id of [event.input?.inputId, event.imageInputId]) {

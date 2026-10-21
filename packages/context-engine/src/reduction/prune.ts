@@ -10,6 +10,7 @@ export function pruneProposal(snapshot: ContextSnapshot, run: ReductionRun, poli
   for (const item of snapshot.conversation.items) for (const call of item.exchange?.calls ?? []) counts.set(call.callId, (counts.get(call.callId) ?? 0) + 1)
   const records: PruneRecord[] = []
   for (const group of run.groups) for (const item of group.items) for (const message of item.messages) {
+    if (item.exchange?.acceptance === 'inherited-observation') continue
     if (message.role !== 'tool' || typeof message.content !== 'string' || message.content.length <= config.thresholdChars || counts.get(message.toolCallId) !== 1) continue
     const call = item.exchange?.calls.find(call => call.callId === message.toolCallId)
     if (!call?.result || !call.result.addressable || !item.sources.some(ref => ref.id === call.result!.id)) continue

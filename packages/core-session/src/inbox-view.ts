@@ -1,9 +1,11 @@
 import type { DeepReadonly, SessionView } from './managed/types.ts'
 import type { PendingInput } from './inbox.ts'
+import { validateBootstrapReadiness } from './conversation/bootstrap-validation.ts'
 
 /** Sole readonly pending fold. Observation never acquires mutation authority. */
 export function readInbox(session: SessionView, fromSeq = 0) {
   const pending = (): readonly DeepReadonly<PendingInput>[] => {
+    validateBootstrapReadiness(session.events, session.formatVersion, session.header ?? {})
     const inputs = new Map<string, DeepReadonly<PendingInput>>()
     for (const event of session.events) {
       if (event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') inputs.delete(event.inputId)

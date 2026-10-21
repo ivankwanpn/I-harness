@@ -163,7 +163,7 @@ describe("session log", () => {
     append(s, { type: "user/message", text: "x" })
     const text = toJSONL(s)
     const s2 = fromJSONL(text)
-    expect(s2.formatVersion).toBe(10)
+    expect(s2.formatVersion).toBe(11)
     expect(s2.events.length).toBe(1)
   })
 
@@ -177,9 +177,9 @@ describe("session log", () => {
     expect(() => fromJSONL("   \n\t  ")).toThrow(/session log is empty/)
   })
 
-  it("the current writer uses v10 and rejects a mismatched requested version assertion", () => {
+  it("the current writer uses v11 and rejects a mismatched requested version assertion", () => {
     const s = createSession()
-    expect(assertVersion(s, 10)).toBe(10)
+    expect(assertVersion(s, 11)).toBe(11)
     expect(() => assertVersion(s, 1)).toThrow(/version/i)
   })
 
@@ -444,7 +444,7 @@ describe("compaction events", () => {
     append(s, { type: "user/message", text: "hi" })
     append(s, { type: "compaction/reset", removedSeqs: [] })
     // The reset marker remains additive within the current writer format.
-    expect(s.formatVersion).toBe(10)
+    expect(s.formatVersion).toBe(11)
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
     // removedSeqs survives persistence (recovery replays the log ⇒ nothing lost)

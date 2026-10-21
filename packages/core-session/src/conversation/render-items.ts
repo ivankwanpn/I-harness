@@ -5,7 +5,7 @@ import type { LLMMessage } from '../projection/types.ts'
 import type { HistoryItem, HistoryRecipe } from './history/types.ts'
 import { archiveConversationSources } from './sources.ts'
 import { finishItem } from './exchange.ts'
-import { copyConversationData } from './render.ts'
+import { copyConversationData, copyConversationMessage } from './render.ts'
 import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
 import { archivePruneSubstitutes } from '../projection/pruning.ts'
 import { resultIsError } from '../results/projection.ts'
@@ -60,14 +60,18 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
   const items = history.items.map(item => {
     const establishment = source(item.establishment)
     const own = archive.get(item.establishmentIndex)
+    const seedRecipe = item.recipes.find(recipe => recipe.kind === 'seed-item')
+    const seedItem = own?.type === 'conversation/seed-group' && seedRecipe ? own.group.items[seedRecipe.item!] : undefined
     const rendered = finishItem({ ...item, id: `${establishment.id}:${item.kind}`, establishment, sources: item.sources.map(source), provenance: sources.provenance(item.establishmentIndex, item.establishment.part, item.admissionIndex),
       ...(item.stepSource ? { stepSource: source(item.stepSource) } : {}),
       ...(item.unitInfo ? { unitInfo: Object.freeze({ source: source(item.unitInfo.source), state: item.unitInfo.state }) } : {}),
       calls: item.calls.map(call => ({ ...call, ...(call.call ? { call: source(call.call) } : {}), ...(call.result ? { result: source(call.result) } : {}), ...(call.dispatch ? { dispatch: source(call.dispatch) } : {}) })),
       receivedResults: new Set([...item.receivedResults].map(id => { const ref = item.sources.find(candidate => candidate.id === id); return ref ? source(ref).id : id })),
-      messages: item.recipes.map(recipe => render(recipe, item)),
+      messages: seedItem ? readConversationPayload(seedItem, 'messages', sources.ref(item.establishmentIndex, item.establishment.part), options.capturePayload).map(copyConversationMessage) : item.recipes.map(recipe => render(recipe, item)),
     })
-    return own?.type === 'compaction/replacement' ? Object.freeze({ ...rendered, replacement: Object.freeze({ replacementId: own.replacementId, coverage: own.coverage, insertBefore: own.insertBefore }) }) : rendered
+    return Object.freeze({ ...rendered, extent: item.extent,
+      ...(seedItem?.kind === 'exchange' ? { exchange: Object.freeze({ ...rendered.exchange!, acceptance: 'inherited-observation' as const }) } : {}),
+      ...(own?.type === 'compaction/replacement' ? { replacement: Object.freeze({ replacementId: own.replacementId, coverage: own.coverage, insertBefore: own.insertBefore }) } : {}) })
   })
   // Structural diagnostics use owner-neutral IDs; source them from this view.
   for (const diagnostic of history.diagnostics) if (!['missing-source-seq', 'invalid-source-seq', 'duplicate-source-seq'].includes(diagnostic.code)) diagnostics.push({ ...diagnostic, sourceIds: diagnostic.sourceIds.map(id => {

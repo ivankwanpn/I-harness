@@ -33,6 +33,7 @@ export interface ConversationUnit {
 }
 
 export interface ConversationItem {
+  readonly extent?: import('./seed-types.ts').TurnExtent
   readonly unit?: ConversationUnit
   readonly ref?: import('../events/replacement.ts').ConversationItemRef
   readonly replacement?: Pick<import('../events/replacement.ts').ContextReplacementRecordV1, 'replacementId' | 'coverage' | 'insertBefore'>
@@ -44,7 +45,7 @@ export interface ConversationItem {
   exchange?: {
     id: string
     step?: ConversationSourceRef
-    acceptance: "legacy-inferred" | "explicit"
+    acceptance: "legacy-inferred" | "explicit" | "inherited-observation"
     state: "open" | "closed" | "unresolved"
     calls: readonly ConversationCall[]
   }

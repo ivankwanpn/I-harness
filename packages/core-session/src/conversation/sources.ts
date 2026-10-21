@@ -38,6 +38,11 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     const event = archive.get(eventIndex)
     const source = ref(eventIndex, part)
     const evidence = [source]
+    if (event.type === 'conversation/seed-group') {
+      const match = /^item:(0|[1-9][0-9]*)$/.exec(part), item = match && event.group.items[Number(match[1])]
+      if (!item) throw new TypeError('Invalid seed item source')
+      return Object.freeze({ kind: 'inherited', authority: 'observation', scope: item.scope, evidence: Object.freeze([source, ref(eventIndex, 'group')]), ...(item.producer === undefined ? {} : { producer: item.producer }) })
+    }
     const admission = admissionIndex === undefined ? undefined : archive.get(admissionIndex)
     if (admissionIndex !== undefined) evidence.push(ref(admissionIndex, "admission"))
     let kind: ConversationProvenance["kind"] = "unknown"
@@ -68,7 +73,7 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     return Object.freeze({ kind: inherited ? "inherited" : kind, authority: inherited ? "observation" : authority, scope, evidence: Object.freeze(evidence), ...(producer === undefined ? {} : { producer }), ...(inherited ? { originSessionId: options.header!.parentSession } : originSessionId === undefined ? {} : { originSessionId }) })
   }
   function isInherited(index: number): boolean {
-    return options.header?.parentSession !== undefined && index < (options.header.seedLength ?? 0)
+    return (options.header?.parentSession !== undefined || options.header?.semanticSeed !== undefined) && index < (options.header.seedLength ?? 0)
   }
   return { ref, provenance, indexOfSeq: (seq: number) => positions.get(seq) ?? -1 }
 }

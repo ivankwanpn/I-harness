@@ -40,7 +40,7 @@ export function parseHeader(line: string): SessionMeta {
   validateSubagentHeader(h)
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
-  if ([6, 7, 8, 9, 10].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
+  if ([6, 7, 8, 9, 10, 11].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,
@@ -49,6 +49,7 @@ export function parseHeader(line: string): SessionMeta {
     ...(h.journal !== undefined ? { journal: h.journal } : {}),
     ...(typeof h.parentSession === "string" ? { parentSession: h.parentSession } : {}),
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
+    ...(h.semanticSeed !== undefined ? { semanticSeed: h.semanticSeed } : {}),
     ...(h.subagentProtocolVersion === 1 ? { subagentProtocolVersion: 1 as const } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
     ...(typeof h.origin === "string" ? { origin: h.origin } : {}),

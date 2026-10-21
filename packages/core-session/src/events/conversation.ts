@@ -6,8 +6,9 @@ import { scalarFields } from './attribution.ts'
 import { isStrictFactData } from '../managed/capture.ts'
 import { validSoftReductionEvent } from './soft-reduction.ts'
 import { validAdmissionObservation } from './admission.ts'
-import { validateResultFact } from '../results/validate.ts'
+import { validateResultFact, validateResultSourceMetadata } from '../results/validate.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
+import { validateSeedEventShape, validateSeedSourceEventShape } from '../conversation/bootstrap-validation.ts'
 
 export interface InputProvenance {
   kind: "human" | "plugin" | "child-report" | "inherited" | "unknown"
@@ -40,7 +41,19 @@ export function validInputProvenance(value: unknown): value is InputProvenance {
 }
 /** New fields are version-fenced; existing event payload policies stay owned by their validators. */
 export function validateConversationEventShape(event: SessionEvent, formatVersion: number): void {
-  if (event.type === 'tool/result' || event.type === 'code/result' || event.type === 'code/output' || event.type === 'subagent/end' || event.type === 'job/status') validateResultFact(event, formatVersion)
+  conversationEventShape(event, formatVersion, false)
+}
+/** Package-private source profile; public intake and readers stay strict. */
+export function validateSemanticSourceEventShape(event: SessionEvent, formatVersion: number): void {
+  conversationEventShape(event, formatVersion, true)
+}
+function conversationEventShape(event: SessionEvent, formatVersion: number, source: boolean): void {
+  if (source) validateSeedSourceEventShape(event, formatVersion)
+  else validateSeedEventShape(event, formatVersion)
+  if (event.type === 'tool/result' || event.type === 'code/result' || event.type === 'code/output' || event.type === 'subagent/end' || event.type === 'job/status') {
+    if (source) validateResultSourceMetadata(event, formatVersion)
+    else validateResultFact(event, formatVersion)
+  }
   if (event.type === 'context/budget' && event.version === 2) {
     if (formatVersion < 9 || !validAdmissionObservation(event.snapshot)) conversationFormatError('invalid admission observation or format')
     return
@@ -68,7 +81,7 @@ export function validateConversationEventShape(event: SessionEvent, formatVersio
     return
   }
   if (event.type === 'compaction/replacement') validateReplacementShape(event, formatVersion)
-  validateNativeWitness(event, formatVersion)
+  if (!source) validateNativeWitness(event, formatVersion)
   const e = event as SessionEvent & { provenance?: unknown; actionId?: unknown; attemptId?: unknown }
   if ((event.type === "model/exchange-accepted" || event.type === "context/usage") && event.version === 2 && formatVersion < 4) conversationFormatError("fields require format 4")
   const explicit = event.type === "conversation/semantics" || event.type === "model/exchange-accepted"

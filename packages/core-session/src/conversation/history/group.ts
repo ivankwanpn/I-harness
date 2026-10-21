@@ -6,6 +6,7 @@ import { historySources } from './sources.ts'
 import { historyVisibility } from './visibility.ts'
 import { historyEntries, historyFacts, type HistoryArchive, type HistoryFact } from './facts.ts'
 import type { HistoryItem, HistoryRecipe } from './types.ts'
+import { historyTurns } from './turns.ts'
 
 
 /** Shared payload-free logical transition; each method has one grouping duty. */
@@ -26,8 +27,10 @@ class HistoryGrouping {
   private readonly auditSteps = new Map<LegacyStep, HistoryItem>()
   private readonly explicitCalls = new Map<string, HistoryItem>()
   private readonly units = new Map<LegacyStep, ConversationUnit>()
+  private readonly turns
 
   constructor(private readonly archive: HistoryArchive, throughSeq?: number) {
+    this.turns = historyTurns(archive)
     this.sources = historySources(archive, this.diagnostics)
     this.visibility = historyVisibility(historyFacts(archive), throughSeq)
     this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics)
@@ -41,7 +44,7 @@ class HistoryGrouping {
       unitInfo = Object.freeze({ source: this.sources.ref(unit.start, 'step'), state: physicalUnitState(unit, unit.calls.map(this.legacy.callMetadata)) })
       this.units.set(unit, unitInfo)
     }
-    return { ...item, ...(unit ? { unit, unitInfo } : {}), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), ...(imageAdmissionIndex === undefined ? {} : { imageAdmissionIndex }), recipes: [] }
+    return { ...item, extent: this.turns.extents.get(index), ...(unit ? { unit, unitInfo } : {}), establishmentIndex: index, ...(admissionIndex === undefined ? {} : { admissionIndex }), ...(imageAdmissionIndex === undefined ? {} : { imageAdmissionIndex }), recipes: [] }
   }
   private addCall = (item: HistoryItem, index: number) => {
     const call = this.legacy.callMetadata(index)
@@ -78,6 +81,24 @@ class HistoryGrouping {
     // Admissions remain readable even when their model-visible range is hidden.
     if (event.type === "agent/input/admitted") this.admissions.set(event.inputId!, index)
     if (!this.visibility.lifecycle(event)) return
+    if (event.type === 'conversation/seed-group') {
+      this.flushToolBlock(undefined, true); this.block = undefined
+      for (const [ordinal, descriptor] of event.seedItems!.entries()) {
+        const part = `item:${ordinal}`, item = this.makeItem(descriptor.kind, index, part)
+        const group = this.sources.ref(index, 'group')
+        addItemSource(item, group)
+        item.provenance = { kind: 'inherited', authority: 'observation', scope: descriptor.scope, evidence: [item.establishment, group] }
+        for (const [callIndex, call] of descriptor.calls.entries()) {
+          const callRef = this.sources.ref(index, `${part}:call:${callIndex}`), resultRef = this.sources.ref(index, `${part}:result:${call.result}`)
+          item.calls.push({ callId: call.id, name: call.name, outcome: call.outcome, call: callRef, result: resultRef })
+          addItemSource(item, callRef); addItemSource(item, resultRef); item.receivedResults.add(resultRef.id)
+        }
+        for (let media = 0; media < descriptor.mediaCount; media++) addItemSource(item, this.sources.ref(index, `${part}:media:${media}`))
+        item.recipes.push({ kind: 'seed-item', index, item: ordinal })
+        this.items.push({ ...item, extent: descriptor.extent })
+      }
+      return
+    }
     if (event.type === "user/message") {
       const admissionIndex = this.admissions.get(event.inputId ?? event.imageInputId ?? "")
       const imageAdmissionIndex = event.imageInputId === undefined ? undefined : this.admissions.get(event.imageInputId)

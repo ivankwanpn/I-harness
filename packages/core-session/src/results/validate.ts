@@ -35,6 +35,43 @@ function data(input: unknown): boolean {
 }
 const closed = (value: object, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key))
 
+/** Package-private semantic-source metadata validation. Retained inline value,
+ * preview and media bytes are deliberately outside this structural profile. */
+export function validateResultSourceMetadata(event: object, formatVersion: number): void {
+  const descriptor = Object.getOwnPropertyDescriptor(event, 'envelope')
+  if (!descriptor) return
+  if (formatVersion < 10 || !('value' in descriptor) || !descriptor.enumerable || 'output' in event || 'isError' in event) throw new TypeError('Invalid result metadata')
+  const envelope = descriptor.value as ResultEnvelope
+  const fields = (value: unknown, keys: string[], opaque: string[] = []) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw new TypeError('Invalid result metadata')
+    if (Reflect.ownKeys(value).some(key => typeof key !== 'string' || !keys.includes(key) || !Object.getOwnPropertyDescriptor(value, key)?.enumerable
+      || !opaque.includes(key) && !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, 'value'))) throw new TypeError('Invalid result metadata')
+  }
+  fields(envelope, ['version', 'execution', 'preview', 'media', 'retention', 'dependencies'], ['preview'])
+  fields(envelope.execution, ['outcome', 'dispatch'])
+  if (envelope.version !== 1 || !['succeeded', 'failed', 'canceled', 'unknown'].includes(envelope.execution.outcome)
+    || !['dispatched', 'not-dispatched', 'unknown'].includes(envelope.execution.dispatch) || !Array.isArray(envelope.media)) throw new TypeError('Invalid result metadata')
+  const retention = envelope.retention
+  fields(retention, ['kind', 'value', 'encodedBytes', 'ref', 'reason', 'observedEncodedBytes'], ['value'])
+  if (retention.kind === 'inline') {
+    fields(retention, ['kind', 'value', 'encodedBytes'], ['value'])
+    if (!Object.hasOwn(retention, 'value') || !size(retention.encodedBytes)) throw new TypeError('Invalid result metadata')
+  } else if (retention.kind === 'artifact') {
+    fields(retention, ['kind', 'ref']); if (!validManagedArtifactRef(retention.ref)) throw new TypeError('Invalid result metadata')
+  } else if (retention.kind === 'unavailable') {
+    fields(retention, ['kind', 'reason', 'observedEncodedBytes'])
+    if (!['quota', 'encoding', 'storage-refused', 'unsupported-owner', 'capture-canceled'].includes(retention.reason)
+      || retention.observedEncodedBytes !== undefined && !size(retention.observedEncodedBytes)) throw new TypeError('Invalid result metadata')
+  } else throw new TypeError('Invalid result metadata')
+  if (envelope.dependencies) {
+    const dependency = envelope.dependencies
+    fields(dependency, ['kind', 'ref', 'reason', 'count'])
+    fields(dependency, dependency.kind === 'artifact-set' ? ['kind', 'ref', 'count'] : ['kind', 'reason', 'count'])
+    if (!size(dependency.count) || dependency.count < 1 || (dependency.kind === 'artifact-set' ? !validManagedArtifactRef(dependency.ref) || dependency.ref.codec !== 'json-utf8-v1'
+      : dependency.kind !== 'unavailable' || !['quota', 'encoding', 'storage-refused', 'unsupported-owner', 'capture-canceled'].includes(dependency.reason))) throw new TypeError('Invalid result metadata')
+  }
+}
+
 export function validManagedArtifactRef(value: unknown): value is ManagedArtifactRef {
   if (!data(value) || value === null || typeof value !== 'object' || Array.isArray(value)) return false
   const ref = value as ManagedArtifactRef
