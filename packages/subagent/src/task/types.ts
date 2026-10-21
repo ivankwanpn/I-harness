@@ -8,6 +8,8 @@ export type RecoveryReason = "dispatch-unknown" | "response-interrupted"
 export type OutboxStatus = "pending" | "delivered" | "woken" | "error" | "suppressed"
 
 export interface TaskIdentity { parentSessionId: string; callEventSeq?: number; toolCallId?: string }
+export type TaskSavedObservation = { status: 'accepted' | 'running'; outcome?: never; execution?: import('@i-harness/core-session').ResultExecution }
+  | { status: TaskStatus; outcome: TaskOutcome; execution?: import('@i-harness/core-session').ResultExecution }
 export interface TaskRecord {
   id: string
   parentSessionId: string
@@ -27,9 +29,11 @@ export interface TaskRecord {
   resultText?: string
   error?: string
   bodyKind?: "legacy-text"
+  /** Stamped only when restoring a literal v1 row; survives a v2 migration save. */
+  legacyFormatVersion?: 1
   result?: RetainedTaskResult
   publication?: 'unqualified' | 'committed'
-  savedObservation?: { status: TaskStatus; outcome: TaskOutcome; execution?: import('@i-harness/core-session').ResultExecution }
+  savedObservation?: TaskSavedObservation
   retention?: "memory" | "pending" | "durable" | "failed"
   retentionError?: string
   recoveryReason?: RecoveryReason

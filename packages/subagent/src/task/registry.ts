@@ -45,7 +45,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
    * real reader. An adapter object, or a store without that capability, is an
    * unsupported owner rather than a disk promise. */
   function restoredRetention(task: TaskRecord, owned: boolean): void {
-    if (task.bodyKind === "legacy-text" && !task.result) { task.retention = "durable"; delete task.retentionError; return }
+    if (task.legacyFormatVersion === 1 && !task.result) { task.retention = "durable"; delete task.retentionError; return }
     if (task.result?.kind === "pending") { task.retention = "pending"; delete task.retentionError; return }
     if (task.result?.kind === "retained" && task.result.envelope.retention.kind === "artifact" && owned) { task.retention = "durable"; delete task.retentionError; return }
     task.retention = "failed"
@@ -55,6 +55,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   async function retainResult(taskId: string): Promise<void> {
     const task = records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
+    if (!task.result && (task.publication === 'unqualified' || documentVersion === 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
     if (resultOwner) await resultOwner.settle(task)
     if (!opts.reportPolicy) return
     // The in-memory authoritative outcome is already complete. Persistence
@@ -87,6 +88,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   function announceTerminal(t: TaskRecord, notify = true): void {
+    // A genuine new current capture leaves historical text recovery behind.
+    if (t.result) delete t.legacyFormatVersion
     notifications.enqueue(t)
     if (opts.reportPolicy) {
       void retainResult(t.id).then(() => { if (notify) opts.onTerminalized?.(t) }, () => { if (notify) opts.onTerminalized?.(t) })
@@ -193,7 +196,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       let restoredAnon = 0
       for (const t of doc.tasks) {
         records.checkRestoredId(t.id)
-        if (doc.formatVersion === 1) t.bodyKind = "legacy-text"
+        if (doc.formatVersion === 1) { t.bodyKind = "legacy-text"; t.legacyFormatVersion = 1 }
         else unqualifyRestoredTask(t)
         records.insertRestored(t)
         if (opts.reportPolicy && t.outcome !== undefined) restoredRetention(t, resultOwner?.available?.() === true)

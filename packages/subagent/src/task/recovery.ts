@@ -3,7 +3,7 @@ import type { TaskRegistry } from "./types.ts"
 export async function classifyRestoredTasks(tasks: TaskRegistry, coordinator: SessionCoordinator): Promise<number> {
   let classified = 0
   for (const t of tasks.list()) {
-    if (t.outcome !== undefined) continue
+    if (t.outcome !== undefined || t.publication === 'unqualified') continue
     const evidence = t.childSessionId === undefined
       ? undefined
       : await completedTurnEvidence(coordinator, t.childSessionId)

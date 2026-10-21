@@ -1,4 +1,5 @@
 import { committedChildResultStatus } from "./result-proof.ts"
+import { currentTaskFormat } from './catalog-provenance.ts'
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { derivePlanMode, type SessionView as Session, type SessionEventView as SessionEvent } from "@i-harness/core-session"
@@ -41,28 +42,31 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
     const stored = new Map<string, AgentRecord[]>(), runtimes = new Map<string, ReturnType<typeof live>>()
     const hints = new Map<string, AgentRecord & { label?: string }>()
     const ownerSessions = new Map<string, Session>()
+    const invalidOwners = new Set<string>()
     for (const ownerId of new Set([parentId, ...scoped.flatMap((row) => row.chain)])) {
       try {
-        const doc = object(await coordinator.getDocument(ownerId))
-        stored.set(ownerId, doc === undefined ? [] : (doc.formatVersion === 1 || doc.formatVersion === 2) ? [...records(doc.agentTable), ...jobRecords(doc.jobs).filter(job => !records(doc.agentTable).some(entry => entry.sessionId === job.sessionId))] : (() => { throw new Error("Subagent registry metadata is invalid") })())
-      } catch (error) { errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }); stored.set(ownerId, []) }
+        const raw = await coordinator.getDocument(ownerId), doc = object(raw)
+        if (raw !== undefined && !doc) throw new Error('Subagent registry metadata is invalid')
+        stored.set(ownerId, doc === undefined ? [] : (doc.formatVersion === 1 || doc.formatVersion === 2) ? [...records(doc.agentTable), ...jobRecords(doc.jobs).filter(job => !records(doc.agentTable).some(entry => entry.sessionId === job.sessionId))].map(row => ({ ...row, currentFormat: doc.formatVersion === 2 })) : (() => { throw new Error("Subagent registry metadata is invalid") })())
+      } catch (error) { invalidOwners.add(ownerId); errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }); stored.set(ownerId, []) }
       // Closed entries leave the runtime table. Their submission and team
       // membership records retain durable names/roles for the saved catalog.
       try {
-        const doc = object(await coordinator.getDocument(taskDocKey(ownerId)))
+        const raw = await coordinator.getDocument(taskDocKey(ownerId)), doc = object(raw)
+        if (raw !== undefined && !doc) throw new Error('Subagent task metadata is invalid')
         if (doc && ((doc.formatVersion !== 1 && doc.formatVersion !== 2) || !Array.isArray(doc.tasks))) throw new Error("Subagent task metadata is invalid")
         for (const raw of doc?.tasks as unknown[] ?? []) {
           const task = object(raw)
           if (typeof task?.childSessionId !== "string" || typeof task.agentPath !== "string") continue
-          hints.set(task.childSessionId, { ...(typeof task.id === 'string' ? { taskId: task.id } : {}), sessionId: task.childSessionId, path: task.agentPath, status: typeof task.outcome === "string" ? task.outcome : typeof task.status === "string" ? task.status : "unavailable", ...(typeof task.agent === "string" ? { roleName: task.agent } : {}), ...(typeof task.jobId === "string" ? { jobId: task.jobId } : {}), ...(typeof task.modelLabel === "string" ? { modelLabel: task.modelLabel } : {}), ...(typeof task.description === "string" ? { label: task.description } : {}), ...(typeof task.resultText === "string" ? { finalText: task.resultText } : {}), ...(typeof task.error === "string" ? { error: task.error } : {}), ...(task.result ? { result: task.result as AgentRecord["result"] } : {}) })
+          hints.set(task.childSessionId, { currentFormat: currentTaskFormat(task, doc!.formatVersion), ...(typeof task.id === 'string' ? { taskId: task.id } : {}), sessionId: task.childSessionId, path: task.agentPath, status: typeof task.outcome === "string" ? task.outcome : typeof task.status === "string" ? task.status : "unavailable", ...(typeof task.agent === "string" ? { roleName: task.agent } : {}), ...(typeof task.jobId === "string" ? { jobId: task.jobId } : {}), ...(typeof task.modelLabel === "string" ? { modelLabel: task.modelLabel } : {}), ...(typeof task.description === "string" ? { label: task.description } : {}), ...(typeof task.resultText === "string" ? { finalText: task.resultText } : {}), ...(typeof task.error === "string" ? { error: task.error } : {}), ...(task.result ? { result: task.result as AgentRecord["result"] } : {}) })
         }
         const scopedOwner = scoped.find(row => row.sessionId === ownerId)
         const ownerAuthority = scopedOwner ? authority(parentId, ownerId, [scopedOwner.meta, ...scopedOwner.chain.slice(1).map(id => metas.get(id)!)]) : undefined
         const ownerSession = await snapshot(ownerId, liveChild(ownerId, ownerAuthority))
         ownerSessions.set(ownerId, ownerSession)
         const team = foldTeam(teamLedger(ownerSession)).state
-        for (const member of team.members.values()) if (member.sessionId) hints.set(member.sessionId, { sessionId: member.sessionId, path: `lead/${member.name}`, roleName: "teammate", label: member.name, status: member.phase === "failed" ? "error" : "unavailable", ...(member.error ? { error: member.error } : {}) })
-      } catch (error) { errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
+        for (const member of team.members.values()) if (member.sessionId) hints.set(member.sessionId, { currentFormat: hints.get(member.sessionId)?.currentFormat, sessionId: member.sessionId, path: `lead/${member.name}`, roleName: "teammate", label: member.name, status: member.phase === "failed" ? "error" : "unavailable", ...(member.error ? { error: member.error } : {}) })
+      } catch (error) { invalidOwners.add(ownerId); errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
       try { runtimes.set(ownerId, live(ownerId)) }
       catch (error) { errors.push({ sessionId: ownerId === parentId ? undefined : ownerId, message: errorText(error) }) }
     }
@@ -72,6 +76,7 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       const liveEntry = runtime?.runtime?.entries.find((row) => row.sessionId === sessionId)
       const saved = chain.flatMap((ownerId) => stored.get(ownerId) ?? []).find((row) => row.sessionId === sessionId)
       const hint = hints.get(sessionId)
+      const currentFormat = meta.subagentProtocolVersion === 1 || saved?.currentFormat === true || hint?.currentFormat === true || chain.some(id => invalidOwners.has(id))
       const entry = liveEntry || saved || hint ? { ...hint, ...saved, ...liveEntry } : undefined
       // Snapshots omit cleared optional fields. Unlike identity metadata, an
       // absent error on the current registry must not fall back to an older
@@ -80,7 +85,7 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
       let retained = (liveEntry ?? saved ?? hint)?.result
       let events: readonly SessionEvent[] = [], unavailable: string | undefined
       const childAuthority = runtime?.runtime && liveEntry ? { ownerId: runtime.ownerId, assembly: runtime.runtime.assembly, entry: liveEntry } : undefined
-      try { if (!retained) events = (await snapshot(sessionId, liveChild(sessionId, childAuthority))).events.slice(meta.seedLength ?? 0) }
+      try { if (!retained && (liveEntry || !currentFormat)) events = (await snapshot(sessionId, liveChild(sessionId, childAuthority))).events.slice(meta.seedLength ?? 0) }
       catch (error) { unavailable = errorText(error); errors.push({ sessionId, message: unavailable }) }
       const final = events.findLast((event) => event.type === "assistant/message")
       const finalText = liveEntry?.finalText ?? (liveEntry ? undefined : saved?.finalText) ?? (final?.type === "assistant/message" ? final.text : undefined) ?? hint?.finalText
@@ -93,6 +98,9 @@ export function createSubagentCatalog(coordinator: SessionCoordinator, service: 
         if (state === 'unavailable' && retained.kind === 'retained') retained = { ...retained, envelope: { ...retained.envelope, execution: { outcome: 'unknown', dispatch: 'unknown' } } }
         else if (proof?.result) retained = proof.result
         if (state === "unavailable") unavailable ??= "The original child result fact is unavailable; retained bytes do not certify its execution outcome."
+      } else if (!liveEntry && currentFormat) {
+        state = 'unavailable'
+        unavailable ??= 'The original child result fact is unavailable; saved history does not certify its execution outcome.'
       } else if (!liveEntry) {
         // A task submission records its initial result. A later resident
         // followup can outlive that result; the old task outcome is not proof

@@ -28,7 +28,7 @@ export interface DesktopSubagentCatalog {
 }
 export type DesktopSubagentControl = { action: "followup" | "message" | "interrupt" | "close"; text?: string }
 export interface DesktopSubagentControlResult { parentSessionId: string; childSessionId: string; action: DesktopSubagentControl["action"]; result: unknown }
-export type AgentRecord = { sessionId: string; path: string; status: string; roleName?: string; modelLabel?: string; jobId?: string; taskId?: string; finalText?: string; error?: string; result?: RetainedResultRevision }
+export type AgentRecord = { sessionId: string; path: string; status: string; roleName?: string; modelLabel?: string; jobId?: string; taskId?: string; finalText?: string; error?: string; result?: RetainedResultRevision; currentFormat?: boolean }
 export interface SubagentResultArgs { offset?: number; maxBytes?: number; resultRevision?: string; refId?: string; refRevision?: string }
 export interface SubagentReadOptions {
   readResult?(access: { sessionId: string; ownerSessionId: string }, ref: ManagedArtifactRef, args: { offset?: number; maxBytes?: number }): Promise<{ ref: ManagedArtifactRef; offset: number; nextOffset: number | null; eof: boolean; data: { kind: 'text'; text: string } | { kind: 'bytes'; base64: string } }>
