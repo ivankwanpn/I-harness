@@ -1,0 +1,147 @@
+{
+  "status": "DELIVERED_FOR_FRESH_ORIGINAL_RANGE_REVIEW_NOT_SELF_ACCEPTED",
+  "scope": "Docs-only handoff recovery after intentional root interruption. No tests/build/runtime reruns, no product/test/executable helper edits, no sealed evidence mutation, no agents, no push/merge/tag/release.",
+  "branch": "codex/v0.1.13-development",
+  "unitBase": "6ac43a4d0892255e3588bbed59d260c002b2cd54",
+  "originalBase": "91d8fef04253272a437c68f5f2f84a657fa53d3b",
+  "qualifiedProductTestHead": "33dab47e25eca4b7b63d6156787d0a44d11645bb",
+  "originalRange": "91d8fef04253272a437c68f5f2f84a657fa53d3b..33dab47e25eca4b7b63d6156787d0a44d11645bb",
+  "unitRange": "6ac43a4d0892255e3588bbed59d260c002b2cd54..33dab47e25eca4b7b63d6156787d0a44d11645bb",
+  "docsCommit": "The commit containing this handback adds only review documents/proof. Resolve that commit separately; it is not a new qualified product source.",
+  "implementationCommits": [
+    "f3d132a88bccfd7b68017c431731c8b677c5b6c0",
+    "33dab47e25eca4b7b63d6156787d0a44d11645bb"
+  ],
+  "product": "0.1.13-rc.1",
+  "sessionFormat": 10,
+  "originalDecomposition": "27/43 unchanged",
+  "evidence": {
+    "root": "D:/I-harness-main/.tmp/r4v1",
+    "sealSha256": "aa4c47da3f5ed453250f0db83c47db318e9f84717f6fed5624689928c0d3cfa7",
+    "inventorySha256": "d35800afe5e607ebcf5f2de027773e207d8c63e2b61596c8db86f1605738f359",
+    "regularFiles": 21601,
+    "regularBytes": 1237041147,
+    "links": 0,
+    "sourceFinalInputs": 2771,
+    "sourceFinalSha256": "47e638bf851287cfe7fd4523d711e8d507632004cd4f229c758b700eac40833f",
+    "finalInputs": 2772,
+    "finalInputSha256": "9db007f013b2a2112a73df325ebdfe3946571c39ed7a0c1c5debb76680e183b0",
+    "portableOriginals": 53,
+    "portableSha256": "9afec259828969cdd578087dfe2ed98e23f5adc9f9fd9ce2bbf1437a25055c9f",
+    "nativeGates": 48,
+    "preservedFailedGates": 12,
+    "allSourceStable": true,
+    "nonoverlapping": true,
+    "boundary": "Original seal excludes only its inventory and seal; these later external docs/proof/report/handback are not within it. source-final2771 precedes explicit sealer2772. Historical extras/source contractions and static26/45 helper omission corrected by48 are retained."
+  },
+  "recoveryVerification": {
+    "portable": "All53 decoded records length/SHA checked against each immutable original; original-bytes copied unchanged.",
+    "runtimeReruns": 0,
+    "wholeEvidenceAudit": "Not performed by docs writer. Root separately reports read-only audit PASS in .superpowers/sdd/2026-10-21-context-r4a-a6-root-audit/audit.mjs/json; root owns this artifact and acceptance.",
+    "checks": "JSON parse, local Markdown target validation, staged scope and diff checks; no product execution."
+  },
+  "finalEntryGates": {
+    "codeEncodedBytes": 70027,
+    "childEncodedBytes": 70031,
+    "note": "Earlier G5 child70030 remains separately scoped; final source actual receipts control.",
+    "gateway": "46-gateway-isolation-final / G6",
+    "staticClosure": "48-final-closed-copy-audit",
+    "cli": "47-cli-isolation-final / B4",
+    "childPages": 5
+  },
+  "requiredNext": [
+    "Root dispatches fresh independent reviewer over the complete original range, including earlier bounded acceptance reports and preserved failures.",
+    "Reviewer independently adjudicates P3 exact native oracle, SDK consent/negative/escalation boundaries, source/copy/runtime closure and five scoped cohesion exceptions.",
+    "Root adjudicates review findings before whole R4A acceptance; no self-credit or automatic later-stage/release authorization."
+  ],
+  "remaining": [
+    "R4B semantic fork/bootstrap",
+    "R4C durable receiver claim/epoch/wake",
+    "R5 broad decomposition/CX1 and renderer dependencies",
+    "R6 whole-history/heavy-parent/provider/platform/release qualification",
+    "36 remaining dynamic .ts imports require separate undispatched-path qualification; exercised A6 bundle flows do not erase warnings.",
+    "Selected seven historical variant sources are later exact-byte reconstructions matched to original pre-invocation SHA/length, not contemporaneous full-byte archives of every variant."
+  ],
+  "artifacts": [
+    {
+      "path": ".superpowers/sdd/2026-10-21-context-r4a-a6-final/task-1-report.md",
+      "bytes": 7175,
+      "sha256": "5a240d31812c37e34425b353c27c4559148724aa093473b67586d4068ce3be0c"
+    },
+    {
+      "path": "docs/research/2026-10-21-context-r4a-a6-delivery.md",
+      "bytes": 27886,
+      "sha256": "2058ded1a7f8796bef1cc226201da91471a8e0e2984644d171e9aa0f0c49d9df"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/.gitattributes",
+      "bytes": 89,
+      "sha256": "75d358931d84b957ea7a3884bb661a0e68188d91c00c15fc921dd265d60ea1a5"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/evidence-seal.json",
+      "bytes": 754,
+      "sha256": "aa4c47da3f5ed453250f0db83c47db318e9f84717f6fed5624689928c0d3cfa7"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/final-host-observations.json",
+      "bytes": 6827,
+      "sha256": "7c9be9d4e4eabf468d2494a40469969c4c0dd2dc614e1751ad1035f6bb9271d7"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/final-process-boundaries.json",
+      "bytes": 21362,
+      "sha256": "a3e028ffae5b45e3b07f21c7cea3d443c6f8511c25170e20151030c0d29bb836"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/gate-index.json",
+      "bytes": 34858,
+      "sha256": "dbb9d8047fb0df2c0fc663e241441ba85c1708263ba819b6cf3ccdedb06dd360"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/original-bytes.json",
+      "bytes": 3123332,
+      "sha256": "9afec259828969cdd578087dfe2ed98e23f5adc9f9fd9ce2bbf1437a25055c9f"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/portable-verification.json",
+      "bytes": 11084,
+      "sha256": "c26dc2a773637b6fde10d65599700c2b66fc14cb88e79ce7aeadf2f454775b1b"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/README.md",
+      "bytes": 4891,
+      "sha256": "51b2f63401c15de5cca288ffb22bfe9e1d48a2118b59fc5dfd05b0e400347d2b"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/sdk-approval-design.md",
+      "bytes": 5294,
+      "sha256": "9c28236c2a6aad00bc2d1a831659e5e7d3e502f93dbb5d3768aca63ae4c41d9f"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/sdk-approval-preflight.md",
+      "bytes": 12862,
+      "sha256": "0ce75e5059344ad9446cff77ece01153eecb97f98a2828cf2012def3b3c3793d"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/sealed-input-identities.json",
+      "bytes": 2646,
+      "sha256": "eda8dd941b2277e8fb7d3bc1d35bb4f9923f26504848ddb59d725a9e5c80f38f"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/structural-preflight.md",
+      "bytes": 25432,
+      "sha256": "4420a82af732fabf9aedb1a45473a04d435c8d30f709011cc132d6b4c01036b9"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-proof-20261021/structural-ruling.md",
+      "bytes": 6064,
+      "sha256": "233a8ab2f23f4be5d5c2c8399d7eb91cc42d05659179092516d2de48b36c790c"
+    },
+    {
+      "path": "docs/research/context-r4a-a6-responsibilities-20261021.md",
+      "bytes": 23003,
+      "sha256": "45a35294159d0ab911732f367b6c9336767c79499c4a2c1dba9d34ba53dc14aa"
+    }
+  ]
+}

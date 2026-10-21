@@ -1,0 +1,80 @@
+{
+  "scope": "Identities of existing sealed inputs for reviewer navigation; not a substitute for independently auditing complete inventories.",
+  "files": [
+    {
+      "path": "evidence-seal.json",
+      "bytes": 754,
+      "sha256": "aa4c47da3f5ed453250f0db83c47db318e9f84717f6fed5624689928c0d3cfa7"
+    },
+    {
+      "path": "evidence-inventory.json",
+      "bytes": 4811886,
+      "sha256": "d35800afe5e607ebcf5f2de027773e207d8c63e2b61596c8db86f1605738f359"
+    },
+    {
+      "path": "final-input-inventory.json",
+      "bytes": 501757,
+      "sha256": "9db007f013b2a2112a73df325ebdfe3946571c39ed7a0c1c5debb76680e183b0"
+    },
+    {
+      "path": "source-final.json",
+      "bytes": 501556,
+      "sha256": "47e638bf851287cfe7fd4523d711e8d507632004cd4f229c758b700eac40833f"
+    },
+    {
+      "path": "source-product-freeze.json",
+      "bytes": 535021,
+      "sha256": "9e0423946a88d61c0dcb0fdce5fdd78125d2d314c5a090aaca0fb7dca6355da8"
+    },
+    {
+      "path": "final-source-comparison.json",
+      "bytes": 794416,
+      "sha256": "cf86755bae99016bf4086dfc83d8e5491cd7d32ef3d8a593c854b968349d8c56"
+    },
+    {
+      "path": "accepted-source-comparison.json",
+      "bytes": 1361545,
+      "sha256": "9f9abb847f58c0fff31f63d06e5fa9241b05b5c064500c7d42dac005155ee4a0"
+    },
+    {
+      "path": "accepted-owner-reuse.json",
+      "bytes": 775792,
+      "sha256": "d768acb4c60a9c1dc1e964d336fec057f56501772d29e749830a85fe6243136e"
+    },
+    {
+      "path": "final-audit-summary.json",
+      "bytes": 6118,
+      "sha256": "ae33570122dc82d5f3219d18aa1439e07bc889fcd8d909a069682f4a9cc743de"
+    },
+    {
+      "path": "runtime-provenance-summary.json",
+      "bytes": 5470991,
+      "sha256": "2a826df214b787d59a33ec2988fb123b59721edfd45c91455e1bac4cb80e961a"
+    },
+    {
+      "path": "liveness.json",
+      "bytes": 235,
+      "sha256": "715ee333471a167f480bd2bb5b313744e0fe17fdc8a535da4de677129b953fb8"
+    },
+    {
+      "path": "final-closed-audit/gateway-source-copy-map.json",
+      "bytes": 4052409,
+      "sha256": "a837e885c30a85bd648ec6965ade70b656b4a64c3f03e1ae4c580b1ae259ad9c"
+    },
+    {
+      "path": "final-closed-audit/bundle-source-copy-map.json",
+      "bytes": 266675,
+      "sha256": "cb3fdb5f2dc61d1283e776786bdf0caae31bfc7c4e203b4255a142472888056c"
+    },
+    {
+      "path": "final-closed-audit/product-census.json",
+      "bytes": 504861,
+      "sha256": "97723c8eef702767bc0e79d627378e31fc6b0860dfe8c3300f585b7463c1f051"
+    },
+    {
+      "path": "final-closed-audit/production-graph.json",
+      "bytes": 236520,
+      "sha256": "b9e7ec3e56e9e9531ae5b6827caf3e9de35d99737ed2b83c39ce03fdb42ed553"
+    }
+  ]
+}

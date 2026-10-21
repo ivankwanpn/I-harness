@@ -1,0 +1,229 @@
+{
+  "provenance": "Derived selected small observations from final actual process stdout; complete raw files remain sealed. No actual-tool preview/value body buffers are copied here.",
+  "hosts": [
+    {
+      "file": "gatewaysealed.native-stdout.log",
+      "sha256": "b41ecfa4a966a259085cd4edbd2a2d43c138e8ad34e1e564133029ba937663f2",
+      "observations": [
+        {
+          "phase": "background-before-EOF",
+          "jobId": "bash-1",
+          "startupMs": 658,
+          "gateAbsent": true
+        },
+        {
+          "phase": "actual-code",
+          "acceptedOutputFacts": 1,
+          "encodedBytes": 70027,
+          "digest": "00cb13ee646cc991a157cdaab6a81f15c625a712165b9df2c8e01f86140ffbd2"
+        },
+        {
+          "phase": "gateway-child-route",
+          "query": {
+            "sessionId": "sess-mvhbx3zb-a69d89",
+            "childSessionId": "child-f9d9e17c-3bbb-4c63-9583-c831bce083ef",
+            "resultRevision": "7f29351f-38eb-42c5-afc9-57ad62b8d4a1",
+            "refId": "ctxv1_03c14eebf42f172a26b441299d9da43285ab5fb759bf530c96d51e936955a54c",
+            "refRevision": "f42891ab10414490a79b8234804ec0898e2ce3c0458e0c6b77a1149f6be2b86f",
+            "offset": 63573,
+            "maxBytes": 16384
+          },
+          "pages": 5,
+          "encodedBytes": 70031,
+          "digest": "e731dca231f41edb832218448875576a8b2e2af49f228e86aec2560c63e93a40"
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "active",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "cold-external-no-work",
+          "baseline": {
+            "requests": 17,
+            "notifications": 435,
+            "effects": "native-launch\n",
+            "stopEffects": "native-launch\n"
+          },
+          "requestIncrement": 0,
+          "notificationIncrement": 0,
+          "sessionBytesUnchanged": true,
+          "foreignDenied": true,
+          "staleRefDenied": true,
+          "internalScope": "Paired accepted unchanged internal cold assembly/model-auth/wake controls; no unmeasured subprocess-internal zero asserted"
+        },
+        {
+          "phase": "explicit-new-input",
+          "providerIncrement": 1,
+          "text": "A6 done explicit"
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "cold",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "legacy",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "legacy-reopen",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "kind": "passed",
+          "host": "gateway",
+          "sessionId": "sess-mvhbx3zb-a69d89",
+          "rows": [
+            "normal-retained",
+            "small-inline",
+            "background-before-EOF",
+            "job-output-native-witness",
+            "actual-Code-guest",
+            "actual-child",
+            "host-specific-selector",
+            "Stop",
+            "cold",
+            "explicit-new-input",
+            "literal8/9",
+            "future11",
+            "owned10",
+            "cold-reopen"
+          ],
+          "requests": 20
+        },
+        {
+          "phase": "final-cleanup-exit",
+          "pid": 27972,
+          "code": 0,
+          "signal": null
+        }
+      ]
+    },
+    {
+      "file": "clisealed.native-stdout.log",
+      "sha256": "00faf90bf69e9eb2bf36ae691d0fa915e4d5c46c0f2df875738ea5eace29cb95",
+      "observations": [
+        {
+          "phase": "background-before-EOF",
+          "jobId": "bash-1",
+          "startupMs": 569,
+          "gateAbsent": true
+        },
+        {
+          "phase": "actual-code",
+          "acceptedOutputFacts": 1,
+          "encodedBytes": 70027,
+          "digest": "00cb13ee646cc991a157cdaab6a81f15c625a712165b9df2c8e01f86140ffbd2"
+        },
+        {
+          "phase": "cli-active-child-selector",
+          "pages": 5,
+          "encodedBytes": 70031,
+          "digest": "e731dca231f41edb832218448875576a8b2e2af49f228e86aec2560c63e93a40",
+          "stale": {
+            "type": "tool/result",
+            "callId": "a6-stale",
+            "name": "get_task_output",
+            "envelope": {
+              "version": 1,
+              "execution": {
+                "outcome": "failed",
+                "dispatch": "dispatched"
+              },
+              "preview": "",
+              "media": [],
+              "retention": {
+                "kind": "inline",
+                "value": {
+                  "error": "Task result revision changed; restart pagination",
+                  "code": "TOOL_FAILED"
+                },
+                "encodedBytes": 81
+              }
+            },
+            "seq": 468
+          }
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "active",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "cold-external-no-work",
+          "baseline": {
+            "requests": 29,
+            "notifications": 702,
+            "effects": "native-launch\n",
+            "stopEffects": "native-launch\n"
+          },
+          "requestIncrement": 0,
+          "notificationIncrement": 0,
+          "sessionBytesUnchanged": true,
+          "foreignDenied": true,
+          "staleRefDenied": true,
+          "internalScope": "Paired accepted unchanged internal cold assembly/model-auth/wake controls; no unmeasured subprocess-internal zero asserted"
+        },
+        {
+          "phase": "explicit-new-input",
+          "providerIncrement": 1,
+          "text": "A6 done explicit"
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "cold",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "legacy",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "phase": "native-close",
+          "lifecycle": "legacy-reopen",
+          "code": 0,
+          "signal": null
+        },
+        {
+          "kind": "passed",
+          "host": "cli",
+          "sessionId": "sess-mvhbyf3k-4y5c0n",
+          "rows": [
+            "normal-retained",
+            "small-inline",
+            "background-before-EOF",
+            "job-output-native-witness",
+            "actual-Code-guest",
+            "actual-child",
+            "host-specific-selector",
+            "Stop",
+            "cold",
+            "explicit-new-input",
+            "literal8/9",
+            "future11",
+            "owned10",
+            "cold-reopen"
+          ],
+          "requests": 32
+        },
+        {
+          "phase": "final-cleanup-exit",
+          "pid": 29048,
+          "code": 0,
+          "signal": null
+        }
+      ]
+    }
+  ]
+}
