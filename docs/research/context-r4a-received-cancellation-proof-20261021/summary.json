@@ -1,0 +1,83 @@
+{
+  "productHead": "678af03dd54659e22dd5f941112c06ec9917e812",
+  "implementationBase": "ccd8593283790b43421cb972ea3712dd57dffa7f",
+  "productPredecessor": "cef5c6e2fdf50000bd8d074af1f918dc19ab48d9",
+  "originalBase": "91d8fef04253272a437c68f5f2f84a657fa53d3b",
+  "evidenceRoot": "D:\\I-harness-main\\.tmp\\r4hc-02",
+  "gates": 41,
+  "failed": [
+    {
+      "id": "01-red-service",
+      "nativeExit": 1,
+      "receiptSha256": "6d5b73e5113591c1f1733946e43430ce7ed19d8470956029e7f76396e45e04df"
+    },
+    {
+      "id": "02-red-lifetime",
+      "nativeExit": 1,
+      "receiptSha256": "1cde46b56b8a78cd702e8dfa701cea3269772271049b87b0972865ac2b374013"
+    },
+    {
+      "id": "05-witness-owner",
+      "nativeExit": 1,
+      "receiptSha256": "ee1e8f3a0f1e92b04104430f7f9dab6f4d3e350293328b5d5f05730813c70e09"
+    },
+    {
+      "id": "07-red-default-order",
+      "nativeExit": 1,
+      "receiptSha256": "4ab3207082d2ce6801568c00cd23d61cf9d77b84fb366a732c15d8c038e0beb4"
+    },
+    {
+      "id": "10-red-closed-boundaries",
+      "nativeExit": 1,
+      "receiptSha256": "71443f0a89ebcbc586529ef7bfa3a338cb47fc2ce572623a18382ade727c322d"
+    },
+    {
+      "id": "12-types-persistence",
+      "nativeExit": 2,
+      "receiptSha256": "51588c457491c32594ab9792a816b57ceaaca0b09367cba8c7e4542e771a6cca"
+    },
+    {
+      "id": "16-executor-connected",
+      "nativeExit": 1,
+      "receiptSha256": "f5a01d420208e95b9a5cb37d201c0fc6ddaf20cf34c6f576731601b45c8e82c7"
+    },
+    {
+      "id": "21-red-native-origin",
+      "nativeExit": 1,
+      "receiptSha256": "d5b43da90aa712882b6ee61e5dd70b6736ef5bc3295f708ab4ac0934ac70f29a"
+    },
+    {
+      "id": "36-public-gateway",
+      "nativeExit": 1,
+      "receiptSha256": "265a28722c384403a31bcf5907e286d1182d1eabbed8b43abd119a3e6267fcf9"
+    }
+  ],
+  "sourceInputs": 2784,
+  "allGatesSourceStable": true,
+  "sequential": true,
+  "selectedOriginals": 206,
+  "proofSha256": "a244304d86ab436c784037b85295762d6915947f97c0178fb0a6faa0f6efc779",
+  "finalCandidates": {
+    "gateway": "D:\\I-harness-main\\.tmp\\r4hc-02\\g",
+    "copiedFiles": 8835,
+    "sourceIdentical": 8834,
+    "generated": 1,
+    "cli": "D:\\I-harness-main\\.tmp\\r4hc-02\\b\\ih.mjs",
+    "cliSha256": "1a6336970714c9752fb3ad87f9dc6fbea05a7146dd6ffd1f70d010d211b91daa"
+  },
+  "seal": {
+    "productHead": "678af03dd54659e22dd5f941112c06ec9917e812",
+    "sourceManifestSha256": "e2ca48bf72e04736b5bb45eaa2f04225ad14a8d4f4e57f42567129e80f0e2c66",
+    "gateIndexSha256": "15528dbba47e4173f7d98ae8388a0d8300db6e8a1d2d7548fb2ecc639f9f1c51",
+    "inventorySha256": "9fe1227241c1400b82b2dcac6bf4d224e55ed06f212e4568752fa663fef494ba",
+    "files": 14358,
+    "bytes": 537142279,
+    "links": 0,
+    "utc": "2026-10-21T14:15:04.485Z",
+    "immutable": true
+  },
+  "rawGateIndex": "D:\\I-harness-main\\.tmp\\r4hc-02\\gate-index.json",
+  "rawSourceManifest": "D:\\I-harness-main\\.tmp\\r4hc-02\\source-final.json",
+  "rawInventory": "D:\\I-harness-main\\.tmp\\r4hc-02\\evidence-inventory.json",
+  "acceptance": "Pending SAME original-range reviewer and root adjudication; no whole-stage acceptance claim. Original failed lifecycle receipts remain immutable. Gate19 unchanged maintained host passed once before final origin guard; final-byte copied A/B and separate public entries passed. Historical size runs reused conditionally, not rerun."
+}
