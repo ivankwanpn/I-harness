@@ -1,9 +1,10 @@
 import { isStrictFactData, type FactGroupDraft, type ReceivedInputSource } from '@i-harness/core-session';
 import { captureSettlementFact, retainSettlementCapture } from './settlement-fact.ts';
 import { createSourceFacts } from './source-facts.ts';
+import type { cancellationRetirementFor } from './received-input-cancellation.ts';
 /** The trusted input composition acquires this before accepting requests. Its
  * captures join required settlement; new inference still needs an action. */
-export function createReceivedInputSource(drain: () => Promise<void>, operations: Parameters<typeof captureSettlementFact>[1], released: () => void): ReceivedInputSource<import('@i-harness/core-session').FactOutcome> & {
+export function createReceivedInputSource(drain: () => Promise<void>, operations: Parameters<typeof captureSettlementFact>[1] & { cancellationRetirement: ReturnType<typeof cancellationRetirementFor> }, released: () => void): ReceivedInputSource<import('@i-harness/core-session').FactOutcome> & {
     revoke(): void;
     assertHeld(): void;
 } {
@@ -23,7 +24,7 @@ export function createReceivedInputSource(drain: () => Promise<void>, operations
         catch { /* Invalid DTO, never lower its hooks. */ }
         if (!strict)
             return records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, { ...operations, assertHeld }));
-        return records.capture(draft);
+        return records.capture(draft, draft.kind === 'input-cancellation' ? operations.cancellationRetirement(draft.cancelled) : undefined);
     };
     return {
         assertHeld,

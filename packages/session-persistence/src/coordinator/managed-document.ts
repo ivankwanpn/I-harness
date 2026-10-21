@@ -9,6 +9,7 @@ import { createSettlementSource } from './settlement-source.ts';
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts';
 import { preflightBatchShape } from '../format/validation.ts';
 import { createReceivedInputSource } from './received-input-source.ts';
+import { cancellationRetirementFor } from './received-input-cancellation.ts';
 import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
 type Ticket = {
@@ -275,6 +276,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
             const required: Authorization = { action: { stopped: false }, required: true, assertSource: () => source.assertHeld() };
             const source = createReceivedInputSource(drain, {
+                cancellationRetirement: cancellationRetirementFor(state.view, document),
                 assertHeld: held.assertHeld, admit: group => {
                     sourceDispositions.delete(group);
                     return admit(group, required, true);

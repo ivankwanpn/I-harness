@@ -1,5 +1,5 @@
 import { committedFactSeqs, type CapturedSettlementFact, type FactGroupDraft, type FactOutcome } from '@i-harness/core-session'
-import { captureSettlementFact } from './settlement-fact.ts'
+import { captureSettlementFact, type InvalidNotIssued } from './settlement-fact.ts'
 
 /** Source-local captures, never a history mirror. Drain reconciles each exact
  * issued key once; absence cannot silently turn into another issuance. */
@@ -19,11 +19,17 @@ export function createSourceFacts(operations: Parameters<typeof captureSettlemen
   }
   return {
     retain,
-    capture: (group: FactGroupDraft) => retain(captureSettlementFact(group, operations)),
+    capture(group: FactGroupDraft, accepts?: (outcome: InvalidNotIssued) => boolean) {
+      const owned = retain(captureSettlementFact(group, operations, false, accepts ? { accepts, retired: () => { pending.delete(owned) } } : undefined))
+      return owned
+    },
     async drain() {
       const errors: unknown[] = []
       for (const fact of [...pending]) {
-        try { committedFactSeqs(await fact.reconcile()) } catch (error) { errors.push(error) }
+        try {
+          const outcome = await fact.reconcile()
+          if (pending.has(fact)) committedFactSeqs(outcome)
+        } catch (error) { errors.push(error) }
       }
       if (errors.length) throw Object.assign(new AggregateError(errors, 'Required source facts need recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
     },

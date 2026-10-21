@@ -73,7 +73,12 @@ it('retains the real completed tool and service attachment at ticket65 through u
     await document.reconcile(unknown.key)
     await service.closeSession(id)
     const saved = (await backend.read(id)).events
-    expect(saved.filter(event => event.type === 'tool/result')).toEqual([expect.objectContaining({ callId: 'c', output: { value: 'the original completed outcome' } })])
+    const results = saved.filter(event => event.type === 'tool/result')
+    expect(results).toEqual([expect.objectContaining({ type: 'tool/result', name: 'completed', callId: 'c', envelope: {
+      version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, media: [], preview: '',
+      retention: { kind: 'inline', value: { value: 'the original completed outcome' }, encodedBytes: 42 },
+    } })])
+    expect(results[0]).not.toHaveProperty('output')
     expect(saved.filter(event => event.type === 'step/end')).toHaveLength(1)
     expect(saved.filter(event => event.type === 'turn/end')).toHaveLength(1)
     expect(saved.map(event => event.seq)).toEqual(saved.map((_, index) => index))

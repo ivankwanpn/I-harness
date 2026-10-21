@@ -1,5 +1,8 @@
 import { captureFactGroup, type BatchKey, type CapturedFactGroup, type CapturedSettlementFact, type FactGroupDraft, type FactOutcome } from '@i-harness/core-session'
 
+export type InvalidNotIssued = Extract<FactOutcome, { kind: 'not-issued' }> & { code: 'FACT_INVALID_GROUP' }
+interface CaptureRetirement { accepts(outcome: InvalidNotIssued): boolean; retired(): void }
+
 /** Source retains this once-lowered capture with its real outcome slot. The
  * serialized handle consumes success and never treats uncertainty as absence. */
 export function captureSettlementFact(draft: FactGroupDraft, operations: {
@@ -8,14 +11,32 @@ export function captureSettlementFact(draft: FactGroupDraft, operations: {
   reconcile(key: BatchKey): Promise<FactOutcome>
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
-}, synchronousAdmission = false): CapturedSettlementFact {
-  return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission)
+}, synchronousAdmission = false, retirement?: CaptureRetirement): CapturedSettlementFact {
+  return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission, retirement)
 }
-export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1], synchronousAdmission = false): CapturedSettlementFact {
+export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1], synchronousAdmission = false, retirement?: CaptureRetirement): CapturedSettlementFact {
   if (capture.kind !== 'captured') operations.quarantineCapture()
   let latest: FactOutcome | undefined, serial: Promise<void> | undefined = synchronousAdmission ? undefined : Promise.resolve()
+  let retired: InvalidNotIssued | undefined
   const track = (work: () => Promise<FactOutcome>): Promise<FactOutcome> => {
-    const result = serial ? serial.then(work) : work()
+    if (!retirement) {
+      const result = serial ? serial.then(work) : work()
+      serial = result.then(() => {}, () => {})
+      return result
+    }
+    const run = async () => {
+      operations.assertHeld()
+      if (retired) return retired
+      const outcome = await work()
+      // latest is populated only by native status/admit/reconcile. A fresh
+      // retryAbsent fallback is not an observed disposition to retire.
+      if (outcome === latest && capture.kind === 'captured' && capture.group.kind === 'input-cancellation' && outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && retirement.accepts(outcome as InvalidNotIssued)) {
+        retired = Object.freeze(outcome as InvalidNotIssued)
+        retirement.retired()
+      }
+      return outcome
+    }
+    const result = serial ? serial.then(run) : run()
     serial = result.then(() => {}, () => {})
     return result
   }
