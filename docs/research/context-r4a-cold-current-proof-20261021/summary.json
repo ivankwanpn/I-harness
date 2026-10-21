@@ -1,0 +1,85 @@
+{
+  "productHead": "cef5c6e2fdf50000bd8d074af1f918dc19ab48d9",
+  "incrementalBase": "a4b31812d2a43e194a2dd38e3e6dafeda3bc1ac1",
+  "originalBase": "91d8fef04253272a437c68f5f2f84a657fa53d3b",
+  "evidenceRoot": "D:\\I-harness-main\\.tmp\\r4cf-1021-01",
+  "gates": 37,
+  "failed": [
+    {
+      "id": "01-red-task",
+      "nativeExit": 1,
+      "receiptSha256": "c866dcda0ed6ad74af259ab1a49d0b34b41c6e0063217a09680a473564b8d8cd"
+    },
+    {
+      "id": "02-red-catalog",
+      "nativeExit": 1,
+      "receiptSha256": "007bbce0843f34a8f1504068f8f7a3cecb568d03f2686d863d7dd7807e2a9716"
+    },
+    {
+      "id": "04-green-catalog",
+      "nativeExit": 1,
+      "receiptSha256": "da012122eded0233d40dcc9ac9245d39a2771cdfe9f72667b37cc86519fafb93"
+    },
+    {
+      "id": "06-red-intake",
+      "nativeExit": 1,
+      "receiptSha256": "b9f66367872e548a695764ebbfd6a28ad0eff11135d43f0f557cb73eeec015e3"
+    },
+    {
+      "id": "07-final-task",
+      "nativeExit": 1,
+      "receiptSha256": "7bbcac5b3041a2545bb03ca11989c52fa7509e5d6cf56b653ed5447c44f146a7"
+    },
+    {
+      "id": "12-final-catalog",
+      "nativeExit": 1,
+      "receiptSha256": "5731f192e6a538e210b873b2d2db515f8803d1c71ed9190fc8524972a5862559"
+    },
+    {
+      "id": "13-host-cleanup-control",
+      "nativeExit": 1,
+      "receiptSha256": "0f5302f04226d8a0d732acaa67c2ae23d8789a58f5ce11e9c05ec07721f9670f"
+    },
+    {
+      "id": "20-cli-entry",
+      "nativeExit": 1,
+      "receiptSha256": "af1a2cc508c2bc52d41324ffd7cd8a611bf26efdec4b9416ec463730c510ad80"
+    },
+    {
+      "id": "22-red-live-no-body",
+      "nativeExit": 1,
+      "receiptSha256": "58a1b2dddb584087d4cfe2d1c98a2bb24fe3df6395745e15677ebe2f557454d8"
+    },
+    {
+      "id": "32-policy-controls",
+      "nativeExit": 1,
+      "receiptSha256": "2a1f0e7bb6a0690aad62e1bfd709551fe33dc86290e4b0c3e201954c6f9a5295"
+    }
+  ],
+  "allGatesSourceStable": true,
+  "sequential": true,
+  "sourceInputs": 2756,
+  "selectedOriginals": 105,
+  "proofSha256": "6ba26db88f76c869deff08363d6a25ca981195e0f791388e1cc499ae547a18a0",
+  "finalCandidates": {
+    "gateway": "D:\\I-harness-main\\.tmp\\r4cf-1021-01\\gfinal",
+    "gatewayCatalogSha256": "ceaed951e8901164847291ab38869a4d2da5e5ee6620765acfbc9e8390300aad",
+    "cli": "D:\\I-harness-main\\.tmp\\r4cf-1021-01\\bfinal\\ih.mjs",
+    "cliSha256": "735cc61127b304ee8b38417cc44a7a60cfe0ffa2b76f0935892664f56a5ced27"
+  },
+  "seal": {
+    "productHead": "cef5c6e2fdf50000bd8d074af1f918dc19ab48d9",
+    "sourceManifestSha256": "f184f3339d59fd6fc7f096ab5729d969b20a18ecf36f0681cb155048422fce33",
+    "gateIndexSha256": "81c1df3a15b34ed3b7dd660fe99d135e4de0a0d58d6eccb90728b7f5dd298ada",
+    "inventorySha256": "dad0d27ad37573633fa21b9ec7143ac9d047894e0977e731f590e89d7ed9ee2f",
+    "files": 22393,
+    "bytes": 934948606,
+    "links": 0,
+    "utc": "2026-10-21T12:10:02.832Z",
+    "immutable": true
+  },
+  "rawGateIndex": "D:\\I-harness-main\\.tmp\\r4cf-1021-01\\gate-index.json",
+  "rawSourceManifest": "D:\\I-harness-main\\.tmp\\r4cf-1021-01\\source-final.json",
+  "rawInventory": "D:\\I-harness-main\\.tmp\\r4cf-1021-01\\evidence-inventory.json",
+  "remainingLimitation": "Existing Desktop child-authority host teardown failed12/13;14 passed under explicit diagnostic instrumentation. Cause not established or fixed; source lifecycle owner bytes unchanged. Root/original reviewer adjudicates acceptance."
+}
