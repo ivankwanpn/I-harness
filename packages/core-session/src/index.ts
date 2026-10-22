@@ -19,6 +19,7 @@ export type { InputProvenance, ConversationSemanticsEvent, ExchangeAcceptedEvent
 export { validateConversationEventShape } from "./events/conversation.ts"
 export { validNativeProducerWitness } from './projection/native-witness.ts'
 export { createConversationValidationIndex, validateConversationHistory } from "./conversation/validation.ts"
+export { validateSemanticBootstrapHistory } from './conversation/bootstrap-validation.ts'
 export type { ConversationValidationIndex } from "./conversation/validation.ts"
 export type {
   ModelRetryInfo,

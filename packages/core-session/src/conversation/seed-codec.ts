@@ -219,9 +219,14 @@ function semanticSeed(value: unknown, payload: boolean, partial = false): Semant
     if (identities.has(identity)) seedInvalid()
     identities.set(identity, encoded)
     const expected = used.get(index)
+    let catalogCount: number | undefined
     const actual = new Set(artifact.uses.map(use => {
       seedFields(use, use.kind === 'result' ? ['kind'] : ['kind', 'count'])
       if (use.kind !== 'result' && (use.kind !== 'dependency-catalog' || !seedCount(use.count) || !use.count || artifact.ref.codec !== 'json-utf8-v1')) seedInvalid()
+      if (use.kind === 'dependency-catalog') {
+        if (catalogCount !== undefined && catalogCount !== use.count) seedInvalid()
+        catalogCount = use.count
+      }
       return canonicalJsonData(use)
     }))
     if (actual.size !== artifact.uses.length || (partial ? expected && [...expected].some(use => !actual.has(use))

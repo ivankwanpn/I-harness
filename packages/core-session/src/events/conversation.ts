@@ -9,6 +9,7 @@ import { validAdmissionObservation } from './admission.ts'
 import { validateResultFact, validateResultSourceMetadata } from '../results/validate.ts'
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { validateSeedEventShape, validateSeedSourceEventShape } from '../conversation/bootstrap-validation.ts'
+import { validateSemanticSourceMetadata } from './conversation-source.ts'
 
 export interface InputProvenance {
   kind: "human" | "plugin" | "child-report" | "inherited" | "unknown"
@@ -45,6 +46,7 @@ export function validateConversationEventShape(event: SessionEvent, formatVersio
 }
 /** Package-private source profile; public intake and readers stay strict. */
 export function validateSemanticSourceEventShape(event: SessionEvent, formatVersion: number): void {
+  validateSemanticSourceMetadata(event)
   conversationEventShape(event, formatVersion, true)
 }
 function conversationEventShape(event: SessionEvent, formatVersion: number, source: boolean): void {

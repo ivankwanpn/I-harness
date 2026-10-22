@@ -9,8 +9,15 @@ export interface MemoryBootstrapReceipt { kind: 'memory-ready'; seedLength: numb
 /** A single synchronous standalone installation, over the existing index owner.
  * No partial target is observable and this produces no durable FactReceipt. */
 export function bootstrapMemorySession(session: Session, header: SessionHeader, recordsWithCompletion: readonly SessionEventView[], current: () => boolean): MemoryBootstrapReceipt {
-  if (managedSessions.has(session) || managedFactOwners.has(session) || hasNondurableFactOwner(session) || conversationIndexes.has(session)
-    || session.events.length || session.header !== undefined || session.formatVersion !== 11 || !Object.isExtensible(session)) throw new TypeError('Bootstrap requires a pristine unbound memory session')
+  const installable = () => {
+    const fields = Object.getOwnPropertyDescriptors(session), events = fields.events, header = fields.header
+    if (managedSessions.has(session) || managedFactOwners.has(session) || hasNondurableFactOwner(session) || conversationIndexes.has(session)
+      || !events || !('value' in events) || !events.writable || !events.enumerable || !Array.isArray(events.value) || events.value.length
+      || header && (!('value' in header) || !header.writable || !header.enumerable || header.value !== undefined)
+      || fields.formatVersion?.value !== 11 || !Object.isExtensible(session)) throw new TypeError('Bootstrap requires a pristine unbound installable memory session')
+    return events.value as Session['events']
+  }
+  const originalEvents = installable()
   const captured = captureLegacyFact({ header, events: recordsWithCompletion })
   if (captured.kind !== 'captured') throw new TypeError('Invalid bootstrap data')
   const candidate = { formatVersion: session.formatVersion, header: captured.value.header, events: [...captured.value.events] } as Session
@@ -20,6 +27,7 @@ export function bootstrapMemorySession(session: Session, header: SessionHeader, 
   const reservation = candidate.header!.semanticSeed
   if (!reservation) throw new TypeError('Bootstrap reservation required')
   if (!current()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' })
+  if (installable() !== originalEvents) throw new TypeError('Bootstrap target changed')
   session.header = candidate.header
   session.events = candidate.events
   conversationIndexes.set(session, { formatVersion: session.formatVersion, events: session.events, index })

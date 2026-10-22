@@ -76,6 +76,9 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
     replacementDependencies: history.dependencies,
     softReduction: soft.read,
     stage(suffix, options) {
+      // Readiness itself dispatches on event.type, so source descriptors must
+      // be checked before it or any index/boundary consumes those scalars.
+      if (capability === semanticSourceStructure) for (const event of suffix) validateSemanticSourceEventShape(event, formatVersion)
       const readCurrent = options?.readCurrentEvent ?? read
       const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0
       validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability)

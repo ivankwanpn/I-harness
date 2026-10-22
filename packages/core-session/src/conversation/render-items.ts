@@ -34,11 +34,12 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
       if (event?.type !== 'user/message') throw new Error('Invalid input recipe')
       const admission = item.imageAdmissionIndex === undefined ? undefined : archive.get(item.imageAdmissionIndex)
       const images = event.imageInputId === undefined ? payload(event, 'images', index, 'image') : admission?.type === 'agent/input/admitted' ? payload(admission, 'images', item.imageAdmissionIndex!, 'admission') : undefined
-      return images?.length ? { role: 'user', content: [{ type: 'text', text: event.text }, ...images.map(image => ({ type: 'image' as const, image }))] } : { role: 'user', content: event.text }
+      const text = payload(event, 'text', index, 'message')
+      return images?.length ? { role: 'user', content: [{ type: 'text', text }, ...images.map(image => ({ type: 'image' as const, image }))] } : { role: 'user', content: text }
     }
     if (recipe.kind === 'summary') {
       if (event?.type !== 'compaction/summary' && event?.type !== 'compaction/replacement') throw new Error('Invalid summary recipe')
-      return { role: 'user', content: event.text }
+      return { role: 'user', content: payload(event, 'text', index, 'message') }
     }
     if (recipe.kind === 'result') {
       if (event?.type !== 'tool/result') throw new Error('Invalid result recipe')
@@ -55,7 +56,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
       if (call?.type !== 'tool/call') throw new Error('Invalid call recipe')
       return { id: call.callId, name: call.name, args: payload(call, 'args', callIndex, 'call') }
     })
-    return { role: 'assistant', content: event?.type === 'assistant/message' ? event.text : '', ...(toolCalls ? { toolCalls } : {}), ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) }
+    return { role: 'assistant', content: event?.type === 'assistant/message' ? payload(event, 'text', index, 'message') : '', ...(toolCalls ? { toolCalls } : {}), ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) }
   }
   const items = history.items.map(item => {
     const establishment = source(item.establishment)

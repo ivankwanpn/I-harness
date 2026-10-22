@@ -42,7 +42,7 @@ function forbidExecution() {
   vi.stubGlobal('fetch', fetch)
   return fetch
 }
-function predecessor(version: 8 | 9) {
+function predecessor(version: 8 | 9 | 10) {
   const original = format8Fixture()
   // A separate literal predecessor fixture keeps the original literal8 fixture
   // intact and adds a historical unknown result with no retained envelope.
@@ -54,8 +54,24 @@ function predecessor(version: 8 | 9) {
   return JSON.stringify({ ...original.header, ...headerOf(raw), formatVersion: version }) + raw.slice(raw.indexOf('\n'))
 }
 
-describe.each([8, 9] as const)('literal predecessor%s owned migration', version => {
-  it.each([false, true])('preserves the body, reservation and unknown result through one append and fresh reopen (explicit=%s)', async explicit => {
+it('upgrades nonempty10 through coordinator metadata while refusing future/downgrade barriers without byte changes', async () => {
+  const raw = predecessor(10), {path,backend} = await store(raw)
+  const coordinator = createSessionCoordinator(backend,{lock:{enabled:true}})
+  try {
+    await coordinator.updateMeta('legacy',{title:'continued metadata'})
+    const changed = await readFile(path,'utf8')
+    expect(headerOf(changed)).toMatchObject({formatVersion:11,title:'continued metadata'})
+    expect(headerOf(changed).semanticSeed).toBeUndefined()
+    expect(bodyOf(changed)).toBe(bodyOf(raw))
+    for(const [expected,target] of [[11,10],[12,11],[10,12]]) {
+      await expect(backend.upgradeSessionFormat!('legacy',expected!,target!)).rejects.toThrow()
+      expect(await readFile(path,'utf8')).toBe(changed)
+    }
+  } finally { await coordinator.close() }
+})
+
+describe.each([8, 9, 10] as const)('literal predecessor%s owned migration', version => {
+  it.each(['owned', 'direct', 'coordinator'])('preserves the body, reservation and unknown result through one append and fresh reopen (barrier=%s)', async barrier => {
     const raw = predecessor(version), original = fromJSONL(raw), header = headerOf(raw), body = bodyOf(raw)
     expect(header.formatVersion).toBe(version)
     expect(original.formatVersion).toBe(11)
@@ -65,7 +81,8 @@ describe.each([8, 9] as const)('literal predecessor%s owned migration', version 
     try {
       await coordinator.snapshot!('legacy')
       expect(await readFile(path, 'utf8')).toBe(raw)
-      if (explicit) expect((await backend.upgradeSessionFormat!('legacy', version, 11)).formatVersion).toBe(11)
+      if (barrier === 'direct') expect((await backend.upgradeSessionFormat!('legacy', version, 11)).formatVersion).toBe(11)
+      if (barrier === 'coordinator') expect(await coordinator.ensureWritableFormat!('legacy')).toEqual({ formatVersion: 11 })
       const document = await coordinator.openManagedDocument('legacy')
       expect(coordinator.ownerOf('legacy')).toBe(true)
       const opened = await readFile(path, 'utf8')

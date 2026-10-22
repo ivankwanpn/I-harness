@@ -13,6 +13,12 @@ export const bootstrapStaging = Symbol('core-session bootstrap staging')
 export const semanticSourceStructure = Symbol('core-session semantic source structure')
 const incomplete = (): never => { throw Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' }) }
 
+/** Strict public writer boundary for the new seed invariants only. Ordinary
+ * legacy cross-event semantics remain with their existing validation owners. */
+export function validateSemanticBootstrapHistory(events: readonly SessionEventView[], formatVersion: number, header: GenerationHistoryScope = {}): void {
+  validateBootstrapReadiness(events, formatVersion, header)
+}
+
 export function validateSeedHeader(header: SeedHeaderV1): void {
   seedData(header)
   seedFields(header, ['version', 'codec', 'operationId', 'requestDigest', 'manifestDigest', 'seedDigest', 'dependencyDigest', 'seedLength', 'groupCount'],

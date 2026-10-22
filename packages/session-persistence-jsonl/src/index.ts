@@ -1,9 +1,9 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
-import { serializeHeader, parseHeader, parseEventLines, hasTornTail } from "./format.ts"
+import { serializeHeader, parseHeader, parseEventLines, hasTornTail, assertMetadataUpdate } from "./format.ts"
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 import { createFactJournalBackend } from './backend/fact-journal.ts'
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
@@ -115,6 +115,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
               const end = bytes.indexOf(0x0a), journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion, header)
               if (journal.torn) throw new Error('Journal recovery required')
               const addressed = events.map((event, position) => event.seq === undefined ? { ...event, seq: journal.prefix.eventCount + position } : event)
+              validateSemanticBootstrapHistory([...journal.events, ...addressed], header.formatVersion, header)
               return addressed.length ? encodeFactBatch(randomUUID(), journal.prefix.prefixDigest, addressed).bytes : new Uint8Array()
             })
           })()
@@ -208,6 +209,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
       if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
+      validateSemanticBootstrapHistory(events, header.formatVersion, header)
       if ([6, 7, 8, 9, 10, 11].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
@@ -219,7 +221,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       return upgradeFactJournal(path, expected)
     },
@@ -255,6 +257,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         throw new Error(`empty session file: ${sessionId}`)
       }
       const previous = parseHeader(lines[0]!)
+      assertMetadataUpdate(previous, patch)
       if (Object.hasOwn(patch, 'journal') && JSON.stringify(patch.journal) !== JSON.stringify(previous.journal)) throw new Error('Journal metadata changes require fenced recovery')
       if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== previous.formatVersion) throw new Error("format changes require durable upgrade; downgrade refused")
       const merged: SessionMeta = { ...previous, ...patch }

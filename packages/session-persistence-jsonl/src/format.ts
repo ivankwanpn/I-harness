@@ -1,5 +1,5 @@
 import type { SessionEvent } from "@i-harness/core-session"
-import { validJournalMetadata, validateSubagentHeader } from '@i-harness/core-session'
+import { canonicalJsonData, isStrictFactData, validJournalMetadata, validateSubagentHeader } from '@i-harness/core-session'
 import type { SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
 // The closed set is settings' — imported, never copied (a local list of the
 // five names would be a second place to edit one enum).
@@ -8,6 +8,23 @@ import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/se
 export function serializeHeader(meta: SessionMeta): string {
   validateSubagentHeader(meta)
   return JSON.stringify(meta)
+}
+
+/** Public metadata edits cannot mint or change a semantic birth reservation.
+ * Inspect protected descriptors before the later merge/serializer can read them;
+ * the preserved body (including a torn tail) is deliberately not parsed here. */
+export function assertMetadataUpdate(previous: SessionMeta, patch: Partial<SessionMeta>): void {
+  const protectedKeys = ['formatVersion', 'journal', 'semanticSeed', ...(previous.semanticSeed === undefined ? []
+    : ['seedLength', 'parentSession', 'origin', 'delegationDepth', 'subagentProtocolVersion', 'sessionId', 'createdAt'])] as const
+  for (const key of protectedKeys) {
+    const field = Object.getOwnPropertyDescriptor(patch, key)
+    if (!field) continue
+    if (!field.enumerable || !('value' in field) || !isStrictFactData(field.value)) throw new TypeError('Invalid protected session metadata')
+    const old = (previous as unknown as Record<string, unknown>)[key], next = field.value
+    const equal = Object.is(old, next) || old !== undefined && next !== undefined && canonicalJsonData(old) === canonicalJsonData(next)
+    if (!equal) throw new Error(key === 'formatVersion' ? 'format changes require durable upgrade; downgrade refused'
+      : key === 'journal' ? 'Journal metadata changes require fenced recovery' : 'Protected session metadata changes require a qualified owner')
+  }
 }
 
 // C5: parseHeader passthrough — a repair/read rewrites the header line and
