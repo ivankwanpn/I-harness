@@ -7,6 +7,22 @@ import { resultText } from '../results/projection.ts'
 import type { ResultEnvelope } from '../results/types.ts'
 
 export type ConversationPayloadCapture = (value: unknown, source: ConversationSourceRef) => unknown
+export type ConversationPayloadReader = <T extends object, K extends keyof T>(value: T, key: K, source: ConversationSourceRef) => T[K]
+
+/** One selected capture per actual object/property slot. A source address can
+ * describe multiple payload fields (for example admission text and images). */
+export function createConversationPayloadReader(capture?: ConversationPayloadCapture): ConversationPayloadReader {
+  const captured = new WeakMap<object, Map<PropertyKey, unknown>>()
+  return (value, key, source) => {
+    if (!capture) return value[key]
+    let slots = captured.get(value)
+    if (!slots) { slots = new Map(); captured.set(value, slots) }
+    if (slots.has(key)) return slots.get(key) as typeof value[typeof key]
+    const owned = readConversationPayload(value, key, source, capture)
+    slots.set(key, owned)
+    return owned
+  }
+}
 
 /** Payload slots are read by descriptor before caller-owned validation. */
 export function readConversationPayload<T, K extends keyof T>(event: T, key: K, source: ConversationSourceRef, capture?: ConversationPayloadCapture): T[K] {

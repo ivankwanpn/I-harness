@@ -1,12 +1,24 @@
 import type { SessionEventView } from '../managed/types.ts'
 import type { InputPreparationEvent } from '../events/input-preparation.ts'
-import { inputObservationText } from '../events/input-preparation.ts'
+import { inputObservationText, type PreparedInputObservation } from '../events/input-preparation.ts'
 import { conversationFormatError as fail } from '../events/conversation.ts'
 import type { GenerationActionState } from './generation.ts'
+import { semanticSourceStructure } from './bootstrap-validation.ts'
+
+/** The same payload equality is used by full intake and by the descriptor-owned
+ * selected renderer. Only the private source index defers this body check. */
+export function validatePreparedInputText(message: { readonly text: string }, original: { readonly text: string }, producer?: PreparedInputObservation['producer'], readText = (value: { readonly text: string }) => value.text): void {
+  const text = readText(message), observed = readText(original)
+  // The existing wire formatter preserves source key order. Rebuild the exact
+  // validated observation fields with owned text rather than spreading the
+  // original (which could read its payload accessor again).
+  const observation = producer === undefined ? undefined : Object.fromEntries(Object.keys(original).map(key => [key, key === 'text' ? observed : producer])) as unknown as PreparedInputObservation
+  if (typeof text !== 'string' || typeof observed !== 'string' || text !== (observation === undefined ? observed : inputObservationText(observation))) fail('prepared input text mismatch')
+}
 
 interface Preparation { started: Extract<InputPreparationEvent, { op: 'started' }>; resultSeq?: number; failed?: boolean; promoted?: boolean }
 /** Structural preparation lineage joins the same staged conversation transition. */
-export function createInputPreparationIndex(scope: { parentSession?: string; seedLength?: number } = {}) {
+export function createInputPreparationIndex(scope: { parentSession?: string; seedLength?: number } = {}, profile?: typeof semanticSourceStructure) {
   const preparations = new Map<string, Preparation>(), inputs = new Set<string>()
   const promotions = new Map<string, number>(), cancellations = new Set<string>()
   return { stage(read: (seq: number) => SessionEventView | undefined, actionState: (id: string) => GenerationActionState | undefined) {
@@ -36,16 +48,18 @@ export function createInputPreparationIndex(scope: { parentSession?: string; see
             const raw = reference(link.rawMessageSeq, 'user/message', event.seq!)
             const observation = result.observations[link.observationIndex]
             if (raw.type !== 'user/message' || raw.inputPreparation?.preparationId !== link.preparationId || !observation
-              || event.text !== inputObservationText(observation) || !event.internal || event.images || event.imageInputId || event.input
+              || !event.internal || event.images || event.imageInputId || event.input
               || event.provenance?.kind !== 'plugin' || event.provenance.authority !== 'observation' || event.provenance.producer !== 'host.input-preparation'
               || event.source?.kind !== 'plugin' || event.source.plugin !== observation.producer) fail('invalid prepared observation')
+            if (profile !== semanticSourceStructure) validatePreparedInputText(event, observation, observation.producer)
           } else {
             const admission = reference(state.started.admissionSeq, 'agent/input/admitted', event.seq!)
             const promotion = promoted.get(state.started.inputId) ?? promotions.get(state.started.inputId)
-            if (admission.type !== 'agent/input/admitted' || event.text !== admission.text || event.input?.inputId !== admission.inputId
+            if (admission.type !== 'agent/input/admitted' || event.input?.inputId !== admission.inputId
               || cancelled.has(admission.inputId) || cancellations.has(admission.inputId) || promotion === undefined || promotion <= link.resultSeq || promotion >= event.seq!
               || JSON.stringify(event.provenance) !== JSON.stringify(admission.provenance)
               || !!admission.images?.length !== (event.imageInputId === admission.inputId) || event.images) fail('prepared promotion changed raw input')
+            if (profile !== semanticSourceStructure) validatePreparedInputText(event, admission)
           }
           pending.add(link.preparationId)
         }

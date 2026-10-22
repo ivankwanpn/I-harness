@@ -22,13 +22,27 @@ export function validInputPreparationLink(value: unknown): value is InputPrepara
     || scalarFields(value, { preparationId: scalarId, resultSeq: scalarCount, rawMessageSeq: scalarCount, observationIndex: scalarCount }))
 }
 export function validInputPreparationEvent(value: unknown): value is InputPreparationEvent {
-  if (!value || typeof value !== 'object' || !isStrictFactData(value)) return false
+  return inputPreparationEvent(value, true)
+}
+/** Private semantic-source shape: observation text belongs to selected payload
+ * capture. Its presence/producer/count are still structural facts. */
+export function validInputPreparationSourceEvent(value: unknown): value is InputPreparationEvent {
+  return inputPreparationEvent(value, false)
+}
+function inputPreparationEvent(value: unknown, payload: boolean): value is InputPreparationEvent {
+  if (!value || typeof value !== 'object' || payload && !isStrictFactData(value)) return false
   const data = value as Record<string, unknown>
   const envelope = { type: oneOf('agent/input/preparation'), version: oneOf(1), op: oneOf(data.op), preparationId: scalarId, inputId: scalarId, actionId: scalarId, actionSeq: scalarCount, admissionSeq: scalarCount }
   const optional = { seq: scalarCount, claim: oneOf('steer') }
   switch (data.op) {
     case 'started': return scalarFields(value, { ...envelope, startedAt: scalarCount }, optional)
-    case 'completed': return scalarFields(value, { ...envelope, observations: v => dense(v, entry => scalarFields(entry, { producer: oneOf('host-preparation', 'supplemental-context'), text: text => typeof text === 'string' })) && (v as PreparedInputObservation[]).length <= 2 && new Set((v as PreparedInputObservation[]).map(entry => entry.producer)).size === (v as PreparedInputObservation[]).length }, optional)
+    case 'completed': return scalarFields(value, { ...envelope, observations: v => dense(v, entry => {
+      if (payload) return scalarFields(entry, { producer: oneOf('host-preparation', 'supplemental-context'), text: text => typeof text === 'string' })
+      if (!entry || typeof entry !== 'object') return false
+      const fields = Object.getOwnPropertyDescriptors(entry)
+      return Reflect.ownKeys(fields).length === 2 && fields.text?.enumerable === true && fields.producer?.enumerable === true
+        && 'value' in fields.producer && oneOf('host-preparation', 'supplemental-context')(fields.producer.value)
+    }) && (v as PreparedInputObservation[]).length <= 2 && new Set((v as PreparedInputObservation[]).map(entry => entry.producer)).size === (v as PreparedInputObservation[]).length }, optional)
     case 'failed': return scalarFields(value, { ...envelope, code: oneOf('PREPARATION_FAILED', 'PREPARATION_UNKNOWN') }, optional)
     case 'promoted': return scalarFields(value, { ...envelope, resultSeq: scalarCount, rawMessageSeq: scalarCount, derivedMessageSeqs: v => dense(v, scalarCount) }, optional)
     default: return false

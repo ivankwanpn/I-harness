@@ -78,3 +78,39 @@ it('permits equivalent protected no-op and ordinary metadata edits while preserv
   const header = JSON.parse(after.slice(0, after.indexOf('\n')))
   expect(header).toMatchObject({ title: 'new title', archived: true, workspaceId: 'workspace', modelSelection: { provider: 'test', model: 'model' }, semanticSeed: loaded.meta!.semanticSeed })
 })
+it('refuses a computed title that mutates an already-checked reservation before publication',async()=>{
+  const {backend,id,path,loaded}=await fixture(true),before=await readFile(path)
+  const patch:any={semanticSeed:structuredClone(loaded.meta!.semanticSeed!)}
+  let reads=0
+  Object.defineProperty(patch,'title',{enumerable:true,get(){reads++;patch.semanticSeed.seedDigest='0'.repeat(64);return 'computed title'}})
+  await expect(backend.updateMeta(id,patch)).rejects.toThrow()
+  expect(reads).toBe(1);expect(await readFile(path)).toEqual(before)
+  expect((await backend.read(id)).events).toEqual(loaded.events)
+})
+it('materializes an ordinary computed title once and returns detached protected metadata',async()=>{
+  const {backend,id,path,loaded}=await fixture(true),before=await readFile(path,'utf8')
+  const patch:any={semanticSeed:structuredClone(loaded.meta!.semanticSeed!)}
+  let reads=0
+  Object.defineProperty(patch,'title',{enumerable:true,get(){reads++;return 'computed title'}})
+  const returned=await backend.updateMeta(id,patch)
+  expect(reads).toBe(1);expect(returned.title).toBe('computed title')
+  expect(returned.semanticSeed).not.toBe(patch.semanticSeed)
+  patch.semanticSeed.seedDigest='0'.repeat(64)
+  expect(returned.semanticSeed!.seedDigest).toBe(loaded.meta!.semanticSeed!.seedDigest)
+  const after=await readFile(path,'utf8');expect(after.slice(after.indexOf('\n')+1)).toBe(before.slice(before.indexOf('\n')+1))
+  expect((await backend.read(id)).meta!.semanticSeed).toEqual(loaded.meta!.semanticSeed)
+})
+it.each(['nested','whole-drop'])('binds the final header despite %s serialization callbacks',async kind=>{
+  const {backend,id,path,loaded}=await fixture(true),before=await readFile(path)
+  const patch:any={semanticSeed:structuredClone(loaded.meta!.semanticSeed!)}
+  let calls=0
+  if(kind==='nested') patch.modelSelection={toJSON(){calls++;patch.semanticSeed.seedDigest='0'.repeat(64);return {provider:'test',model:'model'}}}
+  else patch.toJSON=function(){calls++;const value={...this};delete value.semanticSeed;return value}
+  // Serialize the ordinary callback before semanticSeed so its mutation is
+  // actually present in the final bytes, not merely in a discarded alias.
+  if(kind==='nested') {
+    patch.toJSON=function(){return {modelSelection:this.modelSelection,...this}}
+  }
+  await expect(backend.updateMeta(id,patch)).rejects.toThrow()
+  expect(calls).toBe(1);expect(await readFile(path)).toEqual(before)
+})

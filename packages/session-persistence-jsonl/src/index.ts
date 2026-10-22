@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
 import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
-import { serializeHeader, parseHeader, parseEventLines, hasTornTail, assertMetadataUpdate } from "./format.ts"
+import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 import { createFactJournalBackend } from './backend/fact-journal.ts'
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
@@ -257,16 +257,13 @@ export function createJsonlBackend(root: string): PersistenceBackend {
         throw new Error(`empty session file: ${sessionId}`)
       }
       const previous = parseHeader(lines[0]!)
-      assertMetadataUpdate(previous, patch)
-      if (Object.hasOwn(patch, 'journal') && JSON.stringify(patch.journal) !== JSON.stringify(previous.journal)) throw new Error('Journal metadata changes require fenced recovery')
-      if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== previous.formatVersion) throw new Error("format changes require durable upgrade; downgrade refused")
-      const merged: SessionMeta = { ...previous, ...patch }
+      const snapshot = snapshotMetadataUpdate(previous, patch)
       const out = lines.slice()
-      out[0] = serializeHeader(merged)
+      out[0] = snapshot.line
       const tmp = `${path}.${randomUUID()}.tmp`
       await writeFile(tmp, out.join("\n"), { encoding: "utf-8" })
       await rename(tmp, path)
-      return merged
+      return snapshot.meta
     },
 
     async putDocument(key: string, data: unknown): Promise<void> {

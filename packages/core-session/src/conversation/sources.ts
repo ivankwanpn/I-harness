@@ -1,9 +1,10 @@
 import { eventArchive, type ConversationEventArchive } from './archive.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationDiagnostic, ConversationProvenance, ConversationSourceRef } from "./types.ts"
+import type { ConversationPayloadReader } from './payload.ts'
 
 /** Source coordinates belong to the original archive, even for a prefix view. */
-export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number } } = {}) {
+export function archiveConversationSources(archive: ConversationEventArchive, ownerSessionId: string | undefined, diagnostics: ConversationDiagnostic[], options: { header?: Session['header']; candidate?: { id: string; baseCount: number }; readPayload?: ConversationPayloadReader } = {}) {
   const counts = new Map<number, number>()
   const valid = (seq: unknown): seq is number => typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 0
   const positions = new Map<number, number>()
@@ -55,7 +56,9 @@ export function archiveConversationSources(archive: ConversationEventArchive, ow
     else if (event.type === "tool/result") { kind = "tool"; authority = "observation"; producer = event.name }
     else if (event.type === "user/message") {
       const admitted = admission?.type === "agent/input/admitted" ? admission : undefined
-      const matching = admitted && event.input?.inputId === admitted.inputId && event.text === admitted.text && event.input.intent === admitted.intent
+      const matching = admitted && event.input?.inputId === admitted.inputId
+        && (options.readPayload ? options.readPayload(event, 'text', source) === options.readPayload(admitted, 'text', ref(admissionIndex!, 'admission')) : event.text === admitted.text)
+        && event.input.intent === admitted.intent
       const descriptor = matching ? admitted.provenance : event.provenance ?? event.input?.provenance
       const synthetic = event.input?.synthetic ?? admitted?.synthetic
       if (synthetic) { scope = synthetic.scope; producer = synthetic.description }

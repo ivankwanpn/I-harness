@@ -56,7 +56,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
   const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength,
     ...(header.semanticSeed ? { semanticSeed: Object.freeze({ ...header.semanticSeed }) } : {}) })
   const generation = createGenerationIndex(scope)
-  const preparations = createInputPreparationIndex(scope)
+  const preparations = createInputPreparationIndex(scope, capability === semanticSourceStructure ? semanticSourceStructure : undefined)
   const soft = createSoftReductionIndex(scope)
   let count = 0, revision = 0
   let fence: number | undefined, activeStep: number | undefined

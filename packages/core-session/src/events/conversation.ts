@@ -1,7 +1,7 @@
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
 import { validateReplacementShape } from './replacement.ts'
 import { isGenerationEventType, validGenerationEvent } from './generation.ts'
-import { validInputPreparationEvent, validInputPreparationLink } from './input-preparation.ts'
+import { validInputPreparationEvent, validInputPreparationSourceEvent, validInputPreparationLink } from './input-preparation.ts'
 import { scalarFields } from './attribution.ts'
 import { isStrictFactData } from '../managed/capture.ts'
 import { validSoftReductionEvent } from './soft-reduction.ts'
@@ -74,7 +74,7 @@ function conversationEventShape(event: SessionEvent, formatVersion: number, sour
     || !['session.prompt', 'desktop.input'].includes(event.provenance.producer))) conversationFormatError('invalid human preparation policy')
   if (event.type === 'agent/input/admitted' && event.supplementalContext !== undefined && (formatVersion < 8 || typeof event.supplementalContext !== 'string')) conversationFormatError('invalid supplemental input context')
   if (event.type === 'agent/input/preparation') {
-    if (formatVersion < 8 || !validInputPreparationEvent(event)) conversationFormatError('invalid input preparation or format')
+    if (formatVersion < 8 || !(source ? validInputPreparationSourceEvent(event) : validInputPreparationEvent(event))) conversationFormatError('invalid input preparation or format')
     return
   }
   if (event.type === 'user/message' && event.inputPreparation !== undefined && (formatVersion < 8 || !validInputPreparationLink(event.inputPreparation))) conversationFormatError('invalid prepared input linkage')

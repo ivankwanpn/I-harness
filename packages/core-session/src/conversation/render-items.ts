@@ -6,19 +6,38 @@ import type { HistoryItem, HistoryRecipe } from './history/types.ts'
 import { archiveConversationSources } from './sources.ts'
 import { finishItem } from './exchange.ts'
 import { copyConversationData, copyConversationMessage } from './render.ts'
-import { readConversationPayload, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
+import { createConversationPayloadReader, projectToolResult, type ConversationPayloadCapture } from './payload.ts'
 import { archivePruneSubstitutes } from '../projection/pruning.ts'
 import { resultIsError } from '../results/projection.ts'
+import { validatePreparedInputText } from './input-preparation.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
 export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[] }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number } } = {}): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
-  const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, options)
+  const readPayload = createConversationPayloadReader(options.capturePayload)
+  const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, ...(options.capturePayload ? { readPayload } : {}) })
   const source = (ref: { eventIndex: number; part: string }) => sources.ref(ref.eventIndex, ref.part)
   const pruned = archivePruneSubstitutes(archive)
   const results = new Map<number, ReturnType<typeof projectToolResult>>()
-  const payload = <T, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readConversationPayload(event, key, sources.ref(index, part), options.capturePayload))
+  const payload = <T extends object, K extends keyof T>(event: T, key: K, index: number, part: string) => copyConversationData(readPayload(event, key, sources.ref(index, part)))
+  // The source index already checked preparation structure. Validate selected
+  // complete payload relationships before provenance or wire formatting reads
+  // them; all subsequent consumers share the same owned slot captures.
+  if (options.capturePayload) for (const item of history.items) for (const recipe of item.recipes) {
+    if (recipe.kind !== 'input') continue
+    const index = recipe.index!, event = archive.get(index)
+    if (event.type !== 'user/message' || !event.inputPreparation) continue
+    const link = event.inputPreparation, resultIndex = sources.indexOfSeq(link.resultSeq), result = archive.get(resultIndex)
+    if (result?.type !== 'agent/input/preparation' || result.op !== 'completed') throw new TypeError('Invalid selected preparation')
+    const derived = 'rawMessageSeq' in link
+    const originalIndex = derived ? resultIndex : sources.indexOfSeq(result.admissionSeq)
+    const admitted = derived ? undefined : archive.get(originalIndex)
+    const original = derived ? result.observations[link.observationIndex] : admitted?.type === 'agent/input/admitted' ? admitted : undefined
+    if (!original) throw new TypeError('Invalid selected preparation text')
+    validatePreparedInputText(event, original, derived ? result.observations[link.observationIndex]!.producer : undefined,
+      value => readPayload(value, 'text', sources.ref(value === event ? index : originalIndex, value === event ? 'message' : derived ? 'preparation' : 'admission')))
+  }
   const result = (index: number) => {
     const previous = results.get(index)
     if (previous) return previous
@@ -68,7 +87,7 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
       ...(item.unitInfo ? { unitInfo: Object.freeze({ source: source(item.unitInfo.source), state: item.unitInfo.state }) } : {}),
       calls: item.calls.map(call => ({ ...call, ...(call.call ? { call: source(call.call) } : {}), ...(call.result ? { result: source(call.result) } : {}), ...(call.dispatch ? { dispatch: source(call.dispatch) } : {}) })),
       receivedResults: new Set([...item.receivedResults].map(id => { const ref = item.sources.find(candidate => candidate.id === id); return ref ? source(ref).id : id })),
-      messages: seedItem ? readConversationPayload(seedItem, 'messages', sources.ref(item.establishmentIndex, item.establishment.part), options.capturePayload).map(copyConversationMessage) : item.recipes.map(recipe => render(recipe, item)),
+      messages: seedItem ? readPayload(seedItem, 'messages', sources.ref(item.establishmentIndex, item.establishment.part)).map(copyConversationMessage) : item.recipes.map(recipe => render(recipe, item)),
     })
     return Object.freeze({ ...rendered, extent: item.extent,
       ...(seedItem?.kind === 'exchange' ? { exchange: Object.freeze({ ...rendered.exchange!, acceptance: 'inherited-observation' as const }) } : {}),
