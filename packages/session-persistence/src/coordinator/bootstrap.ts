@@ -32,6 +32,15 @@ function readyState(state:BootstrapReadState):boolean {
   if(!state.meta?.semanticSeed||!state.events)return false
   try{validateSemanticBootstrapHistory(state.events,state.meta.formatVersion,state.meta);return true}catch{return false}
 }
+function publicationStatus(state:BootstrapReadState,stage?:BootstrapHeaderStage):'valid'|'unknown'|'conflict' {
+  if(!state.publicationPresent)return 'valid'
+  if(!stage)return 'unknown'
+  if(stage.originalTarget.kind==='new')return 'conflict'
+  const bytes=state.publicationBytes,expected=Buffer.from(stage.headerBytes)
+  if(!bytes)return 'unknown'
+  if(bytes.length>expected.length||!Buffer.from(bytes).equals(expected.subarray(0,bytes.length)))return 'conflict'
+  return readyState(state)&&bytes.length!==expected.length?'unknown':'valid'
+}
 function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):BootstrapFrame[] {
   let prefix=emptyPrefix();const frames:BootstrapFrame[]=[]
   const add=(name:string,items:readonly SessionEvent[])=>{const batch=encodeFactBatch(`bootstrap:${stage.invocation.operationId}:${name}`,prefix.prefixDigest,items);frames.push({prefix,batch});const decoded=JSON.parse(Buffer.from(batch.bytes).toString('utf8'));prefix={eventCount:prefix.eventCount+batch.key.count,bodyBytes:prefix.bodyBytes+batch.bytes.length,prefixDigest:decoded.prefixDigest}}
@@ -101,6 +110,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }
       let state=await read(b.invocation)
       if(state.foreign)return {kind:'refused',reason:'conflict'}
+      if(state.publicationPresent){b.issued=true;entry.headerUnknown=true}
       if(state.meta?.semanticSeed&&(state.meta.sessionId!==id||state.meta.createdAt!==b.invocation.createdAt||state.meta.semanticSeed.operationId!==b.invocation.operationId||state.meta.semanticSeed.requestDigest!==b.invocation.requestDigest))return {kind:'refused',reason:'conflict'}
       if(state.meta?.semanticSeed){b.manifestDigest=state.meta.semanticSeed.manifestDigest;b.issued=true}
       if(state.meta&&!state.meta.semanticSeed&&state.events?.length)return {kind:'refused',reason:'nonempty'}
@@ -112,6 +122,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(b.stage&&b.request) {
         try {const built=buildBootstrapHeader(b.request,b.stage);b.operation=built.operation}catch{return {kind:'refused',reason:'conflict'}}
       }
+      const publication=publicationStatus(state,b.stage)
+      if(publication==='conflict')return {kind:'refused',reason:'conflict'}
+      if(publication==='unknown'&&(b.stage||!b.request||!state.stageBytes))return blocked(entry,b.stage?'unknown':'payload-required')
       if(b.stage&&readyState(state))return await adopt(entry,state,guards)
       if(!b.stage&&readyState(state))return blocked(entry,'payload-required')
       if(!b.request)return blocked(entry,'payload-required')
@@ -121,6 +134,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         const built=buildBootstrapHeader(b.request,undefined,b.request.target.kind==='existing-empty'?JSON.parse(state.rawHeader!):undefined)
         b.stage=built.stage;b.operation=built.operation
       }
+      if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
       b.phase='header'
       let outcome=await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
       if(outcome.kind!=='committed') {
@@ -215,10 +229,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(state.foreign)return {kind:'conflict',invocation:captured,needsConfirmation:true}
         let stage:BootstrapHeaderStage|undefined
         if(state.stageBytes)try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{}
+        const publication=publicationStatus(state,stage)
+        if(publication==='conflict')return {kind:'conflict',invocation:captured,needsConfirmation:true}
         if(stage&&!sameBootstrapData(stage.invocation,captured)||state.meta?.semanticSeed&&(state.meta.semanticSeed.operationId!==captured.operationId||state.meta.semanticSeed.requestDigest!==captured.requestDigest)||state.meta&&state.meta.createdAt!==captured.createdAt)return {kind:'conflict',invocation:captured,needsConfirmation:true}
         const digest=stage?manifest(stage):state.meta?.semanticSeed?.manifestDigest
         const token:BootstrapResumeToken=digest?{version:1,invocation:captured,manifestDigest:digest,phase:readyState(state)?'completion':'header'}:{version:1,invocation:captured,phase:'header',manifest:'unknown'}
-        return {kind:stage?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
+        return {kind:stage&&publication==='valid'?(readyState(state)&&!state.torn?'ready':'reserved'):'unavailable',invocation:captured,token,needsConfirmation:true}
       }catch{return {kind:'unavailable',invocation:captured,needsConfirmation:true}}
     },
   }

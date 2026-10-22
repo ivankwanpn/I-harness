@@ -382,3 +382,136 @@ it('refuses a pending write-behind before bootstrap opening and preserves its ac
   expect((await readdir(root)).some(n=>n.endsWith('.stage'))).toBe(false)
   expect((await coordinator.snapshot('target')).session.events).toEqual([{type:'plan/mode',mode:'on',seq:0}])
 })
+it('review F1 preserves actual seed/completion/initial frames through same-events and allowed suffix replacement',async()=>{
+  const {root,backend,coordinator}=await setup(),r=seeded(true)
+  const ready=await coordinator.bootstrapSemanticTarget(r,guards);expect(ready.kind).toBe('ready')
+  await ready.document.metadata.admit({type:'plan/mode',mode:'on'})
+  await coordinator.close()
+  const path=join(root,'target.jsonl'),before=await readFile(path),lines=before.toString('utf8').split('\n')
+  const actualBirth=Buffer.from(lines.slice(0,3).join('\n')+'\n')
+  const loaded=await backend.read('target')
+  await backend.replaceEvents!('target',loaded.events)
+  expect((await readFile(path)).subarray(0,actualBirth.length)).toEqual(actualBirth)
+  expect((await backend.read('target')).events).toEqual(loaded.events)
+  const changed=structuredClone(loaded.events);changed[changed.length-1]={type:'plan/mode',mode:'off',seq:changed.length-1}
+  await backend.replaceEvents!('target',changed)
+  expect((await readFile(path)).subarray(0,actualBirth.length)).toEqual(actualBirth)
+  expect((await backend.read('target')).events).toEqual(changed)
+  await backend.updateMeta('target',{title:'after allowed replacement'})
+  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
+  expect(adopted.kind).toBe('already-ready')
+  if(adopted.kind==='already-ready') {
+    expect(adopted.receipt.seed!.key).toEqual(ready.receipt.seed.key)
+    expect(adopted.receipt.completion.key).toEqual(ready.receipt.completion.key)
+    expect(adopted.document.view.events.filter(e=>e.type==='agent/input/admitted')).toHaveLength(1)
+    expect(adopted.document.view.events.at(-1)).toMatchObject({type:'plan/mode',mode:'off'})
+  }
+})
+it('review F1 refuses changed or malformed original birth before replacing any bytes',async()=>{
+  const {root,backend,coordinator}=await setup(),r=seeded(true)
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready');await coordinator.close()
+  const path=join(root,'target.jsonl'),before=await readFile(path),loaded=await backend.read('target')
+  const changed=structuredClone(loaded.events),completion=changed.find(e=>e.type==='session/bootstrap')!
+  if(completion.type!=='session/bootstrap')throw new Error('missing completion')
+  completion.dependencyClosureDigest='f'.repeat(64)
+  await expect(backend.replaceEvents!('target',changed)).rejects.toThrow()
+  expect(await readFile(path)).toEqual(before)
+  await expect(backend.replaceEvents!('target',loaded.events.filter(e=>e.type!=='agent/input/admitted'))).rejects.toThrow()
+  expect(await readFile(path)).toEqual(before)
+  const {encodeFactBatch}=await import('@i-harness/core-session'),end=before.indexOf(10),header=JSON.parse(before.subarray(0,end).toString())
+  const foreign=Buffer.concat([before.subarray(0,end+1),Buffer.from(encodeFactBatch('foreign-whole-birth',header.journal.legacyPrefixDigest,loaded.events).bytes)])
+  await writeFile(path,foreign)
+  await expect(backend.replaceEvents!('target',loaded.events)).rejects.toThrow()
+  expect(await readFile(path)).toEqual(foreign)
+})
+it('review F1 preserves a zero-seed completion frame across ordinary replacement',async()=>{
+  const {root,backend,coordinator}=await setup(),r=request()
+  const ready=await coordinator.bootstrapSemanticTarget(r,guards);expect(ready.kind).toBe('ready');await coordinator.close()
+  const path=join(root,'target.jsonl'),before=await readFile(path),loaded=await backend.read('target')
+  await backend.replaceEvents!('target',loaded.events)
+  expect(await readFile(path)).toEqual(before)
+  expect((await backend.read('target')).events).toEqual(loaded.events)
+  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
+  expect(adopted.kind).toBe('already-ready')
+  if(adopted.kind==='already-ready')expect(adopted.receipt.completion.key).toEqual(ready.receipt.completion.key)
+})
+it.each([['stage','stale'],['stage','abort'],['target','stale'],['target','abort']] as const)('review F2 stops %s short-write continuation at %s and resumes only under a fresh guard',async(which,mode)=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises'),controller=new AbortController()
+  let fresh=true,flipped=false,selectedWrites=0,afterFlipWrites=0
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args)
+    if(which==='stage'?!String(args[0]).endsWith('.stage'):String(args[0])!==join(root,'target.jsonl'))return h
+    return new Proxy(h,{get(target,name){
+      if(name==='write')return async(buffer:Uint8Array,offset:number,length:number,position:number)=>{
+        if(flipped)afterFlipWrites++;selectedWrites++
+        const result=await target.write(buffer,offset,Math.min(11,length),position)
+        if(!flipped){flipped=true;if(mode==='stale')fresh=false;else controller.abort()}
+        return result
+      }
+      const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value
+    }})
+  })
+  const stopped={...guards,signal:controller.signal,assertCurrent(){if(!fresh)throw new Error('source changed during short write')}}
+  try {
+    const initial=await coordinator.bootstrapSemanticTarget(r,stopped)
+    expect(initial).toMatchObject({kind:'blocked'})
+    expect(selectedWrites).toBe(1);expect(afterFlipWrites).toBe(0)
+    expect(initial).toMatchObject({token:{phase:'header'}})
+    const selected=which==='stage'?(await readdir(root)).find(n=>n.endsWith('.stage'))!:'target.jsonl',before=await readFile(join(root,selected))
+    expect(before).toHaveLength(11)
+    expect(await coordinator.resumeSemanticTarget(r.invocation,stopped,r)).toMatchObject({kind:'blocked'})
+    expect(selectedWrites).toBe(1);expect(afterFlipWrites).toBe(0)
+    expect(await readFile(join(root,selected))).toEqual(before)
+  }finally{vi.mocked(open).mockImplementation(native.open)}
+  expect((await coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+})
+it('review F3 retains matching publication-only uncertainty and refuses new-target work around its bytes',async()=>{
+  const {root,coordinator}=await setup(),r=request(),{canonicalJsonData}=await import('@i-harness/core-session')
+  const key=createHash('sha256').update(canonicalJsonData(r.invocation)).digest('hex'),name='target.jsonl.bootstrap-'+key+'.publish',partial=Buffer.from('partial-publication')
+  await writeFile(join(root,name),partial)
+  expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({kind:'unavailable',needsConfirmation:true,token:{phase:'header',manifest:'unknown'}})
+  const result=await coordinator.bootstrapSemanticTarget(r,guards)
+  expect(['blocked','refused']).toContain(result.kind)
+  expect(await readdir(root)).toContain(name)
+  expect((await readdir(root)).some(n=>n==='target.jsonl'||n.endsWith('.stage'))).toBe(false)
+  expect(await readFile(join(root,name))).toEqual(partial)
+})
+it.each(['matching','foreign'] as const)('review F3 checks %s retained existing-empty publication bytes before continuation',async kind=>{
+  const {root,backend,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
+  const path=join(root,'target.jsonl'),original=await readFile(path)
+  r.target={kind:'existing-empty',expectedHeaderDigest:createHash('sha256').update(original).digest('hex'),expectedPrefix:{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())}}
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(!String(args[0]).endsWith('.publish'))return h
+    return new Proxy(h,{get(target,name){if(name==='write')return async(buffer:Uint8Array,offset:number,_length:number,position:number)=>{await target.write(buffer,offset,13,position);throw new Error('publication partial write')};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
+  })
+  try{expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})}finally{vi.mocked(open).mockImplementation(native.open)}
+  const publication=(await readdir(root)).find(n=>n.endsWith('.publish'))!,stage=(await readdir(root)).find(n=>n.endsWith('.stage'))!
+  expect(await readFile(path)).toEqual(original)
+  if(kind==='foreign') {
+    await writeFile(join(root,publication),'FOREIGN publication')
+    const beforePublication=await readFile(join(root,publication)),beforeStage=await readFile(join(root,stage))
+    expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({kind:'conflict',needsConfirmation:true})
+    expect(await coordinator.resumeSemanticTarget(r.invocation,guards,r)).toMatchObject({kind:'refused',reason:'conflict'})
+    expect(await readFile(path)).toEqual(original);expect(await readFile(join(root,publication))).toEqual(beforePublication);expect(await readFile(join(root,stage))).toEqual(beforeStage)
+  } else {
+    const partial=await readFile(join(root,publication));expect(partial).toHaveLength(13)
+    expect(await coordinator.resumeSemanticTarget(r.invocation,{...guards,assertCurrent(){throw new Error('stale')}},r)).toMatchObject({kind:'blocked'})
+    expect(await readFile(join(root,publication))).toEqual(partial)
+    const cold=await copyStore(root)
+    expect((await cold.coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+    expect((await coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+    expect(await readdir(root)).not.toContain(publication)
+    expect((await backend.read('target')).events).toHaveLength(1)
+  }
+})
+it('review F3 refuses conflicting retained publication during already-ready confirmation',async()=>{
+  const {root,coordinator}=await setup(),r=request(),{canonicalJsonData}=await import('@i-harness/core-session')
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  const key=createHash('sha256').update(canonicalJsonData(r.invocation)).digest('hex'),name='target.jsonl.bootstrap-'+key+'.publish'
+  await writeFile(join(root,name),'unqualified publication')
+  const before=await readFile(join(root,'target.jsonl')),publication=await readFile(join(root,name))
+  expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({kind:'conflict',needsConfirmation:true})
+  expect(await coordinator.resumeSemanticTarget(r.invocation,guards)).toMatchObject({kind:'refused',reason:'conflict'})
+  expect(await readFile(join(root,'target.jsonl'))).toEqual(before);expect(await readFile(join(root,name))).toEqual(publication)
+})

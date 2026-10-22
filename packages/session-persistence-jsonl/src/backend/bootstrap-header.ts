@@ -34,6 +34,18 @@ function scope(id:string,owner:HeldFactOwner) {
   if(!isHeldFactOwner(owner)||owner.owner.sessionId!==id)throw new TypeError('Invalid bootstrap owner scope')
   owner.assertHeld()
 }
+function matchingPrefix(actual:Uint8Array,expected:Uint8Array):boolean {
+  return actual.length<=expected.length&&Buffer.from(actual).equals(Buffer.from(expected.subarray(0,actual.length)))
+}
+function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOperation):boolean {
+  if(operation.target.kind!=='existing-empty')return false
+  try {
+    const end=actual.indexOf(10),meta=end>=0?parseHeader(actual.subarray(0,end).toString('utf8')):undefined
+    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&meta.formatVersion===11&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
+      &&rawHeaderDigest(actual)===operation.target.expectedHeaderDigest&&meta.journal?.legacyEventCount===0&&meta.journal?.legacyBodyBytes===0
+      &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
+  }catch{return false}
+}
 export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'> {
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
     scope(id,owner)
@@ -54,21 +66,25 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       await assertNotDeleted('session',invocation.targetSessionId)
       const path=filePath(invocation.targetSessionId), paths=bootstrapPaths(path,invocation)
       const siblings=await bootstrapArtifacts(path), foreign=siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish))
-      let stageBytes:Buffer|undefined, raw:Buffer|undefined
+      let stageBytes:Buffer|undefined, publicationBytes:Buffer|undefined, raw:Buffer|undefined
+      let publicationPresent=siblings.includes(basename(paths.publish))
+      const retained=()=>({...(stageBytes?{stageBytes}:{}),...(publicationBytes?{publicationBytes}:{}),publicationPresent,foreign})
       try {
         stageBytes=await bounded(paths.stage,262144)
+        publicationBytes=await bounded(paths.publish,65536)
+        publicationPresent ||= publicationBytes!==undefined
         const prefix=await headerPrefix(path)
-        if(!prefix&&!stageBytes&&!foreign)return {kind:'absent'}
-        if(!prefix)return {kind:'present',...(stageBytes?{stageBytes}:{}),foreign}
-        if(prefix.indexOf(10)<0)return {kind:'unavailable',...(stageBytes?{stageBytes}:{}),foreign}
+        if(!prefix&&!stageBytes&&!publicationPresent&&!foreign)return {kind:'absent'}
+        if(!prefix)return {kind:'present',...retained()}
+        if(prefix.indexOf(10)<0)return {kind:'unavailable',...retained()}
         raw=await optional(path)
-        if(!raw)return {kind:'unavailable',...(stageBytes?{stageBytes}:{}),foreign}
+        if(!raw)return {kind:'unavailable',...retained()}
         const end=raw.indexOf(10)
-        if(end<0||end+1>65536)return {kind:'unavailable',...(stageBytes?{stageBytes}:{}),foreign}
+        if(end<0||end+1>65536)return {kind:'unavailable',...retained()}
         const rawHeader=raw.subarray(0,end+1).toString('utf8'),meta=parseHeader(rawHeader)
         const journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta)
-        return {kind:'present',...(stageBytes?{stageBytes}:{}),rawHeader,meta,...journal,foreign}
-      } catch { return {kind:'unavailable',...(stageBytes?{stageBytes}:{}),foreign} }
+        return {kind:'present',...retained(),rawHeader,meta,...journal}
+      } catch { return {kind:'unavailable',...retained()} }
     },
     async prepareBootstrapHeader(id,owner,operation) {
       check(id,owner,operation); await assertNotDeleted('session',id)
@@ -84,20 +100,24 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         let synced=false
         try {
           let offset=existing?.length??0
-          if(offset<bytes.length)before()
-          while(offset<bytes.length){const result=await h.write(bytes,offset,bytes.length-offset,offset);if(result.bytesWritten<=0)throw new Error('Header write made no progress');offset+=result.bytesWritten}
+          while(offset<bytes.length){before();const result=await h.write(bytes,offset,bytes.length-offset,offset);if(result.bytesWritten<=0)throw new Error('Header write made no progress');offset+=result.bytesWritten}
           scope(id,owner);await h.sync();synced=true
         } finally {await h.close().catch(error=>{if(synced)cleanup=true;else throw error})}
       }
       try {
         const siblings=await bootstrapArtifacts(path)
         if(siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish)))return {kind:'conflict'}
-        const stage=await optional(paths.stage),target=await optional(path)
+        const stage=await bounded(paths.stage,262144),publication=await bounded(paths.publish,65536),target=await optional(path)
+        if(stage&&!matchingPrefix(stage,operation.stageBytes))return {kind:'conflict'}
+        if(publication!==undefined) {
+          if(operation.target.kind==='new')return {kind:'conflict'}
+          if(!stage)return {kind:'unknown'}
+          if(!matchingPrefix(publication,operation.headerBytes))return {kind:'conflict'}
+        }
         if(!stage&&target&&operation.target.kind==='new')return {kind:'conflict'}
+        if(operation.target.kind==='new'&&target&&!matchingPrefix(target,operation.headerBytes))return {kind:'conflict'}
         if(operation.target.kind==='existing-empty'&&target&&!target.equals(Buffer.from(operation.headerBytes))) {
-          const end=target.indexOf(10),meta=end>=0?parseHeader(target.subarray(0,end).toString('utf8')):undefined
-          if(end!==target.length-1||!meta||meta.semanticSeed||meta.formatVersion!==11||meta.sessionId!==id||meta.createdAt!==operation.invocation.createdAt||rawHeaderDigest(target)!==operation.target.expectedHeaderDigest
-            || meta.journal?.legacyEventCount!==0||meta.journal?.legacyBodyBytes!==0||meta.journal?.separatorBytes!==0||meta.journal?.legacyPrefixDigest!==operation.target.expectedPrefix.prefixDigest)return {kind:'conflict'}
+          if(!originalEmptyTarget(target,id,operation))return {kind:'conflict'}
         }
         if(operation.target.kind==='existing-empty'&&!target)return {kind:'conflict'}
         before();await mkdir(dirname(path),{recursive:true})
@@ -127,8 +147,14 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         const stage=await bounded(paths.stage,262144)
         if(!stage)return {kind:'unknown'}
         if(!stage.equals(Buffer.from(operation.stageBytes)))return {kind:stage.length<operation.stageBytes.length&&stage.equals(Buffer.from(operation.stageBytes.subarray(0,stage.length)))?'unknown':'conflict'}
+        const publication=await bounded(paths.publish,65536)
+        if(publication!==undefined) {
+          if(operation.target.kind==='new'||!matchingPrefix(publication,operation.headerBytes))return {kind:'conflict'}
+          if(publication.length<operation.headerBytes.length)return {kind:'unknown'}
+        }
         const target=await optional(path)
         if(!target)return {kind:'unknown'}
+        if(originalEmptyTarget(target,id,operation))return {kind:'unknown'}
         if(target.length<operation.headerBytes.length)return {kind:target.equals(Buffer.from(operation.headerBytes.subarray(0,target.length)))?'unknown':'conflict'}
         if(!target.subarray(0,operation.headerBytes.length).equals(Buffer.from(operation.headerBytes)))return {kind:'conflict'}
         if(!await syncExact(path,operation.headerBytes,id,owner))return {kind:'unknown'}

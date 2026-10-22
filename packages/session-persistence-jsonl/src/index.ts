@@ -5,7 +5,7 @@ import { CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validate
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
-import { createFactJournalBackend } from './backend/fact-journal.ts'
+import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact-journal.ts'
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 
@@ -225,12 +225,20 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
-      const text = await readFile(path, "utf-8")
+      const raw = await readFile(path), text = raw.toString('utf8')
       const headerLine = text.split("\n")[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
       if (events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
       validateSemanticBootstrapHistory(events, header.formatVersion, header)
+      if (header.semanticSeed && (await bootstrapArtifacts(path)).length) {
+        validateConversationHistory(events, header.formatVersion, header)
+        const birth = await preserveBootstrapBirth(path, raw, header, events)
+        const suffix = events.slice(birth.eventCount)
+        const frame = suffix.length ? encodeFactBatch(randomUUID(), birth.prefixDigest, suffix).bytes : new Uint8Array()
+        await replaceRawSessionFile(path, Buffer.concat([raw.subarray(0, raw.indexOf(10) + 1), birth.bytes, Buffer.from(frame)]))
+        return
+      }
       if ([6, 7, 8, 9, 10, 11].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()

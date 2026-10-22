@@ -25,7 +25,7 @@ export interface BootstrapHeaderStage {
 }
 export interface BootstrapHeaderOperation { invocation: BootstrapInvocation; target: BootstrapHeaderStage['originalTarget']; stageBytes: Uint8Array; headerBytes: Uint8Array }
 export type HeaderOutcome = { kind: 'committed'; headerDigest: string; cleanupDiagnostic?: 'file-close-failed' } | { kind: 'absent'|'unknown'|'conflict' } | { kind: 'not-issued'; reason: 'cancelled'|'stale-source' }
-export interface BootstrapReadState { kind: 'absent'|'present'|'unavailable'; stageBytes?: Uint8Array; rawHeader?: string; meta?: SessionMeta; events?: SessionEvent[]; prefix?: JournalPrefix; frames?: BootstrapFrame[]; torn?: boolean; foreign?: boolean }
+export interface BootstrapReadState { kind: 'absent'|'present'|'unavailable'; stageBytes?: Uint8Array; publicationPresent?: boolean; publicationBytes?: Uint8Array; rawHeader?: string; meta?: SessionMeta; events?: SessionEvent[]; prefix?: JournalPrefix; frames?: BootstrapFrame[]; torn?: boolean; foreign?: boolean }
 export interface BootstrapFrame { prefix: JournalPrefix; batch: EncodedFactBatch }
 export interface BootstrapBackend {
   prepareBootstrapHeader(id: string, owner: IssuingFactOwner, operation: BootstrapHeaderOperation): Promise<HeaderOutcome>;

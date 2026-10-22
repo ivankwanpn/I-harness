@@ -1,10 +1,38 @@
 import { open, readFile, type FileHandle } from 'node:fs/promises'
-import { CURRENT_FORMAT_VERSION, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
-import { isHeldFactOwner } from '@i-harness/session-persistence'
+import { isHeldFactOwner, parseBootstrapHeaderStage } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import type { BootstrapBackend } from '@i-harness/session-persistence'
+import { bootstrapPaths } from './bootstrap-header.ts'
+
+/** Ordinary replacement may rewrite a suffix, never the actual birth frames
+ * whose keys/bytes establish the retained operation's historical receipts. */
+export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: SessionMeta, candidate: readonly SessionEvent[]) {
+  const reservation = meta.semanticSeed
+  if (!reservation) throw new TypeError('Bootstrap reservation required')
+  const invocation = { version: 1 as const, operationId: reservation.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: reservation.requestDigest }
+  const stage = parseBootstrapHeaderStage(await readFile(bootstrapPaths(path, invocation).stage))
+  const original = JSON.parse(stage.headerBytes) as SessionMeta
+  for (const key of ['formatVersion','sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
+    if (canonicalJsonData(meta[key]) !== canonicalJsonData(original[key])) throw new TypeError('Bootstrap birth scope changed')
+  }
+  const end = raw.indexOf(10), body = raw.subarray(end + 1)
+  const decoded = readBootstrapFactJournal(body, meta.journal!, meta.formatVersion, meta)
+  const birthCount = reservation.seedLength + 1 + (reservation.initialInputId === undefined ? 0 : 1)
+  if (canonicalJsonData(candidate.slice(0, birthCount)) !== canonicalJsonData(decoded.events.slice(0, birthCount))) throw new TypeError('Bootstrap birth records are immutable')
+  const phases = reservation.seedLength ? [{ name: 'seed', count: reservation.seedLength }, { name: 'complete', count: birthCount - reservation.seedLength }] : [{ name: 'complete', count: birthCount }]
+  let eventCount = 0
+  for (const [index, phase] of phases.entries()) {
+    const actual = decoded.frames[index]
+    if (!actual || actual.prefix.eventCount !== eventCount || actual.batch.key.firstSeq !== eventCount || actual.batch.key.count !== phase.count
+      || actual.batch.key.batchId !== `bootstrap:${invocation.operationId}:${phase.name}`) throw new TypeError('Original bootstrap phase layout unavailable')
+    eventCount += phase.count
+  }
+  const last = decoded.frames[phases.length - 1]!, bytes = last.prefix.bodyBytes + last.batch.bytes.length
+  return { bytes: body.subarray(0, bytes), eventCount: birthCount, prefixDigest: decodeFactBatch(last.batch.bytes).prefixDigest }
+}
 
 const scope = (id: string, owner: HeldFactOwner) => {
   if (!isHeldFactOwner(owner)) throw new TypeError('Invalid held owner scope')
