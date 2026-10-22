@@ -10,6 +10,8 @@
 
 **Spec:** [approved R4B design](../specs/2026-10-22-context-r4b-semantic-inheritance.md), [root decisions](../../research/2026-10-22-context-r4b-design-decisions.md), [R4 source qualification](../../research/2026-10-16-context-engine-r4-seed-delivery-preflight.md), [owner rebase](../../research/2026-10-18-context-engine-r4b-current-owner-rebase.md), and [framework](../specs/2026-10-15-context-engine-framework.md).
 
+Task2 source refinement: [R-B-20 through R-B-25](../../research/2026-10-23-context-r4b-b2-owner-rulings.md) bind the existing registry/pump, original header staging, partial-header token, exact noncircular hashes, historical-frame confirmation and dependency/task boundaries. These specific rulings supersede the earlier abbreviated bootstrap signatures where they differ; no Task3/4 consumer or whole-B acceptance is implied.
+
 ## Global constraints and status
 
 - **ROOT APPROVED FOR IMPLEMENTATION2026-10-22.** Existing user approval covers the redesign and continued root-led GPT6.1Sol development. Root reviewed the contracts and recorded the explicit rulings linked above. Design promotion is not implementation acceptance; no product/runtime/test operation was performed in this design pass.
@@ -255,10 +257,9 @@ interface BootstrapRequest {
   initial?:BootstrapInitial;
 }
 type BootstrapPhase='header'|'dependencies'|'seed'|'completion';
-interface BootstrapResumeToken {
-  version:1; invocation:BootstrapInvocation; manifestDigest:Digest;
-  phase:BootstrapPhase;
-}
+type BootstrapResumeToken =
+  | {version:1;invocation:BootstrapInvocation;manifestDigest:Digest;phase:BootstrapPhase}
+  | {version:1;invocation:BootstrapInvocation;phase:'header';manifest:'unknown'};
 interface BootstrapReceipt {
   version:1; invocation:BootstrapInvocation; manifestDigest:Digest;
   seedLength:number; dependencyClosureDigest:Digest;
@@ -303,13 +304,20 @@ Qualified backend methods (new `coordinator/bootstrap-header.ts` plus JSONL leaf
 ```ts
 type HeaderOutcome={kind:'committed';headerDigest:Digest}
   |{kind:'absent'|'unknown'|'conflict'}|{kind:'not-issued';reason:'cancelled'|'stale-source'};
-prepareBootstrapHeader(id:string,owner:IssuingFactOwner,target:BootstrapTarget,
-  bytes:Uint8Array):Promise<HeaderOutcome>;
-reconcileBootstrapHeader(id:string,owner:HeldFactOwner,target:BootstrapTarget,
-  bytes:Uint8Array):Promise<HeaderOutcome>;
+interface BootstrapHeaderOperation {
+  invocation:BootstrapInvocation;
+  target:Exclude<BootstrapTarget,{kind:'resume'}>;
+  stageBytes:Uint8Array;headerBytes:Uint8Array;
+}
+prepareBootstrapHeader(id:string,owner:IssuingFactOwner,
+  operation:BootstrapHeaderOperation):Promise<HeaderOutcome>;
+reconcileBootstrapHeader(id:string,owner:HeldFactOwner,
+  operation:BootstrapHeaderOperation):Promise<HeaderOutcome>;
 ```
 
 Both join the existing session lane/lease. New-target is exclusive/no-clobber; existing-empty requires exact header+prefix and zero events, no write-behind/open owner. Fixed transaction staging path/bytes and sync evidence reconcile the original operation; preserve unrelated metadata, no target deletion/rollback. A matching full published header may be sync-confirmed; mismatching/partial foreign state refuses/blocks. Windows directory-sync limits remain honest. Header reservation is immutable and bounded; parse/build/view preserve it. Cold load recognizes incomplete reservation before ordinary repair. Same existing managed registry owns private bootstrap attachment; public open/actions/received inputs/snapshots refuse incomplete state. No nested public lane call while already holding that lane.
+
+R-B-21 additionally retains the bounded original header transaction for later original-metadata/manifest verification, with readBootstrapState(invocation) for no-repair inspection, deterministic stage/publication paths and exact guarded original-operation continuation. R-B-24 adds held historical-frame confirmation after later complete live records; ordinary terminal-suffix reconciliation is unchanged. No original request text or semantic groups enter the header stage. The full closed binding/hash/limits/lifecycle contract is in the linked Task2 rulings.
 
 ### Exact parent and team observation schemas/fences
 
@@ -609,6 +617,8 @@ Use a local raw result and inherited result both named callId=`same`, a seed-onl
 ## Gate B2 — owned bootstrap and real consumers
 
 ### Task 2: B2.1 — Header reservation and deterministic document phase owner
+
+Binding source refinement: [R-B-20..25](../../research/2026-10-23-context-r4b-b2-owner-rulings.md). Keep actual fork/spawn consumer cutover inTask4 even where a broad original file list mentions fork.ts. The original fork regression remains a disclosed staged gate. Include retained staging cleanup, unknown-manifest token, partial-header guarded continuation, original manifest after metadata edits and historical-frame confirmation in this task's tests.
 
 **Files**
 - Create: `session-persistence/src/semantic-seed.ts`, `coordinator/{bootstrap-types,bootstrap-header,bootstrap}.ts`, `session-persistence-jsonl/src/backend/bootstrap-header.ts`.
