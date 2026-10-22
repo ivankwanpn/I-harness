@@ -10,7 +10,7 @@
 
 **Spec:** [approved R4B design](../specs/2026-10-22-context-r4b-semantic-inheritance.md), [root decisions](../../research/2026-10-22-context-r4b-design-decisions.md), [R4 source qualification](../../research/2026-10-16-context-engine-r4-seed-delivery-preflight.md), [owner rebase](../../research/2026-10-18-context-engine-r4b-current-owner-rebase.md), and [framework](../specs/2026-10-15-context-engine-framework.md).
 
-Task2 source refinement: [R-B-20 through R-B-25](../../research/2026-10-23-context-r4b-b2-owner-rulings.md) bind the existing registry/pump, original header staging, partial-header token, exact noncircular hashes, historical-frame confirmation and dependency/task boundaries. These specific rulings supersede the earlier abbreviated bootstrap signatures where they differ; no Task3/4 consumer or whole-B acceptance is implied.
+Task2 source refinement: [R-B-20 through R-B-27](../../research/2026-10-23-context-r4b-b2-owner-rulings.md) bind the existing registry/pump, original header staging, partial-header token, exact noncircular hashes, historical-frame confirmation and dependency/task boundaries. These specific rulings supersede the earlier abbreviated bootstrap signatures where they differ; no Task3/4 consumer or whole-B acceptance is implied.
 
 ## Global constraints and status
 
@@ -618,7 +618,7 @@ Use a local raw result and inherited result both named callId=`same`, a seed-onl
 
 ### Task 2: B2.1 — Header reservation and deterministic document phase owner
 
-Binding source refinement: [R-B-20..25](../../research/2026-10-23-context-r4b-b2-owner-rulings.md). Keep actual fork/spawn consumer cutover inTask4 even where a broad original file list mentions fork.ts. The original fork regression remains a disclosed staged gate. Include retained staging cleanup, unknown-manifest token, partial-header guarded continuation, original manifest after metadata edits and historical-frame confirmation in this task's tests.
+Binding source refinement: [R-B-20..27](../../research/2026-10-23-context-r4b-b2-owner-rulings.md). Keep actual fork/spawn consumer cutover inTask4 even where a broad original file list mentions fork.ts. The original fork regression remains a disclosed staged gate. Include retained staging cleanup, unknown-manifest token, partial-header guarded continuation, original manifest after metadata edits and historical-frame confirmation in this task's tests.
 
 **Files**
 - Create: `session-persistence/src/semantic-seed.ts`, `coordinator/{bootstrap-types,bootstrap-header,bootstrap}.ts`, `session-persistence-jsonl/src/backend/bootstrap-header.ts`.

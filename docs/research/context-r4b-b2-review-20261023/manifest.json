@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "base": "cf437fb549e550ac33cf7e524b99162173c58122",
+  "initial": "50db21c16cc8a4add4b2ff4bf2d6c7c0d4757c58",
+  "final": "9b7f3fa343528cb7e77725273b19ca7aa3fabf87",
+  "reportNormalization": "CRLF to LF; no content rewriting",
+  "reports": [
+    {
+      "path": "delivery.md",
+      "bytes": 29302,
+      "sha256": "73282a592edc6771a3759fedeb5758da741c26ed5c8888c638ffe214c320db1d",
+      "originalSha256": "73282a592edc6771a3759fedeb5758da741c26ed5c8888c638ffe214c320db1d"
+    },
+    {
+      "path": "initial-review.md",
+      "bytes": 14361,
+      "sha256": "a80e2135d062954972d51a9b6b91d66f78d48db6e6196357b3db796848909bb9",
+      "originalSha256": "a80e2135d062954972d51a9b6b91d66f78d48db6e6196357b3db796848909bb9"
+    },
+    {
+      "path": "fix1-review.md",
+      "bytes": 9320,
+      "sha256": "cb59b0422b9c08b989482e7348486c8bf723015c827991c2ff37f742edc81cd6",
+      "originalSha256": "cb59b0422b9c08b989482e7348486c8bf723015c827991c2ff37f742edc81cd6"
+    },
+    {
+      "path": "probes.md",
+      "bytes": 9324,
+      "sha256": "2ed6d3de789966c7c46e674c9fcd72c61a396a04dea3e9b2beefd99a365e5760",
+      "originalSha256": "2ed6d3de789966c7c46e674c9fcd72c61a396a04dea3e9b2beefd99a365e5760"
+    },
+    {
+      "path": "root-audit.json",
+      "bytes": 63423,
+      "sha256": "346b596dfb23efb6979babcb7fe95f95dce513feb41dc05a743188ff36a3133d",
+      "originalSha256": "346b596dfb23efb6979babcb7fe95f95dce513feb41dc05a743188ff36a3133d"
+    },
+    {
+      "path": "fix1-root-audit.json",
+      "bytes": 50516,
+      "sha256": "d11d672778da021a49aa513cd8bacb31b1ef2a9b23a744e4b308a9fc3c864396",
+      "originalSha256": "d11d672778da021a49aa513cd8bacb31b1ef2a9b23a744e4b308a9fc3c864396"
+    }
+  ],
+  "proof": {
+    "path": "proof.json",
+    "entries": 159,
+    "originalBytes": 1972209,
+    "bytes": 1157390,
+    "sha256": "f27faf02a88f1194b7610dba07209caf0585268668e7c4f81f109575e615c6ca"
+  }
+}
