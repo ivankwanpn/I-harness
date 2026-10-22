@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "product": "594f4b259ae62e32b7ec3e3050345deeb2dbeb79",
+  "review": "fix2-review.md",
+  "reports": [
+    {
+      "path": "initial-delivery.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-report.md",
+      "sourceSha256": "46fbd245bf56c4a9cfac23a91bb803a8cd931e743a18c06ab360bf903dec4481",
+      "normalization": "utf8-lf",
+      "sha256": "46fbd245bf56c4a9cfac23a91bb803a8cd931e743a18c06ab360bf903dec4481"
+    },
+    {
+      "path": "initial-review.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-review-20261023.md",
+      "sourceSha256": "b5dc7646a4e332ae8e4e1cc033a05b8ce5606562f961531fe3a1e546cdd71026",
+      "normalization": "utf8-lf",
+      "sha256": "b5dc7646a4e332ae8e4e1cc033a05b8ce5606562f961531fe3a1e546cdd71026"
+    },
+    {
+      "path": "initial-probes.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-probes-20261023.md",
+      "sourceSha256": "ddcb8eb4673250640c3c207b10489201ae78faa4ca9830d98534e20a47618a57",
+      "normalization": "utf8-lf",
+      "sha256": "ddcb8eb4673250640c3c207b10489201ae78faa4ca9830d98534e20a47618a57"
+    },
+    {
+      "path": "public-writer-probes.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-public-writers-probes-20261023.md",
+      "sourceSha256": "73894891c6f10ad1766cff7fa861ea9ea3460e97639b3d00a1fb5f466724edff",
+      "normalization": "utf8-lf",
+      "sha256": "73894891c6f10ad1766cff7fa861ea9ea3460e97639b3d00a1fb5f466724edff"
+    },
+    {
+      "path": "fix1-delivery.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-fix-round1-report.md",
+      "sourceSha256": "bbbf97fff67c2298e11a5c2351766cf0e79bdac63110b6ceae217792ebac1c69",
+      "normalization": "utf8-lf",
+      "sha256": "bbbf97fff67c2298e11a5c2351766cf0e79bdac63110b6ceae217792ebac1c69"
+    },
+    {
+      "path": "fix1-review.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-fix-round1-review.md",
+      "sourceSha256": "ca5b3ad439896f19735084271151549eb06d214c47562c4a147c2a0befd0aea6",
+      "normalization": "utf8-lf",
+      "sha256": "ca5b3ad439896f19735084271151549eb06d214c47562c4a147c2a0befd0aea6"
+    },
+    {
+      "path": "fix1-residual-probes.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-fix-round1-metadata-probe.md",
+      "sourceSha256": "4e9d25f9dab813e105873fc64b205effdb46e97b1e5f8ff3f4ae549ecdfa1b57",
+      "normalization": "utf8-lf",
+      "sha256": "4e9d25f9dab813e105873fc64b205effdb46e97b1e5f8ff3f4ae549ecdfa1b57"
+    },
+    {
+      "path": "fix2-delivery.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-fix-round2-report.md",
+      "sourceSha256": "9854530256f5fd1283cabc1728b29436e5fc34014f12fd2e0a72a52adf9b3af5",
+      "normalization": "utf8-lf",
+      "sha256": "9854530256f5fd1283cabc1728b29436e5fc34014f12fd2e0a72a52adf9b3af5"
+    },
+    {
+      "path": "fix2-review.md",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\task-1-fix-round2-review.md",
+      "sourceSha256": "2dee6f83835cfa621cf7b39222ede372c0836c04e3fe050352c76355e01f45aa",
+      "normalization": "utf8-lf",
+      "sha256": "2dee6f83835cfa621cf7b39222ede372c0836c04e3fe050352c76355e01f45aa"
+    },
+    {
+      "path": "root-audit.mjs",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\root-b1-final-audit.mjs",
+      "sourceSha256": "48fce765e3779e2900431c86d85f559a30e8e35fd6b7a18834c0a69ecaf19578",
+      "normalization": "utf8-lf",
+      "sha256": "48fce765e3779e2900431c86d85f559a30e8e35fd6b7a18834c0a69ecaf19578"
+    },
+    {
+      "path": "root-audit.json",
+      "source": ".superpowers\\sdd\\2026-10-22-context-r4b-semantic-inheritance\\root-b1-final-audit.json",
+      "sourceSha256": "ca77a874dffb43150203052b985b8a54c225aa5f696f734c447966970d729476",
+      "normalization": "utf8-lf",
+      "sha256": "ca77a874dffb43150203052b985b8a54c225aa5f696f734c447966970d729476"
+    },
+    {
+      "path": "current-reader.md",
+      "source": ".tmp/r4b-b1-current-reader-20261023/receipt.md",
+      "sourceSha256": "f424418ba17d42b2b7bb61c594552dc2205d17a2436d970e44b267cecf9874d2",
+      "normalization": "utf8-lf",
+      "sha256": "f424418ba17d42b2b7bb61c594552dc2205d17a2436d970e44b267cecf9874d2"
+    }
+  ],
+  "proof": {
+    "file": "proof.json",
+    "entries": 202,
+    "bytes": 333867,
+    "originalBytes": 791874,
+    "sha256": "dd1b163eb0f4fa7ae816cef81b403cb34780ec9a9ca1fff71c1a5714dc2c4e27"
+  },
+  "limits": [
+    "historical RED/GREEN timings retained; only stated final suites bind final source",
+    "raw fork baseline and staged unused export remain until connected B2",
+    "no B2/B3/native/connected100MiB/R6 whole-history or release acceptance"
+  ]
+}

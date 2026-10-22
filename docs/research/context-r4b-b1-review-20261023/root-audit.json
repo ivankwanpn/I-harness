@@ -1,0 +1,17 @@
+{
+  "kind": "static source/evidence/capsule audit; no product execution",
+  "head": "594f4b259ae62e32b7ec3e3050345deeb2dbeb79",
+  "historicalBlobChecks": 109,
+  "currentProductFiles": 90,
+  "logs": 133,
+  "reusedPredecessorFiles": 8,
+  "capsuleFiles": 178,
+  "genuineOldGraphFiles": 177,
+  "totalCapsuleFileBytes": 860662,
+  "dirty": [
+    "docs/refactoring/context-engine-progress.md",
+    "docs/research/2026-10-22-context-r4b-design-decisions.md",
+    "docs/superpowers/plans/2026-10-22-context-r4b-semantic-inheritance.md"
+  ],
+  "errors": []
+}
