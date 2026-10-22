@@ -12,6 +12,7 @@ export function createMutations(
     Pick<Ownership, "lockEnabled" | "ownerOf" | "withSessionOperation" | "ensureOwnership" | "releaseOwnershipUnlocked">,
   maxDelayMs: number,
   report: (error: unknown) => void,
+  assertManagedMutation: (id: string) => void = () => {},
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
@@ -23,7 +24,9 @@ export function createMutations(
       staged.commit()
     } catch (error) { conversation.invalidate(sessionId); throw error }
   }
-  function assertWritable(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
+  function assertWritableBootstrap(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
+
+  function assertWritable(id: string) { assertWritableBootstrap(id); assertManagedMutation(id) }
 
   const writeBehindFor = (sessionId: string): SessionWriteBehind => {
     let wb = writeBehinds.get(sessionId)
@@ -36,6 +39,7 @@ export function createMutations(
         // survives background write failures for the same reason.
         write: async (events) => {
           await withSessionOperation(sessionId, async () => {
+            assertManagedMutation(sessionId)
             await ensureOwnership(sessionId)
             await appendUnlocked(sessionId, events)
           })
@@ -49,7 +53,7 @@ export function createMutations(
 
   return {
     ensureWritableFormat(sessionId: string) { return withSessionOperation(sessionId, async () => { assertWritable(sessionId); await ensureOwnership(sessionId); await ensureWritableFormatUnlocked(backend, sessionId); conversation.invalidate(sessionId); return { formatVersion: CURRENT_FORMAT_VERSION } }) },
-    assertWritable,
+    assertWritable, assertWritableBootstrap,
     invalidateConversation: (sessionId: string) => conversation.invalidate(sessionId),
     clearConversationIndexes: () => conversation.clear(),
     closeAdmission: (sessionId: string) => { deleted.add(sessionId); conversation.invalidate(sessionId) },
@@ -62,6 +66,7 @@ export function createMutations(
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       assertWritable(id)
       return withSessionOperation(id, async () => {
+        assertManagedMutation(id)
         // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
         // conflicting writer can never clobber the session; the typed Conflict/
         // Unsupported error propagates fail-closed.
@@ -88,6 +93,7 @@ export function createMutations(
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
       await withSessionOperation(sessionId, async () => {
+        assertManagedMutation(sessionId)
         await ensureOwnership(sessionId) // acquire-at-first-use (M23)
         await appendUnlocked(sessionId, events)
       })
@@ -104,6 +110,7 @@ export function createMutations(
       // Mutating path (M23 discipline, same as append): the rewrite must be
       // serialized with appends/write-behind flushes on the same session.
       return withSessionOperation(sessionId, async () => {
+        assertManagedMutation(sessionId)
         await ensureOwnership(sessionId)
         const previous = await ensureWritableFormatUnlocked(backend, sessionId)
         if (Object.hasOwn(patch, "subagentProtocolVersion") && patch.subagentProtocolVersion !== previous.meta?.subagentProtocolVersion) throw new Error("Subagent protocol is immutable creation metadata")
@@ -122,6 +129,7 @@ export function createMutations(
       const pending = writeBehinds.get(sessionId)
       if (pending) await pending.flush()
       await withSessionOperation(sessionId, async () => {
+        assertManagedMutation(sessionId)
         const acquired = lockEnabled && !ownerOf(sessionId)
         await ensureOwnership(sessionId)
         try { await ensureWritableFormatUnlocked(backend, sessionId) }

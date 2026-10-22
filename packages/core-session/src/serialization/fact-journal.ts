@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import type { SessionEvent } from '../events/types.ts'
 import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix } from '../managed/types.ts'
 import { stringifyJsonData } from './json-data.ts'
-import { validateConversationHistory } from '../conversation/validation.ts'
+import { validateConversationHistory, createBootstrapConversationIndex } from '../conversation/validation.ts'
 
 const digestPattern = /^[a-f0-9]{64}$/
 const fail = (): never => { throw new TypeError('Invalid fact journal frame or digest') }
@@ -65,6 +65,18 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
 /** Decodes complete frames only. A torn final envelope is a private suffix;
  * corrupt complete frames fail closed rather than shortening valid history. */
 export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion = 6, header?: import('../conversation/generation.ts').GenerationHistoryScope) {
+  const decoded = decodeJournal(body, metadata)
+  validateConversationHistory(decoded.events, formatVersion, header)
+  return { events: decoded.events, prefix: decoded.prefix, torn: decoded.torn }
+}
+
+/** Internal bootstrap composition only: same physical decoder, no repair. */
+export function readBootstrapFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion: number, header: import('../conversation/generation.ts').GenerationHistoryScope) {
+  const decoded = decodeJournal(body, metadata)
+  createBootstrapConversationIndex(decoded.events, undefined, formatVersion, header)
+  return decoded
+}
+function decodeJournal(body: Uint8Array, metadata: JournalMetadata) {
   if (!validJournalMetadata(metadata)) fail()
   const buffer = Buffer.from(body), legacy = buffer.subarray(0, metadata.legacyBodyBytes)
   if (legacy.length !== metadata.legacyBodyBytes || legacyPrefixDigest(metadata.legacyEventCount, legacy) !== metadata.legacyPrefixDigest) fail()
@@ -76,15 +88,16 @@ export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, for
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest
+  const frames: { prefix: JournalPrefix; batch: EncodedFactBatch }[] = []
   while (offset < buffer.length) {
     const end = buffer.indexOf(0x0a, offset)
     if (end < 0) break
     const frame = decodeFactBatch(buffer.subarray(offset, end + 1))
     if (frame.key.firstSeq !== events.length || frame.key.previousPrefixDigest !== prefixDigest) fail()
+    frames.push({ prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, batch: { key: frame.key, bytes: buffer.subarray(offset, end + 1) } })
     for (const event of frame.events) events.push(event)
     prefixDigest = frame.prefixDigest
     offset = end + 1
   }
-  validateConversationHistory(events, formatVersion, header)
-  return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length }
+  return { events, prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, torn: offset !== buffer.length, frames }
 }

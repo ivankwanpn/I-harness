@@ -37,6 +37,10 @@ export interface SessionModelSelection {
 // concrete backend (e.g. JSONL now, SQLite later) implements it. Capabilities
 // declare what consumers may rely on (F01-5).
 export interface PersistenceBackend {
+  prepareBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['prepareBootstrapHeader']
+  reconcileBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['reconcileBootstrapHeader']
+  readBootstrapState?: import('./bootstrap-types.ts').BootstrapBackend['readBootstrapState']
+  confirmBootstrapFrames?: import('./bootstrap-types.ts').BootstrapBackend['confirmBootstrapFrames']
   readJournalPrefix?: import('./fact-types.ts').OwnedFactBackend['readJournalPrefix']
   appendOwnedBatch?: import('./fact-types.ts').OwnedFactBackend['appendOwnedBatch']
   reconcileOwnedBatch?: import('./fact-types.ts').OwnedFactBackend['reconcileOwnedBatch']
@@ -102,6 +106,9 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  bootstrapSemanticTarget(request: import('./bootstrap-types.ts').BootstrapRequest, guards: import('./bootstrap-types.ts').BootstrapGuards): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
+  resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
+  inspectBootstrap(invocation: import('./bootstrap-types.ts').BootstrapInvocation): Promise<import('./bootstrap-types.ts').BootstrapInspection>
   readonly storageRoot?: string
   /** Fires only after the actual backend confirms its owned deletion. */
   onDocumentDeleted?(listener: (sessionId: string, manifest: SessionArtifactManifest) => Promise<void>): () => void

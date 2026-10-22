@@ -1,55 +1,69 @@
-import type { Session } from '@i-harness/core-session'
+import type { Session, JournalPrefix } from '@i-harness/core-session'
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
+import type { Mutations } from './mutations.ts'
 import { createManagedDocument } from './managed-document.ts'
 import { heldFactOwner } from './fact-owner.ts'
+import { createBootstrapOwner, type ManagedEntry } from './bootstrap.ts'
 
-/** Composition registry shares the existing owned load and lane. Completed
- * documents are retained until their explicit lifecycle close, never mirrored. */
+/** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void) {
+  report: (error: unknown) => void, mutations: Mutations) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
-  type Document = ReturnType<typeof createManagedDocument>
-  const documents = new Map<string, Promise<Document>>()
-  const resolved = new Map<string, Document>(), revoked = new Set<string>()
+  const documents = new Map<string, ManagedEntry>()
+  const resolved = new Map<string, ReturnType<typeof createManagedDocument>>()
+  function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
+    if(entry.document)return entry.document
+    const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined)
+    entry.document=document
+    const close=document.close
+    document.close=async()=>{await close();if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}}
+    if(entry.revoked)document.revokeNewWork()
+    if(!entry.bootstrap)resolved.set(id,document)
+    return document
+  }
+  function assertEntry(entry:ManagedEntry|undefined) {
+    if(entry?.bootstrap && !entry.ready)throw new FactRecoveryRequiredError()
+  }
+  async function closeOne(id:string) {
+    const entry=documents.get(id);if(!entry)return
+    entry.revoked=true;entry.document?.revokeNewWork();await entry.flight
+    if(entry.headerUnknown)throw new FactRecoveryRequiredError()
+    if(entry.document)await entry.document.close()
+    else if(documents.get(id)===entry)documents.delete(id)
+  }
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
   return {
-    has: (id: string) => documents.has(id),
-    revoke(id: string) { if (documents.has(id)) { revoked.add(id); resolved.get(id)?.revokeNewWork() } },
-    async assertObservable(id: string) { (await documents.get(id))?.assertObservable() },
-    async snapshot(id: string) { const document = await documents.get(id); document?.assertObservable(); return document?.view },
-    async closeOne(id: string) { await (await documents.get(id))?.close() },
-    open(id: string): Promise<Document> {
-      if (!ownership.lockEnabled || !backend.appendOwnedBatch || !backend.reconcileOwnedBatch || !backend.readJournalPrefix) {
-        return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'), { code: 'FACT_OWNER_UNSUPPORTED' }))
-      }
-      const existing = documents.get(id)
-      if (existing) return existing
-      const operation = (async () => {
-        const { session } = await loadOwned(id)
-        return ownership.withSessionOperation(id, async () => {
+    ...bootstrap,
+    has:(id:string)=>documents.has(id),
+    assertMutation(id:string){assertEntry(documents.get(id))},
+    revoke(id:string){const entry=documents.get(id);if(entry){entry.revoked=true;entry.document?.revokeNewWork()}},
+    async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
+    async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
+    closeOne,
+    open(id:string):Promise<ReturnType<typeof createManagedDocument>> {
+      if(!ownership.lockEnabled||!backend.appendOwnedBatch||!backend.reconcileOwnedBatch||!backend.readJournalPrefix)return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'),{code:'FACT_OWNER_UNSUPPORTED'}))
+      const existing=documents.get(id)
+      if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
+      const entry:ManagedEntry={};documents.set(id,entry)
+      const operation=(async()=>{
+        const {session}=await loadOwned(id)
+        return ownership.withSessionOperation(id,async()=>{
           ownership.assertHeld(id)
-          const prefix = await backend.readJournalPrefix!(id, heldFactOwner({ sessionId: id, incarnation: 'cold-recovery' }, ownership, () => {}))
-          if (prefix.eventCount !== session.events.length) throw new Error('Managed recovery archive mismatch')
-          const document = createManagedDocument(id, session, prefix, backend, ownership, options, report)
-          const close = document.close
-          document.close = async () => { await close(); if (documents.get(id) === operation) { documents.delete(id); resolved.delete(id); revoked.delete(id) } }
-          resolved.set(id, document)
-          if (revoked.has(id)) document.revokeNewWork()
-          return document
+          const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{}))
+          if(prefix.eventCount!==session.events.length)throw new Error('Managed recovery archive mismatch')
+          return attach(id,entry,session,prefix)
         })
       })()
-      documents.set(id, operation)
-      operation.catch(() => { if (documents.get(id) === operation) { documents.delete(id); resolved.delete(id); revoked.delete(id) } })
+      entry.flight=operation
+      operation.catch(()=>{if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}})
       return operation
     },
-    async close() {
-      const results = await Promise.allSettled([...documents.values()].map(async document => (await document).close()))
-      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-      if (errors.length) throw new AggregateError(errors, 'Managed documents require recovery before close')
-      documents.clear()
-    },
+    async close(){const results=await Promise.allSettled([...documents.keys()].map(closeOne));const errors=results.flatMap(r=>r.status==='rejected'?[r.reason]:[]);if(errors.length)throw new AggregateError(errors,'Managed documents require recovery before close')},
   }
 }

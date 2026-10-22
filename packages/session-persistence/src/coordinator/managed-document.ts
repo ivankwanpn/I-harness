@@ -1,3 +1,5 @@
+import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
+import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
 import { captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, } from '@i-harness/core-session';
 import type { BackendFactOutcome, ManagedDocument } from './fact-types.ts';
@@ -27,7 +29,8 @@ type Authorization = {
     assertSource?: () => void;
 };
 type Entry = {
-    group: CapturedFactGroup;
+    group?: CapturedFactGroup;
+    bootstrap?: { phase: 'seed' | 'completion'; events: readonly import('@i-harness/core-session').SessionEvent[]; batchId: string };
     ticket: Ticket;
     resolve(outcome: FactOutcome): void;
     bytes: number;
@@ -46,10 +49,11 @@ type Pending = {
 };
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }): ManagedDocument & {
     assertObservable(): void;
 } {
-    const state = createManagedSessionState(source, { sessionId: id }), incarnation = randomUUID();
+    const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
+    let bootstrapReady = !bootstrap;
     const formatVersion = source.formatVersion;
     const owner = Object.freeze({ sessionId: id, incarnation });
     const maxPendingGroups = options?.maxPendingGroups ?? 64, targetBytes = options?.coalesceTargetBytes ?? 262144;
@@ -128,7 +132,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 const seqs = entry.seqs!;
                 entry.ticket.release();
                 const outcome = Object.freeze({ kind: 'committed' as const, receipt, seqs });
-                sourceDispositions.set(entry.group, outcome);
+                if (entry.group) sourceDispositions.set(entry.group, outcome);
                 return outcome;
             });
             return { results, observe: true, cleanupDiagnostic };
@@ -139,7 +143,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             pending = undefined;
             for (const entry of current.entries) {
                 entry.ticket.release();
-                sourceDispositions.set(entry.group, outcome);
+                if (entry.group) sourceDispositions.set(entry.group, outcome);
             }
         }
         return { results: current.entries.map(() => outcome), observe: false };
@@ -158,11 +162,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 while (queue.length && (!entries.length || bytes + queue[0]!.bytes <= targetBytes
                     && queue[0]!.authorization.action === entries[0]!.authorization.action
                     && queue[0]!.authorization.source === entries[0]!.authorization.source
-                    && queue[0]!.authorization.required === entries[0]!.authorization.required)) {
+                    && queue[0]!.authorization.required === entries[0]!.authorization.required
+                    && !queue[0]!.bootstrap && !entries[0]!.bootstrap)) {
                     const entry = queue.shift()!;
                     try {
                         assertAuthorized(entry.authorization);
-                        const suffix = resolveFactGroup(entry.group, state.view, prefix.eventCount + events.length);
+                        const suffix = entry.bootstrap ? [...entry.bootstrap.events] : resolveFactGroup(entry.group!, state.view, prefix.eventCount + events.length);
+                        if (entry.bootstrap && suffix.some((event, position) => event.seq !== prefix.eventCount + events.length + position)) throw new TypeError('Invalid bootstrap phase sequence');
                         entry.seqs = Object.freeze(suffix.map(event => event.seq!));
                         entries.push(entry);
                         events.push(...suffix);
@@ -180,7 +186,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 try {
                     const staged = state.stage(events);
                     preflightBatchShape(formatVersion, staged.events);
-                    const batch = encodeFactBatch(randomUUID(), prefix.prefixDigest, staged.events);
+                    const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
                     current = { batch, prefix, entries, events: staged.events, install: staged.install, issued: false };
                     pending = current;
                     const operation = current;
@@ -228,6 +234,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         });
     };
     async function admit(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false): Promise<FactOutcome> {
+        if (!bootstrapReady) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
         if (closed || closing && !authorization.required)
             return { kind: 'not-issued', code: 'FACT_CLOSED' };
         if (!authorization.required && (authorization.action.stopped || authorization.action.signal?.aborted))
@@ -261,6 +268,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     } = {
         importSeed: events => admit({ kind: 'seed-import', events }, rootAuthorization),
         assertReady() {
+            if (!bootstrapReady) throw new FactRecoveryRequiredError();
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
@@ -273,6 +281,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         ...ports,
         registerReceivedInputSource(drain) {
+            if (!bootstrapReady) throw new FactRecoveryRequiredError();
             assertAuthorized(rootAuthorization);
             const required: Authorization = { action: { stopped: false }, required: true, assertSource: () => source.assertHeld() };
             const source = createReceivedInputSource(drain, {
@@ -292,6 +301,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             return source;
         },
         beginAction(signal) {
+            if (!bootstrapReady) throw new FactRecoveryRequiredError();
             const cancel = new AbortController();
             const action: Action = { signal: signal ? AbortSignal.any([signal, cancel.signal]) : cancel.signal, stopped: false, cancel }, authorization = { action, required: false };
             assertAuthorized(authorization);
@@ -355,7 +365,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         ownsAction: action => ownedActions.has(action),
         assertObservable() {
-            if (pending || quarantined)
+            if (!bootstrapReady || pending || quarantined)
                 throw new FactRecoveryRequiredError();
         },
         view: state.view,
@@ -397,6 +407,17 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             closed = true;
         },
     };
+    bootstrap?.bind({ held, ready() { bootstrapReady = true; },
+        async admit(phase, events, guards) {
+            const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
+            const authorization: Authorization = { action: { stopped: false, signal: guards.signal }, required: false, source: bootstrap, assertSource };
+            if (pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+            const ticket = await capacity.acquire(guards.signal);
+            if (typeof ticket === 'string') return { kind: 'not-issued', code: ticket };
+            try { assertAuthorized(authorization); } catch (error) { ticket.release(); return {kind:'not-issued',code:(error as {code?: 'FACT_CANCELLED'}).code ?? 'FACT_PRECONDITION_STALE'}; }
+            return new Promise(resolve => { queue.push({ bootstrap: {phase, events, batchId: 'bootstrap:' + bootstrap.operationId + ':' + (phase === 'seed' ? 'seed' : 'complete')}, ticket, resolve, bytes: Buffer.byteLength(stringifyJsonData(events)!), authorization }); schedule(); });
+        }
+    });
     state.bindOwner(document);
     return document;
 }

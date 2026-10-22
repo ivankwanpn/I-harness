@@ -2,7 +2,8 @@ import type { SemanticSeedV1, SeedGroup, Digest } from '../conversation/seed-typ
 
 export interface BootstrapInvocation { version: 1; operationId: string; targetSessionId: string; createdAt: string; requestDigest: Digest }
 export type BootstrapPhase = 'header' | 'dependencies' | 'seed' | 'completion'
-export interface BootstrapResumeToken { version: 1; invocation: BootstrapInvocation; manifestDigest: Digest; phase: BootstrapPhase }
+export type BootstrapResumeToken = { version: 1; invocation: BootstrapInvocation; manifestDigest: Digest; phase: BootstrapPhase }
+  | { version: 1; invocation: BootstrapInvocation; phase: 'header'; manifest: 'unknown' }
 export interface ChildBootstrapIntent { version: 1; invocation: BootstrapInvocation; startedAt: number; expiresAt: number }
 export interface SeedHeaderV1 {
   version: 1; codec: 'semantic-seed-v1'; operationId: string; requestDigest: Digest; manifestDigest: Digest; seedDigest: Digest

@@ -1,0 +1,384 @@
+import { afterEach, expect, it, vi } from 'vitest'
+import { mkdtemp, readFile, rm, open, rename, readdir, writeFile, copyFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import * as persistence from '@i-harness/session-persistence'
+import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, createSession, append, exportConversationSeed, legacyPrefixDigest } from '@i-harness/core-session'
+import { createJsonlBackend } from '../src/index.ts'
+
+const roots: string[] = [], coordinators: any[] = []
+vi.mock('node:fs/promises', async original => { const fs=await original<typeof import('node:fs/promises')>(); return {...fs,open:vi.fn(fs.open),rename:vi.fn(fs.rename)} })
+const installCut=vi.hoisted(()=>({enabled:false}))
+vi.mock('@i-harness/core-session/internal/bootstrap',async original=>{
+  const api=await original<typeof import('@i-harness/core-session/internal/bootstrap')>()
+  return {...api,createBootstrapManagedSessionState:(...args:Parameters<typeof api.createBootstrapManagedSessionState>)=>{
+    const state=api.createBootstrapManagedSessionState(...args),stage=state.stage
+    state.stage=events=>{const staged=stage(events);return {...staged,install(){if(installCut.enabled){installCut.enabled=false;throw new Error('controlled installation cut')}staged.install()}}}
+    return state
+  }}
+})
+afterEach(async () => { for (const c of coordinators.splice(0)) await c.close().catch(() => {}); for (const r of roots.splice(0)) await rm(r, { recursive: true, force: true }) })
+async function setup() {
+  const root = await mkdtemp(join(tmpdir(), 'ih-bootstrap-')); roots.push(root)
+  const backend = createJsonlBackend(root)
+  const coordinator = persistence.createSessionCoordinator(backend, { lock: { enabled: true } }); coordinators.push(coordinator)
+  return { root, backend, coordinator: coordinator as any }
+}
+const request = ():persistence.BootstrapRequest => ({ invocation: { version: 1, operationId: 'operation', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) },
+  target: { kind: 'new' }, metadata: { title: 'original' }, lineage: { origin: 'fork', parentSession: 'parent' },
+  seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' }, records: [] } })
+const guards = { assertCurrent() {}, dependencies: { async confirm() { throw new Error('empty dependencies must not call port') }, async reconcile() { throw new Error('empty dependencies must not call port') } } }
+function seeded(initial=false):any {
+  const r:any=request(),source=createSession();append(source,{type:'user/message',text:'original source'})
+  const exported=exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'all'})
+  if(exported.kind!=='seed')throw new Error('seed refused')
+  r.seed=persistence.compileSemanticSeed(exported)
+  if(initial)r.initial={inputId:'initial',text:'do task once',parentSessionId:'parent',startedAt:100,expiresAt:200}
+  return r
+}
+function dependent(anonymous=false):persistence.BootstrapRequest {
+  const r=request(),source=createSession()
+  const ref={version:1 as const,id:'ctxv1_'+'c'.repeat(64),revision:'d'.repeat(64),codec:'json-utf8-v1' as const,encodedBytes:10,contentDigest:'e'.repeat(64),completeness:'complete' as const}
+  append(source,{type:'step/start'});append(source,{type:'tool/call',callId:'ref',name:'read',args:{}});append(source,{type:'assistant/message',text:''})
+  append(source,{type:'tool/result',callId:'ref',name:'read',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'artifact preview',media:[],retention:{kind:'artifact',ref}}});append(source,{type:'step/end'})
+  const exported=exportConversationSeed(source,anonymous?{kind:'anonymous'}:{kind:'session',sessionId:'parent'},{kind:'all'})
+  if(exported.kind!=='seed')throw new Error('dependency export refused')
+  r.seed=persistence.compileSemanticSeed(exported)
+  if(anonymous)r.lineage={origin:'import'}
+  return r
+}
+async function copyStore(root:string) {
+  const other=await mkdtemp(join(tmpdir(),'ih-bootstrap-cold-'));roots.push(other)
+  for(const file of await readdir(root))if(file.endsWith('.jsonl')||file.endsWith('.stage')||file.endsWith('.publish'))await copyFile(join(root,file),join(other,file))
+  const backend=createJsonlBackend(other),coordinator=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(coordinator)
+  return {root:other,backend,coordinator}
+}
+
+it('creates a zero-prefix target with one real completion frame and joins same-operation reentry', async () => {
+  const { root, coordinator } = await setup(), r = request()
+  const [a, b] = await Promise.all([coordinator.bootstrapSemanticTarget(r, guards), coordinator.bootstrapSemanticTarget(r, guards)])
+  expect(a.kind).toBe('ready'); expect(b.document).toBe(a.document)
+  const raw = (await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n').map(line => JSON.parse(line))
+  expect(raw[0].semanticSeed.seedLength).toBe(0)
+  expect(raw[1]).toMatchObject({ batchId: 'bootstrap:operation:complete', firstSeq: 0, count: 1 })
+  expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({ kind: 'ready', needsConfirmation: true })
+  const adopted = await coordinator.resumeSemanticTarget(r.invocation, guards)
+  expect(adopted.kind).toBe('already-ready'); expect(adopted.receipt.completion.key).toEqual(a.receipt.completion.key)
+})
+it('refuses an already-open ordinary empty target and nonempty no-turn target without changing bytes', async () => {
+  const { root, coordinator } = await setup(), r = request()
+  await coordinator.create({ sessionId: 'target', createdAt: r.invocation.createdAt })
+  await coordinator.openManagedDocument('target')
+  const before = await readFile(join(root, 'target.jsonl'))
+  expect(await coordinator.bootstrapSemanticTarget(r, guards)).toMatchObject({ kind: 'refused', reason: 'cached-unprepared' })
+  expect(await readFile(join(root, 'target.jsonl'))).toEqual(before)
+})
+it('reserves an exact uncached existing-empty target and preserves unrelated raw metadata',async()=>{
+  const {root,backend,coordinator}=await setup(),r:any=request()
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
+  const path=join(root,'target.jsonl'),raw=JSON.parse(await readFile(path,'utf8'));raw.extension={original:'preserved'}
+  const before=JSON.stringify(raw)+'\n';await writeFile(path,before)
+  r.target={kind:'existing-empty',expectedHeaderDigest:createHash('sha256').update(before).digest('hex'),expectedPrefix:{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())}}
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'ready'})
+  expect(JSON.parse((await readFile(path,'utf8')).split('\n')[0]!)).toMatchObject({extension:{original:'preserved'},title:'original'})
+  expect((await backend.read('target')).events).toHaveLength(1)
+})
+it('keeps the original manifest ready after mutable metadata edits and a later complete live suffix',async()=>{
+  const {root,coordinator}=await setup(),r=seeded(true)
+  const first=await coordinator.bootstrapSemanticTarget(r,guards);expect(first.kind).toBe('ready')
+  await first.document.metadata.admit({type:'plan/mode',mode:'on'})
+  await coordinator.updateMeta('target',{title:'renamed',archived:true,workspaceId:'new',modelSelection:{provider:'test',model:'new'}})
+  await coordinator.close()
+  const cold=persistence.createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
+  const adopted=await cold.resumeSemanticTarget(r.invocation,guards)
+  expect(adopted.kind).toBe('already-ready')
+  if(adopted.kind!=='already-ready')throw new Error(JSON.stringify(adopted))
+  expect(adopted.receipt.completion.key).toEqual(first.receipt.completion.key)
+  expect(adopted.receipt.completion.owner.incarnation).not.toBe(first.receipt.completion.owner.incarnation)
+  expect(adopted.document.view.events.filter((e:{type:string})=>e.type==='agent/input/admitted')).toHaveLength(1)
+  expect(adopted.document.view.events.at(-1)).toMatchObject({type:'plan/mode',mode:'on'})
+  expect(JSON.parse((await readFile(join(root,'target.jsonl'),'utf8')).split('\n')[0]!)).toMatchObject({title:'renamed',workspaceId:'new',archived:true})
+})
+it.each(['seed','complete'])('reconciles a real synced %s frame after response loss without duplicate inputs or a second view',async phase=>{
+  const {root,backend,coordinator}=await setup(),r=seeded(true),actual=backend.appendOwnedBatch!
+  backend.appendOwnedBatch=async(...args)=>{const result=await actual(...args);return args[3].key.batchId.endsWith(':'+phase)?{kind:'unknown',key:args[3].key}:result}
+  const lost=await coordinator.bootstrapSemanticTarget(r,guards);expect(lost).toMatchObject({kind:'blocked'})
+  await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  await expect(coordinator.snapshot('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+  await expect(coordinator.close()).rejects.toThrow()
+  backend.appendOwnedBatch=actual
+  // Closing revoked optional new work; original passive reconciliation is still permitted.
+  const adopted=await coordinator.resumeSemanticTarget(r.invocation,guards)
+  if(phase==='complete')expect(adopted.kind).toBe('already-ready')
+  else expect(adopted).toMatchObject({kind:'blocked'})
+  const raw=await readFile(join(root,'target.jsonl'),'utf8')
+  expect(raw.match(/"batchId":"bootstrap:operation:seed"/g)).toHaveLength(1)
+  const cold=await copyStore(root)
+  const recovered=await cold.coordinator.resumeSemanticTarget(r.invocation,guards,r)
+  expect(['ready','already-ready']).toContain(recovered.kind)
+  if(recovered.kind!=='ready'&&recovered.kind!=='already-ready')throw new Error(JSON.stringify(recovered))
+  expect(recovered.document.view.events.filter((e:{type:string})=>e.type==='agent/input/admitted')).toHaveLength(1)
+})
+it('retains a partial stage under failed close and honestly resumes cold with original payload',async()=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let cut=true
+  vi.mocked(open).mockImplementation(async(...args)=>{
+    const h=await native.open(...args)
+    if(!String(args[0]).endsWith('.stage'))return h
+    return new Proxy(h,{get(target,name){
+      if(name==='write')return async(buffer:Uint8Array,offset:number,length:number,position:number)=>{if(cut){cut=false;await target.write(buffer,offset,17,position);throw new Error('partial stage cut')}return target.write(buffer,offset,length,position)}
+      const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value
+    }})
+  })
+  try {
+    expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked',token:{phase:'header'}})
+    await expect(coordinator.openManagedDocument('target')).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+    await expect(coordinator.close()).rejects.toThrow()
+    vi.mocked(open).mockImplementation(native.open)
+    const cold=await copyStore(root)
+    const files=await readdir(cold.root),stage=files.find(f=>f.endsWith('.stage'))!,before=await readFile(join(cold.root,stage))
+    expect(before).toHaveLength(17)
+    expect(await cold.coordinator.inspectBootstrap(r.invocation)).toMatchObject({kind:'unavailable',token:{manifest:'unknown'}})
+    expect(await cold.coordinator.resumeSemanticTarget(r.invocation,guards)).toMatchObject({kind:'blocked',reason:'payload-required',token:{manifest:'unknown'}})
+    await expect(cold.coordinator.create({sessionId:'target'})).rejects.toThrow()
+    expect(await readFile(join(cold.root,stage))).toEqual(before)
+    const resumed=await cold.coordinator.resumeSemanticTarget(r.invocation,guards,r)
+    expect(resumed.kind).toBe('ready')
+    expect((await readFile(join(cold.root,stage))).subarray(0,17)).toEqual(before)
+    await coordinator.resumeSemanticTarget(r.invocation,guards,r)
+  }finally{vi.mocked(open).mockImplementation(native.open)}
+})
+it('blocks cold public open and metadata mutations when existing-empty publication has not occurred',async()=>{
+  const {root,backend,coordinator}=await setup(),r:any=request()
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
+  const path=join(root,'target.jsonl'),raw=await readFile(path)
+  r.target={kind:'existing-empty',expectedHeaderDigest:createHash('sha256').update(raw).digest('hex'),expectedPrefix:{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())}}
+  const actual=backend.prepareBootstrapHeader!
+  backend.prepareBootstrapHeader=async(_id,owner,operation)=>{owner.beforeIssue();const key=createHash('sha256').update((await import('@i-harness/core-session')).canonicalJsonData(operation.invocation)).digest('hex');await writeFile(path+'.bootstrap-'+key+'.stage',operation.stageBytes);return {kind:'unknown'}}
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
+  const cold=await copyStore(root)
+  await expect(cold.coordinator.openManagedDocument('target')).rejects.toThrow()
+  await expect(cold.coordinator.updateMeta('target',{title:'hijack'})).rejects.toThrow()
+  await expect(cold.coordinator.append('target',[{type:'plan/mode',mode:'on'}])).rejects.toThrow()
+  expect(await readFile(join(cold.root,'target.jsonl'))).toEqual(raw)
+  backend.prepareBootstrapHeader=actual
+})
+it('does not repair a later torn suffix during ready adoption',async()=>{
+  const {root,coordinator}=await setup(),r=request()
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  await coordinator.close()
+  const path=join(root,'target.jsonl'),before=Buffer.concat([await readFile(path),Buffer.from('{"recordKind":"torn')]);await writeFile(path,before)
+  const cold=persistence.createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}});coordinators.push(cold)
+  expect(await cold.resumeSemanticTarget(r.invocation,guards)).toMatchObject({kind:'blocked'})
+  expect(await readFile(path)).toEqual(before)
+})
+it('refuses changed original materialization and invalid operation IDs before file work',async()=>{
+  const {root,coordinator}=await setup(),r:any=request()
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  expect(await coordinator.bootstrapSemanticTarget({...r,metadata:{title:'other'}},guards)).toMatchObject({kind:'refused',reason:'conflict'})
+  for(const operationId of ['x'.repeat(238),'space id','é'])expect(await coordinator.bootstrapSemanticTarget({...r,invocation:{...r.invocation,operationId,targetSessionId:'invalid'}},guards)).toMatchObject({kind:'refused',reason:'manifest-invalid'})
+  expect(await readdir(root)).not.toContain('invalid.jsonl')
+})
+it('includes exact original and partial staging artifacts in owned deletion and fences resume by tombstone',async()=>{
+  const {root,backend,coordinator}=await setup(),r=request()
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  await coordinator.close()
+  const partial='target.jsonl.bootstrap-'+'f'.repeat(64)+'.stage'
+  await writeFile(join(root,partial),'partial original header operation')
+  const stages=(await readdir(root)).filter(n=>n.endsWith('.stage'))
+  await backend.deleteOwnedSession!('target',{documents:[]})
+  for(const file of stages)expect(await readdir(root)).not.toContain(file)
+  const receipt=await backend.deletionReceipt!('target')
+  expect(receipt!.manifest.files).toEqual(stages.sort())
+  const cold=persistence.createSessionCoordinator(backend,{lock:{enabled:true}});coordinators.push(cold)
+  const resumed=await cold.resumeSemanticTarget(r.invocation,guards,r)
+  expect(resumed.kind).toBe('refused')
+  expect(await readdir(root)).not.toContain('target.jsonl')
+})
+it('refuses metadata-only nonempty targets and a stale source before reservation',async()=>{
+  const {root,coordinator}=await setup(),r=request()
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
+  await coordinator.append('target',[{type:'plan/mode',mode:'on'}])
+  const before=await readFile(join(root,'target.jsonl'))
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'refused',reason:'nonempty'})
+  expect(await readFile(join(root,'target.jsonl'))).toEqual(before)
+  const other={...r,invocation:{...r.invocation,targetSessionId:'stale'}}
+  expect(await coordinator.bootstrapSemanticTarget(other,{...guards,assertCurrent(){throw new Error('source changed')}})).toMatchObject({kind:'not-issued',reason:'stale-source'})
+  expect((await readdir(root)).some(n=>n.startsWith('stale.jsonl'))).toBe(false)
+})
+it('preserves the reserved source and clocks when source changes after real seed sync',async()=>{
+  const {root,backend,coordinator}=await setup(),r=seeded(true),actual=backend.appendOwnedBatch!
+  let fresh=true
+  backend.appendOwnedBatch=async(...args)=>{const result=await actual(...args);if(args[3].key.batchId.endsWith(':seed'))fresh=false;return result}
+  expect(await coordinator.bootstrapSemanticTarget(r,{...guards,assertCurrent(){if(!fresh)throw new Error('changed source')}})).toMatchObject({kind:'blocked',reason:'source-changed'})
+  const raw=await readFile(join(root,'target.jsonl'),'utf8')
+  expect(raw).toContain('original source');expect(raw).not.toContain('"type":"session/bootstrap"')
+  backend.appendOwnedBatch=actual
+  const recovered=await coordinator.resumeSemanticTarget(r.invocation,guards,r)
+  expect(recovered.kind).toBe('ready')
+  if(recovered.kind==='ready')expect(recovered.receipt.initial).toMatchObject({inputId:'initial',startedAt:100,expiresAt:200})
+})
+it('rechecks Stop after stage sync and keeps inspection read-only',async()=>{
+  const {root,coordinator}=await setup(),r=request(),controller=new AbortController(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let syncs=0,writes=0
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);return new Proxy(h,{get(target,name){
+    if(name==='sync')return async()=>{syncs++;await target.sync();if(String(args[0]).endsWith('.stage'))controller.abort()}
+    if(name==='write')return async(...values:Parameters<typeof target.write>)=>{writes++;return (target.write as Function)(...values)}
+    const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value
+  }})})
+  try {
+    expect(await coordinator.bootstrapSemanticTarget(r,{...guards,signal:controller.signal})).toMatchObject({kind:'blocked',token:{phase:'header'}})
+    expect(await readdir(root)).not.toContain('target.jsonl')
+    const counters=[syncs,writes]
+    expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({kind:'reserved'})
+    expect([syncs,writes]).toEqual(counters)
+  }finally{vi.mocked(open).mockImplementation(native.open)}
+})
+it.each(['stage','target'])('completes actual short writes for %s header bytes',async which=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let shorts=0
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args)
+    if(which==='stage'?!String(args[0]).endsWith('.stage'):String(args[0])!==join(root,'target.jsonl')||args[1]!=='wx')return h
+    return new Proxy(h,{get(target,name){if(name==='write')return async(buffer:Uint8Array,offset:number,length:number,position:number)=>{shorts++;return target.write(buffer,offset,Math.min(11,length),position)};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
+  })
+  try{expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready');expect(shorts).toBeGreaterThan(2);expect((await coordinator.openManagedDocument('target')).view.events).toHaveLength(1)}finally{vi.mocked(open).mockImplementation(native.open)}
+})
+it('continues only original matching partial target header bytes without truncation',async()=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let cut=true;const truncates:number[]=[]
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(String(args[0])!==join(root,'target.jsonl'))return h
+    return new Proxy(h,{get(target,name){
+      if(name==='write')return async(buffer:Uint8Array,offset:number,length:number,position:number)=>{if(cut&&args[1]==='wx'){cut=false;await target.write(buffer,offset,13,position);throw new Error('partial target')}return target.write(buffer,offset,length,position)}
+      if(name==='truncate')return async(length:number)=>{truncates.push(length);return target.truncate(length)}
+      const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value
+    }})})
+  try{
+    expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
+    const before=await readFile(join(root,'target.jsonl'));expect(before).toHaveLength(13)
+    expect((await coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+    expect((await readFile(join(root,'target.jsonl'))).subarray(0,13)).toEqual(before)
+    // Journal absence confirmation may truncate an empty suffix; the header
+    // operation itself completed before that separate qualified batch step.
+  }finally{vi.mocked(open).mockImplementation(native.open)}
+  const final=await readFile(join(root,'target.jsonl'));expect(truncates.every(n=>n>=final.indexOf(10)+1)).toBe(true)
+})
+it('retains a synced deterministic frame through installation failure and installs once on reconcile',async()=>{
+  const {root,coordinator}=await setup(),r=seeded(true)
+  installCut.enabled=true
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
+  expect((await readFile(join(root,'target.jsonl'),'utf8')).match(/"batchId":"bootstrap:operation:seed"/g)).toHaveLength(1)
+  const recovered=await coordinator.resumeSemanticTarget(r.invocation,guards,r)
+  expect(recovered.kind).toBe('ready')
+  if(recovered.kind==='ready')expect(recovered.document.view.events.filter((e:{type:string})=>e.type==='agent/input/admitted')).toHaveLength(1)
+})
+it('reconciles matching partial seed only through the original journal absence proof',async()=>{
+  const {root,coordinator}=await setup(),r=seeded(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  let failed=false
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(String(args[0])!==join(root,'target.jsonl')||args[1]!=='r+')return h
+    return new Proxy(h,{get(target,name){
+      if(name==='write')return async(buffer:Uint8Array,offset:number,length:number,position:number)=>{if(Buffer.from(buffer).toString().includes('bootstrap:operation:seed')){failed=true;await target.write(buffer,offset,29,position);throw new Error('partial seed')}return target.write(buffer,offset,length,position)}
+      if(name==='truncate'||name==='sync')return async()=>{if(failed)throw new Error('absence proof unavailable');return name==='sync'?target.sync():target.truncate()}
+      const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value
+    }})})
+  try{expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'});expect((await readFile(join(root,'target.jsonl'),'utf8')).endsWith('\n')).toBe(false)}finally{vi.mocked(open).mockImplementation(native.open)}
+  expect((await coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+  expect((await readFile(join(root,'target.jsonl'),'utf8')).match(/"batchId":"bootstrap:operation:seed"/g)).toHaveLength(1)
+})
+it('adopts an existing-empty rename whose response was lost',async()=>{
+  const {root,coordinator}=await setup(),r:any=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt});const before=await readFile(join(root,'target.jsonl'))
+  r.target={kind:'existing-empty',expectedHeaderDigest:createHash('sha256').update(before).digest('hex'),expectedPrefix:{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())}}
+  vi.mocked(rename).mockImplementation(async(...args)=>{await native.rename(...args);if(String(args[0]).endsWith('.publish'))throw new Error('rename caller response lost')})
+  try{expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})}finally{vi.mocked(rename).mockImplementation(native.rename)}
+  expect((await coordinator.resumeSemanticTarget(r.invocation,guards,r)).kind).toBe('ready')
+})
+it('uses the maximum printable operation ID without exceeding the real frame encoder bound',async()=>{
+  const {root,coordinator}=await setup(),r=request();r.invocation.operationId='x'.repeat(237)
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  const lines=(await readFile(join(root,'target.jsonl'),'utf8')).trimEnd().split('\n')
+  expect(JSON.parse(lines[1]!).batchId).toHaveLength(256)
+})
+it('waits for the exact injected dependency operation and passively checks its stored closure on reentry',async()=>{
+  const {root,coordinator}=await setup(),r=dependent(),gate=Promise.withResolvers<void>(),reached=Promise.withResolvers<void>(),closure='c'.repeat(64)
+  const captured:persistence.BootstrapDependencyRequest[]=[]
+  const g:persistence.BootstrapGuards={assertCurrent(){},dependencies:{async confirm(value){captured.push(value);reached.resolve();await gate.promise;return {kind:'confirmed',closureDigest:closure}},async reconcile(value){captured.push(value);return {kind:'confirmed',closureDigest:closure}}}}
+  const pending=coordinator.bootstrapSemanticTarget(r,g);await reached.promise
+  const before=await readFile(join(root,'target.jsonl'),'utf8');expect(before.trimEnd().split('\n')).toHaveLength(1)
+  await expect(coordinator.openManagedDocument('target')).rejects.toThrow()
+  gate.resolve();const ready=await pending;expect(ready.kind).toBe('ready')
+  expect(captured[0]).toMatchObject({operationId:'operation',sourceSessionId:'parent',targetSessionId:'target',artifacts:[{ref:{id:'ctxv1_'+'c'.repeat(64)}}]})
+  expect(await coordinator.resumeSemanticTarget(r.invocation,{...g,dependencies:{...g.dependencies,async reconcile(){return {kind:'confirmed',closureDigest:'f'.repeat(64)}}}})).toMatchObject({kind:'blocked',reason:'dependency-unavailable'})
+  expect((await coordinator.resumeSemanticTarget(r.invocation,g)).kind).toBe('already-ready')
+})
+it('refuses anonymous artifact authority and stale source after dependency await without seed bytes',async()=>{
+  const {root,coordinator}=await setup(),anonymous=dependent(true)
+  expect(await coordinator.bootstrapSemanticTarget(anonymous,guards)).toMatchObject({kind:'refused',reason:'target-policy'})
+  expect(await readdir(root)).not.toContain('target.jsonl')
+  const r=dependent();let fresh=true
+  const g:persistence.BootstrapGuards={assertCurrent(){if(!fresh)throw new Error('source changed')},dependencies:{async confirm(){fresh=false;return {kind:'confirmed',closureDigest:'c'.repeat(64)}},async reconcile(){return {kind:'blocked',reason:'unavailable'}}}}
+  expect(await coordinator.bootstrapSemanticTarget(r,g)).toMatchObject({kind:'blocked',reason:'source-changed'})
+  expect((await readFile(join(root,'target.jsonl'),'utf8')).trimEnd().split('\n')).toHaveLength(1)
+})
+it('binds the actual original stage metadata and compiled records in a noncircular manifest',async()=>{
+  const {root,coordinator}=await setup(),r=seeded(true)
+  expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')
+  const filename=(await readdir(root)).find(n=>n.endsWith('.stage'))!,stage=JSON.parse(await readFile(join(root,filename),'utf8'))
+  const {canonicalJsonData}=await import('@i-harness/core-session')
+  const preimage={version:1,invocation:stage.invocation,target:stage.originalTarget,metadata:stage.metadata,lineage:stage.lineage,headerBase:stage.headerBase,
+    seed:{digest:stage.seed.digest,dependencyDigest:stage.seed.dependencyDigest,sourceObservation:stage.seed.sourceObservation,records:r.seed.records},initial:stage.initial}
+  const expected=createHash('sha256').update('ih.bootstrap.manifest.v1\0'+canonicalJsonData(preimage)).digest('hex')
+  expect(JSON.parse(stage.headerBytes).semanticSeed.manifestDigest).toBe(expected)
+  expect(stage).not.toHaveProperty('records');expect(JSON.stringify(stage)).not.toContain('do task once');expect(JSON.stringify(stage)).not.toContain('original source')
+  const changed=structuredClone(r);changed.initial.text='a different task'
+  expect(await coordinator.bootstrapSemanticTarget(changed,guards)).toMatchObject({kind:'refused',reason:'conflict'})
+})
+it('rejects callbacks and mismatched compiled source binding before any reservation write',async()=>{
+  const {root,coordinator}=await setup(),r=seeded();let calls=0
+  Object.defineProperty(r.metadata,'title',{enumerable:true,get(){calls++;return 'mutable title'}})
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'refused',reason:'manifest-invalid'})
+  expect(calls).toBe(0)
+  const broken=seeded();broken.seed.sourceObservation.digest='f'.repeat(64)
+  expect(await coordinator.bootstrapSemanticTarget(broken,guards)).toMatchObject({kind:'refused',reason:'manifest-invalid'})
+  expect((await readdir(root)).some(n=>n.startsWith('target.jsonl'))).toBe(false)
+})
+it('passively confirms complete header bytes after sync failure while Stop prevents the next phase',async()=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args)
+    if(String(args[0])!==join(root,'target.jsonl')||args[1]!=='wx')return h
+    return new Proxy(h,{get(target,name){if(name==='sync')return async()=>{throw new Error('target sync cut')};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
+  })
+  try{expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})}finally{vi.mocked(open).mockImplementation(native.open)}
+  const controller=new AbortController();controller.abort()
+  expect(await coordinator.resumeSemanticTarget(r.invocation,{...guards,signal:controller.signal})).toMatchObject({kind:'blocked'})
+  expect((await readFile(join(root,'target.jsonl'),'utf8')).trimEnd().split('\n')).toHaveLength(1)
+  expect((await coordinator.resumeSemanticTarget(r.invocation,guards)).kind).toBe('ready')
+})
+it('keeps header fsync commitment when file close cleanup fails',async()=>{
+  const {root,coordinator}=await setup(),r=request(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args)
+    if(args[1]!=='wx')return h
+    return new Proxy(h,{get(target,name){if(name==='close')return async()=>{await target.close();throw new Error('close after sync')};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})
+  })
+  try{expect((await coordinator.bootstrapSemanticTarget(r,guards)).kind).toBe('ready')}finally{vi.mocked(open).mockImplementation(native.open)}
+  expect((await readFile(join(root,'target.jsonl'),'utf8')).match(/"batchId":"bootstrap:operation:complete"/g)).toHaveLength(1)
+})
+it('rejects a foreign historical receipt after real sync and adopts only the current owner evidence',async()=>{
+  const {root,backend,coordinator}=await setup(),r=request(),actual=backend.confirmBootstrapFrames!
+  backend.confirmBootstrapFrames=async(...args)=>{const result=await actual(...args);return result.kind==='committed'?{...result,receipts:result.receipts.map(receipt=>({...receipt,owner:{...receipt.owner,sessionId:'foreign'}}))}:result}
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'blocked'})
+  await expect(coordinator.openManagedDocument('target')).rejects.toThrow()
+  const before=await readFile(join(root,'target.jsonl'))
+  backend.confirmBootstrapFrames=actual
+  expect((await coordinator.resumeSemanticTarget(r.invocation,guards)).kind).toBe('already-ready')
+  expect(await readFile(join(root,'target.jsonl'))).toEqual(before)
+})
+it('refuses a pending write-behind before bootstrap opening and preserves its accepted drain',async()=>{
+  const {root,coordinator}=await setup(),r=request()
+  await coordinator.create({sessionId:'target',createdAt:r.invocation.createdAt})
+  coordinator.enqueue('target',[{type:'plan/mode',mode:'on'}])
+  expect(await coordinator.bootstrapSemanticTarget(r,guards)).toMatchObject({kind:'refused',reason:'cached-unprepared'})
+  await coordinator.flush('target')
+  expect((await readdir(root)).some(n=>n.endsWith('.stage'))).toBe(false)
+  expect((await coordinator.snapshot('target')).session.events).toEqual([{type:'plan/mode',mode:'on',seq:0}])
+})

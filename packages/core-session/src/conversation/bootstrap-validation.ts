@@ -6,6 +6,7 @@ import { seedCount, seedData, seedDigest, seedFields, seedId, seedInvalid, valid
 import { seedHash, EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './seed-digest.ts'
 import { validateAdmitted, type AdmittedInput } from '../inbox.ts'
 import { validateConversationEventShape } from '../events/conversation.ts'
+import { bootstrapInitialInputDigest } from './bootstrap-initial.ts'
 
 // This capability stays inside the internal composition path. Public index and
 // projection factories never accept it, nor any JSON/header readiness toggle.
@@ -79,8 +80,7 @@ export function validateBootstrapReadiness(events: readonly SessionEventView[], 
         seedFields(event, ['type', 'version', 'seq', 'inputId', 'text', 'delivery', 'intent'], ['provenance', 'preparationPolicy', 'supplementalContext', 'synthetic', 'images', 'clientToken'])
         validateConversationEventShape(event, formatVersion)
         validateAdmitted(event as unknown as AdmittedInput)
-        const { seq: _, ...input } = event
-        if (seedHash('ih.bootstrap.initial-input.v1', { input, startedAt: header.initialStartedAt, expiresAt: header.initialExpiresAt }) !== header.initialInputDigest) seedInvalid()
+        if (bootstrapInitialInputDigest(event, header.initialStartedAt!, header.initialExpiresAt!) !== header.initialInputDigest) seedInvalid()
       }
     }
   }

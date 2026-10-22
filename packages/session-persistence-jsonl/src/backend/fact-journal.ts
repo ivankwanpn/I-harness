@@ -3,6 +3,8 @@ import { CURRENT_FORMAT_VERSION, decodeFactBatch, readFactJournal, validJournalM
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
 import { isHeldFactOwner } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
+import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
+import type { BootstrapBackend } from '@i-harness/session-persistence'
 
 const scope = (id: string, owner: HeldFactOwner) => {
   if (!isHeldFactOwner(owner)) throw new TypeError('Invalid held owner scope')
@@ -42,11 +44,25 @@ async function checkPrefix(handle: FileHandle, h: { meta: SessionMeta; bytes: nu
 
 /** Only the coordinator creates owner contexts. This leaf owns complete writes,
  * fsync evidence and same-issued-batch reconciliation; no write-behind retry. */
-export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>): OwnedFactBackend {
+export function createFactJournalBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>): OwnedFactBackend & Pick<BootstrapBackend,'confirmBootstrapFrames'> {
   const receipt = (owner: HeldFactOwner, batch: EncodedFactBatch, prefixDigest: string): FactReceipt => ({
     owner: { ...owner.owner }, key: { ...batch.key }, lastSeq: batch.key.firstSeq + batch.key.count - 1, prefixDigest,
   })
   return {
+    async confirmBootstrapFrames(id,owner,expected) {
+      scope(id,owner);await assertNotDeleted('session',id)
+      let handle:FileHandle|undefined
+      try {
+        const bytes=await readFile(filePath(id)),end=bytes.indexOf(10),meta=parseHeader(bytes.subarray(0,end).toString('utf8'))
+        const decoded=readBootstrapFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+        if(decoded.torn)return {kind:'unknown'}
+        readFactJournal(bytes.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+        for(const wanted of expected){checkBatch(wanted.prefix,wanted.batch);const frame=decoded.frames.find(frame=>frame.prefix.bodyBytes===wanted.prefix.bodyBytes)
+          if(!frame||JSON.stringify(frame.prefix)!==JSON.stringify(wanted.prefix)||!Buffer.from(frame.batch.bytes).equals(Buffer.from(wanted.batch.bytes)))return {kind:'conflict'}}
+        handle=await open(filePath(id),'r+');scope(id,owner);await handle.sync();scope(id,owner)
+        return {kind:'committed',receipts:expected.map(frame=>receipt(owner,frame.batch,decodeFactBatch(frame.batch.bytes).prefixDigest))}
+      }catch{return {kind:'unknown'}}finally{await handle?.close().catch(()=>{})}
+    },
     async readJournalPrefix(id, owner) {
       scope(id, owner)
       await assertNotDeleted('session', id)

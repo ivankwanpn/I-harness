@@ -7,6 +7,7 @@ import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMet
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
 import { createFactJournalBackend } from './backend/fact-journal.ts'
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
+import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
@@ -31,6 +32,20 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     return candidate
   }
   const filePath = (id: string) => artifactPath(id, ".jsonl")
+  async function assertPublicBootstrap(sessionId: string, creating = false) {
+    const path = filePath(sessionId)
+    if (!(await bootstrapArtifacts(path)).length) return
+    if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
+    const raw = await readFile(path)
+    const end = raw.indexOf(10), meta = parseHeader(raw.subarray(0, end).toString('utf8'))
+    if (!meta.semanticSeed) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
+    // Only the immutable bootstrap prefix is needed. Do not parse a live suffix
+    // (including its torn tail) merely to update ordinary title/model metadata.
+    let boundary = end
+    const frames = meta.semanticSeed.seedLength ? 2 : 1
+    for (let index = 0; index < frames; index++) { boundary = raw.indexOf(10, boundary + 1); if (boundary < 0) throw Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' }) }
+    readFactJournal(raw.subarray(end + 1, boundary + 1), meta.journal!, meta.formatVersion, meta)
+  }
   const docPath = (key: string) => artifactPath(key, ".doc.jsonl")
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
   async function assertNotDeleted(kind: string, id: string) {
@@ -78,6 +93,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
   return {
     ...createFactJournalBackend(filePath, assertNotDeleted),
+    ...createBootstrapHeaderBackend(filePath, assertNotDeleted),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -87,6 +103,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId, true)
       if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")
       await mkdir(rootPath, { recursive: true })
       // wx: fail if the session file already exists.
@@ -96,6 +113,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async append(sessionId: string, events: SessionEvent[]): Promise<void> {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
       const header = await readHeader(path)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
@@ -141,6 +159,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async read(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId)
       const text = await readFile(filePath(sessionId), "utf-8")
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
@@ -160,6 +179,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     },
 
     async repair(sessionId: string): Promise<{ version: number; events: SessionEvent[]; meta?: SessionMeta }> {
+      await assertPublicBootstrap(sessionId)
       await assertNotDeleted("session", sessionId)
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
@@ -203,6 +223,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async replaceEvents(sessionId, events) {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
       const text = await readFile(path, "utf-8")
       const headerLine = text.split("\n")[0]!
@@ -221,6 +242,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId)
       if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       return upgradeFactJournal(path, expected)
@@ -246,6 +268,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
     async updateMeta(sessionId, patch) {
       await assertNotDeleted("session", sessionId)
+      await assertPublicBootstrap(sessionId)
       const path = filePath(sessionId)
       // Header rewrite: replace line 0 only; event lines are kept byte-exact
       // (a torn tail is preserved as-is, repair's business). Atomic temp +
@@ -292,17 +315,21 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const digest = createHash("sha256").update(sessionId).digest("hex")
       const owned = new Set([sessionId, `task-${sessionId}`, `session-title/${sessionId}`, `desktop-navigation-${digest}`, `desktop-session-project-${digest}`, `approval-history-${digest}`, `desktop-goal-${digest}`, `desktop-input-tokens-${digest}`])
       if (manifest.documents.some(key => !owned.has(key))) throw new Error("Document manifest includes an artifact not owned by this session")
-      const files = [...(manifest.files ?? [])].sort()
-      if (new Set(files).size !== files.length) throw new Error("Owned file manifest contains duplicate identities")
-      if (files.length > 100000 || files.some(file => !new RegExp(`^rewind/${sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:points\\.jsonl|meta\\.json|pending\\.json|orphaned\\.jsonl|blobs/[a-f0-9]{64})$`).test(file))) throw new Error("Invalid owned file manifest")
-      const paths = [filePath(sessionId), ...manifest.documents.map(docPath), ...files.map(file => artifactPath(file, ""))]
-      for (const path of paths) await confined(path)
       const marker = tombPath("session", sessionId)
       await confined(marker)
       const prior = await readFile(marker, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error })
+      const receipt = prior === undefined ? undefined : await deletionReceipt(sessionId)
+      const stagePrefix = sessionId + '.jsonl.bootstrap-'
+      const isStage = (file: string) => file.startsWith(stagePrefix) && /^[a-f0-9]{64}\.(stage|publish)$/.test(file.slice(stagePrefix.length))
+      const declared = [...(manifest.files ?? [])]
+      if (new Set(declared).size !== declared.length) throw new Error("Owned file manifest contains duplicate identities")
+      const files = [...new Set([...declared, ...await bootstrapArtifacts(filePath(sessionId)), ...(receipt?.manifest.files ?? []).filter(isStage)])].sort()
+      if (new Set(files).size !== files.length) throw new Error("Owned file manifest contains duplicate identities")
+      if (files.length > 100000 || files.some(file => !isStage(file) && !new RegExp(`^rewind/${sessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/(?:points\\.jsonl|meta\\.json|pending\\.json|orphaned\\.jsonl|blobs/[a-f0-9]{64})$`).test(file))) throw new Error("Invalid owned file manifest")
+      const paths = [filePath(sessionId), ...manifest.documents.map(docPath), ...files.map(file => artifactPath(file, ""))]
+      for (const path of paths) await confined(path)
       const header = prior === undefined ? await readHeader(filePath(sessionId)) : undefined
       if (header && header.sessionId !== sessionId) throw new Error("Owned session identity does not match artifact")
-      const receipt = prior === undefined ? undefined : await deletionReceipt(sessionId)
       const visibility = header ? { ...(header.origin !== undefined ? { origin: header.origin } : {}), ...(header.parentSession !== undefined ? { parentSession: header.parentSession } : {}) } : receipt?.visibility
       const document = JSON.stringify({ version: visibility ? 2 : 1, sessionId, ...(visibility ? { visibility } : {}), documents: [...manifest.documents].sort(), files })
       if (prior !== undefined && prior.trimEnd() !== document) throw new Error("Deletion artifact manifest changed")

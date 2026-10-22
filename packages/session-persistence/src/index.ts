@@ -6,6 +6,10 @@ import { createLoads } from "./coordinator/load.ts"
 import { createLifecycle } from "./coordinator/lifecycle.ts"
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
+export { compileSemanticSeed } from './semantic-seed.ts'
+export type { CompiledSemanticSeed } from './semantic-seed.ts'
+export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken, BootstrapCallerMetadata, BootstrapLineage, BootstrapTarget, BootstrapInitial, BootstrapRequest, BootstrapDependencyRequest, BootstrapDependencyOutcome, BootstrapDependencyPort, BootstrapGuards, BootstrapReceipt, BootstrapOutcome, BootstrapInspection, BootstrapHeaderStage, BootstrapHeaderOperation, HeaderOutcome, BootstrapReadState, BootstrapFrame, BootstrapBackend } from './coordinator/bootstrap-types.ts'
+export { parseBootstrapHeaderStage, rawHeaderDigest } from './coordinator/bootstrap-header.ts'
 
 export type {
   SessionMeta, SessionModelSelection, PersistenceBackend, SessionArtifactManifest,
@@ -34,13 +38,17 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
   const ownership = createOwnership(backend, opts)
-  const mutations = createMutations(backend, ownership, maxDelayMs, report)
+  let managed: ReturnType<typeof createManagedDocuments>
+  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id))
   const documents = createDocuments(backend, ownership, report)
   const loads = createLoads(backend, ownership, mutations)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents)
-  const managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report)
+  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
 
   return {
+    bootstrapSemanticTarget: managed.bootstrapSemanticTarget,
+    resumeSemanticTarget: managed.resumeSemanticTarget,
+    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
     openManagedDocument: managed.open,
     revokeManagedDocumentNewWork: managed.revoke,
