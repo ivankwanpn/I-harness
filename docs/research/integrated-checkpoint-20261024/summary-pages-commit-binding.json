@@ -1,0 +1,98 @@
+{
+  "head": "97cdda489394cbac61300e4d744db79579174bc2",
+  "base": "807d2cc082632544034aa13bbd8a75d2b952fcf0",
+  "branch": "codex/context-summary-pages-20261024",
+  "verifiedFiles": [
+    {
+      "file": "packages/compaction/src/prepared-summary.ts",
+      "bytes": 5215,
+      "sha256": "8574594a3937165b004269259260de7693a5b668c561cf3acd410789623e0d52",
+      "gitBlob": "7c633fef4a247a646ec1fedf6055a21883991696"
+    },
+    {
+      "file": "packages/compaction/src/summary/generate.ts",
+      "bytes": 7937,
+      "sha256": "94437b0dc8b4e821cb7b752046132bb7473524a3def2939ea2ac5eda1f533574",
+      "gitBlob": "5c16a6f62c1be69ea28882542a4bd0104573a931"
+    },
+    {
+      "file": "packages/compaction/src/summary/pages.ts",
+      "bytes": 5568,
+      "sha256": "b038ae8d4f823bfab24ef6373f5456d5ab48b95625c390432d1edddead9c9cd2",
+      "gitBlob": "ebc3ed6c4896f524b34ca663c8e157a05a75b590"
+    },
+    {
+      "file": "packages/compaction/src/summary/source.ts",
+      "bytes": 8254,
+      "sha256": "3db67a2b5e3f835efc72616cf6589da465eaebdc3a05e67854cbd3fc098644c6",
+      "gitBlob": "7160c7fc84f7ec173de24f91411d2790738399a4"
+    },
+    {
+      "file": "packages/compaction/test/bounded-checkpoint.test.ts",
+      "bytes": 4496,
+      "sha256": "e5a02a99125887d08544d9ca45daf657b11361b5e9848fc36e13c1328ae96ecb",
+      "gitBlob": "65f0a2664b2878e498f70e991706e9a0b868c3dc"
+    },
+    {
+      "file": "packages/compaction/test/slices.test.ts",
+      "bytes": 4312,
+      "sha256": "4860a824aa3e9b13b78e815453bbf3924538ed6aa15302d33ebe5ca0e363d5ad",
+      "gitBlob": "652d92c1a19584b4793e144f226f60e63dd5ee03"
+    },
+    {
+      "file": "packages/compaction/test/summary-observation.test.ts",
+      "bytes": 7654,
+      "sha256": "80042d06f628a8dfd7e083e6ce2769fe7b1a2dd62a17bd9b5bd2e58c12e80467",
+      "gitBlob": "02206a50243e5577399d1d62e03aacf6074d395b"
+    },
+    {
+      "file": "packages/compaction/test/summary-pages.test.ts",
+      "bytes": 17526,
+      "sha256": "0e88674e12d3841d855d769874ccb9024b47cd0bd907831176a452b8408e1b83",
+      "gitBlob": "49c6a0fd4b47126ddaa15a0154aa2c54ff345811"
+    },
+    {
+      "file": "packages/context-engine/src/reduction/contracts.ts",
+      "bytes": 4183,
+      "sha256": "4e15894675344228ecb42a4a85bfa23524dc7a6b34cb1dfd0f4943641fc17ba6",
+      "gitBlob": "11674fa54d32d1c34711b15aef14c805fc2263ae"
+    },
+    {
+      "file": "packages/context-engine/src/reduction/run.ts",
+      "bytes": 9856,
+      "sha256": "97e5e81ecc8f0ecf55797cb1b0ef085a5102b79593b3b8ab6b7440f5b8fe0da3",
+      "gitBlob": "075ed6efb01d332bb1d69c83b1c0a5fe71a527d1"
+    },
+    {
+      "file": "packages/context-engine/src/reduction/selection.ts",
+      "bytes": 4073,
+      "sha256": "c47aaacbe80811dad66d28576074266b6a1206bc37aa6b0a61165ee3e38aef54",
+      "gitBlob": "7cbdd40f467242803f33003d79301ee318af50c9"
+    },
+    {
+      "file": "packages/context-engine/src/reduction/source.ts",
+      "bytes": 2466,
+      "sha256": "ed5b22000901aa7be8704e1838af3aae649d8ce09121babf8d11cc763c048d38",
+      "gitBlob": "d9fadb750aaee0d42d2bc29d46ff2a1e647b61b0"
+    },
+    {
+      "file": "packages/context-engine/test/reduction-current.test.ts",
+      "bytes": 2892,
+      "sha256": "683615fc99e97698c350131681398c6e0f311b78b33322bc5c3936407830a395",
+      "gitBlob": "c6e32d8f9a8db88a84d577de9648865abeadc133"
+    },
+    {
+      "file": "packages/context-engine/test/reduction.test.ts",
+      "bytes": 7906,
+      "sha256": "ff441fc2a2eae62c4fdf76ca742599af534c011874eb9d3e5b882bab0297d100",
+      "gitBlob": "265e8fb47756967637cbeaffcf7accf75c3d36bd"
+    },
+    {
+      "file": "packages/desktop-gateway/test/context-summary-growth.test.ts",
+      "bytes": 22734,
+      "sha256": "596c1a3a167ce24a8716476bb535de50d79b7a5be4e83737cc3ccb4a5b7036d4",
+      "gitBlob": "5ffcfd8629f93fda8214265a240466c23bf3fb1b"
+    }
+  ],
+  "utc": "2026-10-23T20:47:29.710Z"
+}
