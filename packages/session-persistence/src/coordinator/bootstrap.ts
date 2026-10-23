@@ -230,7 +230,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     let captured:BootstrapInvocation,r:BootstrapRequest|undefined
     try{captured=captureBootstrapInvocation(invocation);r=request?captureBootstrapRequest(request):undefined;if(r&&!sameBootstrapData(r.invocation,captured))throw new Error('invocation mismatch');
       const port=Object.getOwnPropertyDescriptor(guards,'targetPreparation')
-      if(port) { if(!('value' in port) || !port.enumerable)throw new TypeError('Invalid target preparation'); guards={...guards,targetPreparation:captureBootstrapTargetPreparationPort(port.value)} }
+      if(port ? !('value' in port) || !port.enumerable : 'targetPreparation' in guards)throw new TypeError('Invalid target preparation')
+      const targetPreparation=port?.value===undefined?undefined:captureBootstrapTargetPreparationPort(port.value)
+      // Capture absence too, without ever consulting the caller's optional
+      // field again. Forward the other guards with their original receiver.
+      const originalGuards=guards
+      guards={get signal(){return originalGuards.signal},assertCurrent(){originalGuards.assertCurrent()},get dependencies(){return originalGuards.dependencies},targetPreparation}
     }catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}
     const first=r?.seed.records[0]
     if(first?.type==='conversation/seed-manifest'&&first.artifacts.length&&first.origins[0]?.kind!=='session')return Promise.resolve({kind:'refused',reason:'target-policy'})

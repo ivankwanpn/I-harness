@@ -97,6 +97,61 @@ it('captures the preparation callbacks before the first await and rejects non-cl
   expect(await pending).toMatchObject({ kind: 'blocked', reason: 'dependency-unavailable' })
   expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(1)
 })
+it.each(['omitted', 'undefined'])('review F1 captures %s target preparation before a caller adds a port', async mode => {
+  const { coordinator, root } = await setup(), r = request()
+  let injected = 0, sourceChecks = 0
+  const original: persistence.BootstrapGuards = {
+    ...guards,
+    assertCurrent() { expect(this).toBe(original); sourceChecks++ },
+    ...(mode === 'undefined' ? { targetPreparation: undefined } : {}),
+  }
+  const pending = coordinator.bootstrapSemanticTarget(r, original)
+  original.targetPreparation = {
+    async confirm() { injected++; return { kind: 'blocked', reason: 'unavailable' } },
+    async reconcile() { injected++; return { kind: 'blocked', reason: 'unavailable' } },
+    assertTargetCurrent() { injected++ },
+  }
+  expect((await pending).kind).toBe('ready')
+  expect(injected).toBe(0); expect(sourceChecks).toBeGreaterThan(0)
+  expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(2)
+})
+it.each(['inherited', 'inherited-accessor', 'own-accessor', 'own-hidden'])('review F1 rejects %s target preparation without evaluating it or reserving a target', async mode => {
+  const { coordinator, root } = await setup(), r = request()
+  let reads = 0, callbacks = 0
+  const port = {
+    async confirm() { callbacks++; return { kind: 'confirmed' as const } },
+    async reconcile() { callbacks++; return { kind: 'confirmed' as const } },
+    assertTargetCurrent() { callbacks++ },
+  }
+  const original = { ...guards }
+  if (mode === 'inherited') Object.setPrototypeOf(original, { targetPreparation: port })
+  else if (mode === 'inherited-accessor') Object.setPrototypeOf(original, Object.defineProperty({}, 'targetPreparation', { get() { reads++; return port } }))
+  else if (mode === 'own-accessor') Object.defineProperty(original, 'targetPreparation', { enumerable: true, get() { reads++; return port } })
+  else Object.defineProperty(original, 'targetPreparation', { value: port })
+  expect(await coordinator.bootstrapSemanticTarget(r, original)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+  expect(reads).toBe(0); expect(callbacks).toBe(0)
+  expect((await coordinator.inspectBootstrap(r.invocation)).kind).toBe('absent')
+  expect((await readdir(root)).filter(path => path.endsWith('.jsonl') || path.endsWith('.stage'))).toEqual([])
+})
+it.each([false, true])('review F1 preserves other guard receivers and live Stop while preparation absence stays captured (aborted=%s)', async aborted => {
+  const { coordinator } = await setup(), controller = new AbortController()
+  const original: persistence.BootstrapGuards = Object.assign(Object.create({ assertCurrent() { expect(this).toBe(original) } }), { signal: controller.signal, dependencies: guards.dependencies })
+  const pending = coordinator.bootstrapSemanticTarget(request(), original)
+  if (aborted) controller.abort()
+  expect(await pending).toMatchObject(aborted ? { kind: 'not-issued', reason: 'cancelled' } : { kind: 'ready' })
+})
+it('review F1 preserves the captured preparation method receiver and function references', async () => {
+  const { coordinator } = await setup()
+  let checks = 0
+  const targetPreparation: persistence.BootstrapTargetPreparationPort = {
+    async confirm() { this.assertTargetCurrent(); return { kind: 'confirmed' } },
+    async reconcile() { this.assertTargetCurrent(); return { kind: 'confirmed' } },
+    assertTargetCurrent() { checks++ },
+  }
+  const pending = coordinator.bootstrapSemanticTarget(request(), { ...guards, targetPreparation })
+  targetPreparation.assertTargetCurrent = () => { throw new Error('late replacement') }
+  expect((await pending).kind).toBe('ready'); expect(checks).toBeGreaterThan(1)
+})
 it('rechecks target authority at the original seed issue guard after backend awaits and permits a fresh attempt', async () => {
   const { coordinator, backend, root } = await setup(), r = seeded(), append = backend.appendOwnedBatch!
   let available = true, cut = true
