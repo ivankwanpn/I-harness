@@ -36,6 +36,36 @@ it('protects only active inputs and newest complete exchange in a fifty-step act
 function assessment(input: number, target: ReductionAssessment['target'] = 'over-target'): ReductionAssessment {
   return { kind: 'assessed', capacityFit: 'yes', target, inputTokens: input, inputBytes: input, inputFingerprint: String(input), shape: 'same', currentView: 'view', fixedInput: false, proof: {} }
 }
+it.each(['auto', 'manual', 'recovery'] as const)('escapes a retained complete tail only after hard capacity failure (%s)', async reason => {
+  const { capture } = fixture(), observed: unknown[] = []
+  const ports: ContextReductionPorts = { capture, current: () => true,
+    prepare: async (_s, groups, rewrites) => ({ ...assessment(rewrites.length && groups.some(g => g.items.some(i => i.messages.some(m => m.content === 'tail'))) ? 50 : 100), capacityFit: 'no' }),
+    summary: async source => { observed.push(source.groups.flatMap(g => g.items.flatMap(i => i.messages.map(m => m.content)))); source.attempts.count++; return { kind: 'complete', text: 'S', groupIds: source.groups.map(g => g.id) } },
+    publish: async () => ({ kind: 'nondurable' }),
+  }
+  expect(await engine.reduceContext(ports, {}, { reason })).toMatchObject({ compacted: true })
+  expect(observed).toEqual([['E1', 'E2'], ['E3', 'E4'], ['tail']])
+})
+it.each(['yes', 'no'] as const)('a no-op summary cannot publish or repeatedly select a span (capacity=%s)', async capacityFit => {
+  const { capture } = fixture(), seen: unknown[] = []; let published = 0
+  const attempts = { count: 0, staleRebuilds: 0 }
+  const ports: ContextReductionPorts = { capture, current: () => true,
+    prepare: async () => ({ ...assessment(100), capacityFit }),
+    summary: async source => { seen.push(source.groups.map(group => group.id)); source.attempts.count++; return { kind: 'complete', text: 'unchanged', groupIds: source.groups.map(group => group.id) } },
+    publish: async () => { published++; return { kind: 'nondurable' } },
+  }
+  expect(await engine.reduceContext(ports, {}, { attempts })).toMatchObject({ compacted: false, blockedReason: 'no-progress' })
+  expect(published).toBe(0); expect(seen.length).toBe(capacityFit === 'no' ? 3 : 2); expect(attempts.count).toBe(seen.length)
+})
+it('hard pressure still excludes protected, open and unknown-outcome groups', async () => {
+  const { session, capture } = fixture()
+  append(session, { type: 'step/start' }); append(session, { type: 'tool/call', callId: 'pending', name: 'read', args: {} })
+  const snapshot = capture(), selected = engine.selectReductionRuns(snapshot, {}, undefined, true)
+  expect(selected.flatMap(run => run.groups).every(group => group.complete && !group.protected)).toBe(true)
+  expect(selected.flatMap(run => run.groups.flatMap(group => group.items.flatMap(item => item.messages.map(message => message.content))))).toEqual(['tail'])
+  const tailSeq = session.events.find(event => event.type === 'assistant/message' && event.text === 'tail')!.seq
+  expect(engine.selectReductionRuns(snapshot, {}, [tailSeq!], true).flatMap(run => run.groups.flatMap(group => group.items.flatMap(item => item.messages.map(message => message.content))))).not.toContain('tail')
+})
 it('skips an unhelpful oldest span and commits only the useful later proposal', async () => {
   const { session, capture } = fixture(), observed: unknown[] = [], published: unknown[] = []
   const attempts = { count: 0, staleRebuilds: 0 }

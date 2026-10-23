@@ -20,6 +20,7 @@ export interface SummaryLimits {
   validateBeforeTransport?: () => void
   onMeasurement?: (facts: { inputTokens: number; contextWindow?: number; outputReserve: number; effectiveCap?: number; capSupport: string; minimumCap: number; reasoningBudget?: number; defaultFloorAdjusted: boolean; coverage: string; estimateSource: "projected-heuristic"; uncertainties: readonly string[] }) => void
   onPieceAccepted?: (observation: import("./summary-observation.ts").SummaryPieceObservation) => void
+  onPreparation?: (facts: Parameters<NonNullable<SummaryLimits['onMeasurement']>>[0] & { mode: 'page' | 'full'; disposition: string; inputBytes?: number; inputFingerprint: string; pageDigest?: string; sourceDigest?: string; sourceBytes?: number; sizingCorrections: number }) => void
   onUsage?: (usage: LLMUsage) => void
 }
 

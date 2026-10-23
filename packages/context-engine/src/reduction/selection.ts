@@ -31,7 +31,7 @@ export function reductionGroups(snapshot: ContextSnapshot, protectedSeqs: readon
   return Object.freeze(groups)
 }
 /** Open/protected inputs never pay the complete exchange tail budget. */
-export function selectReductionRuns(snapshot: ContextSnapshot, policy: ReductionPolicy, protectedSeqs?: readonly number[]): readonly ReductionRun[] {
+export function selectReductionRuns(snapshot: ContextSnapshot, policy: ReductionPolicy, protectedSeqs?: readonly number[], retainedTailOnly = false): readonly ReductionRun[] {
   const groups = reductionGroups(snapshot, protectedSeqs), tail = new Set<string>()
   let retained = 0, exchanges = 0
   for (let i = groups.length - 1; i >= 0; i--) {
@@ -44,7 +44,7 @@ export function selectReductionRuns(snapshot: ContextSnapshot, policy: Reduction
   const close = () => { if (pending.some(group => group.items.some(item => item.kind !== 'summary'))) {
     const selected = Object.freeze(pending.slice()); runs.push(Object.freeze({ id: projectionFingerprint(selected.map(group => group.id)), groups: selected }))
   }; pending.length = 0 }
-  for (const group of groups) { if (group.protected || tail.has(group.id)) close(); else pending.push(group) }
+  for (const group of groups) { if (group.protected || (retainedTailOnly ? !tail.has(group.id) : tail.has(group.id))) close(); else pending.push(group) }
   close()
   return Object.freeze(runs)
 }

@@ -14,10 +14,11 @@ it('preflight partitions exactly between whole groups and preserves literal 0..7
   expect(f.requests[1]!.messages.slice(0,-1).map(m => String(m.content).slice(0,7))).toEqual(['GROUP-4','GROUP-5','GROUP-6','GROUP-7'])
   expect(String(f.requests[1]!.messages.at(-1)?.content)).toContain(checkpointOfLength(600))
 })
-it('one indivisible huge source blocks without character/message slicing or transport', async () => {
+it('one oversized group uses recorded pages and returns only whole-group coverage', async () => {
   const f=spyModel()
-  await expect(summarizeFixture(f.model,'huge'.repeat(10000),1024,undefined,undefined,500,undefined,undefined,{ contextWindow: 9000 })).rejects.toMatchObject({kind:'fixed-input'})
-  expect(f.requests).toEqual([])
+  await expect(summarizeFixture(f.model,'huge'.repeat(10000),1024,undefined,undefined,500,undefined,undefined,{ contextWindow: 9000 })).resolves.toMatchObject({text:checkpointOfLength(600)})
+  expect(f.requests.length).toBeGreaterThan(1)
+  expect(f.requests.every(request=>String(request.messages.at(-1)?.content).includes('recorded-pages-v1'))).toBe(true)
 })
 it.each([false,true])('only an explicit confirmed overflow may partition at group boundaries (confirmed=%s)',async confirmed=>{
   const requests: LLMRequest[]=[]

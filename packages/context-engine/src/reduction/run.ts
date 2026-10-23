@@ -41,6 +41,7 @@ export async function reduceContext(ports: ContextReductionPorts, policy: Reduct
     if (accepted && !ports.current(accepted.source, accepted.groups)) accepted = undefined
     const run = accepted ? { id: projectionFingerprint(accepted.groups.map(group => group.id)), groups: accepted.groups }
       : selectReductionRuns(source, policy, options.protectedSeqs).find(run => !tried.has(run.id))
+        ?? (baseline.capacityFit === 'no' ? selectReductionRuns(source, policy, options.protectedSeqs, true).find(run => !tried.has(run.id)) : undefined)
     if (!run) return result.compacted ? result : block(result, tried.size ? 'no-progress' : 'no-eligible-source')
     let rewrites = pruneProposal(source, run, policy), candidate = rewrites.length ? await ports.prepare(source, run.groups, rewrites) : undefined
     if (candidate?.kind === 'stale') { if (stale(attempts)) continue; return block(result, 'unstable-input') }

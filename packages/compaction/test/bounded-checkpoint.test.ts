@@ -11,9 +11,9 @@ it('distinct summary binding has an independent preferred output ceiling even wh
  expect((await createCompactionHarness({model:main.model,maxOutputTokens:384000,config:{...autoConfig,contextWindow:1000000,summarizationModel:summary.model}}).compact(history())).compacted).toBe(true)
  expect(main.requests).toEqual([]);expect(summary.requests[0]?.maxOutputTokens).toBe(4096)
 })
-it('preflights actual Responses fixed policy/directive with no transport',async()=>{
+it('bounds recorded-page sizing for actual Responses fixed policy/directive with no transport',async()=>{
  let calls=0;const summary=createOpenAIClient({apiKey:'controlled',model:'fixture',options:{instructions:'fixed '.repeat(3000)},fetch:async()=>{calls++;return new Response('')}} as any)
- expect(await createCompactionHarness({model:spyModel().model,config:{...autoConfig,summarizationModel:summary,summaryMaxOutputTokens:16,summaryLimits:{contextWindow:1000}}}).compact(history())).toMatchObject({compacted:false,blockedReason:'fixed-input'})
+ expect(await createCompactionHarness({model:spyModel().model,config:{...autoConfig,summarizationModel:summary,summaryMaxOutputTokens:16,summaryLimits:{contextWindow:1000}}}).compact(history())).toMatchObject({compacted:false,blockedReason:'shrink-limit'})
  expect(calls).toBe(0)
 })
 it('flush refusal is causal and precedes all summary transport',async()=>{

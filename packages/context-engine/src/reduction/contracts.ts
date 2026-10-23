@@ -11,7 +11,12 @@ export interface ReductionPolicy {
   reserveRatio?: number
   prune?: { enabled: boolean; thresholdChars: number; headChars: number; tailChars: number }
 }
-export interface ReductionAttempts { count: number; staleRebuilds: number }
+export interface ReductionAttempts {
+  count: number
+  staleRebuilds: number
+  /** Shared local page sizing allowance; stale source rebuilds do not reset it. */
+  summarySizingCorrections?: number
+}
 export type ReductionBlockedReason = 'summary-unavailable' | 'source-unrepresentable' | 'opaque' | 'fixed-input' | 'capacity-unavailable'
   | 'no-eligible-source' | 'no-progress' | 'call-limit' | 'unstable-input' | 'summary-failed' | 'publication-unavailable'
   | 'retention-policy' | 'call-policy' | 'binding' | 'shrink-limit'
