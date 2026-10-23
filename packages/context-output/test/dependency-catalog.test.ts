@@ -12,7 +12,8 @@ import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ResultDependency } from '@i-harness/core-session'
 import { readDependencyCatalog } from '../src/artifact/dependency-catalog.ts'
-const evidence = resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023/catalog')
+import { structureEvidence } from './structure-evidence.ts'
+const evidence = resolve(structureEvidence(resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023')), 'catalog')
 await mkdir(evidence, { recursive: true }); process.env.IH_CONFIG_DIR = resolve(evidence, 'config')
 const { createContextOutputService } = await import('../src/index.ts')
 const hash = (s: string) => createHash('sha256').update(s).digest('hex')

@@ -15,6 +15,8 @@ import { requireSpace } from './quota.ts'
 import { publishPin, readPin, releaseDocumentPin } from './pins.ts'
 import { confirmArtifactOwner, type OwnerConfirmation } from './owner-confirmation.ts'
 import { createDependencyMembership, dependencyEntries, sameArtifactRef, type DependencyRegistration } from './dependency-membership.ts'
+import { createSeedDependencyTransfer } from './bootstrap-transfer.ts'
+import { TransferBlocked } from './transfer-codec.ts'
 
 export function createArtifactOwnership(options: ContextOutputOptions, quota: () => number) {
   const root = resolve(options.root, 'context-output', sha(options.workspaceId)), managed = resolve(root, 'managed-v1')
@@ -91,7 +93,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       return sink
     })
   }
-  async function authorized(access: ContextAccess, ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef): Promise<ArtifactOperation> {
+  async function authorized(access: ContextAccess, ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef, verifyOriginalCatalog = false): Promise<ArtifactOperation> {
     identity(access.sessionId, 'sessionId')
     if (closed || deletedDocuments.has(access.sessionId)) throw new Error('Artifact access closed or deleted/unavailable')
     if (!validManagedArtifactRef(ref)) throw new Error('Artifact reference unavailable')
@@ -104,10 +106,10 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       || operation.ref.encodedBytes !== ref.encodedBytes || operation.ref.contentDigest !== ref.contentDigest || operation.ref.completeness !== ref.completeness) throw new Error('Artifact reference stale or unavailable')
     const pin = await readPin(root, target, access.sessionId, ref.revision)
     if (!pin || pin.operationId !== operation.owner.operationId) throw new Error('Artifact reference unavailable or unauthorized')
-    const witness = viaCatalog === undefined ? undefined : await membership.witness(access.sessionId, operation, pin, viaCatalog)
-    if (witness && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: witness.owner, ref: witness.ref }))) throw new Error('Dependency catalog unavailable or unauthorized')
+    const witness = viaCatalog === undefined ? undefined : await membership.witness(access.sessionId, operation, pin, viaCatalog, verifyOriginalCatalog)
+    if (witness && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: witness.owner, ref: witness.ref }))) throw new TransferBlocked('policy', 'Dependency catalog unavailable or unauthorized')
     const visibleVia = witness?.ref
-    if ((operation.owner.source || visibleVia) && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: structuredClone(operation.owner), ref: structuredClone(ref), ...(visibleVia ? { visibleVia } : {}) }))) throw new Error('Artifact reference unavailable or unauthorized')
+    if ((operation.owner.source || visibleVia) && (!options.authorizeResult || !await options.authorizeResult(access, { workspaceId: options.workspaceId, owner: structuredClone(operation.owner), ref: structuredClone(ref), ...(visibleVia ? { visibleVia } : {}) }))) throw new TransferBlocked('policy', 'Artifact reference unavailable or unauthorized')
     access.signal?.throwIfAborted()
     return operation
   }
@@ -179,7 +181,8 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
     const current = () => !closed && !deletedDocuments.has(registered.owner.sessionId) && !deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) && registered.current()
     await mutate(() => confirmArtifactOwner(root, directory(expectedId), registered.owner, registered.confirmation!, quota(), current))
   }
-  return { registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
+  const transfers = createSeedDependencyTransfer({ root, options, directory, quota, mutate, membership, authorized, available: document => !closed && !deletedDocuments.has(document) })
+  return { ...transfers, registerResultScope, registerResultDependencyScope, settleResultDependencyMembership, beginResult, readResult, readExecResult, confirmResultOwner, mutate, protectedCount, grantResults, releaseDocuments,
     checkQuota: () => mutate(() => requireSpace(root, quota(), 0)),
     reconcileResult: (operationId: string, id: string) => mutate(async () => {
       if (closed) throw new Error('Artifact owner closed')

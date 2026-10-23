@@ -2,8 +2,9 @@ import { mkdir, readdir, rm } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { atomicJson, boundedJson, ownedPath } from './io.ts'
 import { sha } from './manifest.ts'
+import { validTransferBinding, type SeedDependencyTransferBinding } from './transfer-codec.ts'
 
-export interface ArtifactPin { version: 1; documentId: string; sessionId: string; state: 'pending' | 'committed'; operationId: string; revision: string }
+export interface ArtifactPin { version: 1; documentId: string; sessionId: string; state: 'pending' | 'committed'; operationId: string; revision: string; seedTransfer?: SeedDependencyTransferBinding }
 type Pin = ArtifactPin
 interface Access { version: 1; sessionId: string; revision: string; pinId: string }
 export async function publishPin(directory: string, pin: Pin): Promise<void> {
@@ -23,7 +24,8 @@ export async function readPin(root: string, directory: string, sessionId: string
     const pinPath = resolve(directory, 'pins', `${access.pinId}.json`)
     await ownedPath(root, pinPath)
     const pin = await boundedJson(pinPath) as Pin
-    return pin.version === 1 && pin.sessionId === sessionId && pin.revision === revision && sha(pin.documentId) === access.pinId ? pin : undefined
+    return pin.version === 1 && pin.sessionId === sessionId && pin.revision === revision && sha(pin.documentId) === access.pinId
+      && (!Object.hasOwn(pin, 'seedTransfer') || validTransferBinding(pin.seedTransfer) && pin.state === 'committed' && pin.documentId === pin.seedTransfer.targetDocumentId && pin.sessionId === pin.seedTransfer.targetSessionId) ? pin : undefined
   } catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw cause }
 }
 export async function releaseDocumentPin(root: string, directory: string, documentId: string): Promise<boolean> {

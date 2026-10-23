@@ -1,6 +1,6 @@
 import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { isStrictFactData, validManagedArtifactRef, type ManagedArtifactRef, type ResultDependency } from '@i-harness/core-session'
+import { canonicalJsonData, isStrictFactData, validManagedArtifactRef, type ManagedArtifactRef, type ResultDependency } from '@i-harness/core-session'
 import { identity } from '../config.ts'
 import { continueAtomicJson, boundedJson, ownedPath } from './io.ts'
 import { readDependencyCatalog } from './dependency-catalog.ts'
@@ -9,6 +9,8 @@ import { sha, validateManifest } from './manifest.ts'
 import { readPin, type ArtifactPin } from './pins.ts'
 import { requireSpace } from './quota.ts'
 import type { ArtifactOperation, ArtifactOwner } from './types.ts'
+import { validOwner } from './transfer-codec.ts'
+import { isMetadataData } from './metadata-data.ts'
 
 export type MembershipSettlement = 'ready' | 'quota' | 'recovery-required'
 export interface DependencyRegistration {
@@ -18,6 +20,10 @@ export interface DependencyRegistration {
 interface Membership {
   version: 1; kind: 'result-dependency'; workspaceId: string; documentId: string; sessionId: string
   memberRef: ManagedArtifactRef; catalogRef: ManagedArtifactRef; catalogOperationId: string; sourceId: string; ordinal: number
+}
+export interface TransferMembership extends Omit<Membership, 'version' | 'kind'> {
+  version: 2; kind: 'result-dependency-transfer'; catalogOwner: ArtifactOwner; memberOperationId: string;
+  manifestDigest: string; transferOperationId: string; sourceSessionId: string
 }
 const keys = ['version', 'kind', 'workspaceId', 'documentId', 'sessionId', 'memberRef', 'catalogRef', 'catalogOperationId', 'sourceId', 'ordinal']
 export function sameArtifactRef(a: ManagedArtifactRef, b: ManagedArtifactRef): boolean {
@@ -37,6 +43,17 @@ function validMembership(value: unknown): value is Membership {
   try { for (const key of ['workspaceId', 'documentId', 'sessionId', 'catalogOperationId', 'sourceId'] as const) identity(record[key], key) } catch { return false }
   return Buffer.byteLength(JSON.stringify(record)) <= 8192
 }
+export function validTransferMembership(value: unknown): value is TransferMembership {
+  if (!isMetadataData(value) || !value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as TransferMembership
+  const extra = ['catalogOwner', 'memberOperationId', 'manifestDigest', 'transferOperationId', 'sourceSessionId']
+  if (Object.keys(record).length !== keys.length + extra.length || Object.keys(record).some(key => ![...keys, ...extra].includes(key))
+    || record.version !== 2 || record.kind !== 'result-dependency-transfer' || !validOwner(record.catalogOwner)
+    || record.catalogOwner.operationId !== record.catalogOperationId || !/^[a-f0-9]{64}$/.test(record.manifestDigest)) return false
+  const { catalogOwner: _, memberOperationId, manifestDigest: __, transferOperationId, sourceSessionId, ...base } = record
+  try { for (const value of [memberOperationId, transferOperationId, sourceSessionId]) identity(value, 'transfer identity') } catch { return false }
+  return validMembership({ ...base, version: 1, kind: 'result-dependency' }) && Buffer.byteLength(JSON.stringify(record)) <= 8192
+}
 
 /** All methods run only inside the original workspace mutation fence. The
  * private scope supplies semantics; these companions never grant a pin. */
@@ -47,15 +64,15 @@ export function createDependencyMembership(root: string, workspaceId: string, di
     const path = resolve(directory(ref.id), 'operation.json')
     await ownedPath(root, path)
     const value = await boundedJson(path) as ArtifactOperation
-    if (value.phase !== 'committed' || value.id !== ref.id || !value.ref || !sameArtifactRef(value.ref, ref) || !value.manifest) throw new Error('Dependency operation stale or unavailable')
+    if (value.version !== 1 || value.phase !== 'committed' || value.id !== ref.id || !value.ref || !sameArtifactRef(value.ref, ref) || !value.manifest || !validOwner(value.owner)) throw new Error('Dependency operation stale or unavailable')
     validateManifest(value.manifest, ref)
     return value
   }
   function pinMatches(pin: ArtifactPin | undefined, owner: ArtifactOwner, ref: ManagedArtifactRef, documentId: string, sessionId: string): pin is ArtifactPin {
     return !!pin && pin.documentId === documentId && pin.sessionId === sessionId && pin.revision === ref.revision && pin.operationId === owner.operationId
   }
-  async function load(path: string): Promise<Membership | undefined> {
-    try { await ownedPath(root, path); const value = await boundedJson(path, 8192); if (!validMembership(value)) throw new Error('Dependency membership corrupt'); return value }
+  async function load(path: string): Promise<Membership | TransferMembership | undefined> {
+    try { await ownedPath(root, path); const value = await boundedJson(path, 8192); if (!validMembership(value) && !validTransferMembership(value)) throw new Error('Dependency membership corrupt'); return value }
     catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return; throw cause }
   }
   async function settle(registration: DependencyRegistration, catalogRef: ManagedArtifactRef): Promise<MembershipSettlement> {
@@ -110,16 +127,32 @@ export function createDependencyMembership(root: string, workspaceId: string, di
       return 'recovery-required'
     }
   }
-  async function witness(sessionId: string, member: ArtifactOperation, memberPin: ArtifactPin, viaCatalog: ManagedArtifactRef): Promise<{ owner: ArtifactOwner; ref: ManagedArtifactRef }> {
+  async function witness(sessionId: string, member: ArtifactOperation, memberPin: ArtifactPin, viaCatalog: ManagedArtifactRef, verifyOriginalCatalog = false): Promise<{ owner: ArtifactOwner; ref: ManagedArtifactRef }> {
     const ref = member.ref!
     if (ref.codec !== 'exec-frames-v1' || !validManagedArtifactRef(viaCatalog) || viaCatalog.codec !== 'json-utf8-v1' || ref.id === viaCatalog.id
       || memberPin.operationId !== member.owner.operationId || memberPin.sessionId !== sessionId || memberPin.revision !== ref.revision) throw new Error('Dependency witness unavailable or unauthorized')
     const record = await load(companion(ref, memberPin.documentId, viaCatalog))
     if (!record || record.workspaceId !== workspaceId || record.documentId !== memberPin.documentId || record.sessionId !== sessionId || !sameArtifactRef(record.memberRef, ref) || !sameArtifactRef(record.catalogRef, viaCatalog)) throw new Error('Dependency membership unavailable or unauthorized')
     const catalog = await operation(viaCatalog)
-    if (catalog.owner.operationId !== record.catalogOperationId || catalog.owner.sessionId !== sessionId || (catalog.owner.documentId ?? sessionId) !== record.documentId
-      || !pinMatches(await readPin(root, directory(viaCatalog.id), sessionId, viaCatalog.revision), catalog.owner, viaCatalog, record.documentId, sessionId)) throw new Error('Dependency catalog pin unavailable or unauthorized')
+    const catalogPin = await readPin(root, directory(viaCatalog.id), sessionId, viaCatalog.revision)
+    if (catalog.owner.operationId !== record.catalogOperationId || !pinMatches(catalogPin, catalog.owner, viaCatalog, record.documentId, sessionId)) throw new Error('Dependency catalog pin unavailable or unauthorized')
+    if (record.version === 1) {
+      if (catalog.owner.sessionId !== sessionId || (catalog.owner.documentId ?? sessionId) !== record.documentId) throw new Error('Dependency original catalog owner conflict')
+    } else {
+      const binding = { operationId: record.transferOperationId, manifestDigest: record.manifestDigest, sourceSessionId: record.sourceSessionId, targetSessionId: sessionId, targetDocumentId: record.documentId }
+      if (canonicalJsonData(record.catalogOwner) !== canonicalJsonData(catalog.owner) || record.memberOperationId !== member.owner.operationId
+        || memberPin.state !== 'committed' || catalogPin!.state !== 'committed' || canonicalJsonData(memberPin.seedTransfer) !== canonicalJsonData(binding) || canonicalJsonData(catalogPin!.seedTransfer) !== canonicalJsonData(binding)) throw new Error('Dependency transfer binding conflict')
+    }
+    // Legacy v1 page reads retain their metadata-only witness contract. A NEW
+    // transfer validates the actual source catalog; v2 reads always do so.
+    if (record.version === 2 || verifyOriginalCatalog) {
+      let first: { ordinal: number; sourceId: string } | undefined
+      await readDependencyCatalog(root, directory(viaCatalog.id), viaCatalog, (entry, ordinal) => {
+        if (entry.retention.kind === 'artifact' && sameArtifactRef(entry.retention.ref, ref) && !first) first = { ordinal, sourceId: entry.sourceId }
+      })
+      if (!first || first.ordinal !== record.ordinal || first.sourceId !== record.sourceId) throw new Error('Dependency catalog canonical membership conflict')
+    }
     return { owner: structuredClone(catalog.owner), ref: structuredClone(viaCatalog) }
   }
-  return { settle, witness }
+  return { settle, witness, operation, companion }
 }

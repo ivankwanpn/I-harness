@@ -28,7 +28,8 @@ import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { atomicJson, continueAtomicJson, confirmAtomicJson } from '../src/artifact/io.ts'
-const evidence = resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023/metadata')
+import { structureEvidence } from './structure-evidence.ts'
+const evidence = resolve(structureEvidence(resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023')), 'metadata')
 await mkdir(evidence, { recursive: true })
 const value = { version: 1, kind: 'literal', value: '漢字🙂' }
 const bytes = Buffer.from(JSON.stringify(value))

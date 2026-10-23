@@ -25,6 +25,9 @@ export interface ContextSearchResult {
   partial: boolean; reasons: string[];
 }
 export interface ContextOutputService {
+  registerSeedDependencyTransfer(access: import('./artifact/bootstrap-transfer.ts').SeedDependencyHostAccess): import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope;
+  confirmSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest, current: () => boolean): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
+  reconcileSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
   /** Host composition only; model tools expose read DTOs, never this method. */
   registerResultScope(owner: import('./artifact/types.ts').ArtifactOwner, current: () => boolean): import('./artifact/types.ts').ResultArtifactScope;
   registerResultDependencyScope(owner: import('./artifact/types.ts').ArtifactOwner, current: () => boolean, entries: readonly import('@i-harness/core-session').ResultDependency[]): import('./artifact/types.ts').ResultArtifactScope;

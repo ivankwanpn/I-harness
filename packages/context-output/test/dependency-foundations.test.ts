@@ -16,8 +16,9 @@ import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { ManagedArtifactRef, ResultDependency } from '@i-harness/core-session'
 import type { ContextOutputService } from '../src/types.ts'
+import { structureEvidence } from './structure-evidence.ts'
 
-const evidence = resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023/settlement')
+const evidence = resolve(structureEvidence(resolve(import.meta.dirname, '../../../.tmp/context-parallel-artifact-20261023')), 'settlement')
 await mkdir(evidence, { recursive: true }); process.env.IH_CONFIG_DIR = resolve(evidence, 'config')
 const { createContextOutputService } = await import('../src/index.ts')
 const hash = (text: string) => createHash('sha256').update(text).digest('hex')

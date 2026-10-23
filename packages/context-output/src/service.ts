@@ -98,6 +98,9 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   }
 
   return {
+    registerSeedDependencyTransfer: artifacts.registerSeedDependencyTransfer,
+    confirmSeedDependencies: artifacts.confirmSeedDependencies,
+    reconcileSeedDependencies: artifacts.reconcileSeedDependencies,
     registerResultScope: artifacts.registerResultScope,
     registerResultDependencyScope: artifacts.registerResultDependencyScope,
     settleResultDependencyMembership: artifacts.settleResultDependencyMembership,
