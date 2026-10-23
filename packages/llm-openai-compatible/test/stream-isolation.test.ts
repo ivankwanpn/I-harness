@@ -60,7 +60,7 @@ describe("Chat stream ownership", () => {
   })
 
   it.each(["done", "early-return", "parse-error", "read-error", "abort"])(
-    "releases the reader after %s without canceling the transport", async mode => {
+    "releases the reader after %s and cancels any still-open owned transport", async mode => {
       let controller!: ReadableStreamDefaultController<Uint8Array>
       let canceled = 0
       const body = new ReadableStream<Uint8Array>({
@@ -88,7 +88,8 @@ describe("Chat stream ownership", () => {
         await iterator.return?.()
       }
       expect(body.locked).toBe(false)
-      expect(canceled).toBe(0)
+      // A body already errored by its transport cannot be canceled again.
+      expect(canceled).toBe(mode === 'read-error' || mode === 'abort' ? 0 : 1)
     },
   )
 })

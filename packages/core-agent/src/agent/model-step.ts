@@ -9,6 +9,7 @@ import { TOOL_ABORTED_BEFORE_DISPATCH } from "@i-harness/core-tools"
 import { randomUUID } from "node:crypto"
 import { closeStepBoundary, failStepBoundary, openStepBoundary } from './boundaries.ts'
 import { savingFailure } from './saving-failure.ts'
+import { reportModelUsage } from './finalization.ts'
 
 export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => Promise<BatchCall>, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
@@ -67,6 +68,9 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
           if (!providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`) {
             if ((stepText || batch.length) && !ev.retry.discardOutput) throw new Error("model retry cannot preserve partial output")
             reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
+            const failedUsage = stepUsage
+            stepUsage = {}
+            if (Object.keys(failedUsage).length) reportModelUsage(deps, { stepUsage: failedUsage })
             // Keep failed output in the append-only audit, but exclude it
             // and its unexecuted calls from the next model projection.
             if (stepText) committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: stepText }))
@@ -75,7 +79,6 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
             stepText = ""
             toolCallsThisStep = 0
             batch.length = 0
-            stepUsage = {}
             receipt = undefined
             reasoning.length = reasoningStart
             stepReasoning.resetBlockIndex()

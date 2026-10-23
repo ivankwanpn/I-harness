@@ -37,6 +37,11 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
           }
         } catch (error) {
           streamFailure = error; streamFailed = true
+          // Failed responses still have real billing observations. Keep them
+          // on this attempt, without entering accepted calibration. The outer
+          // catch retains the original failure if reporting itself fails.
+          const failedStep = streamStep.result()
+          if (Object.keys(failedStep.stepUsage).length) reportModelUsage(deps, failedStep)
           const failure = modelFailureFacts(error)
           if (["AUTH", "INVALID_API_KEY"].includes(failure?.code ?? (error as { code?: string })?.code ?? "")) context.ownedBudget.retire("execution-identity-changed")
           const handoff = candidate.execution.handoff()

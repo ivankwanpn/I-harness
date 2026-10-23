@@ -1,4 +1,4 @@
-import { reportStreamActivity, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { describeChatStreamError, reportStreamActivity, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 import type { OpenAICompatibleConfig } from "../types.ts"
 import { mapUsage } from "./usage.ts"
 
@@ -57,8 +57,17 @@ export function createChatFold(config: Pick<OpenAICompatibleConfig, "model" | "p
   // call arriving only in a boundary-less final frame was dropped). New
   // wire rules land HERE, once.
   const handleFrame = (event: Record<string, unknown>): { events: LLMStreamEvent[]; done: boolean } => {
-    if (event.type === "[DONE]") return { events: [], done: true }
     const events: LLMStreamEvent[] = []
+    const usage = mapUsage((event as { usage?: unknown }).usage)
+    // Null is the optional no-error value. Every other explicit carrier must
+    // fail, even when its diagnostic is malformed or unknown. Usage is a
+    // billing observation; never process choices from an error-bearing frame.
+    if (Object.hasOwn(event, 'error') && event.error !== null) {
+      if (usage !== undefined) events.push({ type: 'usage', usage })
+      events.push({ type: 'error', error: describeChatStreamError(event.error) })
+      return { events, done: false }
+    }
+    if (event.type === "[DONE]") return { events: [], done: true }
     const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
     for (const choice of choices) {
       const delta = choice.delta ?? {}
@@ -117,7 +126,6 @@ export function createChatFold(config: Pick<OpenAICompatibleConfig, "model" | "p
     // with the round-trip's counters. It is the ONE carrier of usage on this
     // wire, and it is handled here, at the single frame handler both loops
     // share (Task 4), so the residual flush reports it identically.
-    const usage = mapUsage((event as { usage?: unknown }).usage)
     if (usage !== undefined) events.push({ type: "usage", usage })
     return { events, done: false }
   }

@@ -46,6 +46,10 @@ function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolic
         return
       }
       if (isGenerationError(failure) || isExecutionControlError(failure)) throw failure
+      // These counters belong to the failed physical attempt. Publish before
+      // its retry boundary resets the consumer's attempt-local accumulator.
+      // They do not count as content or change the retry/discard decision.
+      yield* pendingUsage
       const code = retryErrorCode(failure)
       const retryable = !TERMINAL_CODES.has(code ?? "") && (policy.mode === "always" || policy.retryableCodes.includes(code ?? ""))
       const budgetExhausted = policy.mode === "normal" && attemptNo >= policy.maxRetries

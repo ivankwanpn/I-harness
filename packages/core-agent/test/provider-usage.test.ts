@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
-import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { createTelemetry, type Telemetry, type TelemetryEvent } from "@i-harness/telemetry"
+import { createRetryingClient, resolveRetryPolicy, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
 
 // M5 / T2, half one: "以 provider 回報為事實".
@@ -72,6 +72,56 @@ const usageEvents = (emitted: TelemetryEvent[]): TelemetryEvent[] =>
   emitted.filter((e) => e.type === "provider/usage")
 
 describe("core-agent provider usage (M5 T2)", () => {
+  it('standard telemetry isolates a failed usage sink while retaining the original failure and later progress', async () => {
+    const ctx = createContext(), session = createSession(), original = new Error('original provider failure'), events: TelemetryEvent[] = []
+    let sends = 0
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const telemetry = createTelemetry([{ onEvent(event) { if (event.type === 'provider/usage') throw new Error('fixture sink failure') } }, { onEvent(event) { events.push(event) } }])
+    const model: ModelClient = { async *stream() { sends++; yield { type: 'usage', usage: { inputTokens: 12 } }; if (sends === 1) throw original; yield { type: 'text/chunk', text: 'continued' }; yield { type: 'end' } } }
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry })
+    try {
+      await expect(agent.run('fail')).rejects.toBe(original)
+      expect(events.filter(event => event.type === 'provider/usage')).toHaveLength(1)
+      expect(session.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(0)
+      expect((await agent.run('continue')).finalText).toBe('continued')
+      expect(events.filter(event => event.type === 'provider/usage')).toHaveLength(2)
+      expect(session.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+    } finally { warning.mockRestore() }
+  })
+
+  it('retains the original stream failure when failed-usage reporting also fails', async () => {
+    const ctx = createContext(), session = createSession(), original = new Error('original provider failure'), observation = new Error('usage observer failed')
+    let reports = 0
+    const model: ModelClient = { async *stream() { yield { type: 'usage', usage: { inputTokens: 12 } }; throw original } }
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry: {
+      emit(event) { if (event.type === 'provider/usage') { reports++; throw observation } }, close() {},
+    } })
+    const failure = await agent.run('fail').catch(error => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.cause).toBe(original)
+    expect(failure.errors).toEqual([original, observation])
+    expect(reports).toBe(1)
+    expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage')).toEqual([])
+    expect(session.events.filter(event => event.type === 'step/failed')).toHaveLength(1)
+  })
+
+  it('does not report a retry attempt twice when its usage observer fails before reset completes', async () => {
+    const ctx = createContext(), session = createSession(), observation = new Error('usage observer failed')
+    let sends = 0, reports = 0
+    const model = createRetryingClient({ async *stream() {
+      sends++
+      yield { type: 'usage', usage: { inputTokens: 12 } }
+      yield { type: 'error', error: Object.assign(new Error('temporary failure'), { code: 'SERVER' }) }
+    } }, resolveRetryPolicy({ mode: 'normal', maxRetries: 1 }))
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry: {
+      emit(event) { if (event.type === 'provider/usage') { reports++; throw observation } }, close() {},
+    } })
+    await expect(agent.run('fail')).rejects.toBe(observation)
+    expect(reports).toBe(1)
+    expect(sends).toBe(1)
+    expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage')).toEqual([])
+  })
+
   it("turns a reported usage into exactly ONE provider/usage, carrying only what was reported", async () => {
     const emitted = await runWith([
       { type: "usage", usage: { inputTokens: 12, cacheReadTokens: 400, cacheCreationTokens: 0 } },

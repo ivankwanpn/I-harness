@@ -130,6 +130,7 @@ export type { RetryableErrorCode, RetryBackoffConfig, NormalRetryPolicyConfig, A
 // Provider failure classification and payload-free facts share one public facade.
 export { retryErrorCode } from "./provider-error/classify.ts"
 export { describeHttpError } from "./provider-error/http.ts"
+export { describeChatStreamError } from "./provider-error/chat-stream.ts"
 export { modelFailureFacts, safeModelFailureFacts } from "./provider-error/facts.ts"
 export type { ModelFailureFacts } from "./provider-error/types.ts"
 import { retryErrorCode } from "./provider-error/classify.ts"
