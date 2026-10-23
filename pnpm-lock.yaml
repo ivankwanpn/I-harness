@@ -853,7 +853,11 @@ importers:
         specifier: 0.35.5
         version: 0.35.5(@types/node@24.13.3)
 
-  packages/instructions: {}
+  packages/instructions:
+    dependencies:
+      '@i-harness/fs-watch':
+        specifier: workspace:*
+        version: link:../fs-watch
 
   packages/interaction:
     dependencies:

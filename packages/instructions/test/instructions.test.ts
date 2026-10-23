@@ -1,15 +1,34 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest"
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { discoverInstructionPaths, loadInstructionFiles, renderInstructions, createInstructionsSection } from "../src/index.ts"
 
+// Legacy discovery walks to the volume root. Keep this control wholly inside
+// its synthetic fixture, including existence probes and default global roots.
+const isolated = vi.hoisted(() => ({ root: '', home: '', actualProbes: [] as string[] }))
+vi.mock('node:os', async original => ({ ...await original<typeof import('node:os')>(), homedir: () => isolated.home }))
+vi.mock('node:fs', async original => {
+  const actual = await original<typeof import('node:fs')>()
+  return { ...actual, existsSync: (path: import('node:fs').PathLike) => {
+    const value = String(path)
+    if (!isolated.root || !(value === isolated.root || value.startsWith(isolated.root + '/') || value.startsWith(isolated.root + '\\'))) return false
+    isolated.actualProbes.push(value)
+    return actual.existsSync(path)
+  } }
+})
+
 describe("instructions discovery", () => {
   let root: string
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "i-harness-inst-"))
+    isolated.root = root; isolated.home = join(root, 'fake-home'); isolated.actualProbes = []
   })
-  afterEach(() => rmSync(root, { recursive: true, force: true }))
+  afterEach(() => {
+    expect(isolated.actualProbes.length).toBeGreaterThan(0)
+    expect(isolated.actualProbes.every(path => path.startsWith(root + '/') || path.startsWith(root + '\\'))).toBe(true)
+    rmSync(root, { recursive: true, force: true })
+  })
 
   it("walks workspace → parent → ancestor; AGENTS.md preferred over CLAUDE.md per dir", () => {
     const ws = join(root, "workspace")
@@ -18,8 +37,7 @@ describe("instructions discovery", () => {
     writeFileSync(join(ws, "CLAUDE.md"), "claude in workspace")
     writeFileSync(join(ws, "AGENTS.md"), "agents in workspace")
     const paths = discoverInstructionPaths(ws)
-    // the ancestor walk reaches the volume root — a real dev home may hold a
-    // global AGENTS.md/CLAUDE.md, so assert on the temp-root subset + ordering
+    // The guard above prevents foreign ancestor/home probes.
     const local = paths.filter((p) => p.startsWith(root))
     expect(local).toEqual([join(root, "AGENTS.md"), join(ws, "AGENTS.md")])
     expect(paths.indexOf(join(root, "AGENTS.md"))).toBeLessThan(paths.indexOf(join(ws, "AGENTS.md")))
