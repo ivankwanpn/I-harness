@@ -32,6 +32,9 @@ describe.skipIf(process.platform !== 'win32')('real Windows observation/factory 
       const replaced = tracker.at(value => value.reliability === 'ready' && value.text.includes('directory replacement'))
       await fs.rename(root, join(temp.root, '.i-harness', 'retired')); await fs.mkdir(root)
       await fs.writeFile(join(root, 'AGENTS.md'), 'directory replacement'); await replaced
+      stage = 'ordinary write after directory recovery'
+      const later = tracker.at(value => value.reliability === 'ready' && value.text.includes('later directory write'))
+      await fs.writeFile(join(root, 'AGENTS.md'), 'later directory write'); await later
     } catch (error) {
       throw new Error(JSON.stringify({ stage, trace, snapshot: view.snapshot() }), { cause: error })
     } finally { await tracker.close(); await view.close(); await observation.close(); await watch.close(); await temp.remove() }
@@ -53,6 +56,8 @@ describe.skipIf(process.platform !== 'win32')('real Windows observation/factory 
       if (kind === 'file') await fs.unlink(join(child, '.git'))
       else await fs.rmdir(join(child, '.git'))
       await restored
+      const later = tracker.at(value => value.reliability === 'ready' && value.text.includes('later boundary write'))
+      await fs.writeFile(join(child, 'AGENTS.md'), 'later boundary write'); await later
     } finally { await tracker.close(); await view.close(); await observation.close(); await watch.close(); await temp.remove() }
   })
 
@@ -73,6 +78,8 @@ describe.skipIf(process.platform !== 'win32')('real Windows observation/factory 
       await fs.rmdir(join(a, '.git')); await restored
       const retargeted = tracker.at(value => value.reliability === 'ready' && value.text.includes('second') && !value.text.includes('canonical edit'))
       await fs.unlink(alias); await fs.symlink(b, alias, 'junction'); await retargeted
+      const later = tracker.at(value => value.reliability === 'ready' && value.text.includes('later junction write'))
+      await fs.writeFile(join(b, 'AGENTS.md'), 'later junction write'); await later
     } finally { await tracker.close(); await view.close(); await observation.close(); await watch.close(); await temp.remove() }
   }, 30000)
 })

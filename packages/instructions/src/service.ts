@@ -40,10 +40,14 @@ export function createInstructionService(options: InstructionServiceOptions): In
   let plan: DiscoveryPlan = planDiscovery(scope, [])
   let boundaryAliases: readonly BoundaryAlias[] = []
 
-  function publish(next: InstructionSnapshot) {
-    if (JSON.stringify({ ...next, revision: 0 }) === JSON.stringify({ ...current, revision: 0 })) return
+  function publish(next: InstructionSnapshot, reconcile = false) {
+    if (!reconcile && JSON.stringify({ ...next, revision: 0 }) === JSON.stringify({ ...current, revision: 0 })) return
     current = frozen({ ...next, revision: current.revision + 1 })
-    for (const listener of [...listeners]) { try { listener() } catch { /* Observer failure cannot break the source owner. */ } }
+    const published = current
+    for (const listener of [...listeners]) {
+      if (current !== published) break // reentrant publication supersedes this notice
+      if (listeners.has(listener)) { try { listener() } catch { /* Observer failure cannot break the source owner. */ } }
+    }
   }
   function boundaryAffects(changed: string, slot: Pick<Slot, 'scopeDirectory' | 'scopeRoot'>): boolean {
     return basename(changed) === '.git' && inside(slot.scopeRoot, changed) && inside(dirname(changed), slot.scopeDirectory)
@@ -67,7 +71,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
     }
     return ids
   }
-  function mark(changed?: readonly string[]) {
+  function mark(changed?: readonly string[], reconcile = false) {
     if (closed || disabled) return
     if (changed) changed = withBoundaryAliases(changed)
     const ids = affectedIds(changed)
@@ -85,7 +89,10 @@ export function createInstructionService(options: InstructionServiceOptions): In
       const cs = a.candidateSlotIds.flatMap(id => byId.get(id) ?? []), r = reliability(cs.map(c => c.reliability))
       return { ...a, fingerprint: applicableFingerprint(a.scopeKey, cs), reliability: r === 'ready' ? 'unavailable' as const : r, complete: false }
     })
-    publish({ ...current, candidates, applicable, reliability: applicable.length ? reliability(applicable.map(a => a.reliability)) : 'unavailable', complete: false })
+    // A new external generation is a reconciliation opportunity even when its
+    // visible snapshot is still unavailable. Internal failed builds keep the
+    // default deduplication so notify→prepare cannot create its own retry loop.
+    publish({ ...current, candidates, applicable, reliability: applicable.length ? reliability(applicable.map(a => a.reliability)) : 'unavailable', complete: false }, reconcile)
   }
   function accept(value: unknown, event?: InstructionObservationEvent): boolean {
     const next = observationData(value), signature = JSON.stringify(next)
@@ -107,8 +114,11 @@ export function createInstructionService(options: InstructionServiceOptions): In
       const before = state; const changed = accept(event, event)
       if (!changed) return
       const pendingChanges = [...before.pending, ...state.pending].filter(p => JSON.stringify(before.pending.find(x => x.id === p.id)) !== JSON.stringify(state.pending.find(x => x.id === p.id))).flatMap(p => p.paths)
-      if (event.kind === 'reset' || !state.available || before.available !== state.available) { interestsChanged = true; mark() }
-      else mark([...event.paths, ...pendingChanges])
+      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available) { interestsChanged = true; mark(undefined, true) }
+      else {
+        if (!state.available) interestsChanged = true
+        mark([...event.paths, ...pendingChanges], true)
+      }
     } catch { healthy = false; interestsChanged = true; mark() }
   }
   function connect() {
@@ -188,7 +198,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
       } catch (error) { return Promise.reject(error) }
     },
     snapshot: () => current,
-    invalidate(values) { if (closed || disabled) return; mark(values === undefined ? undefined : paths(values)) },
+    invalidate(values) { if (closed || disabled) return; mark(values === undefined ? undefined : paths(values), true) },
     subscribe(listener) { if (closed) return () => {}; if (typeof listener !== 'function') throw new InstructionConfigurationError('Invalid listener'); listeners.add(listener); return () => { listeners.delete(listener) } },
     close() {
       if (closing) return closing

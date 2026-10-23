@@ -162,9 +162,15 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         }
         shard.cursor = event.cursor; shard.signature = encoded
       } else { shard.cursor = shard.route.cursor; shard.signature = shard.route.signature }
+      const previousStatus = shard.status
       shard.status = shard.route.status
       if (shard.status !== 'starting') shard.settle()
-      if (shard.status !== 'ready') { affect('availability'); return }
+      if (shard.status !== 'ready') {
+        // Retrying an acquire that still throws has no new W1 generation.
+        // Settle its waiter without turning the same failure into a fresh event.
+        if (event || previousStatus !== shard.status) affect('availability')
+        return
+      }
       if (!event || event.kind === 'reset') {
         mappingVersion++; mappingDirty = true
         affect('reset'); return
@@ -200,7 +206,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
             // A thrown acquire owns no W1 retry resource. A fresh host update
             // may try again after capacity frees; there is no retry timer here.
             existing.first = new Promise<void>(resolve => { existing.settle = resolve })
-            existing.status = 'starting'; start(existing.route)
+            start(existing.route)
           }
           continue
         }
@@ -223,7 +229,17 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
     }
     async function update(input: readonly InstructionWatchInterest[]): Promise<InstructionObservationState> {
       if (stopped || closed) return state
+      const priorInterests = JSON.stringify(registered), priorMapping = plan?.signature
       updating = true; dirty = new Set(); reset = false
+      const finish = () => {
+        // A repeated unavailable update is an internal attempt, not a new
+        // recovery opportunity. Actual callbacks set reset/dirty and publish
+        // immediately; changed interests/mappings/outcomes still get a barrier.
+        if (priorInterests !== JSON.stringify(registered) || priorMapping !== plan?.signature || reset || dirty.size || state.available !== available()) {
+          publish('reset', reset ? [] : [...dirty])
+        }
+        return state
+      }
       try {
         const interests = interestData(scope, input)
         registered = interests
@@ -271,7 +287,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         if (!failures.length && stable && verifiedMapping === mappingVersion) mappingDirty = false
         // Everything received before this synchronous capture is represented by
         // the final reset and complete pending set. IA must reread under coverage.
-        publish('reset', reset ? [] : [...dirty]); return state
+        return finish()
       } catch {
         if (!stopped) {
           mappingDirty = true
@@ -285,7 +301,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
             for (const shard of removed) shards.delete(shard.route.selectionKey)
             await Promise.allSettled(removed.map(retainCleanup))
           }
-          if (!stopped) publish('reset')
+          if (!stopped) finish()
         }
         return state
       }
