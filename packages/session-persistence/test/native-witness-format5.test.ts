@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -39,7 +40,7 @@ it.each([1, 2, 3, 4])('reads historical format%s without retrospective proof, th
   expect(JSON.stringify(session.events)).not.toContain('producerWitness')
   const document = await coordinator.openManagedDocument('s')
   await ownedContextReadiness(coordinator, 's', document.view)()
-  expect((await backend.profile('s')).meta.formatVersion).toBe(11)
+  expect((await backend.profile('s')).meta.formatVersion).toBe(CURRENT_FORMAT_VERSION)
   expect((await readFile(path, 'utf8')).split('\n').slice(1).join('\n')).toBe(body)
   const event = history().events[2]!
   if (event.type !== 'assistant/message') throw new Error('Expected assistant fixture')

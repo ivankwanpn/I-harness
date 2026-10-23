@@ -1,7 +1,7 @@
 import { open, readFile, type FileHandle } from 'node:fs/promises'
 import { CURRENT_FORMAT_VERSION, canonicalJsonData, decodeFactBatch, readFactJournal, validJournalMetadata, validJournalPrefix, type EncodedFactBatch, type FactReceipt, type JournalPrefix, type SessionEvent } from '@i-harness/core-session'
 import type { BackendFactOutcome, HeldFactOwner, OwnedFactBackend, SessionMeta } from '@i-harness/session-persistence'
-import { isHeldFactOwner, parseBootstrapHeaderStage } from '@i-harness/session-persistence'
+import { isHeldFactOwner, parseBootstrapHeaderStage, bootstrapManifest } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import type { BootstrapBackend } from '@i-harness/session-persistence'
@@ -15,11 +15,13 @@ export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: Se
   const invocation = { version: 1 as const, operationId: reservation.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: reservation.requestDigest }
   const stage = parseBootstrapHeaderStage(await readFile(bootstrapPaths(path, invocation).stage))
   const original = JSON.parse(stage.headerBytes) as SessionMeta
-  for (const key of ['formatVersion','sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
+  if (meta.formatVersion !== original.formatVersion && !(original.formatVersion === 11 && meta.formatVersion === 12)) throw new TypeError('Bootstrap storage format changed')
+  for (const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
     if (canonicalJsonData(meta[key]) !== canonicalJsonData(original[key])) throw new TypeError('Bootstrap birth scope changed')
   }
   const end = raw.indexOf(10), body = raw.subarray(end + 1)
   const decoded = readBootstrapFactJournal(body, meta.journal!, meta.formatVersion, meta)
+  if (bootstrapManifest(stage, decoded.events.slice(0, reservation.seedLength) as import('@i-harness/session-persistence').BootstrapRequest['seed']['records']) !== reservation.manifestDigest) throw new TypeError('Bootstrap birth manifest changed')
   const birthCount = reservation.seedLength + 1 + (reservation.initialInputId === undefined ? 0 : 1)
   if (canonicalJsonData(candidate.slice(0, birthCount)) !== canonicalJsonData(decoded.events.slice(0, birthCount))) throw new TypeError('Bootstrap birth records are immutable')
   const phases = reservation.seedLength ? [{ name: 'seed', count: reservation.seedLength }, { name: 'complete', count: birthCount - reservation.seedLength }] : [{ name: 'complete', count: birthCount }]
@@ -40,13 +42,27 @@ const scope = (id: string, owner: HeldFactOwner) => {
   owner.assertHeld()
 }
 class JournalPrefixConflict extends Error {}
-async function header(handle: FileHandle) {
+async function header(handle: FileHandle, path: string, batch: EncodedFactBatch) {
   const bytes = Buffer.alloc(64 * 1024)
   const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0)
   const end = bytes.subarray(0, bytesRead).indexOf(0x0a)
   if (end < 0) throw new TypeError('Invalid managed header')
   const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-  if (meta.formatVersion !== CURRENT_FORMAT_VERSION || !validJournalMetadata(meta.journal)) throw new TypeError('Current managed journal format required')
+  if (!validJournalMetadata(meta.journal)) throw new TypeError('Current managed journal format required')
+  if (meta.formatVersion !== CURRENT_FORMAT_VERSION) {
+    const seed = meta.semanticSeed
+    if (meta.formatVersion !== 11 || !seed) throw new TypeError('Current managed journal format required')
+    const invocation = { version: 1 as const, operationId: seed.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: seed.requestDigest }
+    const stage = parseBootstrapHeaderStage(await readFile(bootstrapPaths(path, invocation).stage))
+    if (!bytes.subarray(0, end + 1).equals(Buffer.from(stage.headerBytes))) throw new TypeError('Original bootstrap header required')
+    const phase = batch.key.firstSeq === 0 && seed.seedLength > 0 ? 'seed' : 'complete'
+    const first = phase === 'seed' ? 0 : seed.seedLength, count = phase === 'seed' ? seed.seedLength : 1 + (seed.initialInputId === undefined ? 0 : 1)
+    if (batch.key.batchId !== `bootstrap:${seed.operationId}:${phase}` || batch.key.firstSeq !== first || batch.key.count !== count) throw new TypeError('Original bootstrap phase required')
+    const raw = await readFile(path), body = raw.subarray(raw.indexOf(10) + 1)
+    const prefix = body.subarray(0, phase === 'seed' ? 0 : readBootstrapFactJournal(body, meta.journal!, 11, meta).frames.find(frame => frame.batch.key.batchId.endsWith(':seed'))?.batch.bytes.length ?? 0)
+    // The original lane permits only the exact seed/completion/initial shape.
+    readBootstrapFactJournal(Buffer.concat([prefix, Buffer.from(batch.bytes)]), meta.journal!, 11, meta)
+  }
   return { meta, bytes: end + 1 }
 }
 function checkBatch(prefix: JournalPrefix, batch: EncodedFactBatch) {
@@ -97,7 +113,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       const path = filePath(id), bytes = await readFile(path)
       const end = bytes.indexOf(0x0a)
       const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-      if (![6, 7, 8, 9, 10, 11].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+      if (![6, 7, 8, 9, 10, 11, 12].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
       const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
       const handle = await open(path, 'r+')
       try {
@@ -116,7 +132,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       let outcome: BackendFactOutcome
       try {
         handle = await open(filePath(id), 'r+')
-        const h = await header(handle)
+        const h = await header(handle, filePath(id), batch)
         position = h.bytes + prefix.bodyBytes
         if ((await handle.stat()).size !== position) return { kind: 'conflict', key: batch.key }
         await checkPrefix(handle, h, prefix)
@@ -163,7 +179,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       let handle: FileHandle | undefined, outcome: BackendFactOutcome = { kind: 'unknown', key: batch.key }
       try {
         handle = await open(filePath(id), 'r+')
-        const h = await header(handle), position = h.bytes + prefix.bodyBytes
+        const h = await header(handle, filePath(id), batch), position = h.bytes + prefix.bodyBytes
         await checkPrefix(handle, h, prefix)
         const size = (await handle.stat()).size
         if (size < position || size > position + batch.bytes.length) return { kind: 'conflict', key: batch.key }

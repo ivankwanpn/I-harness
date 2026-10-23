@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { afterEach, expect, it } from 'vitest'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,7 +12,7 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture(ready: boolean) {
   const root = await mkdtemp(join(tmpdir(), 'semantic-publication-')); roots.push(root)
   const backend = createJsonlBackend(root), id = 'session', path = join(root, id + '.jsonl')
-  await backend.create(id, { formatVersion: 11, sessionId: id, createdAt: '2026-10-23T00:00:00.000Z', title: 'original', ...(ready ? structuredClone(literalReady.header) : {}) })
+  await backend.create(id, { formatVersion: CURRENT_FORMAT_VERSION, sessionId: id, createdAt: '2026-10-23T00:00:00.000Z', title: 'original', ...(ready ? structuredClone(literalReady.header) : {}) })
   if (ready) await backend.replaceEvents!(id, structuredClone(literalReady.events))
   const loaded = await backend.read(id)
   expect(projectConversation({ formatVersion: loaded.version, header: loaded.meta, events: loaded.events }).items).toHaveLength(ready ? 2 : 0)

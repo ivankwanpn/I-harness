@@ -55,7 +55,8 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
 }
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
-  for(const key of ['formatVersion','sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
+  if (meta.formatVersion !== original.formatVersion && !(original.formatVersion === 11 && meta.formatVersion === 12 && readyState(state))) throw new Error('Bootstrap storage format conflict')
+  for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
   if(stage.seed.seedLength&&first?.type==='conversation/seed-manifest') {
@@ -117,6 +118,13 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(checked.kind!=='committed')return blocked(entry)
       receipts.push(checked.receipt)
     }
+    targetCurrent(guards)
+    // Confirm the original birth frames before changing only the writable header.
+    if (state.meta!.formatVersion === 11) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
+      if (!backend.upgradeSessionFormat) throw new Error('Bootstrap writer cannot upgrade current storage')
+      const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, 11, 12)
+      if (upgraded.formatVersion !== 12) throw new Error('Bootstrap storage upgrade incomplete')
+    })
     targetCurrent(guards)
     entry.control!.ready();entry.ready=true;b.phase='completion';entry.headerUnknown=false
     return {kind:'already-ready',document:doc,receipt:{version:1,invocation:b.invocation,manifestDigest:manifest(stage),seedLength:stage.seed.seedLength,dependencyClosureDigest:closure,

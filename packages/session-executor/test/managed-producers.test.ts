@@ -1,16 +1,23 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { type BatchKey } from '@i-harness/core-session'
+import { renderRuntimeContext, type BatchKey } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createTodoTool } from '@i-harness/todo'
 import { enterPlanMode } from '@i-harness/plan-mode'
 import { createRuntimeContext } from '@i-harness/runtime-context'
 import { createScheduleTools } from '@i-harness/schedule/tools'
 import { applyTitle } from '../../session-title/src/index.ts'
+import { createRuntimeContextSource } from '../src/lifecycle/action-facts.ts'
 import { createSessionAssembly } from '../src/assembly.ts'
+
+// This host wiring control must not discover instructions from the real home
+// or drive ancestors. The real Agent/HTTP test supplies all sections directly.
+vi.mock('@i-harness/instructions', async original => ({
+  ...await original<typeof import('@i-harness/instructions')>(), createInstructionsSection: () => () => 'controlled assembly instruction',
+}))
 
 it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s through its actual producer only after the managed receipt', async producer => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-producer-'))
@@ -18,7 +25,7 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), actual = backend.appendOwnedBatch!
   backend.appendOwnedBatch = async (...args) => { entered.resolve(); await release.promise; return actual(...args) }
-  const runtime = createRuntimeContext(document.view as any, document.agent)
+  const runtime = createRuntimeContext(document.view as any, createRuntimeContextSource(document))
   runtime.registerSection('test', () => 'current source')
   try {
     const work = producer === 'todo'
@@ -32,7 +39,7 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
     await Promise.race([entered.promise, settled])
     expect(document.view.events).toEqual([])
     release.resolve(); await settled
-    const expected = producer === 'todo' ? ['todo/write'] : producer === 'plan' ? ['plan/mode', 'user/message'] : producer === 'runtime' ? ['user/message'] : producer === 'schedule' ? ['schedule/change'] : ['session/title']
+    const expected = producer === 'todo' ? ['todo/write'] : producer === 'plan' ? ['plan/mode', 'user/message'] : producer === 'runtime' ? ['runtime/context'] : producer === 'schedule' ? ['schedule/change'] : ['session/title']
     expect(document.view.events.map(event => event.type)).toEqual(expected)
     expect((await backend.read(id)).events.map(event => event.type)).toEqual(expected)
   } finally { release.resolve(); await coordinator.close() }
@@ -58,7 +65,7 @@ it('shares adjacent runtime snapshots through the actual assembly feedback facto
     release.resolve()
     await Promise.all([first, second])
     expect([writes, sends, settled]).toEqual([1, 0, 2])
-    expect(assembly.session.events.filter(event => event.type === 'user/message' && event.source?.plugin === 'i-harness/runtime-context')).toHaveLength(1)
+    expect(assembly.session.events.filter(event => event.type === 'runtime/context')).toHaveLength(1)
   } finally { release.resolve(); await Promise.allSettled([first, second]); await assembly.dispose(); await coordinator.close() }
 })
 
@@ -74,18 +81,18 @@ it('invalidates runtime dedupe knowledge after unknown so a reconciled newer sna
     if (writes === 2) { unknown = args[3].key; return { kind: 'unknown', key: unknown } }
     return outcome
   }
-  const runtime = createRuntimeContext(document.view, document.agent)
+  const runtime = createRuntimeContext(document.view, createRuntimeContextSource(document))
   runtime.registerSection('state', () => text)
   try {
     await runtime.render()
     text = 'B'
     await expect(runtime.render()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-    expect(document.view.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual(['## state\n\nA'])
+    expect(document.view.events.filter(event => event.type === 'runtime/context').map(event => renderRuntimeContext(event.sections))).toEqual(['## state\n\nA'])
     expect((await document.reconcile(unknown!)).kind).toBe('committed')
     text = 'A'
     await runtime.render()
     expect(writes).toBe(3)
-    expect(document.view.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual(['## state\n\nA', '## state\n\nB', '## state\n\nA'])
+    expect(document.view.events.filter(event => event.type === 'runtime/context').map(event => renderRuntimeContext(event.sections))).toEqual(['## state\n\nA', '## state\n\nB', '## state\n\nA'])
   } finally { await coordinator.close() }
 })
 
@@ -101,7 +108,7 @@ it('shares one pending runtime snapshot across overlapping render calls until it
     await release.promise
     return append(...args)
   }
-  const runtime = createRuntimeContext(document.view, document.agent)
+  const runtime = createRuntimeContext(document.view, createRuntimeContextSource(document))
   let text = 'one immutable snapshot'
   runtime.registerSection('held', () => text)
   const first = runtime.render().then(() => { firstSettled = true })
@@ -115,7 +122,7 @@ it('shares one pending runtime snapshot across overlapping render calls until it
     await Promise.all([first, second])
     await runtime.render()
     expect(writes).toBe(1)
-    expect(document.view.events).toEqual([expect.objectContaining({ type: 'user/message', text: '## held\n\none immutable snapshot' })])
+    expect(document.view.events).toEqual([expect.objectContaining({ type: 'runtime/context', sections: [{ name: 'held', text: 'one immutable snapshot' }] })])
     text = 'second'
     const changed = runtime.render()
     text = 'third'
@@ -123,7 +130,7 @@ it('shares one pending runtime snapshot across overlapping render calls until it
     text = 'second'
     const back = runtime.render()
     await Promise.all([changed, third, back])
-    expect(document.view.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual([
+    expect(document.view.events.filter(event => event.type === 'runtime/context').map(event => renderRuntimeContext(event.sections))).toEqual([
       '## held\n\none immutable snapshot', '## held\n\nsecond', '## held\n\nthird', '## held\n\nsecond',
     ])
     expect((await backend.read(id)).events).toEqual(document.view.events)

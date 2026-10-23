@@ -1,5 +1,29 @@
 import type { AgentFacts, FactOwner, MetadataFacts, ProducerFactOutcome } from '@i-harness/core-session'
 
+/** One actual source identity per owner/signal while captures are outstanding.
+ * The last terminal capture releases the action; unknown captures keep it. */
+export function createRuntimeContextSource(owner: FactOwner): import('@i-harness/core-session').RuntimeContextFactSource {
+  type Source = ReturnType<import('@i-harness/core-session').RuntimeContextFactSource>
+  const scoped = new WeakMap<AbortSignal, Source>()
+  let unscoped: Source | undefined
+  return signal => {
+    const existing = signal ? scoped.get(signal) : unscoped
+    if (existing) return existing
+    const action = owner.beginAction(signal)
+    let captures = 0
+    const source: Source = {
+      captureRuntimeContext(record, checkCurrent) { const capture = action.captureRuntimeContext(record, checkCurrent); captures++; return capture },
+      finish() {
+        if (--captures > 0) return
+        if (signal) scoped.delete(signal); else unscoped = undefined
+        action.finish()
+      },
+    }
+    if (signal) scoped.set(signal, source); else unscoped = source
+    return source
+  }
+}
+
 /** One-shot host ports release their action as soon as the receipt returns.
  * Long-running Agent/tool sources keep their separate registered lifecycle. */
 export function actionMetadataFacts(owner: FactOwner, signal?: AbortSignal): MetadataFacts<ProducerFactOutcome> {

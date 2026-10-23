@@ -84,6 +84,7 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
+  captureRuntimeContext(record: import('../events/runtime-context.ts').RuntimeContextRecordV1, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureSoftReduction(event: import('../events/soft-reduction.ts').SoftReductionStart, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   /** Frozen diagnostics from the real writer; these scalars grant no authority. */
   readonly owner?: Readonly<import('./types.ts').OwnerToken>
@@ -113,5 +114,6 @@ export interface FactOwner<Outcome = ProducerFactOutcome> {
   registerReceivedInputSource(drain: () => Promise<void>): ReceivedInputSource<Outcome>
   drain?(): Promise<void>
 }
+export type RuntimeContextFactSource = (signal?: AbortSignal) => Pick<ManagedAction<ProducerFactOutcome>, 'captureRuntimeContext' | 'finish'>
 export type MetadataFactSource = MetadataFacts<ProducerFactOutcome> | ((signal?: AbortSignal) => MetadataFacts<ProducerFactOutcome>)
 export type FeedbackFactSource = Pick<AgentFacts<ProducerFactOutcome>, 'feedback'> | ((signal?: AbortSignal) => Pick<AgentFacts<ProducerFactOutcome>, 'feedback'>)

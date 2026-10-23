@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from 'vitest'
 import { append, createSession, createNondurableFactOwner, fromJSONL, toJSONL, createConversationValidationIndex, captureFactGroup, resolveFactGroup, projectConversation, projectConversationCandidate, type SessionEvent } from '../src/index.ts'
 
@@ -53,7 +54,7 @@ describe('generation accounting through the existing history owner', () => {
     const value = session()
     expect(() => { add(value, open); add(value, bind); add(value, reserve()) }).not.toThrow()
     const cold = fromJSONL(toJSONL(value))
-    expect(cold.formatVersion).toBe(11)
+    expect(cold.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(cold.events.map(event => event.type)).toEqual(['user/message', 'context/action', 'context/action', 'context/attempt'])
   })
 

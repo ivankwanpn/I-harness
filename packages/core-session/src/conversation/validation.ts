@@ -1,6 +1,7 @@
 import { validateUsageFact, type AcceptanceFact, type UsageAnchorFact } from "./usage-validation.ts"
 import type { SessionEventView as SessionEvent } from "../managed/types.ts"
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
+import { validateRuntimeContextDiscriminant } from '../events/runtime-context.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape, validateSemanticSourceEventShape } from "../events/conversation.ts"
 import type { projectHistory } from './history/replacements.ts'
 import { createHistoryIndex } from './history/index.ts'
@@ -53,7 +54,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
   const attempts = new Set<string>()
   const acceptedCalls = new Set<number>()
   const callsById = new Map<string, number | null>()
-  const history = createHistoryIndex(formatVersion, validateShape)
+  const history = createHistoryIndex(formatVersion, validateShape, header.parentSession !== undefined || header.semanticSeed !== undefined ? header.seedLength ?? 0 : 0)
   const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength,
     ...(header.semanticSeed ? { semanticSeed: Object.freeze({ ...header.semanticSeed }) } : {}) })
   const generation = createGenerationIndex(scope)
@@ -80,6 +81,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
     stage(suffix, options) {
       // Readiness itself dispatches on event.type, so source descriptors must
       // be checked before it or any index/boundary consumes those scalars.
+      for (const event of suffix) validateRuntimeContextDiscriminant(event, formatVersion)
       if (capability === semanticSourceStructure) for (const event of suffix) validateSemanticSourceEventShape(event, formatVersion)
       const readCurrent = options?.readCurrentEvent ?? read
       const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0

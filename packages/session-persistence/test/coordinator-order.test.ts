@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createSessionCoordinator, registerEventType, registerUpgrade, type CoordinatorOptions, type PersistenceBackend } from "../src/index.ts"
@@ -6,8 +7,8 @@ function backend(): PersistenceBackend {
   return {
     id: "jsonl", capabilities: { seekableRead: false, rawArtifacts: true },
     async create() {}, async append() {}, async list() { return [] },
-    async read() { return { version: 11, events: [] } },
-    async repair() { return { version: 11, events: [] } },
+    async read() { return { version: CURRENT_FORMAT_VERSION, events: [] } },
+    async repair() { return { version: CURRENT_FORMAT_VERSION, events: [] } },
     async putDocument() {}, async getDocument() { return undefined },
     async profile() { throw new Error("unused") }, async updateMeta() { throw new Error("unused") },
   }
@@ -87,7 +88,7 @@ describe("coordinator callback and evaluation order", () => {
     store.replaceEvents = async function (_id, events) { expect(this).toBe(store); calls++; expect(events[0]?.seq).toBe(0) }
     // This fixture exercises current-format sequence canonicalization and late
     // method lookup; literal predecessor upgrades have their own owner tests.
-    repaired.resolve({ version: 11, events: [{ type: "assistant/message", text: "persist me" }] })
+    repaired.resolve({ version: CURRENT_FORMAT_VERSION, events: [{ type: "assistant/message", text: "persist me" }] })
     await loaded
     expect(calls).toBe(1)
     await coordinator.close()

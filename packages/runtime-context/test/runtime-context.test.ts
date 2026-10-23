@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, createNondurableFactOwner, deriveMessages, type SessionEvent } from "@i-harness/core-session"
-import { createRuntimeContext, installRuntimeContext, RUNTIME_CONTEXT_SOURCE_PLUGIN } from "../src/index.ts"
+import { createSession, createNondurableFactOwner, deriveMessages, renderRuntimeContext, type SessionEvent } from "@i-harness/core-session"
+import { createRuntimeContext, installRuntimeContext } from "../src/index.ts"
 
 function snapshotTexts(s: ReturnType<typeof createSession>): string[] {
   return s.events.filter(
-    (e): e is Extract<SessionEvent, { type: "user/message" }> =>
-      e.type === "user/message" && e.source?.kind === "plugin" && e.source.plugin === RUNTIME_CONTEXT_SOURCE_PLUGIN,
-  ).map((e) => e.text)
+    (e): e is Extract<SessionEvent, { type: "runtime/context" }> =>
+      e.type === "runtime/context",
+  ).map((e) => renderRuntimeContext(e.sections))
 }
 
 describe("runtime context", async () => {
@@ -34,7 +34,7 @@ describe("runtime context", async () => {
     branch = ""
     await rc.render()
     expect(snapshotTexts(s)).toHaveLength(2)
-    expect(snapshotTexts(s)[1]!).toContain("none")
+    expect(snapshotTexts(s)[1]!).toBe("")
   })
 
   it("keeps different overlapping snapshots in source order without merging a later return to earlier text", async () => {
@@ -51,12 +51,15 @@ describe("runtime context", async () => {
   })
 
   it("does not advance the retained snapshot after a refused admission", async () => {
-    const s = createSession(), feedback = createNondurableFactOwner(s).beginAction().facts.agent
+    const s = createSession(), owner = createNondurableFactOwner(s)
     let attempts = 0
-    const rc = createRuntimeContext(s, { feedback(event) {
-      attempts++
-      return attempts === 1 ? Promise.resolve({ kind: 'not-issued', code: 'FACT_CANCELLED' }) : feedback.feedback(event)
-    } })
+    const rc = createRuntimeContext(s, signal => {
+      const action = owner.beginAction(signal)
+      return { finish: action.finish, captureRuntimeContext(event, check) {
+        const capture = action.captureRuntimeContext(event, check)
+        return { ...capture, admit() { attempts++; return attempts === 1 ? Promise.resolve({ kind: 'not-issued', code: 'FACT_CANCELLED' }) : capture.admit() } }
+      } }
+    })
     rc.registerSection('state', () => 'same text')
     await expect(rc.render()).rejects.toMatchObject({ code: 'FACT_CANCELLED' })
     expect(snapshotTexts(s)).toEqual([])
@@ -67,12 +70,16 @@ describe("runtime context", async () => {
   })
 
   it("does not share an identical pending snapshot across different actual feedback ports", async () => {
-    const s = createSession(), feedback = createNondurableFactOwner(s).beginAction().facts.agent
+    const s = createSession(), owner = createNondurableFactOwner(s)
     const release = Promise.withResolvers<void>()
     let resolutions = 0
-    const first = { async feedback(event: Parameters<typeof feedback.feedback>[0]) { await release.promise; return feedback.feedback(event) } }
-    const refused = { async feedback() { return { kind: 'not-issued' as const, code: 'FACT_CANCELLED' as const } } }
-    const rc = createRuntimeContext(s, () => ++resolutions === 1 ? first : refused)
+    const rc = createRuntimeContext(s, signal => {
+      const action = owner.beginAction(signal), ordinal = ++resolutions
+      return { finish: action.finish, captureRuntimeContext(event, check) {
+        const capture = action.captureRuntimeContext(event, check)
+        return { ...capture, async admit() { if (ordinal === 1) { await release.promise; return capture.admit() } return { kind: 'not-issued' as const, code: 'FACT_CANCELLED' as const } } }
+      } }
+    })
     rc.registerSection('state', () => 'same text')
     const held = rc.render()
     try {
@@ -84,11 +91,16 @@ describe("runtime context", async () => {
   })
 
   it("keeps a newer confirmed snapshot when an older admission fails later", async () => {
-    const s = createSession(), feedback = createNondurableFactOwner(s).beginAction().facts.agent
+    const s = createSession(), owner = createNondurableFactOwner(s)
     const release = Promise.withResolvers<void>()
     let resolutions = 0, text = 'old'
-    const lateFailure = { async feedback() { await release.promise; return { kind: 'not-issued' as const, code: 'FACT_CANCELLED' as const } } }
-    const rc = createRuntimeContext(s, () => ++resolutions === 1 ? lateFailure : feedback)
+    const rc = createRuntimeContext(s, signal => {
+      const action = owner.beginAction(signal), ordinal = ++resolutions
+      return { finish: action.finish, captureRuntimeContext(event, check) {
+        const capture = action.captureRuntimeContext(event, check)
+        return { ...capture, async admit() { if (ordinal === 1) { await release.promise; return { kind: 'not-issued' as const, code: 'FACT_CANCELLED' as const } } return capture.admit() } }
+      } }
+    })
     rc.registerSection('state', () => text)
     const old = rc.render()
     text = 'new'

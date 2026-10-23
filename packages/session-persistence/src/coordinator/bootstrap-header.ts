@@ -85,7 +85,7 @@ export function bootstrapManifest(stage: Omit<BootstrapHeaderStage,'headerBytes'
 export function buildBootstrapHeader(request: BootstrapRequest, original?: BootstrapHeaderStage, existing?: Record<string,unknown>): {stage:BootstrapHeaderStage;operation:BootstrapHeaderOperation;initial?:SessionEvent} {
   const r=captureBootstrapRequest(request), initial=initialAdmission(r)
   if (r.target.kind === 'resume' && !original) bad()
-  const headerBase:SessionMeta=original?.headerBase ?? { ...existing, formatVersion:11, sessionId:r.invocation.targetSessionId,createdAt:r.invocation.createdAt,
+  const headerBase:SessionMeta=original?.headerBase ?? { ...existing, formatVersion:12, sessionId:r.invocation.targetSessionId,createdAt:r.invocation.createdAt,
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},...r.metadata,...r.lineage,seedLength:r.seed.records.length }
   if(!original)for(const key of ['parentSession','delegationDepth','subagentProtocolVersion'] as const)if(r.lineage[key]===undefined)delete headerBase[key]
   const core:Omit<BootstrapHeaderStage,'headerBytes'>={version:1,kind:'semantic-bootstrap-header',invocation:r.invocation,originalTarget:original?.originalTarget ?? r.target as BootstrapHeaderStage['originalTarget'],metadata:r.metadata,lineage:r.lineage,headerBase,
@@ -116,7 +116,7 @@ export function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderSta
   if (value.initial) { fields(value.initial,['inputId','digest','startedAt','expiresAt']); if (!id(value.initial.inputId)||!digest(value.initial.digest)||!count(value.initial.startedAt)||!count(value.initial.expiresAt)||value.initial.expiresAt<=value.initial.startedAt) bad() }
   const header=JSON.parse(value.headerBytes) as SessionMeta, s=header.semanticSeed
   validateSubagentHeader(header)
-  if (!s || header.formatVersion!==11 || header.journal?.version!==1 || header.journal.legacyBodyBytes!==0 || header.journal.legacyEventCount!==0 || header.journal.separatorBytes!==0 || header.journal.legacyPrefixDigest!==legacyPrefixDigest(0,new Uint8Array())
+  if (!s || ![11,12].includes(header.formatVersion) || header.journal?.version!==1 || header.journal.legacyBodyBytes!==0 || header.journal.legacyEventCount!==0 || header.journal.separatorBytes!==0 || header.journal.legacyPrefixDigest!==legacyPrefixDigest(0,new Uint8Array())
     || header.sessionId!==value.invocation.targetSessionId || header.createdAt!==value.invocation.createdAt || s.operationId!==value.invocation.operationId || s.requestDigest!==value.invocation.requestDigest
     || s.seedDigest!==value.seed.digest || s.dependencyDigest!==value.seed.dependencyDigest || s.seedLength!==value.seed.seedLength || s.groupCount!==value.seed.groupCount || header.seedLength!==s.seedLength
     || s.initialInputId!==value.initial?.inputId || s.initialInputDigest!==value.initial?.digest || s.initialStartedAt!==value.initial?.startedAt || s.initialExpiresAt!==value.initial?.expiresAt) bad()

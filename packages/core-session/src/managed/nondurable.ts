@@ -73,6 +73,9 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         return { kind: 'memory-committed', durability: 'nondurable', seqs: [seq] }
       }
       return {
+        captureRuntimeContext(event, checkCurrent) {
+          return captureMemoryFact(session, { kind: 'runtime-context', event }, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
+        },
         captureSoftReduction(event, checkCurrent) {
           return captureMemorySoftStart(session, event, assertOpen, checkCurrent)
         },

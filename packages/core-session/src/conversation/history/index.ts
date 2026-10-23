@@ -8,7 +8,7 @@ import { projectHistory, validateHistoricalReplacement } from './replacements.ts
 
 /** The existing validation owner's staged logical metadata. This registry is
  * structural only; it neither retains an event array nor renders payloads. */
-export function createHistoryIndex(formatVersion: number, validateShape = validateConversationEventShape) {
+export function createHistoryIndex(formatVersion: number, validateShape = validateConversationEventShape, inheritedBoundary = 0) {
   const facts = new Map<number, HistoryFact>()
   const counts = new Map<number, number>()
   const dependencies = new Map<number, ReadonlySet<number>>()
@@ -38,7 +38,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
       let stagedLength = 0
       return { advance(event: SessionEventView) {
         validateShape(event, formatVersion)
-        const position = baseCount + stagedLength++, fact = historyFact(event, position)
+        const position = baseCount + stagedLength++, fact = historyFact(event, position, inheritedBoundary)
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)
         if (event.type === 'user/message') for (const id of [event.input?.inputId, event.imageInputId]) {
           if (id === undefined) continue
@@ -53,7 +53,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
           const required = validateHistoricalReplacement(archive, fact)
           if (read) for (const prior of facts.values()) if (prior.seq !== undefined && required.has(prior.seq)) {
             const actual = read(prior.index)
-            if (!actual || JSON.stringify(historyFact(actual, prior.index)) !== JSON.stringify(prior)) replacementFormatError('unsafe-address', event.seq)
+            if (!actual || JSON.stringify(historyFact(actual, prior.index, inheritedBoundary)) !== JSON.stringify(prior)) replacementFormatError('unsafe-address', event.seq)
           }
           nextDependencies.set(event.seq!, required)
           nextAddresses.add(event.seq!)

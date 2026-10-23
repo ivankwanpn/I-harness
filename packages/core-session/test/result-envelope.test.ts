@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '../src/index.ts'
 import { describe, expect, it } from 'vitest'
 import { append, createSession, deriveMessages, fromJSONL, stringifyJsonData, toJSONL, type SessionEvent } from '../src/index.ts'
 
@@ -31,11 +32,11 @@ describe('closed retained result facts', () => {
     expect(fromJSONL(raw).events).toHaveLength(2)
     expect(() => append(createSession(), { ...output, content: 'duplicate raw' } as SessionEvent)).toThrow()
     expect(() => fromJSONL(raw.replace('"envelope":', '"content":"duplicate raw","envelope":'))).toThrow()
-    expect(() => fromJSONL(raw.replace('"formatVersion":11', '"formatVersion":9'))).toThrow()
-    expect(() => fromJSONL(raw.replace('"formatVersion":11', '"formatVersion":12'))).toThrow()
+    expect(() => fromJSONL(raw.replace(`"formatVersion":${CURRENT_FORMAT_VERSION}`, '"formatVersion":9'))).toThrow()
+    expect(() => fromJSONL(raw.replace(`"formatVersion":${CURRENT_FORMAT_VERSION}`, `"formatVersion":${CURRENT_FORMAT_VERSION+1}`))).toThrow()
     const legacy = createSession()
     append(legacy, { type: 'code/output', cellId: 'legacy', content: { type: 'text', text: 'literal old output' } })
-    expect(fromJSONL(toJSONL(legacy).replace('"formatVersion":11', '"formatVersion":9')).events[0]).toMatchObject({ content: { text: 'literal old output' } })
+    expect(fromJSONL(toJSONL(legacy).replace(`"formatVersion":${CURRENT_FORMAT_VERSION}`, '"formatVersion":9')).events[0]).toMatchObject({ content: { text: 'literal old output' } })
   })
   it('retains stack-safe native property semantics for a deep accessor result in one traversal', () => {
     let reads = 0

@@ -1,5 +1,6 @@
 import type { ItemBuilder } from '../exchange.ts'
 
+export interface HistoryCurrent { readonly index: number }
 export interface HistoryRecipe {
   readonly kind: 'input' | 'summary' | 'assistant' | 'result' | 'images' | 'seed-item'
   readonly item?: number

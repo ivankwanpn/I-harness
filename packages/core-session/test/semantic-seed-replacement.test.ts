@@ -12,7 +12,7 @@ it('reads literal inherited observations without creating pending work or effect
   expect(projected.items.every(item => item.provenance.kind === 'inherited' && item.provenance.authority === 'observation')).toBe(true)
   expect(projected.items[0]!.sources.map(ref => ref.part)).toEqual(['item:0', 'group'])
   expect(readConversationState(literalReady, projected)).toMatchObject({ kind: 'available', state: { pendingInputIds: [], unsettledDelegationIds: [], effects: [] } })
-  expect(fromJSONL(toJSONL(literalReady))).toMatchObject(literalReady)
+  expect(fromJSONL(toJSONL(literalReady))).toMatchObject({ ...literalReady, formatVersion: 12 })
   expect(createManagedSessionState(literalReady).view).toEqual(literalReady)
 })
 

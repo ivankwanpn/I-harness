@@ -32,6 +32,7 @@ export interface ModelActivityInfo {
 // otherwise only the last member would carry `ignorable`.
 export type SessionEvent =
   | (
+    | import('./runtime-context.ts').RuntimeContextRecordV1
     | { type: "turn/start"; seq?: number }
     | import('./bootstrap.ts').SeedManifestRecord
     | import('./bootstrap.ts').SeedGroupRecord
@@ -257,4 +258,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 11
+export const CURRENT_FORMAT_VERSION = 12

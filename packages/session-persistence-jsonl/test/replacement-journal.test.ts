@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile, copyFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -57,9 +58,9 @@ it('upgrades6 to11 by changing only the header and preserves journal metadata an
   try {
     const document = await coordinator.openManagedDocument('s')
     const upgraded = await readFile(path), end = upgraded.indexOf(0x0a)
-    expect(JSON.parse(upgraded.subarray(0, end).toString())).toMatchObject({ formatVersion: 11, journal, extension: { keep: true } })
+    expect(JSON.parse(upgraded.subarray(0, end).toString())).toMatchObject({ formatVersion: CURRENT_FORMAT_VERSION, journal, extension: { keep: true } })
     expect(upgraded.subarray(end + 1)).toEqual(body)
-    expect(document.view.formatVersion).toBe(11)
+    expect(document.view.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).toMatchObject({ kind: 'committed', seqs: [2] })
   } finally { await coordinator.close() }
 })
@@ -85,7 +86,7 @@ it('refuses a replacement batch if the actual owned file header was changed back
   const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const path = join(root, `${id}.jsonl`)
   try {
-    const raw = await readFile(path, 'utf8'), changed = raw.replace('"formatVersion":11', '"formatVersion":6')
+    const raw = await readFile(path, 'utf8'), changed = raw.replace(`"formatVersion":${CURRENT_FORMAT_VERSION}`, '"formatVersion":6')
     expect(changed).not.toBe(raw); await writeFile(path, changed)
     expect((await document.importSeed(events())).kind).not.toBe('committed')
     expect(document.view.events).toEqual([])

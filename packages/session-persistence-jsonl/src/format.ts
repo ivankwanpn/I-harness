@@ -79,7 +79,7 @@ export function parseHeader(line: string): SessionMeta {
   validateSubagentHeader(h)
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
-  if ([6, 7, 8, 9, 10, 11].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
+  if ([6, 7, 8, 9, 10, 11, 12].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid session journal metadata')
   const modelSelection = parseModelSelection(h.modelSelection)
   return {
     formatVersion: h.formatVersion,

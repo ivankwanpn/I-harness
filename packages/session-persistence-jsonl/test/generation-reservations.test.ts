@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -108,9 +109,9 @@ it('upgrades the actual format7 predecessor through its existing writable owner 
   const next = createSessionCoordinator(backend, { lock: { enabled: true } })
   try {
     const document = await next.openManagedDocument(id)
-    expect(document.view.formatVersion).toBe(11)
+    expect(document.view.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(document.view.events).toEqual([])
-    expect((await backend.read(id)).version).toBe(11)
+    expect((await backend.read(id)).version).toBe(CURRENT_FORMAT_VERSION)
   } finally { await next.close().catch(() => {}) }
 })
 it.each([20, 9])('the existing journal owns the literal physical trace with total cap %s', async cap => {

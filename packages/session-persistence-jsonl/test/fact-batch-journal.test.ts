@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, writeFile, open } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -52,7 +53,7 @@ it('publishes an atomic source-order frame only after a scoped receipt and reope
     expect(result.seqs).toEqual([0])
     expect(document.view.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
     const lines = (await readFile(join(root, `${id}.jsonl`), 'utf8')).trimEnd().split('\n')
-    expect(JSON.parse(lines[0]!).formatVersion).toBe(11)
+    expect(JSON.parse(lines[0]!).formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(JSON.parse(lines[1]!)).toMatchObject({ recordKind: 'session/fact-batch', version: 1, firstSeq: 0, count: 1 })
     expect((await coordinator.snapshot!(id)).session.events).toEqual([{ type: 'plan/mode', mode: 'on', seq: 0 }])
   } finally { await coordinator.close() }

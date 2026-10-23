@@ -1,3 +1,4 @@
+import { runtimeContextDigest, renderRuntimeContext } from '../events/runtime-context.ts'
 import type { ConversationEventArchive } from './archive.ts'
 import type { SessionView, SessionEventView } from '../managed/types.ts'
 import type { ConversationProjection, ConversationDiagnostic } from './types.ts'
@@ -13,7 +14,7 @@ import { validatePreparedInputText } from './input-preparation.ts'
 
 /** Payload-only rendering consumes the sole history owner's complete recipes.
  * It never establishes groups, closure, source unions, order or visibility. */
-export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[] }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number } } = {}): ConversationProjection {
+export function renderConversationItems(archive: ConversationEventArchive, history: { items: HistoryItem[]; diagnostics: ConversationDiagnostic[]; current?: import('./history/types.ts').HistoryCurrent }, options: { ownerSessionId?: string; throughSeq?: number; capturePayload?: ConversationPayloadCapture; header?: SessionView['header']; candidate?: { id: string; baseCount: number } } = {}): ConversationProjection {
   const diagnostics: ConversationDiagnostic[] = []
   const readPayload = createConversationPayloadReader(options.capturePayload)
   const sources = archiveConversationSources(archive, options.ownerSessionId, diagnostics, { ...options, ...(options.capturePayload ? { readPayload } : {}) })
@@ -77,6 +78,13 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
     })
     return { role: 'assistant', content: event?.type === 'assistant/message' ? payload(event, 'text', index, 'message') : '', ...(toolCalls ? { toolCalls } : {}), ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) }
   }
+  const current = history.current && (() => {
+    const index = history.current.index, event = archive.get(index)
+    if (event.type !== 'runtime/context') throw new TypeError('Invalid current context descriptor')
+    const sections = payload(event, 'sections', index, 'runtime-context'), text = renderRuntimeContext(sections)
+    return Object.freeze({ kind: 'runtime-context' as const, version: 1 as const, source: sources.ref(index, 'runtime-context'), sections,
+      semanticDigest: runtimeContextDigest(sections), messages: text ? [{ role: 'user' as const, content: text }] : [] })
+  })()
   const items = history.items.map(item => {
     const establishment = source(item.establishment)
     const own = archive.get(item.establishmentIndex)
@@ -99,6 +107,6 @@ export function renderConversationItems(archive: ConversationEventArchive, histo
     const index = typeof coordinate === 'number' ? sources.indexOfSeq(coordinate) : Number(coordinate.slice(6))
     return sources.ref(index, part).id
   }) })
-  return Object.freeze({ version: 1, ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: options.candidate?.baseCount ?? archive.length,
+  return Object.freeze({ version: 1, ...(current ? { current } : {}), ...(options.ownerSessionId === undefined ? {} : { ownerSessionId: options.ownerSessionId }), archiveEventCount: options.candidate?.baseCount ?? archive.length,
     ...(options.throughSeq === undefined ? {} : { throughSeq: options.throughSeq }), items: Object.freeze(items), diagnostics: Object.freeze(diagnostics.map(diagnostic => Object.freeze({ ...diagnostic, sourceIds: Object.freeze(diagnostic.sourceIds) }))) })
 }

@@ -41,7 +41,7 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
   if(operation.target.kind!=='existing-empty')return false
   try {
     const end=actual.indexOf(10),meta=end>=0?parseHeader(actual.subarray(0,end).toString('utf8')):undefined
-    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&meta.formatVersion===11&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
+    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&[11,12].includes(meta.formatVersion)&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
       &&rawHeaderDigest(actual)===operation.target.expectedHeaderDigest&&meta.journal?.legacyEventCount===0&&meta.journal?.legacyBodyBytes===0
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}

@@ -78,10 +78,12 @@ it('preserves reservation through parse→buildSession→managed view and reads1
   try {
     const old = await coordinator.load('old')
     expect(old.session.header?.semanticSeed).toBeUndefined();expect(old.session.events).toEqual([])
-    const document = await coordinator.openManagedDocument('literal')
-    expect(await document.metadata.admit({type:'plan/mode',mode:'on'})).toMatchObject({kind:'committed',seqs:[3]})
-    expect(document.view.events.slice(0,3)).toEqual(literalReady.events)
-    expect(document.view.header?.semanticSeed).toEqual(literalReady.header!.semanticSeed)
+    // This literal has no original operation stage: read-only inspection is
+    // valid, but it cannot mint a birth receipt during the 11→12 write gate.
+    const before = await readFile(join(store,'literal.jsonl'))
+    expect((await coordinator.snapshot!('literal')).session.events).toEqual(literalReady.events)
+    await expect(coordinator.openManagedDocument('literal')).rejects.toThrow()
+    expect(await readFile(join(store,'literal.jsonl'))).toEqual(before)
     const repair = vi.spyOn(backend,'repair')
     for(const [id,text] of Object.entries({headerOnly:lines[0]!+'\n',interrupted:lines[0]!+'\n'+lines[1]!.slice(0,20)})) {
       await writeFile(join(store,id+'.jsonl'),text)

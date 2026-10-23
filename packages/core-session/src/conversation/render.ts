@@ -30,6 +30,6 @@ export function copyConversationData<T>(input: T): DeepMutable<T> {
 }
 
 /** Selection is item based: every item's already ordered full bundle is emitted. */
-export function renderConversation(projection: { readonly items: readonly { readonly messages: readonly ReadonlyMessage[] }[] }): LLMMessage[] {
-  return projection.items.flatMap(item => item.messages.map(copyConversationMessage))
+export function renderConversation(projection: { readonly current?: { readonly messages: readonly ReadonlyMessage[] }; readonly items: readonly { readonly messages: readonly ReadonlyMessage[] }[] }): LLMMessage[] {
+  return [...(projection.current?.messages ?? []).map(copyConversationMessage), ...projection.items.flatMap(item => item.messages.map(copyConversationMessage))]
 }

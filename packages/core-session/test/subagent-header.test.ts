@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { expect, it } from 'vitest'
 import { createSession, fromJSONL, toJSONL, migrate, validateSubagentHeader } from '../src/index.ts'
 
@@ -7,7 +8,7 @@ it('preserves the ordinary creation marker through public JSONL and never mints 
   expect(fromJSONL(toJSONL(current)).header).toMatchObject({ subagentProtocolVersion: 1, parentSession: 'parent', origin: 'subagent' })
   const legacy = { ...current, formatVersion: 9, header: { origin: 'subagent', parentSession: 'parent', seedLength: 0 } }
   expect(fromJSONL(toJSONL(legacy)).header).not.toHaveProperty('subagentProtocolVersion')
-  expect(migrate(legacy, 11).header).not.toHaveProperty('subagentProtocolVersion')
+  expect(migrate(legacy, CURRENT_FORMAT_VERSION).header).not.toHaveProperty('subagentProtocolVersion')
 })
 
 it('rejects unsupported or accessor markers without certifying the header', () => {

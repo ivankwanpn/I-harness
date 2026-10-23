@@ -50,7 +50,7 @@ export { rewindCuts } from "./projection/rewind.ts"
 export type { RewindCut } from "./projection/rewind.ts"
 export { deriveProjectionRewrite } from "./projection/rewrite.ts"
 export { deriveMessages } from "./projection/messages.ts"
-export { projectConversation } from "./conversation/project.ts"
+export { projectConversation, projectCurrentContext } from "./conversation/project.ts"
 export { readConversationState } from "./conversation/state.ts"
 export type { ConversationState } from "./conversation/state.ts"
 export type { ConversationPayloadCapture } from "./conversation/payload.ts"
@@ -79,6 +79,10 @@ export { createManagedSessionState, isManagedFactOwner } from './managed/view.ts
 export { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, factPrefixDigest, readFactJournal, validJournalMetadata, validJournalPrefix } from './serialization/fact-journal.ts'
 export { captureFactGroup, resolveFactGroup } from './managed/groups.ts'
 export { validContextReductionDraft } from './managed/reduction.ts'
+export { validRuntimeContextRecord, validateRuntimeContextRecord, runtimeContextDigest, renderRuntimeContext } from './events/runtime-context.ts'
+export type { RuntimeContextRecordV1 } from './events/runtime-context.ts'
+export type { CurrentContextComponent } from './conversation/types.ts'
+export type { RuntimeContextFactSource } from './managed/ports.ts'
 export type { CapturedFactGroup, FactGroupDraft, AcceptedDraft, MetadataFact, LifecycleFact } from './managed/groups.ts'
 export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, FactPorts, SettlementFacts, ManagedAction, CapturedActionFact, CapturedSettlementFact, ReceivedInputSource } from './managed/ports.ts'
 export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'

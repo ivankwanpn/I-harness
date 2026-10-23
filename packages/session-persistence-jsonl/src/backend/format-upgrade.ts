@@ -1,11 +1,12 @@
 import { createReadStream } from 'node:fs'
-import { open, rename, unlink } from 'node:fs/promises'
+import { open, rename, unlink, readFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { SessionMeta } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
-import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
+import { preserveBootstrapBirth } from './fact-journal.ts'
+import { validateSemanticBootstrapHistory, readFactJournal, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 
 /** A one-time streamed header migration. The legacy body is byte-identical;
  * only a necessary separator LF is outside its hashed legacy boundary. */
@@ -23,9 +24,19 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
   } finally { await source.close() }
   if (old.formatVersion === CURRENT_FORMAT_VERSION) return old
   if (old.formatVersion !== expected || !Number.isSafeInteger(expected) || expected < 1 || expected >= CURRENT_FORMAT_VERSION) throw new TypeError('Unexpected journal upgrade')
+  if (old.formatVersion === 11 && old.semanticSeed) {
+    const raw = await readFile(path), decoded = readFactJournal(raw.subarray(bodyStart), old.journal!, 11, old)
+    if (decoded.torn) throw new TypeError('Cannot upgrade an incomplete bootstrap journal')
+    validateSemanticBootstrapHistory(decoded.events, 11, old)
+    await preserveBootstrapBirth(path, raw, old, decoded.events)
+    // The existing writable lane confirms the immutable birth before replacing
+    // its current header. No initial input or bootstrap frame is issued again.
+    const confirmed = await open(path, 'r+')
+    try { await confirmed.sync() } finally { await confirmed.close() }
+  }
   // Framed format6 already owns its exact legacy boundary and frame chain.
   // Only the header changes; never count frames as legacy event records.
-  if ([6, 7, 8, 9, 10].includes(old.formatVersion)) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
+  if ([6, 7, 8, 9, 10, 11].includes(old.formatVersion)) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
   let legacyBodyBytes = 0, legacyEventCount = 0, last = 0x0a, line = ''
   const decoder = new StringDecoder('utf8')
   const consume = (text: string) => {

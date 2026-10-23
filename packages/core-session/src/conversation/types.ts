@@ -57,7 +57,17 @@ export interface ConversationDiagnostic {
   sourceIds: readonly string[]
 }
 
+export interface CurrentContextComponent {
+  kind: 'runtime-context'
+  version: 1
+  source: ConversationSourceRef
+  sections: import('../events/runtime-context.ts').RuntimeContextRecordV1['sections']
+  semanticDigest: string
+  messages: readonly LLMMessage[]
+}
+
 export interface ConversationProjection {
+  current?: CurrentContextComponent
   version: 1
   ownerSessionId?: string
   archiveEventCount: number

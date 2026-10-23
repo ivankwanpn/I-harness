@@ -9,7 +9,7 @@ import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behi
 export { compileSemanticSeed } from './semantic-seed.ts'
 export type { CompiledSemanticSeed } from './semantic-seed.ts'
 export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken, BootstrapCallerMetadata, BootstrapLineage, BootstrapTarget, BootstrapInitial, BootstrapRequest, BootstrapDependencyRequest, BootstrapDependencyOutcome, BootstrapDependencyPort, BootstrapGuards, BootstrapReceipt, BootstrapOutcome, BootstrapInspection, BootstrapHeaderStage, BootstrapHeaderOperation, HeaderOutcome, BootstrapReadState, BootstrapFrame, BootstrapBackend } from './coordinator/bootstrap-types.ts'
-export { parseBootstrapHeaderStage, rawHeaderDigest } from './coordinator/bootstrap-header.ts'
+export { parseBootstrapHeaderStage, rawHeaderDigest, bootstrapManifest } from './coordinator/bootstrap-header.ts'
 export { captureBootstrapRequestIntent } from './coordinator/bootstrap-intent.ts'
 export type { BootstrapRequestIntent } from './coordinator/bootstrap-intent.ts'
 export { captureBootstrapTargetPreparationRequest } from './coordinator/bootstrap-preparation.ts'

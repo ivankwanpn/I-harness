@@ -1,3 +1,4 @@
+import { validRuntimeContextRecord } from '../events/runtime-context.ts'
 import type { SessionEvent } from '../events/types.ts'
 import type { DeepReadonly, SeqRef, SessionView } from './types.ts'
 import { captureLegacyFact, isStrictFactData } from './capture.ts'
@@ -24,6 +25,7 @@ export type LifecycleFact = Event<'turn/start' | 'turn/end' | 'step/start' | 'st
 export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'>
 export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[]; softTerminal?: SoftReductionTerminalDraft }
 export type FactGroupDraft =
+  | { kind: 'runtime-context'; event: import('../events/runtime-context.ts').RuntimeContextRecordV1 }
   | ContextReductionDraft
   | { kind: 'soft-reduction'; event: SoftReductionStart | SoftReductionTerminalDraft }
   | { kind: 'input-admission'; admitted: Event<'agent/input/admitted'> }
@@ -62,6 +64,7 @@ export function validInputPromotionDraft(value: unknown): value is InputPromotio
 export type CapturedFactGroup = DeepReadonly<FactGroupDraft> & { readonly [captured]: true }
 const owned = new WeakSet<object>()
 const family: Record<string, readonly SessionEvent['type'][]> = {
+  'runtime-context': ['runtime/context'],
   generation: ['context/action', 'context/attempt'],
   'soft-reduction': ['context/soft-reduction'],
   'generation-recovery': ['context/recovery', 'context/action'],
@@ -116,6 +119,7 @@ export function captureFactGroup(draft: FactGroupDraft):
   try {
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+    if (draft.kind === 'runtime-context' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2 || Object.getOwnPropertyNames(draft).length !== 2 || !validRuntimeContextRecord(draft.event) || Object.hasOwn(draft.event, 'seq'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'soft-reduction' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2
       || !(draft.event.op === 'start' ? validSoftReductionEvent(draft.event) : validSoftTerminalDraft(draft.event) && draft.event.publication === 'none'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
@@ -152,7 +156,7 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
   if (group.kind === 'seed-import') {
     if (firstSeq !== 0 || view.events.length) throw new TypeError('Seed requires an empty owned document')
     for (const event of group.events) {
-      if (isContextEventType(event.type) || event.type === 'agent/input/preparation' || event.type === 'model/exchange-accepted' && event.version !== 1) throw new TypeError('Seed cannot import operational authority')
+      if (event.type === 'runtime/context' || isContextEventType(event.type) || event.type === 'agent/input/preparation' || event.type === 'model/exchange-accepted' && event.version !== 1) throw new TypeError('Seed cannot import operational authority')
       if (event.type === 'user/message' && event.inputPreparation || event.type === 'agent/input/admitted' && event.preparationPolicy) throw new TypeError('Seed cannot import input preparation authority')
       if ((event.type === 'user/message' || event.type === 'agent/input/admitted' || event.type === 'subagent/inbox') && event.provenance?.kind !== 'inherited') throw new TypeError('Seed input must carry inherited provenance')
     }

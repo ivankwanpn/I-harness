@@ -17,7 +17,7 @@ function captureConversation(session: Session, ownerSessionId: string) {
     } })
     const state = readConversationState(session, projection)
     if (state.kind === "ambiguous") return unsupported("protection", state.sourceIds, "CONTEXT_STATE_AMBIGUOUS")
-    const conversation = captureData(projection), protection = contextProtection(state.state)
+    const conversation = captureData(projection), protection = contextProtection(state.state, conversation.current)
     const effects = state.state.effects ?? []
     // Empty audit fragments carry no accepted model input. Their unresolved
     // effects remain evidence in protection, never semantic message identity.

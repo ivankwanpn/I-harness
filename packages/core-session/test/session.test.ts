@@ -1,3 +1,4 @@
+import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages, toJSONL, fromJSONL, assertVersion } from "../src/index.ts"
 import { deriveSearchText } from "../src/index.ts"
@@ -163,7 +164,7 @@ describe("session log", () => {
     append(s, { type: "user/message", text: "x" })
     const text = toJSONL(s)
     const s2 = fromJSONL(text)
-    expect(s2.formatVersion).toBe(11)
+    expect(s2.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     expect(s2.events.length).toBe(1)
   })
 
@@ -179,7 +180,7 @@ describe("session log", () => {
 
   it("the current writer uses v11 and rejects a mismatched requested version assertion", () => {
     const s = createSession()
-    expect(assertVersion(s, 11)).toBe(11)
+    expect(assertVersion(s, CURRENT_FORMAT_VERSION)).toBe(CURRENT_FORMAT_VERSION)
     expect(() => assertVersion(s, 1)).toThrow(/version/i)
   })
 
@@ -444,7 +445,7 @@ describe("compaction events", () => {
     append(s, { type: "user/message", text: "hi" })
     append(s, { type: "compaction/reset", removedSeqs: [] })
     // The reset marker remains additive within the current writer format.
-    expect(s.formatVersion).toBe(11)
+    expect(s.formatVersion).toBe(CURRENT_FORMAT_VERSION)
     const restored = fromJSONL(toJSONL(s))
     expect(restored.events.map((e) => e.type)).toEqual(["user/message", "compaction/reset"])
     // removedSeqs survives persistence (recovery replays the log ⇒ nothing lost)

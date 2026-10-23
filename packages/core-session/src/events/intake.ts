@@ -1,3 +1,4 @@
+import { validateRuntimeContextDiscriminant } from './runtime-context.ts'
 import type { SessionEvent } from './types.ts'
 import { validateConversationEventShape } from './conversation.ts'
 import { validateImages, type ImageInput, type ImageSummary } from '../images.ts'
@@ -12,6 +13,7 @@ type IntakeSession = { readonly formatVersion: number; readonly events: readonly
 /** The existing event intake contract shared by explicit memory append and
  * owned staging. Only the newly allocated event is normalized. */
 export function prepareSessionEvent(session: IntakeSession, event: SessionEvent, seq: number, staged: IntakeSession['events'] = []): SessionEvent {
+  validateRuntimeContextDiscriminant(event, session.formatVersion)
   const resultType = Object.getOwnPropertyDescriptor(event, 'type')?.value
   if (resultType === 'tool/result' || resultType === 'code/result' || resultType === 'code/output' || resultType === 'subagent/end' || resultType === 'job/status') validateResultFact(event, session.formatVersion)
   if (isGenerationEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)

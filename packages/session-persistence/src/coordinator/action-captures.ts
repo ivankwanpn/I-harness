@@ -1,9 +1,9 @@
-import { isStrictFactData, validContextEvent, validContextReductionDraft, validGenerationEvent, validInputPreparationEvent, validInputPromotionDraft, validSoftReductionEvent, type CapturedActionFact, type FactOutcome, type ManagedAction } from '@i-harness/core-session'
+import { validRuntimeContextRecord, isStrictFactData, validContextEvent, validContextReductionDraft, validGenerationEvent, validInputPreparationEvent, validInputPromotionDraft, validSoftReductionEvent, type CapturedActionFact, type FactOutcome, type ManagedAction } from '@i-harness/core-session'
 import { captureSettlementFact, retainSettlementCapture } from './settlement-fact.ts'
 
 /** Optional action captures retain their original disposition after Stop.
  * Their read/reconcile handles never gain required-settlement admission. */
-export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
+export function createActionCaptures(operations: Parameters<typeof captureSettlementFact>[1], guarded: (check: () => boolean) => Parameters<typeof captureSettlementFact>[1]): Pick<ManagedAction<FactOutcome>, 'captureRuntimeContext' | 'captureSoftReduction' | 'captureCodeStore' | 'captureTeamTransaction' | 'captureSubagentStart' | 'captureContextReduction' | 'captureGeneration' | 'captureGenerationRecovery' | 'captureInputPreparation' | 'captureInputPromotion'> {
   const actionHandle = (retained: ReturnType<typeof captureSettlementFact>): CapturedActionFact => ({
     admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe,
   })
@@ -17,6 +17,9 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
     catch { return false }
   }
   return {
+    captureRuntimeContext(event, checkCurrent) {
+      return validRuntimeContextRecord(event) && !Object.hasOwn(event, 'seq') ? actionHandle(captureSettlementFact({ kind: 'runtime-context', event }, guarded(checkCurrent), true)) : invalidReduction()
+    },
     captureSoftReduction(event, checkCurrent) {
       return validSoftReductionEvent(event) && event.op === 'start' && !Object.hasOwn(event, 'seq') ? actionHandle(captureSettlementFact({ kind: 'soft-reduction', event }, guarded(checkCurrent), true)) : invalidReduction()
     },

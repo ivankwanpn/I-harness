@@ -18,5 +18,5 @@ export function semanticContextRevision(owner: string, conversation: Captured<Co
     ...(item.exchange ? { exchange: { id: item.exchange.id, step: item.exchange.step, acceptance: item.exchange.acceptance,
       calls: item.exchange.calls.map(call => ({ callId: call.callId, name: call.name, call: call.call, result: call.result })) } } : {}),
   }))
-  return contextRevision("semantic", [owner, items])
+  return contextRevision("semantic", [owner, items, ...(conversation.current ? [conversation.current] : [])])
 }

@@ -13,9 +13,10 @@ import { historyTurns } from './turns.ts'
 class HistoryGrouping {
   readonly diagnostics: ConversationDiagnostic[] = []
   private readonly sources
-  private readonly visibility
+  private readonly visibility: ReturnType<typeof historyVisibility>
   private readonly legacy
   private readonly items: HistoryItem[] = []
+  private readonly current: import('./types.ts').HistoryCurrent | undefined
   private readonly admissions = new Map<string, number>()
   private pendingCalls: number[] | undefined
   private readonly pendingResults: HistoryRecipe[] = []
@@ -33,6 +34,7 @@ class HistoryGrouping {
     this.turns = historyTurns(archive)
     this.sources = historySources(archive, this.diagnostics)
     this.visibility = historyVisibility(historyFacts(archive), throughSeq)
+    for (const [index, fact] of historyEntries(archive)) if (fact.type === 'runtime/context' && this.visibility.branch(fact)) this.current = { index }
     this.legacy = inferLegacy(archive, this.visibility, this.sources, this.diagnostics)
   }
 
@@ -77,7 +79,7 @@ class HistoryGrouping {
 
 
   advance(index: number, event: HistoryFact): void {
-    if (!this.visibility.selected(event)) return
+    if (!this.visibility.selected(event) || event.type === 'runtime/context' || this.current && event.legacyRuntimeContext) return
     // Admissions remain readable even when their model-visible range is hidden.
     if (event.type === "agent/input/admitted") this.admissions.set(event.inputId!, index)
     if (!this.visibility.lifecycle(event)) return
@@ -171,7 +173,7 @@ class HistoryGrouping {
   finish() {
     this.flushToolBlock(undefined, true)
     for (const [owner, images] of this.pendingToolImages) owner.recipes.push(...images)
-    return { items: this.items, diagnostics: this.diagnostics }
+    return { items: this.items, diagnostics: this.diagnostics, ...(this.current ? { current: this.current } : {}) }
   }
 }
 

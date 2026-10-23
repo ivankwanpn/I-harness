@@ -15,6 +15,7 @@ export interface HistoryFact {
     calls: readonly { id: string; name: string; outcome: 'success' | 'error' | 'not-dispatched'; result: number }[]
     resultCount: number; mediaCount: number
   }[]
+  readonly legacyRuntimeContext?: boolean
   readonly index: number; readonly type: SessionEventView['type']; readonly seq?: number
   readonly callId?: string; readonly name?: string; readonly eventSeq?: number
   readonly actionId?: string; readonly attemptId?: string; readonly exchangeId?: string
@@ -27,7 +28,7 @@ export interface HistoryFact {
 }
 export interface HistoryArchive { readonly length: number; get(index: number): HistoryFact }
 
-export function historyFact(event: SessionEventView, index: number): HistoryFact {
+export function historyFact(event: SessionEventView, index: number, inheritedBoundary = 0): HistoryFact {
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }) }
   switch (event.type) {
     case 'conversation/seed-manifest': return { ...base, seedArtifacts: event.artifacts.map(artifact => ({ ...artifact.ref })), seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
@@ -50,7 +51,7 @@ export function historyFact(event: SessionEventView, index: number): HistoryFact
         ...(event.isError && code === 'TOOL_OUTCOME_UNKNOWN' && outcomeField(output, 'replay') === false ? { disposition: 'unknown' as const }
           : event.isError && (code === 'TOOL_ABORTED_BEFORE_DISPATCH' || code === 'TOOL_CANCELLED_BY_SIBLING') ? { disposition: 'not-dispatched' as const } : {}) }
     }
-    case 'user/message': return { ...base, inputId: event.input?.inputId, imageInputId: event.imageInputId,
+    case 'user/message': return { ...base, legacyRuntimeContext: index >= inheritedBoundary && (event.provenance ?? event.input?.provenance)?.kind !== 'inherited' && event.internal === true && event.source?.kind === 'plugin' && event.source.plugin === 'i-harness/runtime-context', inputId: event.input?.inputId, imageInputId: event.imageInputId,
       ...(event.inputPreparation && 'rawMessageSeq' in event.inputPreparation ? { preparedRawMessageSeq: event.inputPreparation.rawMessageSeq } : {}),
       ...(event.seedInputContext ? { preparedRawMessageSeq: event.seedInputContext.rawMessageSeq } : {}),
       images: Array.isArray(outcomeField(event, 'images')) && event.images!.length > 0,

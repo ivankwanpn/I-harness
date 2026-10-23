@@ -15,7 +15,7 @@ import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
 import { derivePlanMode, AsyncInbox, subscribe, committedFactSeqs, captureLegacyFact, isManagedFactOwner, type SessionView as Session, type FactOwner, type MetadataFactSource } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
-import { actionMetadataFacts, actionFeedbackFacts } from './lifecycle/action-facts.ts'
+import { actionMetadataFacts, actionFeedbackFacts, createRuntimeContextSource } from './lifecycle/action-facts.ts'
 import { createGenerationLifecycle } from './lifecycle/generation-actions.ts'
 import { createSteerPreparationFactory } from './lifecycle/steer-preparation.ts'
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
@@ -1039,7 +1039,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // via the agent/pre-step hook. Instructions load as one section, the skills
   // catalogue as the next; W11 registers the subagents table below, once the
   // subagent mount has produced the table it reads.
-  const runtimeContext = installRuntimeContext(ctx, session, signal => actionFeedbackFacts(factOwner, signal))
+  const runtimeContext = installRuntimeContext(ctx, session, createRuntimeContextSource(factOwner))
   runtimeContext.registerSection(
     "instructions",
     createInstructionsSection({ workspace: opts.workspace }),
@@ -1778,6 +1778,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     try { await flushSubagentPersistence?.() }
     catch (error) { processCleanupFailures.push(error); d.warn(`Subagent persistence drain failed: ${String(error)}`) }
     if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
+    await runtimeContext.close()
     await managedDocument?.close()
     await resultStore.release()
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —

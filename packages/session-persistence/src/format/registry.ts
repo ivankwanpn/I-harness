@@ -22,6 +22,7 @@ upgrades.set(7, events => events)
 upgrades.set(8, events => events)
 upgrades.set(9, events => events)
 upgrades.set(10, events => events)
+upgrades.set(11, events => events)
 export function registerUpgrade(from: number, fn: (events: SessionEvent[]) => SessionEvent[]): void {
   upgrades.set(from, fn)
 }
@@ -158,3 +159,4 @@ registerEventType("context/soft-reduction")
 registerEventType('conversation/seed-manifest')
 registerEventType('conversation/seed-group')
 registerEventType('session/bootstrap')
+registerEventType('runtime/context')
