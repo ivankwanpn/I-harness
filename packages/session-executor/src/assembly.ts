@@ -1032,7 +1032,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // tick (I5 structurally). The handler MUST return undefined (block body, awaited inside):
     // emit() feeds a plain listener's non-undefined return into the waterfall chain payload, and
     // hooks HAS a waterfall on this same event (hooks/src/index.ts:411).
-    ctx.on("agent/pre-step", async input => { scheduleSignal = (input as { signal?: AbortSignal }).signal; await scheduleDriver.tick() })
+    ctx.on("agent/pre-step", async input => {
+      if (typeof input !== "object" || input === null) return
+      const payload = input as { session?: unknown; signal?: AbortSignal }
+      // Child scopes bubble here; only this exact session owns the tick and signal.
+      if (payload.session !== session) return
+      scheduleSignal = payload.signal
+      await scheduleDriver.tick()
+    })
   }
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary

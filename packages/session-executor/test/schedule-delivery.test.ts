@@ -215,6 +215,67 @@ function sleep(ms: number): Promise<void> {
 /* ── cases ─────────────────────────────────────────────────────────────── */
 
 describe("createSessionAssembly — the schedule delivery mount (Task 5)", () => {
+  it.each(["child", "matching sessionId"])("ignores a bubbled %s pre-step before reading its signal; the parent's own step delivers once and preserves the waterfall payload", async (identity) => {
+    const record = overdueOneShot()
+    const host = await mountHost({ seed: (session) => seedCreate(session, record) })
+    const childCtx = host.assembly.ctx.scope.mount()
+    await host.coordinator.create({ sessionId: "sched-child", parentSession: SESSION_ID, origin: "subagent" })
+    const child = (await host.coordinator.openManagedDocument("sched-child")).view
+    let signalReads = 0
+    const payload = {
+      session: child,
+      sessionId: identity === "child" ? "sched-child" : SESSION_ID,
+      get signal() { signalReads++; return new AbortController().signal },
+    }
+    const waterfallPayloads: unknown[] = []
+    const scheduleSignals: Array<AbortSignal | undefined> = []
+    const beginAction = host.assembly.factOwner.beginAction.bind(host.assembly.factOwner)
+    // Trace the real grouped fact port without replacing its managed admission.
+    const actionProbe = vi.spyOn(host.assembly.factOwner, "beginAction").mockImplementation(signal => {
+      const action = beginAction(signal)
+      const scheduled = action.facts.inputs.scheduled.bind(action.facts.inputs)
+      vi.spyOn(action.facts.inputs, "scheduled").mockImplementation((...args) => {
+        scheduleSignals.push(signal)
+        return scheduled(...args)
+      })
+      return action
+    })
+    host.assembly.ctx.waterfall("agent/pre-step", (input, next) => {
+      waterfallPayloads.push(input)
+      return next(input)
+    })
+    try {
+      await childCtx.emit("agent/pre-step", payload)
+      expect(waterfallPayloads).toEqual([payload])
+      expect.soft(signalReads).toBe(0)
+      expect.soft(host.session.events.filter(isScheduleDispatch)).toHaveLength(0)
+      expect.soft(host.session.events.filter(isScheduleAdmission)).toHaveLength(0)
+      expect.soft(host.coordinator.written.filter(isScheduleDispatch)).toHaveLength(0)
+      expect(scheduleSignals).toHaveLength(0)
+      expect(host.model.requests).toHaveLength(0)
+
+      const ownSignal = new AbortController().signal
+      await host.assembly.agent.run("parent step", ownSignal)
+      const ownPayload = waterfallPayloads[1] as { session: SessionView; signal: AbortSignal }
+      expect(ownPayload.session).toBe(host.session)
+      expect(ownPayload.signal).toBeInstanceOf(AbortSignal)
+      expect(scheduleSignals).toHaveLength(1)
+      expect(scheduleSignals[0]).toBe(ownPayload.signal)
+      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(host.session.events.filter(isScheduleAdmission)).toMatchObject([{ inputId: `schedule-1@${record.scheduledAt}` }])
+      expect(host.model.requests).toHaveLength(1)
+      await host.assembly.agent.run("parent next step", ownSignal)
+      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(host.session.events.filter(isScheduleAdmission)).toHaveLength(1)
+      expect(requestMessagesCarrying(host.model.requests[1]!, REMINDER)).toHaveLength(1)
+    } finally {
+      actionProbe.mockRestore()
+      childCtx.scope.unmount()
+      await host.assembly.dispose()
+      await host.coordinator.close()
+    }
+  }, 30_000)
+
   it("idle does no work (no step ⇒ no tick ⇒ no dispatch); a user turn delivers once — the model sees the reminder in the pumped second turn, the user sees a message without `internal`, and [dispatch, admitted] is one adjacent durable batch", async () => {
     const record = overdueOneShot()
     const host = await mountHost({ seed: (session) => seedCreate(session, record) })
@@ -224,6 +285,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       // mutation: start()/setInterval) delivers here, with no turn at all.
       await sleep(200)
       expect(host.session.events.some(isScheduleDispatch)).toBe(false)
+      expect(host.model.requests).toHaveLength(0)
       expect(host.coordinator.written.map(event=>event.type)).toEqual(['schedule/change'])
 
       await host.runTurn("hello")
@@ -363,6 +425,68 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(reminderMessages(host.session)).toHaveLength(0)
     } finally {
       await host.assembly.dispose()
+    }
+  }, 30_000)
+
+  it("dispatches an owned suffix while the inherited overdue prefix stays active", async () => {
+    const inherited = overdueOneShot("schedule-inherited")
+    const owned = overdueOneShot("schedule-owned")
+    const host = await mountHost({ seed(session) {
+      seedCreate(session, inherited)
+      session.header = { seedLength: 1 }
+      seedCreate(session, owned)
+    } })
+    try {
+      await host.runTurn()
+      expect(host.session.events.filter(isScheduleDispatch)).toMatchObject([{ id: "schedule-owned" }])
+      expect(host.session.events.filter(isScheduleAdmission)).toMatchObject([{ inputId: `schedule-owned@${owned.scheduledAt}` }])
+      expect(foldScheduleEvents(host.session.events).active.map(record => record.id)).toEqual(["schedule-inherited"])
+    } finally {
+      await host.assembly.dispose()
+      await host.coordinator.close()
+    }
+  }, 30_000)
+
+  it("cold reopens the JSONL journal without repeating an accepted occurrence and delivers the overdue remainder once", async () => {
+    const accepted = overdueOneShot("schedule-accepted")
+    const remainder = overdueOneShot("schedule-remainder")
+    const host = await mountHost({ seed(session) {
+      seedCreate(session, accepted)
+      seedCreate(session, remainder)
+    } })
+    try {
+      // A direct turn takes one step, leaving its accepted admission pending
+      // and the other overdue occurrence unexamined until another boundary.
+      await host.assembly.agent.run("before shutdown")
+      expect(host.session.events.filter(isScheduleDispatch)).toMatchObject([{ id: "schedule-accepted" }])
+      expect(foldScheduleEvents(host.session.events).active.map(record => record.id)).toEqual(["schedule-remainder"])
+    } finally {
+      await host.assembly.dispose()
+      await host.coordinator.close()
+    }
+
+    const coordinator = createSessionCoordinator(createJsonlBackend(host.coordinator.storageRoot!), { lock: { enabled: true } })
+    const model = scriptedModel(twoStepScript())
+    const assembly = await createSessionAssembly({ workspace: process.cwd(), coordinator, sessionId: SESSION_ID, model, modelPolicy: "test-mock" })
+    try {
+      expect(assembly.session).not.toBe(host.session)
+      expect(assembly.session.events.filter(isScheduleDispatch)).toMatchObject([{ id: "schedule-accepted" }])
+      const executor = createSessionExecutor({ session: assembly.session, agent: assembly.agent, inbox: assembly.inbox })
+      executor.submit({ tier: "send", text: "after cold reopen" })
+      await executor.drain()
+      const durable = (await coordinator.snapshot!(SESSION_ID)).session
+      expect(durable.events.filter(isScheduleDispatch)).toMatchObject([{ id: "schedule-accepted" }, { id: "schedule-remainder" }])
+      expect(durable.events.filter(isScheduleAdmission)).toMatchObject([
+        { inputId: `schedule-accepted@${accepted.scheduledAt}` },
+        { inputId: `schedule-remainder@${remainder.scheduledAt}` },
+      ])
+      expect(foldScheduleEvents(durable.events).active).toEqual([])
+      expect(model.requests).toHaveLength(2)
+      expect(requestMessagesCarrying(model.requests[0]!, REMINDER)).toHaveLength(1)
+      expect(requestMessagesCarrying(model.requests[1]!, REMINDER)).toHaveLength(2)
+    } finally {
+      await assembly.dispose()
+      await coordinator.close()
     }
   }, 30_000)
 
