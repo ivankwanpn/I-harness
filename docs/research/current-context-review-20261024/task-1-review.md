@@ -1,0 +1,48 @@
+# Task 1 independent spec and quality review
+
+## Spec Compliance
+
+- ✅ **Spec compliant for the assigned IC-A scope.** Reviewed the complete `b7ba78b0ae2c977f61709052f4180acae4977fdc..fe8e11c876d4f6aaf1ea7ac7a160bb5c52711997` package, including production changes, test changes, fixture manifests and extraction/regeneration code. No task-scoped product blocker found. This verdict covers typed current publication/projection and format12 compatibility; it does not accept IC-B, IC-C, child/factory/native-proof cutover, or failed-audit retry repair.
+- ✅ The complete, closed runtime record is admitted by the existing captured-action/fact-group owners, with nondurable outcomes retained as such: `packages/core-session/src/events/runtime-context.ts:13`, `packages/core-session/src/managed/groups.ts:120`, `packages/session-persistence/src/coordinator/action-captures.ts:20`, `packages/core-session/src/managed/nondurable.ts:76`.
+- ✅ Current is selected by branch visibility independently of effective history items; exact legacy plugin/internal metadata is suppressed only after typed current exists, while inherited observations remain history: `packages/core-session/src/conversation/history/group.ts:37`, `:82`; `packages/core-session/src/conversation/history/facts.ts:54`. Rendering and snapshot identity/protection consume the same component: `packages/core-session/src/conversation/render-items.ts:81`, `packages/core-session/src/conversation/render.ts:33`, `packages/context-engine/src/snapshot/build.ts:20`, `packages/context-engine/src/snapshot/revision.ts:21`.
+- ✅ Original format11 birth and current format12 storage are explicitly distinguished. Recovery validates the original header and bootstrap phase, and migration checks the original manifest/frame layout before changing storage: `packages/session-persistence-jsonl/src/backend/fact-journal.ts:18`, `:51`; `packages/session-persistence-jsonl/src/backend/format-upgrade.ts:27`; `packages/session-persistence/src/coordinator/bootstrap.ts:56`, `:123`. The genuine predecessor controls exercise these behaviors, rather than only changing expected version literals: `packages/session-persistence-jsonl/test/current-context-predecessors.test.ts:28`, `:49`.
+- ⚠️ The six protocol controls prove full-current rendering and call/result ordering through actual preparers; signed current-prefix continuation is directly demonstrated by the Anthropic Agent/HTTP control. Separately passing native suites for other adapters are regression evidence, not a signed-current cross-product or inherited-native qualification: `packages/core-agent/test/current-context-protocols.test.ts:13`, `packages/core-agent/test/current-context-loopback.test.ts:30`, `:53`, `:63`. This matches the scoped brief and is not a Task 1 blocker.
+- ⚠️ Source/blob binding is the controller's separate audit. I inspected the supplied manifests and qualification records without rerunning Git; I do not independently certify the contents of the two binary capsules against Git objects in this review.
+
+## Strengths
+
+- The service retains the original uncertain capture, reconciles it before another publication, checks committed sequence outcomes, and joins pending work on close. The real durable lost-response test proves one capture and one physical issue, including a failed then successful close: `packages/runtime-context/src/index.ts:36`, `:56`, `:94`; `packages/core-agent/test/current-context-loopback.test.ts:77`.
+- Parent/child isolation is performed before evaluating getters or resolving the source, using actual Session view identity: `packages/runtime-context/src/index.ts:107`. The original behavioral RED log shows an actual parent getter read and stale synthetic-message projection on BASE, not a missing API failure; the corresponding current controls pass.
+- The actual main control runs the managed generation lifecycle, JSONL receipts, loopback HTTP/SSE, completed tool effect and signed thinking response. It checks clear, skills-only and ordinary plugin feedback, plus independent current-source protection: `packages/core-agent/test/current-context-loopback.test.ts:18`.
+- Seed exclusion follows the existing item selection/rendering path. The codec/preimage format is not extended with live current identity, and a current-only change preserves exported seed equality: `packages/core-session/test/runtime-context.test.ts:25`; unchanged `packages/core-session/src/conversation/seed-selection.ts:56` and `packages/core-session/src/conversation/seed-capture.ts:47`.
+- Compatibility fixtures use immutable format1/10/11 source graphs and run actual old readers before repair/upgrade. Original format11 writer operations, initial input identity/clock, dependency requests, completion keys, stage bytes and ready-body bytes are asserted across cold adoption and upgrade interruptions: `packages/session-persistence-jsonl/test/current-context-predecessors.test.ts:28`, `:49`, `:107`. The helper explicitly provisions the native lock dependency instead of relying on ambient `NODE_PATH`: `packages/session-persistence-jsonl/test/helpers/current-context-predecessors.ts:16`.
+
+## Issues
+
+### Critical
+
+- None found within Task 1.
+
+### Important
+
+- None found within Task 1.
+
+### Minor
+
+- **Qualification report provenance discrepancy, corrected during review.** `task-1-report.md:103` originally said the MAIN attempt produced no JSON and an empty log. The appended “Root evidence correction — MAIN diagnostic artifacts” explicitly supersedes it: retained artifacts are a 794,259-byte JSON and 163-byte log, recording 1,740 tests / 1,485 pass / 255 fail. This wider failed diagnostic is not the isolated 149-test baseline; its command/environment and failure disposition remain unqualified. I read the correction and do not count that MAIN run in the differential. The reporting error does not invalidate the independently checked isolated baseline.
+- **Native runtime wording overstates the helper's checks.** `task-1-report.md:79` says the fixture checks entry/package/native hashes. `packages/session-persistence-jsonl/test/helpers/current-context-predecessors.ts:20` checks package name/version and loads the native binding; `:25` computes and records hashes, without comparing them to pinned expected hashes. Describe those hashes as recorded provenance unless a separate comparison is cited. This is a report precision issue, not evidence of a fake lock or a failed compatibility run.
+- **Several current/future test titles retain obsolete format numbers.** For example, `packages/core-session/test/session.test.ts:181` says the current writer uses v11, and `packages/session-persistence/test/conversation-format.test.ts:93` says future12 while now testing `CURRENT_FORMAT_VERSION + 1` (13). The assertions are appropriate, but failing-test diagnostics would identify the wrong version. Use “current format”/“future format” for these titles; preserve genuine literal predecessor labels.
+
+## Checks and evidence limits
+
+- Read the original final commands, raw final JSON, raw isolated-baseline JSON, baseline identity/resolution records, RED log, direct-Node predecessor log, first failed direct-Node evidence and native runtime receipt. Independently compared failed file/fullName sets: final **1,906 total / 1,864 pass / 42 fail**; isolated baseline **149 total / 107 pass / 42 fail**; **zero added or removed failure identities**. This establishes a bounded differential, not an all-green suite. The 41 Agent failures and original semantic-fork RED remain open.
+- The baseline source record contains **2,706 checked / 0 changed**, comprising 2,634 CRLF-only matches and 72 raw matches; all **351** recorded workspace resolutions remain inside its isolated root. No unused MAIN attempt is substituted for that evidence.
+- Final command timestamps show sequential execution and eight typecheck exits of zero. The final JSON records the new current core/runtime tests, actual Agent/unknown controls, six preparer cases, managed-producer controls and **12/12 predecessor cases** passing. Final test stdout is only the JSON-report notice, and the eight individual typecheck logs are empty; no additional final warning finding was observed.
+- Named unchanged-code risk checks: (1) losing current at full-request call sites—checked `packages/core-agent/src/agent/request-input.ts:13`, `request-snapshot.ts:21`, `packages/llm-seam/src/index.ts:237`, and projection message callers; they pass the complete projection. (2) reductions consuming current or losing it in prospective snapshots—checked `packages/core-session/src/conversation/history/visibility.ts:7`, `history/replacements.ts:24`, and `candidate.ts:49`; current survives via the grouped descriptor and is outside item coverage. (3) current leaking into portable seeds—checked `seed-selection.ts:56`, `seed-capture.ts:47`, and `seed-export.ts:9`; selection and capture use history items and the existing seed preimage. These checks resolved the named risks without broader codebase crawling.
+- No product/Git/index/branch mutation, new test execution, live provider/home/credential access, or subagent dispatch was performed. Only this requested review report was written. No changed product file needed a separate reread beyond the supplied diff.
+
+## Assessment
+
+**Task quality: Approved, with the minor report/diagnostic corrections above.**
+
+**Reasoning:** The implementation keeps current context in the existing fact and projection ownership chain, and its tests exercise genuine publication, request consumption and predecessor recovery. The remaining evidence limits are explicitly scoped; none demonstrates a Task 1 product defect or closes the later integration gates.
