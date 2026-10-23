@@ -1,7 +1,7 @@
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createAgent } from '../src/index.ts'
-import { createRetryingClient, resolveRetryPolicy } from '@i-harness/llm-seam'
+import { createRetryingClient, resolveRetryPolicy, consumeRetryFailure, type LLMStreamEvent } from '@i-harness/llm-seam'
 import { expect, it } from 'vitest'
 import { append, createSession, createNondurableFactOwner, committedFactSeqs } from '@i-harness/core-session'
 import { createModelStep } from '../src/agent/model-step.ts'
@@ -93,4 +93,56 @@ it('a throwing error observer retains the provider cause and observed usage', as
   expect(error.errors).toContain(observer)
   expect(usage).toBe(1)
   expect(session.events.filter(e => e.type === 'tool/result')).toHaveLength(1)
+})
+
+it.each(['sync-throw', 'rejected-save', 'copied-waiting', 'stop'] as const)('pending reasoning failure preserves waiting provenance without recapture (%s)', async mode => {
+  const session = createSession(), owner = createNondurableFactOwner(session), action = owner.beginAction()
+  append(session, { type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1' })
+  append(session, { type: 'step/start', actionId: 'action', attemptId: 'attempt' })
+  const facts = action.facts, original = Object.assign(new Error('original provider'), { code: 'SERVER' }), saving = new Error('reasoning save failed')
+  const stop = new AbortController(), stopped = new Error('genuine Stop')
+  let saves = 0, sends = 0
+  const reports: unknown[] = []
+  const step = createModelStep({ session, facts: { ...facts, agent: { ...facts.agent, lifecycle(event) {
+    if (event.type !== 'reasoning') return facts.agent.lifecycle(event)
+    saves++
+    if (mode === 'rejected-save') return Promise.reject(saving)
+    throw saving
+  } } }, telemetry: { emit(event) { if (event.type === 'provider/usage') reports.push(event.data) }, close() {} } }, [], async () => { throw Error('no tool calls') },
+    { turnOpen: true, stepOpen: true, providerCompleted: false, stepFailed: false }, 1, stop.signal, () => 1)
+  const client = createRetryingClient({ async *stream() {
+    sends++
+    yield { type: 'reasoning', text: 'pending original reasoning' }
+    yield { type: 'usage', usage: { inputTokens: 12 } }
+    throw original
+  } }, resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1 } }))
+  let waiting: Extract<LLMStreamEvent, { type: 'retry' }> | undefined, error: unknown
+  try {
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: '', retryOutput: 'discard' })) {
+      if (event.type === 'retry' && event.retry.phase === 'waiting') {
+        waiting = event
+        if (mode === 'stop') stop.abort(stopped)
+      }
+      await step.accept(mode === 'copied-waiting' && event === waiting ? { ...waiting! } : event)
+    }
+  } catch (caught) { error = caught }
+  if (mode === 'stop') {
+    expect(error).toBe(stopped)
+    expect(step.result().stepUsage).toEqual({ inputTokens: 12 })
+    expect(consumeRetryFailure(waiting!)?.failure).toBe(original)
+  } else if (mode === 'copied-waiting') {
+    expect(error).toBe(saving)
+    expect(consumeRetryFailure(waiting!)?.failure).toBe(original)
+  } else {
+    expect(error).toMatchObject({ cause: original, errors: [original, saving] })
+    expect(consumeRetryFailure(waiting!)).toBeUndefined()
+  }
+  await step.fail(error).catch(() => {})
+  await step.fail(error).catch(() => {})
+  await step.settle().catch(() => {})
+  expect(saves).toBe(1)
+  expect(sends).toBe(1)
+  expect(reports).toEqual(mode === 'stop' ? [] : [{ inputTokens: 12 }])
+  expect(session.events.filter(e => e.type === 'model/exchange-accepted' || e.type === 'tool/dispatch' || e.type === 'tool/result')).toEqual([])
+  expect(session.events.filter(e => e.type === 'step/start')).toHaveLength(1)
 })

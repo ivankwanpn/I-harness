@@ -8,6 +8,8 @@ import type { HistoryVisibility } from './visibility.ts'
  * Inspect the entire physical interval and all original call references before
  * visibility or audit projection can erase evidence of an effect. */
 export function failedAuditEvidence(archive: HistoryArchive, steps: readonly LegacyStep[], visibility: HistoryVisibility, sources: ConversationSources) {
+  const evidence = new Map<LegacyStep, { readonly failureIndex: number; readonly endIndex: number }>()
+  if (!steps.some(step => step.explicitRegion && step.failed && !step.acceptance)) return evidence
   const intervals = new Map<number, number[]>(), calls = new Map<string, number[]>(), results = new Map<string, number[]>()
   const dispatches = new Set<string>(), acceptances = new Set<number>(), attempts = new Map<string, number>()
   const fences: number[] = []
@@ -26,7 +28,6 @@ export function failedAuditEvidence(archive: HistoryArchive, steps: readonly Leg
     } else if (event.type === 'turn/start' || event.type === 'turn/end') interval = undefined
     interval?.push(index)
   }
-  const evidence = new Map<LegacyStep, { readonly failureIndex: number; readonly endIndex: number }>()
   const visibleSource = (index: number) => visibility.content(archive.get(index)) && sources.ref(index, 'event').addressable
   for (const step of steps) {
     if (!step.explicitRegion || !step.failed || step.acceptance || fences.length !== 1 || fences[0]! >= step.start || !visibleSource(fences[0]!)) continue

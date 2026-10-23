@@ -81,20 +81,30 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
         return
       }
       abort?.throwIfAborted()
-      stepReasoning.checkPublication()
-      if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
-      if (ev.type !== "reasoning" && ev.type !== "activity") await stepReasoning.flush()
+      const settlingRetry = ev.type === "retry" && !providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`
+      // Stop above remains authoritative. Once handling a genuine waiting event,
+      // retain its provider failure before publication checks can throw.
+      const originalFailure = ev.type === "retry" && ev.retry.phase === "waiting" ? consumeRetryFailure(ev) : undefined
+      try {
+        stepReasoning.checkPublication()
+        if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
+        // Failed reasoning belongs to the cached settlement, not a preliminary
+        // save that could be recaptured by the outer failure/finalization path.
+        if (ev.type !== "reasoning" && ev.type !== "activity" && !settlingRetry) await stepReasoning.flush()
+      } catch (saving) {
+        if (originalFailure) throw savingFailure(originalFailure.failure, [saving], 'model retry settlement failed')
+        throw saving
+      }
       switch (ev.type) {
         case "activity":
           modelActivity = ev.activity
           publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: ev.activity })
           break
         case "retry":
-          if (!providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`) {
-            if ((stepText || batch.length) && !ev.retry.discardOutput) throw new Error("model retry cannot preserve partial output")
-            reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
-            const originalFailure = consumeRetryFailure(ev)
+          if (settlingRetry) {
             try {
+              if ((stepText || batch.length) && !ev.retry.discardOutput) throw new Error("model retry cannot preserve partial output")
+              reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
               // Mark delivery before invoking an observer: a throwing sink
               // must not cause the response catch to report these counters twice.
               usageReported = true
@@ -179,7 +189,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
       if (modelActivity && modelActivity.phase !== "settled") {
         publishTransient(deps.session, { type: "model/activity", version: 1, ts: Date.now(), activity: { ...modelActivity, phase: "settled", outcome: abort?.aborted ? "cancelled" : modelFailed ? "failed" : "completed" } })
       }
-      await stepReasoning.flush()
+      await (failedSettlement ?? stepReasoning.flush())
     },
     result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
   }

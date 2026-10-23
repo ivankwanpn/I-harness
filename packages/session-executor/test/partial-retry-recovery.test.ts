@@ -189,9 +189,10 @@ it('Stop interrupts actual ten-second capacity backoff without a second reservat
   } finally { unsub(); stop.abort(); await run.catch(() => {}); await f.close() }
 })
 
-it.each(['tool/result', 'assistant/message', 'step/end'].flatMap(type => ['committed', 'unknown', 'absent'].map(disposition => ({ type, disposition }))))('$disposition $type save joins the original managed operation without reopening', async ({ type, disposition }) => {
+it.each(['tool/result', 'assistant/message', 'step/end', 'reasoning'].flatMap(type => ['committed', 'unknown', 'absent'].map(disposition => ({ type, disposition }))))('$disposition $type save joins the original managed operation without reopening', async ({ type, disposition }) => {
   const committed = disposition === 'committed'
-  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? partial + frame({ ...failure, usage: { prompt_tokens: 12, completion_tokens: 3 } }) : success), { retries: 1 })
+  const output = type === 'reasoning' ? frame({ choices: [{ delta: { reasoning_content: 'pending original reasoning' } }] }) : partial
+  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? output + frame({ ...failure, usage: { prompt_tokens: 12, completion_tokens: 3 } }) : success), { retries: 1 })
   const original = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
   const consume = seam.consumeRetryFailure
   let originalFailure: unknown
@@ -213,11 +214,12 @@ it.each(['tool/result', 'assistant/message', 'step/end'].flatMap(type => ['commi
     await expect(f.service.submit(f.id, 'must not reopen', new AbortController().signal)).rejects.toThrow()
     expect(f.bodies).toHaveLength(1); expect(issued).toBe(1)
     const facts = await f.facts()
+    expect(facts.filter(e => e.type === 'model/exchange-accepted' || e.type === 'tool/dispatch' || e.type === 'context/usage')).toEqual([])
     expect(facts.filter(e => e.type === 'tool/result')).toHaveLength(type === 'step/end' || type === 'tool/result' && committed || type === 'assistant/message' && disposition === 'absent' ? 1 : 0)
     for (const result of facts.filter(e => e.type === 'tool/result')) expect(result).toMatchObject({ callId: 'failed-call', name: 'effect', isError: true, output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH' } })
     expect(facts.filter(e => e.type === 'context/action' && e.op === 'open')).toHaveLength(1)
     const projection = projectConversation({ formatVersion: 12, events: facts })
-    if (type !== 'step/end' || !committed) expect(projection.items.some(i => i.unit?.state === 'unresolved' || i.unit?.state === 'open')).toBe(true)
+    if (type !== 'reasoning' && (type !== 'step/end' || !committed)) expect(projection.items.some(i => i.unit?.state === 'unresolved' || i.unit?.state === 'open')).toBe(true)
   } finally {
     observing.mockRestore()
     blocked = false; f.backend.appendOwnedBatch = original; f.backend.reconcileOwnedBatch = reconcile
@@ -225,7 +227,8 @@ it.each(['tool/result', 'assistant/message', 'step/end'].flatMap(type => ['commi
       await (await f.coordinator.openManagedDocument(f.id)).reconcile(key!)
       await f.service.closeSession(f.id)
       const settled = await f.facts()
-      expect(settled.filter(e => e.type === 'tool/result' && e.callId === 'failed-call')).toHaveLength(1)
+      expect(settled.filter(e => e.type === 'tool/result' && e.callId === 'failed-call')).toHaveLength(type === 'reasoning' ? 0 : 1)
+      if (type === 'reasoning') expect(settled.filter(e => e.type === 'reasoning').map(e => e.text)).toEqual(['pending original reasoning'])
       await f.service.submit(f.id, 'after original persistence settles', new AbortController().signal)
       expect(f.bodies).toHaveLength(2); expect(f.bodies[1]).not.toContain('failed-call'); expect(f.effects()).toBe(0)
     }
