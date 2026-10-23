@@ -44,13 +44,14 @@ const changed = (path: string, kind?: string) => (event: WatchNotification) => e
 
 /** Minimal real consumer: every invalidation schedules a serialized resnapshot.
  * Resets reread every selected file, including files with no reliable deltas. */
-function snapshots(lease: WatchLease, paths: string[]) {
+function snapshots(lease: WatchLease, paths: string[], beforeRead?: () => Promise<void>) {
   const state = new Map<string, string | null>()
   const waiting = new Set<{ expected: Array<[string, string | null]>; resolve: () => void }>()
   let job = Promise.resolve(), error: unknown
   lease.subscribe(event => {
     if (event.kind === "unavailable") return
     job = job.then(async () => {
+      if (beforeRead) await beforeRead()
       for (const path of paths) state.set(path, await readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return null
         throw error
@@ -68,6 +69,48 @@ function snapshots(lease: WatchLease, paths: string[]) {
     if (error) throw error
   }, async join() { await job; if (error) throw error } }
 }
+
+// Injected callback ordering with actual disk reads: this diagnoses test
+// coordination, not native event delivery. An initial resnapshot can see new
+// contents before a later change notification, and the converse is valid too.
+it.each(["contents-first", "notification-first"])("snapshot/notification coordination waits for both (%s)", async order => {
+  const temp = await temporary(), file = join(temp.root, "ordered.txt")
+  await writeFile(file, "before")
+  const listeners = new Set<(event: WatchNotification) => void>()
+  const lease: WatchLease = {
+    ready: Promise.resolve({ epoch: 1, revision: 1 }),
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
+    close: async () => { listeners.clear() },
+  }
+  const emit = (event: WatchNotification) => { for (const listener of listeners) listener(event) }
+  const readStarted = gate(), readHold = gate()
+  const state = snapshots(lease, [file], () => { readStarted.resolve(); return readHold.promise })
+  const notifications = capture(lease)
+  const invalidation = notifications.next(event => event.kind === "changed" || (event.kind === "reset" && event.reason === "overflow"))
+  const contents = state.at([[file, "after"]]), both = Promise.all([contents, invalidation])
+  let complete = false
+  void both.then(() => { complete = true })
+  const change: WatchNotification = { kind: "changed", cursor: { epoch: 1, revision: 2 }, changes: [{ path: file, kind: "change" }] }
+  try {
+    emit({ kind: "reset", reason: "initial", cursor: { epoch: 1, revision: 1 } })
+    await watchdog(readStarted.promise)
+    await writeFile(file, "after")
+    if (order === "contents-first") {
+      readHold.resolve(); await contents
+      expect(state.state.get(file)).toBe("after")
+      expect(notifications.events).toEqual([{ kind: "reset", reason: "initial", cursor: { epoch: 1, revision: 1 } }])
+      expect(complete).toBe(false)
+      emit(change)
+    } else {
+      emit(change); await invalidation
+      expect(state.state.has(file)).toBe(false); expect(complete).toBe(false)
+      readHold.resolve()
+    }
+    await both
+    expect(complete).toBe(true); expect(state.state.get(file)).toBe("after")
+    expect(notifications.events).toContainEqual(change)
+  } finally { readHold.resolve(); await lease.close(); await state.join(); await temp.remove() }
+})
 
 describe.skipIf(process.platform !== "win32")("real Windows native watch leases", () => {
   it("hybrid held close: reentrant initial reset waits for replacement native readiness", async () => {
@@ -151,8 +194,11 @@ describe.skipIf(process.platform !== "win32")("real Windows native watch leases"
     const notifications = capture(lease)
     try {
       await lease.ready
+      // The initial asynchronous resnapshot can see these writes before native
+      // batching publishes them. Require both independent outcomes, in either order.
+      const invalidation = notifications.next(event => event.kind === "changed" || (event.kind === "reset" && event.reason === "overflow"))
       await Promise.all(files.map((file, i) => writeFile(file, String(i))))
-      await state.at(files.map((file, i) => [file, String(i)]))
+      await Promise.all([state.at(files.map((file, i) => [file, String(i)])), invalidation])
       expect(notifications.events.some(event => event.kind === "changed" || (event.kind === "reset" && event.reason === "overflow"))).toBe(true)
       expect(observed.watchers).toHaveLength(1)
     } finally { await service.close(); await state.join(); await temp.remove() }
