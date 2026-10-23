@@ -1,0 +1,18 @@
+{
+  "observedAt": "2026-10-23T23:16:07.4579051+00:00",
+  "head": "d0a2331b71d7ea34ccf78586c0592dcf6228eb42",
+  "files": [
+    {
+      "path": "packages/session-executor/src/assembly.ts",
+      "expected": "0c7c3a4e7ac3cbfb11d284795fa3d54949fffae9",
+      "integrated": "0c7c3a4e7ac3cbfb11d284795fa3d54949fffae9",
+      "match": true
+    },
+    {
+      "path": "packages/session-executor/test/schedule-delivery.test.ts",
+      "expected": "44d1c7ba6feb17c2b34c72006bb92da0a6461856",
+      "integrated": "44d1c7ba6feb17c2b34c72006bb92da0a6461856",
+      "match": true
+    }
+  ]
+}

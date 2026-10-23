@@ -10,7 +10,8 @@ These are independently reviewed scoped changes integrated into `codex/v0.1.13-d
 | Retired settings leaf | a41230d9..85beea4a | 85beea4a | Fresh independent review approved |
 | P3 Agent contract tests | 07ac8fc9..f5bf396e | 665126e1 | Fresh Sol review approved; later P2 integration close hook still required |
 | P4 Agent compaction policy tests | 444e356f..cd83f7f1 | 9fc102ea | Fresh Sol review approved; 58 scoped tests and typecheck pass |
-| S1 schedule deadline driver Tasks1–2 | 8493641c..c86df70b | 43eadb6c | Fresh Sol review approved; shipping Task3 remains reserved |
+| S1 schedule deadline driver Tasks1–2 | 8493641c..c86df70b | 43eadb6c | Fresh Sol review approved; shipping Task3 is independently recorded below |
+| S1 shipping schedule Task3 | bbca3c79..65fe3b4a | d0a2331b | Fresh Sol review approved; managed10/10, held-child1/1 and typecheck pass |
 | P2 original recovery/acceptance terminal settlement | ca54230b..fc113394 | 190c2eb1,bbca3c79 | Fresh Sol review approved within explicit host-close/reopen qualification; still-open service management remains open |
 | P2/P3 integration fixture | bbca3c79..bd052a4d | bd052a4d | Scoped reviewer approved; actual combined core-agent495/495 and typecheck pass |
 
@@ -56,6 +57,8 @@ The accepted S1 Tasks1–2 packet replaces the library start-mode interval with 
 
 The final frozen schedule package gate passed70/70 (including40driver tests), with typecheck and diff check exit0. Root matched both physical SHA256 values and committed Git blobs; independent Sol review found no open product findings. Intermediate raw RED/GREEN receipts show their actual assertion results, but do not independently reconstruct every historical source snapshot or worker flag. An incorrectly cited missing Git-status file was explicitly corrected; a separately timed new status receipt proves the same reviewed HEAD was then clean, without pretending to recover historical evidence. These limits remain in the tracked report/review.
 
-P2 has released the shared assembly owner. Task3 exact-Session filtering and real managed-host shipping qualification are now executing under a separate sole-writer reservation before IC-B takes assembly. Library acceptance does not complete S1, Task6 or the release gate.
+S1 Task3 is now independently reviewed and integrated. The causal RED established actual parent dispatch/admission/backend publication from bubbled child pre-step events; exact Session object identity is now required before reading the signal or ticking. A matching sessionId on another object is insufficient. The parent event preserves its actual signal and undefined waterfall return. Final managed schedule10/10, retained child/followup1/1 and package typecheck pass on the frozen source; root confirmed the integrated assembly/test blobs exactly match reviewed HEAD. A fresh JSONL backend/coordinator case verifies accepted occurrence non-replay and overdue remainder, independently of the existing same-coordinator reconciliation/reopen control.
+
+The child test's existing missing code_context_* role-tool warnings remain recorded for the later C2 catalog qualification. They were not suppressed or repaired by this packet. The caller-signal fixture's failed identity assumption is also preserved; the final oracle compares the actual composed pre-step signal at the real handoff. S1 Tasks1–3 are complete within this stated deadline-library/existing step-bound consumer scope. Full Task6, shipping idle delivery and release gates remain open; no automatic idle model wake was added.
 
 Latest user quota policy: all subsequent implementation/review/correction subagents use GPT-6.1Sol until changed. The two active Astra workers handed off preserved partial work and existing receipts; Sol resumed those same checkouts without restarting completed steps.
