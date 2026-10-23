@@ -1,9 +1,11 @@
 import { expect, it, vi } from 'vitest'
-const cuts = vi.hoisted(() => ({ afterRename: undefined as undefined | ((from: string, to: string) => Promise<void>) }))
+const cuts = vi.hoisted(() => ({ afterLink: undefined as undefined | ((from: string, to: string) => Promise<void>) }))
 vi.mock('node:fs/promises', async original => {
   const native = await original<typeof import('node:fs/promises')>()
   return { ...native,
-    rename: async (...args: Parameters<typeof native.rename>) => { const result = await native.rename(...args); await cuts.afterRename?.(String(args[0]), String(args[1])); return result },
+    // Immutable membership publication is atomic no-clobber link. Mutable
+    // operation publication retains atomicJson's separate rename policy.
+    link: async (...args: Parameters<typeof native.link>) => { const result = await native.link(...args); await cuts.afterLink?.(String(args[0]), String(args[1])); return result },
   }
 })
 import { readFile, readdir, writeFile } from 'node:fs/promises'
@@ -84,7 +86,7 @@ it.each(['unknown', 'quota'] as const)('settles actual original native catalog m
     }
     return sink
   })
-  cuts.afterRename = async (_from, to) => {
+  cuts.afterLink = async (_from, to) => {
     if (mode !== 'unknown' || cut || !to.replaceAll('\\', '/').includes('/pin-memberships/')) return
     cut = true
     // Inspect direct files while the real original publication still owns its
@@ -94,8 +96,8 @@ it.each(['unknown', 'quota'] as const)('settles actual original native catalog m
       for (const document of documents) partialCount += (await readdir(resolve(f.managed, id, 'pin-memberships', document))).filter(name => name.endsWith('.json')).length
     }
     expect(partialCount).toBe(1)
-    await writeFile(resolve(f.root, 'partial-membership-receipt.json'), JSON.stringify({ actualRenamedRecord: to, partialCount, operationId }, null, 2))
-    throw new Error('controlled real first membership rename acknowledgement unavailable')
+    await writeFile(resolve(f.root, 'partial-membership-receipt.json'), JSON.stringify({ actualLinkedRecord: to, partialCount, operationId }, null, 2))
+    throw new Error('controlled real first membership link acknowledgement unavailable')
   }
   try {
     if (mode === 'unknown') {
@@ -126,5 +128,5 @@ it.each(['unknown', 'quota'] as const)('settles actual original native catalog m
     expect(await readFile(ledger, 'utf8')).toBe('native-0\nnative-1\n')
     expect({ bodies, launches }).toEqual({ bodies: 1, launches: 2 })
     await writeFile(resolve(f.root, 'membership-receipt.json'), JSON.stringify({ mode, operationId, attempts, partialCount, quotaCalibration, result, bodies, launches, inventory: await f.inventory() }, null, 2))
-  } finally { released = true; cuts.afterRename = undefined; spy.mockRestore(); beginSpy.mockRestore(); await f.close() }
+  } finally { released = true; cuts.afterLink = undefined; spy.mockRestore(); beginSpy.mockRestore(); await f.close() }
 }, 60000)

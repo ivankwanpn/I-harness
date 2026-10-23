@@ -2,7 +2,9 @@ import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { isStrictFactData, validManagedArtifactRef, type ManagedArtifactRef, type ResultDependency } from '@i-harness/core-session'
 import { identity } from '../config.ts'
-import { atomicJson, boundedJson, ownedPath } from './io.ts'
+import { continueAtomicJson, boundedJson, ownedPath } from './io.ts'
+import { readDependencyCatalog } from './dependency-catalog.ts'
+export { dependencyEntries } from './dependency-catalog.ts'
 import { sha, validateManifest } from './manifest.ts'
 import { readPin, type ArtifactPin } from './pins.ts'
 import { requireSpace } from './quota.ts'
@@ -21,22 +23,10 @@ const keys = ['version', 'kind', 'workspaceId', 'documentId', 'sessionId', 'memb
 export function sameArtifactRef(a: ManagedArtifactRef, b: ManagedArtifactRef): boolean {
   return a.id === b.id && a.revision === b.revision && a.codec === b.codec && a.encodedBytes === b.encodedBytes && a.contentDigest === b.contentDigest && a.completeness === b.completeness && a.version === b.version
 }
-export function dependencyEntries(entries: readonly ResultDependency[]): readonly ResultDependency[] {
-  if (!Array.isArray(entries) || !isStrictFactData(entries) || !entries.length) throw new Error('Original dependency entries unavailable')
-  const ids = new Set<string>()
-  for (const entry of entries) {
-    identity(entry.sourceId, 'sourceId')
-    if (ids.has(entry.sourceId) || entry.kind !== 'exec-frames' || Object.keys(entry).some(key => !['kind', 'sourceId', 'retention'].includes(key))) throw new Error('Original dependency entries conflict')
-    ids.add(entry.sourceId)
-    const retention = entry.retention
-    if (retention.kind === 'artifact') {
-      if (Object.keys(retention).some(key => !['kind', 'ref'].includes(key)) || !validManagedArtifactRef(retention.ref) || retention.ref.codec !== 'exec-frames-v1') throw new Error('Original dependency reference unavailable')
-    } else if (retention.kind !== 'unavailable' || Object.keys(retention).some(key => !['kind', 'reason', 'observedEncodedBytes'].includes(key)) || !['quota', 'encoding', 'storage-refused', 'unsupported-owner', 'capture-canceled'].includes(retention.reason)
-      || retention.observedEncodedBytes !== undefined && (!Number.isSafeInteger(retention.observedEncodedBytes) || retention.observedEncodedBytes < 0)) throw new Error('Original dependency refusal unavailable')
-  }
-  const frozen = structuredClone(entries)
-  for (const entry of frozen) { if (entry.retention.kind === 'artifact') Object.freeze(entry.retention.ref); Object.freeze(entry.retention); Object.freeze(entry) }
-  return Object.freeze(frozen)
+function sameEntry(a: ResultDependency, b: ResultDependency): boolean {
+  if (a.kind !== b.kind || a.sourceId !== b.sourceId) return false
+  if (a.retention.kind === 'artifact') return b.retention.kind === 'artifact' && sameArtifactRef(a.retention.ref, b.retention.ref)
+  return b.retention.kind === 'unavailable' && a.retention.reason === b.retention.reason && a.retention.observedEncodedBytes === b.retention.observedEncodedBytes
 }
 function validMembership(value: unknown): value is Membership {
   if (!isStrictFactData(value) || !value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -72,30 +62,45 @@ export function createDependencyMembership(root: string, workspaceId: string, di
     const assertCurrent = () => { if (!registration.current()) throw new Error('Original dependency catalog source unavailable') }
     try {
       assertCurrent()
-      if (registration.disposition === 'ready' || registration.disposition === 'quota') return registration.disposition
+      if (registration.disposition === 'quota') return registration.disposition
       if (catalogRef.codec !== 'json-utf8-v1') throw new Error('Original catalog codec unavailable')
       const catalog = await operation(catalogRef), owner = registration.owner, documentId = owner.documentId ?? owner.sessionId
       if (JSON.stringify(catalog.owner) !== JSON.stringify(owner) || !pinMatches(await readPin(root, directory(catalogRef.id), owner.sessionId, catalogRef.revision), catalog.owner, catalogRef, documentId, owner.sessionId)) throw new Error('Original dependency catalog pin unavailable')
+      // Drain and verify the immutable body, including schema/count/EOF, before
+      // issuing any companion mutation. Registered producer data alone is not
+      // evidence that the actual committed catalog contains those entries.
+      await readDependencyCatalog(root, directory(catalogRef.id), catalogRef, (entry, ordinal) => {
+        assertCurrent()
+        if (!sameEntry(entry, registration.entries[ordinal]!)) throw new Error('Original dependency catalog entries conflict')
+      }, registration.entries.length)
+      const canonical = new Map<string, { ordinal: number; record: Membership; path: string }>()
       for (const [ordinal, entry] of registration.entries.entries()) {
         if (entry.retention.kind !== 'artifact') continue
         assertCurrent()
         const memberRef = entry.retention.ref, member = await operation(memberRef)
         if (!pinMatches(await readPin(root, directory(memberRef.id), owner.sessionId, memberRef.revision), member.owner, memberRef, documentId, owner.sessionId)) throw new Error('Original dependency member pin unavailable')
+        // Every alias above must validate its exact original operation and pin.
+        // Only publication is deduplicated; the catalog retains all ordinals.
+        const first = canonical.get(memberRef.id)
+        if (first) { if (!sameArtifactRef(first.record.memberRef, memberRef)) throw new Error('Original dependency alias conflict'); continue }
         const record: Membership = { version: 1, kind: 'result-dependency', workspaceId, documentId, sessionId: owner.sessionId, memberRef, catalogRef, catalogOperationId: owner.operationId, sourceId: entry.sourceId, ordinal }
         if (!validMembership(record)) throw new Error('Original dependency membership unavailable')
         const path = companion(memberRef, documentId, catalogRef), existing = await load(path)
-        if (existing) { if (JSON.stringify(existing) !== JSON.stringify(record)) throw new Error('Immutable dependency membership conflict'); continue }
+        if (existing && JSON.stringify(existing) !== JSON.stringify(record)) throw new Error('Immutable dependency membership conflict')
+        canonical.set(memberRef.id, { ordinal, record, path })
+      }
+      for (const { ordinal, record, path } of canonical.values()) {
+        const memberRef = record.memberRef
+        assertCurrent()
         if (!registration.admitted.has(ordinal)) { await requireSpace(root, quota(), Buffer.byteLength(JSON.stringify(record)) + 131072); registration.admitted.add(ordinal) }
         for (const pathPart of [resolve(directory(memberRef.id), 'pin-memberships'), resolve(directory(memberRef.id), 'pin-memberships', sha(documentId))]) {
+          assertCurrent()
           try { await mkdir(pathPart) } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause }
           await ownedPath(root, pathPart)
         }
         assertCurrent()
-        // atomicJson may resume its exact pending transaction, but must never
-        // overwrite foreign bytes at the immutable published key.
-        const temporary = path + '.' + sha(Buffer.from(JSON.stringify(record))) + '.pending'
-        try { await ownedPath(root, temporary) } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause }
-        await atomicJson(path, record)
+        const disposition = await continueAtomicJson(root, path, record, registration.current)
+        if (disposition.kind !== 'confirmed') throw new Error('Original dependency membership ' + disposition.kind)
         assertCurrent()
         if (JSON.stringify(await load(path)) !== JSON.stringify(record)) throw new Error('Original dependency membership acknowledgement unavailable')
       }
