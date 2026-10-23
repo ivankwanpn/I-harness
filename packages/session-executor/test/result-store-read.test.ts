@@ -80,3 +80,16 @@ it('uses a live confirmed producer without an execution subscription and refuses
     expect(execution).not.toHaveBeenCalled(); expect(service.hasAssembly('parent')).toBe(false)
   } finally { await service.close(); await producer.release(); await f.close() }
 })
+
+it('denies configured read resolver failure even when the supplied original service could read', async () => {
+  const f = await fixture(), lease = await acquireAssemblyResultStore(f.options), owner = lease.service!
+  const capture = owner.registerResultScope({ operationId: 'resolver-error', sessionId: 'parent', callId: 'c', source: await lease.sourceFor!('parent') }, () => true)
+  const sink = await owner.beginResult(capture, 'text-utf8-v1'); await sink.write(Buffer.from('resolver must gate this body'))
+  const saved = await sink.finish('complete'); if (saved.kind !== 'committed') throw Error('fixture')
+  const model = vi.fn(), scope = vi.fn(async () => { throw Error('revoked broker') })
+  const service = createSessionService({ ...f.options, contextOutput: owner, resultReadScopeFor: scope, modelBindingFor: model, projectContextFor: model })
+  try {
+    expect(await service.readResultPage!('parent', { ref: saved.ref })).toMatchObject({ kind: 'unavailable' })
+    expect(scope).toHaveBeenCalledWith('parent'); expect(model).not.toHaveBeenCalled(); expect(service.hasAssembly('parent')).toBe(false)
+  } finally { await service.close(); await lease.release(); await f.close() }
+})

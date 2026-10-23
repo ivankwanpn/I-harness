@@ -1,12 +1,15 @@
 import { createHash } from 'node:crypto'
 import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, createContextOutputService, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService } from '@i-harness/context-output'
-import { managedResultRefs, rewindCuts } from '@i-harness/core-session'
+import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 
+export interface ResultReadScope { projectId?: string; scope?: { id: string; roots: string[] }; revision: string }
+export type ResultReadScopeResolver = (sessionId: string) => Promise<(() => ResultReadScope) | undefined>
 interface Registration {
   sessionId: string; coordinator: SessionCoordinator
   projectContext?(): { id: string; roots: string[] } | undefined
   available?(): boolean
+  readScope?: () => ResultReadScope
   mode: 'producer' | 'reader'
   lastScopeId?: string
 }
@@ -17,13 +20,14 @@ export interface ResultStoreOptions {
   workspace: string; coordinator?: SessionCoordinator; sessionId?: string
   contextOutput?: ContextOutputService; contextOutputSourceFor?(sessionId: string): Promise<ContextCapture['source']>
   contextOutputSettingsPath?: string
+  resultReadScopeFor?: ResultReadScopeResolver
   projectContext?: Registration['projectContext']; executionCallerAvailable?: Registration['available']
 }
 export function acquireAssemblyResultStore(options: ResultStoreOptions) { return acquireResultStore(options, 'producer') }
-export function acquireResultReadStore(options: ResultStoreOptions & { readCallerAvailable(): boolean }) {
-  return acquireResultStore({ ...options, projectContext: undefined, executionCallerAvailable: options.readCallerAvailable }, 'reader')
+export function acquireResultReadStore(options: ResultStoreOptions & { readCallerAvailable(): boolean }, readScope?: () => ResultReadScope) {
+  return acquireResultStore({ ...options, projectContext: undefined, executionCallerAvailable: options.readCallerAvailable }, 'reader', readScope)
 }
-async function acquireResultStore(options: ResultStoreOptions, mode: Registration['mode']) {
+async function acquireResultStore(options: ResultStoreOptions, mode: Registration['mode'], readScope?: () => ResultReadScope) {
   if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, release: async () => {} }
   if (!options.coordinator?.storageRoot || !options.sessionId) return { service: undefined, sourceFor: undefined, release: async () => {} }
   const location = await contextWorkspaceLocation(options.workspace, options.coordinator.storageRoot)
@@ -44,6 +48,16 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         const candidates = [...registrations]
         const coordinator = candidates.at(-1)?.coordinator
         if (!coordinator) throw new Error('Result source owner unavailable')
+        const independent = candidates.findLast(owner => owner.sessionId === sessionId && owner.mode === 'reader' && owner.readScope)
+        if (independent) {
+          if (independent.available?.() === false) throw new Error('Result source host unavailable')
+          const before = independent.readScope!()
+          const { meta } = await independent.coordinator.profile(sessionId)
+          const current = independent.readScope!()
+          if (meta.archived || independent.available?.() === false || before.revision !== current.revision
+            || current.projectId && current.scope?.id !== current.projectId) throw new Error('Result read scope unavailable')
+          return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, current.scope), readonly: true }
+        }
         let cursor = sessionId, selected: Registration | undefined, reader: Registration | undefined, projectId: string | undefined, bindingSeen = false
         const visited = new Set<string>()
         for (;;) {
@@ -81,8 +95,9 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
             const snapshot = (await coordinator.snapshot(access.sessionId)).session, cuts = rewindCuts(snapshot)
-            return snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
-              && managedResultRefs(event).some(ref => ref.id === (metadata.visibleVia ?? metadata.ref).id && ref.revision === (metadata.visibleVia ?? metadata.ref).revision))
+            const expected = metadata.visibleVia ?? metadata.ref
+            return semanticSeedResultRefs(snapshot).some(ref => sameManagedArtifactRef(ref, expected)) || snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
+              && managedResultRefs(event).some(ref => sameManagedArtifactRef(ref, expected)))
           } catch { return false }
         } })
       const entry: StoreEntry = { service, registrations, users: 0, sourceFor,
@@ -101,7 +116,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   // A last owner can retire the instance while creation is awaited.
   if (stores.get(key) !== pending) continue
   const registration: Registration = { mode, sessionId: options.sessionId, coordinator: options.coordinator,
-    ...(mode === 'producer' ? { projectContext: options.projectContext } : {}), available: options.executionCallerAvailable }
+    ...(mode === 'producer' ? { projectContext: options.projectContext } : { readScope }), available: options.executionCallerAvailable }
   entry.registrations.add(registration); entry.users++
   // Read the existing owner's current source resolver, which consults all
   // actual registrations rather than capturing the first assembly's scope.

@@ -6,6 +6,8 @@ import { resultDisposition, resultIsError } from '../../results/projection.ts'
 /** Only structural metadata. No text, arguments, result/native/image bodies,
  * request attribution or receipts are retained by the history index. */
 export interface HistoryFact {
+  readonly seedArtifacts?: readonly import('../../results/types.ts').ManagedArtifactRef[]
+  readonly seedArtifactIndices?: readonly number[]
   readonly seedTurns?: import('../seed-types.ts').SeedTurnDomain
   readonly seedExtent?: import('../seed-types.ts').TurnExtent
   readonly seedItems?: readonly {
@@ -28,8 +30,12 @@ export interface HistoryArchive { readonly length: number; get(index: number): H
 export function historyFact(event: SessionEventView, index: number): HistoryFact {
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }) }
   switch (event.type) {
-    case 'conversation/seed-manifest': return { ...base, seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
-    case 'conversation/seed-group': return { ...base, seedExtent: { ...event.group.extent }, seedItems: event.group.items.map(item => ({ kind: item.kind, scope: item.scope, extent: { ...item.extent },
+    case 'conversation/seed-manifest': return { ...base, seedArtifacts: event.artifacts.map(artifact => ({ ...artifact.ref })), seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
+    case 'conversation/seed-group': return { ...base,
+      seedArtifactIndices: event.group.items.flatMap(item => item.kind !== 'exchange' ? [] : item.results.flatMap(result => result.kind !== 'envelope' ? [] : [
+        ...(result.sourceRetention.kind === 'artifact' ? [result.sourceRetention.artifact] : []),
+        ...(result.dependencies?.kind === 'catalog' ? [result.dependencies.artifact] : []),
+      ])), seedExtent: { ...event.group.extent }, seedItems: event.group.items.map(item => ({ kind: item.kind, scope: item.scope, extent: { ...item.extent },
       calls: item.kind === 'exchange' ? item.calls.map(call => ({ id: call.id, name: call.name, outcome: call.outcome, result: call.result })) : [],
       resultCount: item.kind === 'exchange' ? item.results.length : 0, mediaCount: item.kind === 'input' ? item.input.media.length : item.kind === 'exchange' ? item.results.reduce((count, result) => count + result.media.length, 0) : 0 })) }
     case 'step/start': return { ...base, actionId: event.actionId, attemptId: event.attemptId }

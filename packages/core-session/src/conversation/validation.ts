@@ -21,6 +21,7 @@ export interface ConversationValidationIndex {
   readonly semanticsStartSeq: number | undefined
   stage(events: readonly SessionEvent[], options?: StageOptions): { commit(): void; history(): ReturnType<typeof projectHistory> }
   history(throughSeq?: number): ReturnType<typeof projectHistory>
+  semanticSeedResultRefs(): readonly import('../results/types.ts').ManagedArtifactRef[]
   replacementDependencies(): ReadonlyMap<number, ReadonlySet<number>>
   softReduction(ownerSessionId: string): import('./soft-reduction.ts').SoftReductionState
 }
@@ -73,6 +74,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
     get eventCount() { return count },
     get semanticsStartSeq() { return fence },
     history: history.history,
+    semanticSeedResultRefs: history.semanticSeedResultRefs,
     replacementDependencies: history.dependencies,
     softReduction: soft.read,
     stage(suffix, options) {

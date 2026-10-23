@@ -266,3 +266,43 @@ describe("trusted project scope broker", () => {
     } finally { await coordinator.close() }
   })
 })
+
+it('resolves only target-own ready read authority and never restores roots from a saved binding', async () => {
+  const { coordinator, broker, project, workspace } = await setup()
+  try {
+    expect(await broker.resultReadScopeFor('s1')).toBeUndefined()
+    await broker.configure(project); await broker.bind('s1', project.id)
+    const get = (await broker.resultReadScopeFor('s1'))!
+    expect(get()).toMatchObject({ projectId: 'p1', scope: project, revision: expect.any(String) })
+    const cold = createProjectScopeBroker(coordinator, workspace)
+    try { await expect(cold.resultReadScopeFor('s1')).rejects.toThrow(/revoked|confirmed/i) } finally { await cold.close() }
+    await broker.revoke(project.id)
+    expect(get).toThrow(/revoked/i)
+  } finally { await broker.close(); await coordinator.close() }
+})
+it('invalidates target read revisions across equal-root reconfiguration and ABA project changes', async () => {
+  const { coordinator, broker, project, third } = await setup()
+  try {
+    await broker.configure(project); await broker.bind('s1', project.id)
+    const get = (await broker.resultReadScopeFor('s1'))!, before = get()
+    await broker.configure({ ...project, roots: [third], primaryRoot: third }); await broker.configure(project)
+    expect(get().scope).toEqual(before.scope)
+    expect(get().revision).not.toBe(before.revision)
+    const next = get().revision; await broker.configure(project)
+    expect(get().revision).not.toBe(next)
+    await broker.close(); expect(get).toThrow(/closed/i)
+  } finally { await broker.close(); await coordinator.close() }
+})
+it('keeps independently bound child read authority after ancestor loss and checks target archive', async () => {
+  const { coordinator, broker, project } = await setup()
+  try {
+    await broker.configure(project); await broker.bind('s1', project.id)
+    await coordinator.create({ sessionId: 'child', parentSession: 's1', origin: 'subagent' })
+    await broker.inherit('s1', 'child')
+    await coordinator.updateMeta('s1', { archived: true })
+    const get = (await broker.resultReadScopeFor('child'))!
+    expect(get().scope?.roots).toEqual(project.roots)
+    await coordinator.updateMeta('child', { archived: true })
+    await expect(broker.resultReadScopeFor('child')).rejects.toThrow(/archived|unavailable/i)
+  } finally { await broker.close(); await coordinator.close() }
+})

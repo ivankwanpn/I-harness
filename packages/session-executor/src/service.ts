@@ -114,6 +114,8 @@ type PostTurnAction = Pick<ManagedAction<ProducerFactOutcome>, 'signal' | 'asser
 }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Read-only host authority; never invokes execution project setup. */
+  resultReadScopeFor?: import('./lifecycle/result-store.ts').ResultReadScopeResolver
   /** Loaded settings only; never resolves authentication or constructs a model client. */
   modelMetadataFor?: (sessionId: string, meta: SessionMeta | undefined) => import("@i-harness/core-session").ContextBindingMetadata | undefined | Promise<import("@i-harness/core-session").ContextBindingMetadata | undefined>
   /** Host structural management shares this admission boundary with all writers. */

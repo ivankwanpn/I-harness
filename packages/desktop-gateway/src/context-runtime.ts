@@ -1,16 +1,17 @@
 import {join} from 'node:path'
 import {createContextOutputService,contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef} from '@i-harness/context-output'
-import type {ManagedArtifactRef} from '@i-harness/core-session'
+import {sameManagedArtifactRef,type ManagedArtifactRef} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator} from '@i-harness/session-persistence'
-import type {SessionProjectContext} from '@i-harness/session-executor'
+import type {SessionProjectContext,ResultReadScopeResolver} from '@i-harness/session-executor'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 
 export async function createNativeContextRuntime(options:{
   workspace:string;storageRoot:string;coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'>
   // A durable binding is independent of its currently confirmed scope. An
   // absent scope for a bound consumer is revoked authority, never unassigned.
-  projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext}>
+  projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext;revision?:string}>
+  resultReadScopeFor?:ResultReadScopeResolver
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
@@ -39,15 +40,36 @@ export async function createNativeContextRuntime(options:{
       try{
         if(metadata.workspaceId!==workspaceKey||!metadata.owner.source||(await sourceFor(access.sessionId)).sourceId!==metadata.owner.source.sourceId)return false
         const visibleRef=metadata.visibleVia??metadata.ref
-        return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>visible.id===visibleRef.id&&visible.revision===visibleRef.revision))
+        return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>'version' in visible&&sameManagedArtifactRef(visible,visibleRef)))
       }catch{return false}
     },
     authorize:async(access,ref)=>{
       try{
         if(ref.workspaceId!==workspaceKey||!ref.source||(await sourceFor(access.sessionId)).sourceId!==ref.source.sourceId)return false
-        return access.sessionId===ref.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>visible.id===ref.id))
+        return access.sessionId===ref.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>!('version' in visible)&&visible.id===ref.id))
       }catch{return false}
     }})
+  // The supplied service is Gateway's fast path. Capture broker currentness
+  // around its real readers as source identity alone cannot detect ABA.
+  async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{
+    if(closed)throw new Error('Native context is closed')
+    const getter=await options.resultReadScopeFor?.(sessionId)
+    const captured=getter?.() ?? await options.projectFor(sessionId)
+    const assertCurrent=async()=>{
+      if(closed)throw new Error('Native context is closed')
+      const {meta}=await options.coordinator.profile(sessionId)
+      if(meta.archived)throw new Error('Native context session is archived')
+      const current=getter?.() ?? await options.projectFor(sessionId)
+      if(closed||current.revision!==captured.revision)throw new Error('Result read scope changed')
+    }
+    await assertCurrent()
+    const page=await operation()
+    await assertCurrent()
+    return page
+  }
+  const readResult=contextOutput.readResult.bind(contextOutput),readExecResult=contextOutput.readExecResult.bind(contextOutput)
+  contextOutput.readResult=(access,args)=>guardedRead(access.sessionId,()=>readResult(access,args))
+  contextOutput.readExecResult=(access,args)=>guardedRead(access.sessionId,()=>readExecResult(access,args))
   let codeRetrieval:ReturnType<typeof createCodeRetrievalService>
   const reader=createNativeCodeSourceReader({workspace:canonical,references:()=>references,config:()=>codeRetrieval.status().config,
     authorize:async(actor,sourceId)=>{

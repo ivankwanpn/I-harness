@@ -14,19 +14,38 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
     const operation = Promise.resolve().then(async (): Promise<ResultPageResult> => {
       let lease: Awaited<ReturnType<typeof acquireResultReadStore>> | undefined
       let result: ResultPageResult = unavailable()
+      let assertScope = () => {}
       try {
         if (!available(sessionId)) return result
+        const getter = await options.resultReadScopeFor?.(sessionId)
+        if (!available(sessionId)) return result
+        const revision = getter?.().revision
+        assertScope = () => {
+          if (!available(sessionId) || getter && getter().revision !== revision) throw new Error('Result read scope changed')
+        }
+        assertScope()
         if (options.coordinator) {
           const { meta } = await options.coordinator.profile(sessionId)
+          assertScope()
           if (meta.archived || !available(sessionId)) return result
         }
-        lease = await acquireResultReadStore({ ...options, sessionId, readCallerAvailable: () => available(sessionId) })
+        lease = await acquireResultReadStore({ ...options, sessionId, readCallerAvailable: () => available(sessionId) }, getter ? () => { assertScope(); return getter() } : undefined)
+        assertScope()
         if (lease.service && available(sessionId)) result = await readManagedResultPage(lease.service, { sessionId }, query)
+        assertScope()
       } catch (cause) { result = resultPageFailure(cause) }
       finally {
         try { await lease?.release() }
         catch (cause) { result = resultPageFailure(cause) }
       }
+      try {
+        assertScope()
+        if (options.coordinator) {
+          const { meta } = await options.coordinator.profile(sessionId)
+          assertScope()
+          if (meta.archived) return unavailable()
+        }
+      } catch { return unavailable() }
       return available(sessionId) ? result : unavailable()
     })
     pending.set(operation, sessionId)

@@ -10,7 +10,7 @@ import { prepareModelRequest, withPreparedSignal, snapshotModelData, type LLMReq
 import { createUsageStore } from "@i-harness/usage-stats"
 import { createUsageCapture } from "./usage-capture.ts"
 import { safeCompactionDiagnostic } from "./context-diagnostics.ts"
-import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
+import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
@@ -224,11 +224,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
     projectFor:projects.nativeScopeFor,
+    resultReadScopeFor:projects.resultReadScopeFor,
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
       const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
       const cuts=rewindCuts(snapshot)
-      return snapshot.events.flatMap<ContextResultRef | ManagedArtifactRef>(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?event.type==="context/result-ref"?[event.ref]:managedResultRefs(event):[])
+      return [...semanticSeedResultRefs(snapshot), ...snapshot.events.flatMap<ContextResultRef | ManagedArtifactRef>(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?event.type==="context/result-ref"?[event.ref]:managedResultRefs(event):[])]
     },
     resolveCredential:ref=>nativeCredentials.resolve(ref),
     registerJob:(access,job)=>{
@@ -302,6 +303,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     additionalTools,
     contextOutput:nativeContext.contextOutput,
     contextOutputSourceFor:nativeContext.sourceFor,
+    resultReadScopeFor:projects.resultReadScopeFor,
     sessionQuery,
     workspace: options.workspace,
     sandbox: mode,

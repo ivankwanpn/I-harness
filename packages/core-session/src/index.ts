@@ -107,3 +107,5 @@ export { exportConversationSeed } from './conversation/seed-export.ts'
 export { validateSemanticSeed } from './conversation/seed-codec.ts'
 export { closeSourceIntervals } from './conversation/history/intervals.ts'
 export { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './conversation/seed-digest.ts'
+
+export { semanticSeedResultRefs, sameManagedArtifactRef } from './results/seed-refs.ts'

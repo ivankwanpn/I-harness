@@ -35,6 +35,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const loading = new Map<string, Promise<Binding>>()
   const operations = new Map<string, Promise<unknown>>()
   const revisions = new Map<string, number>()
+  const bindingRevisions = new Map<string, number>()
   let referenceRevision = 0
   let references: readonly string[] = []
   let referenceFailure: string | undefined
@@ -84,6 +85,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   }
   async function save(id: string, projectId?: string): Promise<void> {
     assertOpen()
+    bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
     const document = { version: 1, ...(projectId ? { projectId } : {}) }
     await coordinator.putDocument(key(id), document)
     // Coordinator background document errors are reported rather than thrown.
@@ -92,7 +94,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     if (!object(saved) || saved.version !== 1 || saved.projectId !== projectId) throw new Error("Could not persist session project binding")
     bindings.set(id, { bound: true, ...(projectId ? { projectId } : {}) })
   }
-  async function resolveOwner(id: string, ownedOperation?: string): Promise<Binding> {
+  async function resolveOwner(id: string, ownedOperation?: string, reading = false): Promise<Binding> {
     const chain: string[] = []
     const visited = new Set<string>()
     let cursor = id
@@ -100,6 +102,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       if (visited.has(cursor) || chain.length >= 32) throw new Error("Invalid or excessive session project lineage")
       visited.add(cursor); chain.push(cursor)
       const meta = await ensureVisible(cursor)
+      if (reading && meta.archived) throw new Error('Result source session archived')
       if ((await load(cursor)).bound) break
       if (!meta.parentSession || (meta.origin !== "subagent" && meta.origin !== "team")) { parents.delete(cursor); break }
       const parent = identifier(meta.parentSession)
@@ -297,15 +300,37 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       })
     },
     projectFor,
-    async nativeScopeFor(id:string):Promise<{projectId?:string;scope?:SessionProjectContext}> {
-      await resolveOwner(id)
+    /** Only a target's own durable binding can avoid ancestor traversal. */
+    async resultReadScopeFor(id: string): Promise<(() => import('@i-harness/session-executor').ResultReadScope) | undefined> {
+      const meta = await ensureVisible(id)
+      if (meta.archived) throw new Error('Session is archived')
+      await operations.get(id)
+      const own = await load(id)
+      assertOpen()
+      if (!own.bound) return undefined
+      observed.add(id)
+      const get = () => {
+        assertOpen()
+        if (!bindings.get(id)?.bound) throw new Error('Result read binding unavailable')
+        const projectId = bindings.get(id)!.projectId
+        assertAvailable(projectId)
+        const context = projectId ? projects.get(projectId) : undefined
+        return { ...(projectId ? { projectId } : {}), ...(context ? { scope: { id: context.id, name: context.name, primaryRoot: context.primaryRoot!, roots: [...context.roots] } } : {}),
+          revision: `${bindingRevisions.get(id) ?? 0}:${projectId ?? 'unbound'}:${revisions.get(projectId ?? '') ?? 0}` }
+      }
+      get()
+      return get
+    },
+    async nativeScopeFor(id:string):Promise<{projectId?:string;scope?:SessionProjectContext;revision:string}> {
+      await resolveOwner(id, undefined, true)
       assertOpen()
       const projectId=liveOwner(id)
-      if(!projectId)return {}
+      const revision = authority(id).revision + ':binding:' + (bindingRevisions.get(id) ?? 0)
+      if(!projectId)return {revision}
       const context=projects.get(projectId)
-      if(!context)return {projectId}
+      if(!context)return {projectId,revision}
       assertAvailable(projectId)
-      return {projectId,scope:{id:context.id,name:context.name,roots:[...context.roots],primaryRoot:context.primaryRoot!}}
+      return {projectId,revision,scope:{id:context.id,name:context.name,roots:[...context.roots],primaryRoot:context.primaryRoot!}}
     },
     move(id: string, expectedOwner: string | undefined, projectId: string | undefined): Promise<{ sessionId: string; projectId?: string; executionWorkspace: string }> {
       return serial(id, () => fence.exclusive(id, async () => {

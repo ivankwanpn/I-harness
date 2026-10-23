@@ -1,11 +1,13 @@
 import {afterEach,expect,it,vi} from 'vitest'
 import {mkdir,mkdtemp,rm,stat,writeFile} from 'node:fs/promises'
-import {join,resolve} from 'node:path'
+import {join} from 'node:path'
+import {tmpdir} from 'node:os'
 import {createNativeContextRuntime} from '../src/context-runtime.ts'
 const cleanup:Array<()=>Promise<void>>=[]
 afterEach(async()=>{for(const operation of cleanup.splice(0).reverse())await operation()})
 async function setup(){
-  const base=resolve('build/native-context-runtime-tests');await mkdir(base,{recursive:true})
+  // Keep SQLite journals within Windows path limits in isolated worktrees.
+  const base=tmpdir()
   const root=await mkdtemp(join(base,'runtime-'));cleanup.push(()=>rm(root,{recursive:true,force:true}))
   const workspace=join(root,'repo'),storageRoot=join(root,'storage');await mkdir(workspace)
   await writeFile(join(workspace,'auth.ts'),'export function approveDeployment() { return true }')
@@ -72,4 +74,18 @@ it('owns refresh timers only while explicitly enabled and drains refresh on clos
     expect(cleared).toHaveBeenCalledTimes(1)
     await runtime.close();expect(runtime.codeRetrieval.status().activeJobs).toBe(0)
   }finally{intervals.mockRestore();cleared.mockRestore();indexing.mockRestore()}
+})
+
+it.each([
+  ['version', 2], ['id', `ctxv1_${'a'.repeat(64)}`], ['revision', 'b'.repeat(64)], ['codec', 'json-utf8-v1'], ['encodedBytes', 900], ['contentDigest', 'c'.repeat(64)], ['completeness', 'source-limited'],
+] as const)('does not admit managed evidence with a wrong %s even when the target has a real pin', async (field, value) => {
+  const { runtime, visibleRefs } = await setup()
+  const scope = runtime.contextOutput.registerResultScope({ operationId: `exact-${field}`, sessionId: 's', callId: 'c', source: await runtime.sourceFor('s') }, () => true)
+  const sink = await runtime.contextOutput.beginResult(scope, 'text-utf8-v1'); await sink.write(Buffer.from('full identity bytes'))
+  const result = await sink.finish('complete'); if (result.kind !== 'committed') throw Error('fixture')
+  await runtime.contextOutput.grant({ sessionId: 's' }, [result.ref.id], 'child')
+  visibleRefs.child = [{ ...result.ref, [field]: value }]
+  await expect(runtime.contextOutput.readResult({ sessionId: 'child' }, { ref: result.ref })).rejects.toThrow(/unauthorized/)
+  visibleRefs.child = [{ ...result.ref }]
+  expect((await runtime.contextOutput.readResult({ sessionId: 'child' }, { ref: result.ref })).data).toEqual({ kind: 'text', text: 'full identity bytes' })
 })

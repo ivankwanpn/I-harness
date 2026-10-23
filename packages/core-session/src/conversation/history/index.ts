@@ -1,6 +1,8 @@
 import type { SessionEventView } from '../../managed/types.ts'
 import { conversationSeq, validateConversationEventShape } from '../../events/conversation.ts'
 import { addressKey, replacementFormatError } from '../../events/replacement.ts'
+import { historyVisibility } from './visibility.ts'
+import { canonicalJsonData } from '../../serialization/json-data.ts'
 import { historyFact, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { projectHistory, validateHistoricalReplacement } from './replacements.ts'
 
@@ -16,6 +18,17 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
   let count = 0
   return {
     history: (throughSeq?: number) => projectHistory({ length: count, get: position => facts.get(position)! }, throughSeq),
+    semanticSeedResultRefs() {
+      const branch = historyVisibility(facts.values()).branch
+      const manifest = [...facts.values()].find(fact => fact.type === 'conversation/seed-manifest')
+      if (!manifest || !branch(manifest)) return []
+      const refs = new Map<string, import('../../results/types.ts').ManagedArtifactRef>()
+      for (const fact of facts.values()) if (branch(fact)) for (const ordinal of fact.seedArtifactIndices ?? []) {
+        const ref = manifest.seedArtifacts![ordinal]!
+        refs.set(canonicalJsonData(ref), { ...ref })
+      }
+      return [...refs.values()]
+    },
     dependencies: () => new Map([...dependencies].map(([seq, required]) => [seq, new Set(required)])),
     stage(read?: (index: number) => SessionEventView | undefined) {
       const nextFacts = new Map<number, HistoryFact>(), nextCounts = new Map<number, number>()
