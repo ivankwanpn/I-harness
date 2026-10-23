@@ -135,7 +135,10 @@ export function createFsWatchService(options: { onObserverError?: (error: unknow
       if (entry.generation !== generation || entry.state !== "starting" || closed) return
       entry.state = "healthy"; entry.delay = 500
       const initial = publish(entry, { kind: "reset", reason: entry.epoch === 1 ? "initial" : "recovered" })
-      for (const lease of entry.leases) lease.resolve(initial)
+      // Reset observers may retire this source and acquire on its tombstone.
+      // Only the still-current healthy generation can settle lease readiness.
+      if (entry.generation !== generation || entry.state !== "healthy" || closed) return
+      for (const lease of entry.leases) if (!lease.closed) lease.resolve(initial)
     }, error => lose(entry, generation, error)).catch(error => lose(entry, generation, error))
     entry.drain = (async () => {
       try {

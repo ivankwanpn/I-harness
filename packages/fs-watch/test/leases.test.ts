@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { createFsWatchService, type WatchNotification } from "../src/index.ts"
+import { createFsWatchService, type WatchCursor, type WatchLease, type WatchNotification } from "../src/index.ts"
 import { gate, PushWatcher, turns } from "./helpers/push-watcher.ts"
 import { resolve } from "node:path"
 
@@ -267,4 +267,68 @@ it("retrying a retired lease close cannot close the recovered owner used by new 
   natives[1]!.change("change", "still-live"); await flush()
   expect(events.at(-1)).toMatchObject({ kind: "changed", changes: [{ path: "still-live", kind: "change" }] })
   await service.close()
+})
+
+it.each([
+  { reason: "initial", cleanupFails: false, epoch: 2 },
+  { reason: "recovered", cleanupFails: false, epoch: 3 },
+  { reason: "initial", cleanupFails: true, epoch: 2 },
+  { reason: "recovered", cleanupFails: true, epoch: 3 },
+])("reentrant $reason reset retirement fences replacement readiness (cleanupFails: $cleanupFails)", async ({ reason, cleanupFails, epoch }) => {
+  const service = createFsWatchService(), a = service.acquire(selection)
+  void a.ready.catch(() => {})
+  if (reason === "recovered") {
+    await start(); await a.ready
+    natives[0]!.fail(); await turns(); await vi.advanceTimersByTimeAsync(500)
+  }
+  const retiring = natives.at(-1)!, oldCount = natives.length, hold = gate()
+  retiring.close.mockReturnValueOnce(hold.promise)
+  let b: WatchLease | undefined, closing: Promise<void> | undefined, sameClose = false
+  let settlement: { cursor: WatchCursor } | { error: unknown } | undefined
+  let eventsAtReady: WatchNotification[] | undefined
+  const events: WatchNotification[] = []
+  a.subscribe(event => {
+    if (event.kind !== "reset" || event.reason !== reason) return
+    closing = a.close(); sameClose = a.close() === closing
+    void closing.catch(() => {})
+    b = service.acquire(selection)
+    b.subscribe(event => events.push(event))
+    void b.ready.then(cursor => { settlement = { cursor }; eventsAtReady = [...events] }, error => { settlement = { error } })
+  })
+  try {
+    retiring.ready(); await turns()
+    expect(b).toBeDefined(); expect(sameClose).toBe(true)
+    expect(settlement).toBeUndefined()
+    expect(natives).toHaveLength(oldCount); expect(events).toEqual([])
+    retiring.ready(); retiring.change("change", "stale")
+    await flush()
+    expect(settlement).toBeUndefined(); expect(events).toEqual([])
+    if (cleanupFails) {
+      hold.reject(new Error("held cleanup failure"))
+      await expect(closing).rejects.toMatchObject({ code: "FS_WATCH_CLOSE" }); await turns()
+      expect(settlement).toMatchObject({ error: { code: "FS_WATCH_CLOSE" } })
+      expect(events).toMatchObject([{ kind: "unavailable", code: "FS_WATCH_CLOSE" }])
+      expect(natives).toHaveLength(oldCount)
+      await vi.advanceTimersByTimeAsync(500)
+    } else {
+      hold.resolve(); await closing; await turns()
+      expect(settlement).toBeUndefined(); expect(events).toEqual([])
+    }
+    expect(natives).toHaveLength(oldCount + 1)
+    const replacement = natives.at(-1)!
+    // Construction alone must not settle readiness: the replacement owns its barrier.
+    await turns()
+    if (!cleanupFails) expect(settlement).toBeUndefined()
+    replacement.ready(); await turns()
+    if (cleanupFails) {
+      expect(settlement).toMatchObject({ error: { code: "FS_WATCH_CLOSE" } })
+      expect(events.at(-1)).toMatchObject({ kind: "reset", reason: "recovered", cursor: { epoch, revision: 1 } })
+    } else {
+      expect(await b!.ready).toEqual({ epoch, revision: 1 })
+      expect(eventsAtReady).toEqual([{ kind: "reset", reason: "recovered", cursor: { epoch, revision: 1 } }])
+    }
+    replacement.change("change", "current"); await flush()
+    expect(events.at(-1)).toMatchObject({ kind: "changed", cursor: { epoch }, changes: [{ path: "current", kind: "change" }] })
+    expect(JSON.stringify(events)).not.toContain("stale")
+  } finally { hold.resolve(); await service.close() }
 })

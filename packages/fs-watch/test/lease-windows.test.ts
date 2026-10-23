@@ -7,7 +7,7 @@ import fs from "node:fs"
 import { syncBuiltinESMExports } from "node:module"
 import type { FSWatcher } from "chokidar"
 import { createFsWatcher, createFsWatchService, type WatchNotification, type WatchLease } from "../src/index.ts"
-import { gate, watchdog } from "./helpers/push-watcher.ts"
+import { gate, turns, watchdog } from "./helpers/push-watcher.ts"
 
 // Actual chokidar instances and filesystem event delivery. Only the labeled
 // recovery test injects an error/holds close at this real construction boundary.
@@ -70,6 +70,40 @@ function snapshots(lease: WatchLease, paths: string[]) {
 }
 
 describe.skipIf(process.platform !== "win32")("real Windows native watch leases", () => {
+  it("hybrid held close: reentrant initial reset waits for replacement native readiness", async () => {
+    const temp = await temporary(), file = join(temp.root, "replacement.txt"), service = createFsWatchService()
+    const selection = { roots: [temp.root], persistent: false }, a = service.acquire(selection)
+    void a.ready.catch(() => {})
+    const native = observed.watchers[0]!, actualClose = native.close.bind(native)
+    const hold = gate(), retired = gate(), changed = gate()
+    vi.spyOn(native, "close").mockImplementationOnce(() => actualClose().then(() => hold.promise))
+    let b: WatchLease | undefined, closing: Promise<void> | undefined, readySettled = false
+    const events: WatchNotification[] = []
+    let eventsAtReady: WatchNotification[] | undefined
+    a.subscribe(event => {
+      if (event.kind !== "reset" || event.reason !== "initial") return
+      closing = a.close(); void closing.catch(() => {})
+      b = service.acquire(selection)
+      b.subscribe(event => {
+        events.push(event)
+        if (event.kind === "changed" && event.changes.some(change => change.path === file)) changed.resolve()
+      })
+      void b.ready.then(() => { readySettled = true; eventsAtReady = [...events] }, () => { readySettled = true })
+      retired.resolve()
+    })
+    try {
+      await watchdog(retired.promise); await turns()
+      expect(readySettled).toBe(false); expect(events).toEqual([])
+      expect(observed.watchers).toHaveLength(1)
+      hold.resolve(); await closing
+      expect(await watchdog(b!.ready)).toEqual({ epoch: 2, revision: 1 })
+      expect(eventsAtReady).toEqual([{ kind: "reset", reason: "recovered", cursor: { epoch: 2, revision: 1 } }])
+      expect(observed.watchers).toHaveLength(2)
+      await writeFile(file, "replacement source"); await watchdog(changed.promise)
+      expect(await readFile(file, "utf8")).toBe("replacement source")
+    } finally { hold.resolve(); await service.close(); await temp.remove() }
+  })
+
   it("shares one backend, delivers to both leases, and keeps another service independent", async () => {
     const temp = await temporary(), file = join(temp.root, "shared.txt")
     const service = createFsWatchService(), other = createFsWatchService()
