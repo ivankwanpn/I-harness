@@ -1,0 +1,36 @@
+{
+  "utc": "2026-10-23T11:47:10.384Z",
+  "root": "C:\\Users\\inkik\\.codex\\worktrees\\context-host-transfer\\I-harness-main",
+  "base": "63d9b5dd89397aaece202bf903f5e689065e09a7",
+  "head": "3946af7755581c5ee3a3ca1be8dd53ed95a123a2",
+  "hashes": 507,
+  "blobs": 18,
+  "configs": 3,
+  "logs": [
+    {
+      "file": "final-core.log",
+      "sha256": "56c8d96679c14fa90138524f737b8f69879331786a96915754e940d37fbcf260",
+      "bytes": 1762,
+      "tail": " ✓ test/semantic-seed-omissions.test.ts (2 tests) 22ms\n ✓ test/semantic-seed-turns.test.ts (3 tests) 19ms\n ✓ test/legacy-result-projection.test.ts (8 tests) 22ms\n ✓ test/semantic-seed-codec.test.ts (2 tests) 8ms\n\n Test Files  17 passed (17)\n      Tests  190 passed (190)\n   Start at  19:41:54\n   Duration  4.17s (transform 657ms, setup 0ms, collect 3.08s, tests 1.18s, environment 2ms, prepare 1.64s)\n\n\n"
+    },
+    {
+      "file": "final-executor.log",
+      "sha256": "da9757e89436e03adf7a157734817a97ecbafb999cd5f92494812d17c8e70345",
+      "bytes": 1261,
+      "tail": " ✓ test/result-reader-lifetime.test.ts (4 tests) 568ms\n ✓ test/result-reader.test.ts (5 tests) 298ms\n ✓ test/retained-result-host.test.ts (1 test) 489ms\n   ✓ acquires the actual custom JSONL workspace result owner without a supplied Desktop service  488ms\n\n Test Files  5 passed (5)\n      Tests  19 passed (19)\n   Start at  19:42:00\n   Duration  12.68s (transform 3.26s, setup 0ms, collect 8.37s, tests 3.02s, environment 1ms, prepare 473ms)\n\n\n"
+    },
+    {
+      "file": "final-gateway.log",
+      "sha256": "f83208db2bf53e41ce29acbb7ca6acd2e4aaf89db9b5a5193154779ea403342a",
+      "bytes": 1244,
+      "tail": "   ✓ wires real fresh Gateway host semantic visibility and saved binding only after current catalog confirmation  323ms\n ✓ test/result-page.test.ts (17 tests) 2365ms\n ✓ test/project-scope-host.test.ts (2 tests) 220ms\n ✓ test/result-page-host.test.ts (1 test) 181ms\n\n Test Files  6 passed (6)\n      Tests  53 passed (53)\n   Start at  19:42:13\n   Duration  10.95s (transform 4.51s, setup 0ms, collect 12.75s, tests 4.82s, environment 1ms, prepare 598ms)\n\n\n"
+    },
+    {
+      "file": "stable-types.log",
+      "sha256": "879810ca370166c664e65eff4b2c5b58e741f58ce79a13dbdfba6a852d66ea9c",
+      "bytes": 273,
+      "tail": "UTC: 2026-10-23T11:42:24.8263084Z\nHEAD: 63d9b5dd89397aaece202bf903f5e689065e09a7\nCOMMAND: pnpm --filter @i-harness/core-session --filter @i-harness/session-executor --filter @i-harness/desktop-gateway typecheck\nEXIT: 0\n$ tsc --noEmit\n$ tsc --noEmit\n$ tsc --noEmit\n\n"
+    }
+  ],
+  "errors": []
+}

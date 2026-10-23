@@ -1,0 +1,278 @@
+{
+  "utc": "2026-10-23T12:13:58.157Z",
+  "root": "D:\\I-harness-main",
+  "base": "7ef8d71b76541b6311a9fa8364dbfe6f89f41869",
+  "head": "7706c2ea768af6da573ebb9abef75ef12aad4969",
+  "hashes": 4606,
+  "rootCompilerConfigFromFixManifest": "a92f2106b082ebb099e4de588fb38f85e04720b15881330cc9093eb9edc89fbb  tsconfig.base.json",
+  "changedFromOriginal": [
+    "packages/session-executor/src/service/result-reader.ts",
+    "packages/session-executor/test/result-reader-lifetime.test.ts"
+  ],
+  "bindings": [
+    {
+      "file": "packages/context-output/src/artifact/dependency-catalog.ts",
+      "committed": "5598f9d545fa94cb540c93ac964af578c8cb6a19",
+      "tested": "5598f9d545fa94cb540c93ac964af578c8cb6a19",
+      "sha256": "c476fa0c7ba00ed696a0ad60316069750268e8686692f9014b1844d066fb8d62"
+    },
+    {
+      "file": "packages/context-output/src/artifact/dependency-membership.ts",
+      "committed": "031ad240ebba118fe7c39f520aee810b3a55291e",
+      "tested": "031ad240ebba118fe7c39f520aee810b3a55291e",
+      "sha256": "dfd75098dd4e1d87f4339318b76fa9d9cc8bc1d0b1d08f96e9f4f981af1308f9"
+    },
+    {
+      "file": "packages/context-output/src/artifact/io.ts",
+      "committed": "7310b240a99339fbebfcd822c0439a52bf06d12f",
+      "tested": "7310b240a99339fbebfcd822c0439a52bf06d12f",
+      "sha256": "dcc5e1b2c27debe258f94084ae136499c1475183fa4e0741f0344cdfc7652b14"
+    },
+    {
+      "file": "packages/context-output/src/artifact/metadata-data.ts",
+      "committed": "24362d4a1a987cd044facacae5b7a8d1a5031a0d",
+      "tested": "24362d4a1a987cd044facacae5b7a8d1a5031a0d",
+      "sha256": "062962a8ff0ea29f7c487de7e9934731f8ee8d20fefc5f19cb6315f87ca98c73"
+    },
+    {
+      "file": "packages/context-output/test/dependency-catalog.test.ts",
+      "committed": "1725e63a48c17af0a40b782fa0fc18f4d0a7ddc3",
+      "tested": "1725e63a48c17af0a40b782fa0fc18f4d0a7ddc3",
+      "sha256": "fe1c6e06df4b36b3ac7ab3a8e417e4ea85b515e0ab6fba6448126666ad827b9a"
+    },
+    {
+      "file": "packages/context-output/test/dependency-foundations.test.ts",
+      "committed": "489692192f3f23bd51b1efa17c7ecb9e6d40d23a",
+      "tested": "489692192f3f23bd51b1efa17c7ecb9e6d40d23a",
+      "sha256": "5201ccfcf7c4096bd69ed7d7daf06ee8607cf36a28562d9ec890e81c64f236f0"
+    },
+    {
+      "file": "packages/context-output/test/immutable-metadata.test.ts",
+      "committed": "7816f2ca0bce705f784faddab913ebc2c98477b8",
+      "tested": "7816f2ca0bce705f784faddab913ebc2c98477b8",
+      "sha256": "441d41497cc4e3c3d93865587446d841bf8f5de61a85d992d6a67dc530bc25ac"
+    },
+    {
+      "file": "packages/core-session/src/conversation/history/facts.ts",
+      "committed": "b225b5b6a5e6efb6bc58da5f8ddf42d3bd1d6fca",
+      "tested": "b225b5b6a5e6efb6bc58da5f8ddf42d3bd1d6fca",
+      "sha256": "6a81a8b64218e3543e9f739127eac636557c80c56e480b62f65b99afcd1dff76"
+    },
+    {
+      "file": "packages/core-session/src/conversation/history/index.ts",
+      "committed": "dd83849529194fe2be82ae6b9e0ff9f78362b4cf",
+      "tested": "dd83849529194fe2be82ae6b9e0ff9f78362b4cf",
+      "sha256": "901471b2f348bec9f9d4ee49781d89687e0e04f589c608a212b5d549270a38ca"
+    },
+    {
+      "file": "packages/core-session/src/conversation/validation.ts",
+      "committed": "b714d1ac7fba20cad1f4164d9b241d391a42b4fc",
+      "tested": "b714d1ac7fba20cad1f4164d9b241d391a42b4fc",
+      "sha256": "c52eef73017fc9f0635ebe1761de4ff154719c87f1a5fc6a913af9a15ac70e91"
+    },
+    {
+      "file": "packages/core-session/src/index.ts",
+      "committed": "235650f49e47e23ce3249d5b96199c75122f2d4a",
+      "tested": "235650f49e47e23ce3249d5b96199c75122f2d4a",
+      "sha256": "94faa31278d312905c7280034ef75723ab5ff1f0f9bff1f09699b6a8e67d17aa"
+    },
+    {
+      "file": "packages/core-session/src/results/seed-refs.ts",
+      "committed": "5dff87243e9d0c4212ca719218e63a70159b3c09",
+      "tested": "5dff87243e9d0c4212ca719218e63a70159b3c09",
+      "sha256": "474c464f904242ec17030ee4f73248ba0e6060b1d7a8f07b36cf959e2af7e641"
+    },
+    {
+      "file": "packages/core-session/test/semantic-seed-result-refs.test.ts",
+      "committed": "35e21d1783fab646e8ac8e93cd22042ef3f7e7f6",
+      "tested": "35e21d1783fab646e8ac8e93cd22042ef3f7e7f6",
+      "sha256": "4b8d06c1cd9d42ab6a5c4e55aa3c39bd572bd0b2f25af1c8bf05f210585367c9"
+    },
+    {
+      "file": "packages/desktop-gateway/src/context-runtime.ts",
+      "committed": "b0ff926bf1d91b93ee6debf04648be0b346a717a",
+      "tested": "b0ff926bf1d91b93ee6debf04648be0b346a717a",
+      "sha256": "5fe59832c1ffa26b7d6b85bbd28badb8c52902fac6d548793b1354fd57d248ad"
+    },
+    {
+      "file": "packages/desktop-gateway/src/host.ts",
+      "committed": "080cca1c9d4f04ee673d902d079a37cbf7360470",
+      "tested": "080cca1c9d4f04ee673d902d079a37cbf7360470",
+      "sha256": "dda70d339582c8d046999b3113bd45f0848e8d05b602d36490d80508e8a4705c"
+    },
+    {
+      "file": "packages/desktop-gateway/src/project-scope.ts",
+      "committed": "bc089fb6be4ee869ba3f7215f65666c9e58ed833",
+      "tested": "bc089fb6be4ee869ba3f7215f65666c9e58ed833",
+      "sha256": "c8644884e9cb3e49c6bf54136f1ba3b88278753a1f067f9eaef46ce11ad9610a"
+    },
+    {
+      "file": "packages/desktop-gateway/test/context-runtime.test.ts",
+      "committed": "9b25191b6b4cea2fecb370d466328350d34deb48",
+      "tested": "9b25191b6b4cea2fecb370d466328350d34deb48",
+      "sha256": "7cfdde55e62e180500cf9defc302df150183bfb807f1410179d348de9db485b0"
+    },
+    {
+      "file": "packages/desktop-gateway/test/project-scope.test.ts",
+      "committed": "792d38f8e6693f8435d6af53d7bffc0edb533144",
+      "tested": "792d38f8e6693f8435d6af53d7bffc0edb533144",
+      "sha256": "165e81776e85bd06b8e9b6c01bcb16b3f065957a36a842098002cf9f36516685"
+    },
+    {
+      "file": "packages/desktop-gateway/test/result-page.test.ts",
+      "committed": "0da9f7992a8678b7912c964173e254bbed858abe",
+      "tested": "0da9f7992a8678b7912c964173e254bbed858abe",
+      "sha256": "c6a289cdbc32d8873643fdcf6d3e68f364970dd06b0579cb2ea028a61ddbd148"
+    },
+    {
+      "file": "packages/desktop-gateway/test/semantic-seed-result-read.test.ts",
+      "committed": "480304174af671ee2ccecbcfd3914720b199e91b",
+      "tested": "480304174af671ee2ccecbcfd3914720b199e91b",
+      "sha256": "94001c26f6a167309bf4e84d3fabbeca585a200f0eea8680c9cd61a58a031e90"
+    },
+    {
+      "file": "packages/llm-seam/src/prepared/bedrock-terminal.ts",
+      "committed": "b1a4174ffc67191c7e12aba115e87cb6ed862aae",
+      "tested": "b1a4174ffc67191c7e12aba115e87cb6ed862aae",
+      "sha256": "0bfd844eb175d644795b10c5d678001d9f78615f07286d02d63ecdc49340681b"
+    },
+    {
+      "file": "packages/llm-seam/src/prepared/http-terminal.ts",
+      "committed": "d00577583bbdd96b54d51fefa783bbbd6da1420b",
+      "tested": "d00577583bbdd96b54d51fefa783bbbd6da1420b",
+      "sha256": "90f1a608c34249cf005a478472060e06186b798f9df44ec8cdead8ac2c6f07c2"
+    },
+    {
+      "file": "packages/llm-seam/src/prepared/owned-terminal.ts",
+      "committed": "d42c49c145efd9df879d936f377448ae49883beb",
+      "tested": "d42c49c145efd9df879d936f377448ae49883beb",
+      "sha256": "25ada29fa8429862362bcde8e42d1e69b2f2d51e51e46387b4da91491301c2fb"
+    },
+    {
+      "file": "packages/llm-seam/src/prepared/owned-wrappers.ts",
+      "committed": "af33bab999d7a18a9d3ef63e5385dcd84311c9d9",
+      "tested": "af33bab999d7a18a9d3ef63e5385dcd84311c9d9",
+      "sha256": "4bd160a29b0d0326d4cbc9eadf0c3e599036de26eeef4797a9fe328c002da134"
+    },
+    {
+      "file": "packages/llm-seam/src/prepared/payload.ts",
+      "committed": "2726c15e4ec6b5757adf49f6d12a98b953ce52bb",
+      "tested": "2726c15e4ec6b5757adf49f6d12a98b953ce52bb",
+      "sha256": "255c96be75e8789406f6a49875e4baf9bbfed398b7f8497373b27bf993c11db9"
+    },
+    {
+      "file": "packages/llm-seam/test/owned-confirmation.test.ts",
+      "committed": "abb083037504aec27adf7ff01253f061daba66c1",
+      "tested": "abb083037504aec27adf7ff01253f061daba66c1",
+      "sha256": "56383042c55b0355be66533202cb0f30fb1e1608ae6c3fc6585d118d1645c03c"
+    },
+    {
+      "file": "packages/llm-seam/test/terminal-ownership-contract.test.ts",
+      "committed": "00e990314b77811aef06cf0799014f80fc40119f",
+      "tested": "00e990314b77811aef06cf0799014f80fc40119f",
+      "sha256": "23fae0d12fe47be55383913f08575339b79e885ccfac74286afe7961af169ad9"
+    },
+    {
+      "file": "packages/session-executor/src/index.ts",
+      "committed": "c48bd57b1e9863cf81371e15420b156d50b65275",
+      "tested": "c48bd57b1e9863cf81371e15420b156d50b65275",
+      "sha256": "5f90932294e71dbb0345c55af1f605af7c940ba3cc51b06973fc89bed79aba7b"
+    },
+    {
+      "file": "packages/session-executor/src/lifecycle/result-store.ts",
+      "committed": "92d47ab1a0f452be04d74e82dcbde788bd75cbdc",
+      "tested": "92d47ab1a0f452be04d74e82dcbde788bd75cbdc",
+      "sha256": "0c72012d0d8da43eadec945382d3ed637910c651528bcf0d25dc71d086276956"
+    },
+    {
+      "file": "packages/session-executor/src/service.ts",
+      "committed": "5b6047f7e4a4abf702861dd80b2cfca3aa960ef9",
+      "tested": "5b6047f7e4a4abf702861dd80b2cfca3aa960ef9",
+      "sha256": "068414632f9472785a7056ba15e1cb344ffffe4cfe03d0b554c81bb53cf6f21f"
+    },
+    {
+      "file": "packages/session-executor/src/service/result-reader.ts",
+      "committed": "2ace98da55943ad805d19249e0541dd0090d42a8",
+      "tested": "2ace98da55943ad805d19249e0541dd0090d42a8",
+      "sha256": "e8c094e11f737bc87933b2c104825b7a1bfd8530bf933c45894050a84e77498b"
+    },
+    {
+      "file": "packages/session-executor/test/native-dependency-membership.test.ts",
+      "committed": "adfbe4efcc5214b880f38724ccef45729f210355",
+      "tested": "adfbe4efcc5214b880f38724ccef45729f210355",
+      "sha256": "08791300557b9ddf3cf8773ad9fd1cb62075a558f0bd792f3d01f53a7d64b07c"
+    },
+    {
+      "file": "packages/session-executor/test/result-reader-lifetime.test.ts",
+      "committed": "25011f5f4bc6842d31f9ad077cc476026f838697",
+      "tested": "25011f5f4bc6842d31f9ad077cc476026f838697",
+      "sha256": "23783a373f05d39b45a819931f4b448754f462025a679bfd6726e654436d9fd9"
+    },
+    {
+      "file": "packages/session-executor/test/result-store-read.test.ts",
+      "committed": "c3b00cb3e4c6dea9176f83278b7c05c198f0bd59",
+      "tested": "c3b00cb3e4c6dea9176f83278b7c05c198f0bd59",
+      "sha256": "418da3dc0cea81892b8945280dea42c0040ddb6d3bfbe167a0efc0523b24101f"
+    }
+  ],
+  "logs": [
+    {
+      "file": "context-output-isolated.log",
+      "expectedExit": 0,
+      "sha256": "c9c769c9b048d79361a2024fd53fd95e81b098f7351b2f3cfd393298a86f4ba9",
+      "bytes": 3132
+    },
+    {
+      "file": "executor-final.log",
+      "expectedExit": 0,
+      "sha256": "3c3d61643544075971170420dfb2f0fb14a1a7a47d52a3d43dcce751e8da9001",
+      "bytes": 2774
+    },
+    {
+      "file": "gateway-final.log",
+      "expectedExit": 0,
+      "sha256": "519da320946c42e97d6baac481a3eea498a97d5eb0c4fb220a2e4d61aea4413e",
+      "bytes": 1460
+    },
+    {
+      "file": "core-refs-final.log",
+      "expectedExit": 0,
+      "sha256": "11ece337778326da917a334f86b7f30ba1b12e2f628ff818cc484373f030d8d7",
+      "bytes": 566
+    },
+    {
+      "file": "seam-final.log",
+      "expectedExit": 0,
+      "sha256": "7e90042f4f43e907a43c1152ebab6961ff3a515662299a4e1244f674de482594",
+      "bytes": 818
+    },
+    {
+      "file": "calibration-final.log",
+      "expectedExit": 0,
+      "sha256": "e94c5562e7c9c8f39f83bedaa89c68a53cbdd2c7ea687492963f4b36bb9d36a5",
+      "bytes": 559
+    },
+    {
+      "file": "types-final.log",
+      "expectedExit": 0,
+      "sha256": "c7bfc2a5352b3549978ab2b0ad67021e96f2322863760e4ed5c5cd4fe1f7567b",
+      "bytes": 475
+    },
+    {
+      "file": "reachability-final.log",
+      "expectedExit": 1,
+      "sha256": "f2711e38071669a10c606fa7f5c07c60498fcd64a8aba82fc07eb86f7e3d3092",
+      "bytes": 8306
+    }
+  ],
+  "stagedReachabilityRows": [
+    "  new  unused-export\t@i-harness/core-session#exportConversationSeed\tpackages/core-session/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapCallerMetadata\tpackages/session-persistence/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapDependencyPort\tpackages/session-persistence/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapInitial\tpackages/session-persistence/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapLineage\tpackages/session-persistence/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapReceipt\tpackages/session-persistence/src/index.ts",
+    "  new  unused-export\t@i-harness/session-persistence#BootstrapTarget\tpackages/session-persistence/src/index.ts"
+  ],
+  "errors": []
+}
