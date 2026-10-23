@@ -41,7 +41,13 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
           // on this attempt, without entering accepted calibration. The outer
           // catch retains the original failure if reporting itself fails.
           const failedStep = streamStep.result()
-          if (Object.keys(failedStep.stepUsage).length) reportModelUsage(deps, failedStep)
+          if (Object.keys(failedStep.stepUsage).length) {
+            try { reportModelUsage(deps, failedStep) }
+            catch (reporting) {
+              // Billing observers cannot skip the already-owned local audit.
+              await streamStep.fail(savingFailure(error, [reporting], 'model usage reporting failed'))
+            }
+          }
           const failure = modelFailureFacts(error)
           if (["AUTH", "INVALID_API_KEY"].includes(failure?.code ?? (error as { code?: string })?.code ?? "")) context.ownedBudget.retire("execution-identity-changed")
           const handoff = candidate.execution.handoff()

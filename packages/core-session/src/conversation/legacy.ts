@@ -1,3 +1,4 @@
+import { failedAuditEvidence } from './history/failed-audit.ts'
 import type { ConversationCall, ConversationDiagnostic } from "./types.ts"
 import type { ConversationSources } from "./sources.ts"
 import { historyEntries, type HistoryArchive, type HistoryFact } from "./history/facts.ts"
@@ -16,6 +17,7 @@ export interface LegacyStep {
   explicitRegion?: boolean
   acceptance?: ExchangeAcceptedEvent
   acceptanceIndex?: number
+  failedAudit?: { readonly failureIndex: number; readonly endIndex: number }
 }
 
 /** Legacy evidence and failure prepass; it never constructs model messages. */
@@ -113,6 +115,7 @@ export function inferLegacy(session: HistoryArchive, visibility: HistoryVisibili
       outcome: ambiguous || dispatchIndices.length > 1 ? "unknown" : recordedOutcome(result, dispatchIndices.length > 0, !!step?.failed, !!step?.ended, dispatches.size > 0),
     }
   }
+  for (const [step, evidence] of failedAuditEvidence(session, steps, visibility, sources)) step.failedAudit = evidence
   return { calls, results, steps, stepByEvent, suppressedCalls, suppressedAssistants, unacceptedResults, fenceIndex, callMetadata }
 }
 

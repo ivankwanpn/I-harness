@@ -1,3 +1,4 @@
+import { retainRetryFailure } from './failure.ts'
 import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { ModelClient, LLMRequest, LLMStreamEvent, ModelRetryInfo } from '../index.ts'
@@ -78,7 +79,7 @@ function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolic
           ...(metadata?.modelId === undefined ? {} : { modelId: metadata.modelId.slice(0, 256) }),
           ...(request.retryOutput === "discard" ? { discardOutput: true as const } : {}),
         }
-        yield { type: "retry", retry: recovery }
+        yield retainRetryFailure({ type: "retry", retry: recovery }, failure)
         request.signal?.throwIfAborted()
         await delay(Math.max(0, recovery.nextAttemptAt! - Date.now()), undefined, { signal: request.signal })
         continue

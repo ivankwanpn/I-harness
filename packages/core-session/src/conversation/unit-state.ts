@@ -4,10 +4,12 @@ export interface UnitLifecycle {
   readonly ended: boolean
   readonly failed: boolean
   readonly suppressed: boolean
+  readonly failedAudit?: { readonly failureIndex: number; readonly endIndex: number }
 }
 
 /** Lifecycle and recorded outcomes only; no execution or dispatch inference. */
 export function physicalUnitState(step: UnitLifecycle, calls: readonly ConversationCall[]): ConversationUnitState {
+  if (step.failedAudit) return 'closed'
   if (step.failed || step.suppressed && step.ended) return 'unresolved'
   if (!step.ended) return 'open'
   return calls.some(call => !call.result || call.outcome === 'pending' || call.outcome === 'unknown') ? 'unresolved' : 'closed'

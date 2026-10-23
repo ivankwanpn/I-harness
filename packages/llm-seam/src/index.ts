@@ -440,3 +440,5 @@ export type { GenerationControl, GenerationReservation, GenerationIssue } from '
 export type { AuxiliaryGenerationAction, ApprovalGenerationAction, TitleGenerationFactory, MediaGenerationAction, ToolModelGeneration, ApprovalGenerationFactory, CodeGenerationLineage, CodeGenerationScope } from './prepared/auxiliary.ts'
 
 export { preparedExecutionSource } from './prepared/owned-terminal.ts'
+
+export { consumeRetryFailure } from './retry/failure.ts'

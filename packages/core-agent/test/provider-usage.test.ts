@@ -159,17 +159,20 @@ describe("core-agent provider usage (M5 T2)", () => {
   })
 
   it('does not report a retry attempt twice when its usage observer fails before reset completes', async () => {
-    const ctx = createContext(), session = createSession(), observation = new Error('usage observer failed')
+    const ctx = createContext(), session = createSession(), observation = new Error('usage observer failed'), original = Object.assign(new Error('temporary failure'), { code: 'SERVER' })
     let sends = 0, reports = 0
     const model = createRetryingClient({ async *stream() {
       sends++
       yield { type: 'usage', usage: { inputTokens: 12 } }
-      yield { type: 'error', error: Object.assign(new Error('temporary failure'), { code: 'SERVER' }) }
+      yield { type: 'error', error: original }
     } }, resolveRetryPolicy({ mode: 'normal', maxRetries: 1 }))
     const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry: {
       emit(event) { if (event.type === 'provider/usage') { reports++; throw observation } }, close() {},
     } })
-    await expect(agent.run('fail')).rejects.toBe(observation)
+    const failure = await agent.run('fail').catch(error => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.cause).toBe(original)
+    expect(failure.errors).toEqual([original, observation])
     expect(reports).toBe(1)
     expect(sends).toBe(1)
     expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage')).toEqual([])

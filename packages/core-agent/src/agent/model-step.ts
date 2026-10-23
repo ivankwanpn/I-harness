@@ -1,7 +1,7 @@
 import { agentFacts, committedFactSeqs } from "./facts.ts"
 import { publishTransient, type ModelActivityInfo } from "@i-harness/core-session"
 import type { LLMStreamEvent, LLMUsage } from "@i-harness/llm-seam"
-import { modelFailureFacts } from "@i-harness/llm-seam"
+import { modelFailureFacts, consumeRetryFailure } from "@i-harness/llm-seam"
 import type { BatchCall } from "../execute-tool-calls.ts"
 import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import { createStepReasoning } from "./reasoning.ts"
@@ -23,6 +23,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
   let toolCallsThisStep = 0
   // Reports merge within this attempt; a discarded retry resets usage.
   let stepUsage: LLMUsage = {}
+  let usageReported = false
   const reasoningStart = reasoning.length
   const batch: BatchCall[] = []
   // Endings belong to this step. Truncated and refused are independent bits;
@@ -35,25 +36,38 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
   let modelActivity: ModelActivityInfo | undefined
   let modelFailed = false
   let providerEnded = false
-  async function discard(notDispatched: boolean) {
+  let failedSettlement: Promise<void> | undefined
+  function discard() {
+    return failedSettlement ??= settleFailedAttempt().catch(error => {
+      // A backend-proven absence still owns this captured audit operation.
+      // Keep optional work fenced until its existing source can settle it.
+      deps.sourceFacts?.holdRecovery()
+      throw error
+    })
+  }
+  async function settleFailedAttempt() {
     modelFailed = true
+    const failedBatch = [...batch], failedText = stepText
+    const nativeThinking = thinkingBlocks, nativeContinuation = providerContinuation
+    // Retain all local outcomes before the first awaited save. If an audit
+    // acknowledgment is lost, the existing source can finish these exact
+    // captures after reconciliation without recreating the failed attempt.
+    const results = failedBatch.map(call => {
+      const event = { type: "tool/result" as const, callId: call.callId, name: call.name, isError: true as const,
+        output: { code: TOOL_ABORTED_BEFORE_DISPATCH, error: "Model attempt was not accepted; tool call was not dispatched" } }
+      return deps.sourceFacts?.tools.captureResult(event) ?? { admit: () => agentFacts(deps).tools.result(event) }
+    })
     await stepReasoning.flush()
-    if (stepText || thinkingBlocks?.length || providerContinuation || truncatedThisStep || refusedThisStep) {
-      committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) }))
+    if (failedText || nativeThinking?.length || nativeContinuation || truncatedThisStep || refusedThisStep) {
+      committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: failedText, ...(nativeThinking?.length ? { thinkingBlocks: nativeThinking } : {}), ...(nativeContinuation ? { providerContinuation: nativeContinuation } : {}) }))
     }
-    if (notDispatched) for (const call of batch) {
-      // This batch never entered the scheduler. Do not synthesize outcomes for
-      // any earlier/unknown dispatched work.
-      committedFactSeqs(await (deps.sourceFacts?.tools ?? agentFacts(deps).tools).result({ type: "tool/result", callId: call.callId, name: call.name, isError: true,
-        output: { code: TOOL_ABORTED_BEFORE_DISPATCH, error: "Model attempt was not accepted; tool call was not dispatched" } }))
-    }
-    stepText = ""
-    reasoning.length = reasoningStart
+    for (const result of results) committedFactSeqs(await result.admit())
     await failStepBoundary(deps,lifecycle)
+    await closeStepBoundary(deps,lifecycle,{type:'step/end', ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {})})
   }
   return {
     confirm(received: import("@i-harness/llm-seam").ExecutionReceipt) { receipt = { ...received, actionId, attemptId } },
-    discard() { return discard(true) },
+    discard,
     async accept(ev: LLMStreamEvent) {
       // Billing observations may finish crossing the stream boundary after
       // Stop. Accumulate them on this original attempt without publishing
@@ -79,14 +93,19 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
           if (!providerEnded && ev.retry.phase === "waiting" && reopenedRetry !== `${ev.retry.requestId}:${ev.retry.attempt}`) {
             if ((stepText || batch.length) && !ev.retry.discardOutput) throw new Error("model retry cannot preserve partial output")
             reopenedRetry = `${ev.retry.requestId}:${ev.retry.attempt}`
-            const failedUsage = stepUsage
+            const originalFailure = consumeRetryFailure(ev)
+            try {
+              // Mark delivery before invoking an observer: a throwing sink
+              // must not cause the response catch to report these counters twice.
+              usageReported = true
+              if (Object.keys(stepUsage).length) reportModelUsage(deps, { stepUsage })
+              await discard()
+            } catch (saving) {
+              if (originalFailure) throw savingFailure(originalFailure.failure, [saving], 'model retry settlement failed')
+              throw saving
+            }
             stepUsage = {}
-            if (Object.keys(failedUsage).length) reportModelUsage(deps, { stepUsage: failedUsage })
-            // Keep failed output in the append-only audit, but exclude it
-            // and its unexecuted calls from the next model projection.
-            if (stepText) committedFactSeqs(await (deps.sourceFacts?.lifecycle ?? agentFacts(deps).agent).auditAssistant({ type: "assistant/message", text: stepText }))
-            await failStepBoundary(deps,lifecycle)
-            await closeStepBoundary(deps,lifecycle,{type:'step/end'})
+            usageReported = false
             stepText = ""
             toolCallsThisStep = 0
             batch.length = 0
@@ -102,6 +121,8 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
             attemptId = randomUUID()
             stepStartSeq = committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "step/start", actionId, attemptId }))[0]!
             openStepBoundary(lifecycle)
+            failedSettlement = undefined
+            modelFailed = false
           }
           committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "model/retry", version: 1, ts: Date.now(), retry: ev.retry }))
           break
@@ -118,12 +139,15 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
         }
         case "error": {
           const modelFailure = modelFailureFacts(ev.error)
-          deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: modelFailure?.message ?? "Model request failed.", ...(modelFailure ? { modelFailure } : {}) } })
-          throw Object.assign(new Error(`model stream error: ${ev.error.message}`, { cause: ev.error }), {
+          const failure = Object.assign(new Error(`model stream error: ${ev.error.message}`, { cause: ev.error }), {
             code: (ev.error as Error & { code?: string }).code,
             httpStatus: (ev.error as Error & { httpStatus?: number }).httpStatus,
             ...(modelFailure ? { modelFailure } : {}),
           })
+          try {
+            deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: modelFailure?.message ?? "Model request failed.", ...(modelFailure ? { modelFailure } : {}) } })
+          } catch (reporting) { throw savingFailure(failure, [reporting], 'model error reporting failed') }
+          throw failure
         }
         case "end":
           if (providerEnded && endFingerprint !== JSON.stringify(ev)) throw Object.assign(new Error("Conflicting model completion records"), { code: "MODEL_RESPONSE_INCOMPLETE" })
@@ -145,7 +169,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
       }
     },
     async fail(error: unknown): Promise<never> {
-      try { await discard(false) }
+      try { await discard() }
       catch (saving) {
         throw savingFailure(error, [saving], 'model attempt saving failed')
       }
@@ -157,7 +181,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
       }
       await stepReasoning.flush()
     },
-    result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
+    result() { return { receipt, stepText, toolCallsThisStep, batch, stepUsage: usageReported ? {} : stepUsage, truncatedThisStep, refusedThisStep, thinkingBlocks, providerContinuation, providerEnded, identity: { actionId, attemptId, stepStartSeq } } },
   }
 }
 

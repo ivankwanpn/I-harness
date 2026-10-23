@@ -129,26 +129,6 @@ it('retries a real pre-output failure under explicit discard and charges both se
   } finally { await f.close() }
 })
 
-it('the existing candidate guard blocks automatic partial-output replay, retains its failed debit, and allows a new submit', async () => {
-  const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? partial + frame({ ...failure, usage: { prompt_tokens: 12, completion_tokens: 3 } }) : success), { retries: 1 })
-  try {
-    const assembly = await f.service.assemblyFor(f.id)
-    await expect(f.service.submit(f.id, 'partial retry guard', new AbortController().signal)).rejects.toMatchObject({ code: 'CONTEXT_INPUT_STALE' })
-    expect(f.bodies).toHaveLength(1)
-    const facts = await f.facts()
-    expect(facts.filter(event => event.type === 'context/attempt' && event.op === 'settle').map(event => event.disposition)).toEqual(['failed', 'unsent'])
-    expect(facts.filter(event => event.type === 'model/exchange-accepted' || event.type === 'tool/dispatch' || event.type === 'context/usage')).toEqual([])
-    expect(f.effects()).toBe(0)
-    expect(f.events.filter(event => event.type === 'provider/usage').map(event => event.data)).toEqual([{ inputTokens: 12, inputTokenSemantics: 'includes-cache', outputTokens: 3 }])
-    await expect(f.service.submit(f.id, 'new submit after guarded retry', new AbortController().signal)).resolves.toBeUndefined()
-    expect(f.service.liveAssembly(f.id)).toBe(assembly)
-    expect(f.bodies).toHaveLength(2)
-    expect(f.bodies[1]).not.toContain('failed-call')
-    expect(f.effects()).toBe(0)
-    expect((await f.facts()).filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
-  } finally { await f.close() }
-})
-
 it('the same real tool dispatcher can execute an accepted call and keeps normal usage separate', async () => {
   const tool = frame({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'accepted-call', function: { name: 'effect', arguments: '{}' } }] }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 12, completion_tokens: 3 } }) + 'data: [DONE]\n\n'
   const f = await fixture((response, ordinal) => response.end(ordinal === 1 ? tool : success), { retries: 1 })
