@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { BootstrapDependencyRequest, ManagedArtifactRef, ResultDependency } from '@i-harness/core-session'
@@ -8,7 +9,7 @@ import type { SeedDependencyHostAccess } from '../src/index.ts'
 import { createTransferClosure } from '../src/artifact/transfer-closure.ts'
 import { structureEvidence } from './structure-evidence.ts'
 
-const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', afterRead: undefined as undefined | ((path: string) => void), mutations: 0 }))
+const controls = vi.hoisted(() => ({ reads: [] as string[], cutPath: '', cut: '', afterRead: undefined as undefined | ((path: string) => void), afterReaddir: undefined as undefined | ((path: string) => void), mutations: 0 }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, open: async (...args: Parameters<typeof fs.open>) => {
@@ -22,25 +23,29 @@ vi.mock('node:fs/promises', async original => {
     if (String(args[1]) === controls.cutPath && controls.cut === 'link') throw new Error('link cut')
     await fs.link(...args)
     if (String(args[1]) === controls.cutPath && controls.cut === 'response') throw new Error('link response cut')
-  }, unlink: async (...args: Parameters<typeof fs.unlink>) => { controls.mutations++; return fs.unlink(...args) } }
+  }, unlink: async (...args: Parameters<typeof fs.unlink>) => { controls.mutations++; return fs.unlink(...args) },
+  readdir: async (...args: Parameters<typeof fs.readdir>) => { const result = await fs.readdir(...args); controls.afterReaddir?.(String(args[0])); return result } }
 })
 const evidence = resolve(structureEvidence('.tmp/context-transfer-artifact-20261023'), 'bootstrap-transfer')
 await mkdir(evidence, { recursive: true })
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-afterEach(() => Object.assign(controls, { reads: [], cutPath: '', cut: '', afterRead: undefined, mutations: 0 }))
+afterEach(() => Object.assign(controls, { reads: [], cutPath: '', cut: '', afterRead: undefined, afterReaddir: undefined, mutations: 0 }))
 
-async function fixture(extra = 0, ownerPath?: string, prefix = 'original-') {
+async function fixture(extra = 0, ownerPath?: string, prefix = 'original-', ownerSources: { catalog?: string; member?: string } = {}) {
   const root = await mkdtemp(resolve(evidence, prefix)), workspaceId = 'transfer-workspace'
-  let source = true, target = true, sourcePolicy = true, targetPolicy = true, revision = 'target-rev-1', sourceCalls = 0
+  let source = true, target = true, sourcePolicy = true, targetPolicy = true, targetThrows = false, revision = 'target-rev-1', sourceCalls = 0, targetReadCalls = 0
+  let deniedRelation: string | undefined
   let deleted!: (documents: readonly string[]) => Promise<void>
   const service = createContextOutputService({ root, workspaceId, documentDeletions: listener => { deleted = listener; return () => {} }, authorizeResult: (access, metadata) => {
     if (access.sessionId === 'parent') sourceCalls++
+    if (access.sessionId !== 'parent' && access.sessionId !== 'producer') { targetReadCalls++; if (targetThrows) throw Error('incomplete target has no public snapshot') }
+    if (access.sessionId === 'parent' && metadata.visibleVia && `${metadata.ref.id}:${metadata.visibleVia.id}` === deniedRelation) return false
     return access.sessionId === 'producer' || (access.sessionId === 'parent' ? source && sourcePolicy : target && targetPolicy)
       && (metadata.ref.codec === 'json-utf8-v1' || !!metadata.visibleVia)
   } })
   const members: ManagedArtifactRef[] = []
   for (const n of [0, 1]) {
-    const scope = service.registerResultScope({ operationId: `member-${n}`, sessionId: 'producer', callId: `exec-${n}`, source: { sourceId: 'original-project' } }, () => true)
+    const scope = service.registerResultScope({ operationId: `member-${n}`, sessionId: 'producer', callId: `exec-${n}`, source: { sourceId: ownerSources.member ?? 'original-project' } }, () => true)
     const sink = await service.beginResult(scope, 'exec-frames-v1')
     await sink.write(Buffer.from('IHEXEC01\n{"channel":"stdout","frame":0,"offset":0,"end":true,"data":"eA=="}\n'))
     const result = await sink.finish('complete'); if (result.kind !== 'committed') throw Error('fixture member refused')
@@ -53,7 +58,7 @@ async function fixture(extra = 0, ownerPath?: string, prefix = 'original-') {
     { kind: 'exec-frames', sourceId: 'native-alias', retention: { kind: 'artifact', ref: members[0]! } },
     ...Array.from({ length: extra }, (_, n): ResultDependency => ({ kind: 'exec-frames', sourceId: `extra-${n}`, retention: { kind: 'artifact', ref: members[0]! } })),
   ]
-  const owner = { operationId: 'original-catalog', sessionId: 'parent', callId: 'observe', source: { sourceId: 'original-project', ...(ownerPath ? { path: ownerPath } : {}) } }
+  const owner = { operationId: 'original-catalog', sessionId: 'parent', callId: 'observe', source: { sourceId: ownerSources.catalog ?? 'original-project', ...(ownerPath ? { path: ownerPath } : {}) } }
   const scope = service.registerResultDependencyScope(owner, () => true, entries), sink = await service.beginResult(scope, 'json-utf8-v1')
   await sink.write(Buffer.from(JSON.stringify({ version: 1, kind: 'result-dependencies', entries })))
   const catalog = await sink.finish('complete'); if (catalog.kind !== 'committed') throw Error('fixture catalog refused')
@@ -62,12 +67,13 @@ async function fixture(extra = 0, ownerPath?: string, prefix = 'original-') {
   const binding = { operationId: request.operationId, sourceSessionId: request.sourceSessionId, targetSessionId: request.targetSessionId, targetDocumentId: request.targetSessionId, manifestDigest: request.manifestDigest }
   const access = { binding, sourceAccess: { sessionId: 'parent' }, sourceAvailable: () => source,
     assertSourceCurrent: () => { sourceCalls++; if (!source) throw Error('source revoked') }, targetAvailable: () => target,
-    targetScope: () => ({ source: { sourceId: 'target-project' }, revision }), assertTargetCurrent: () => { if (!target) throw Error('target revoked') } }
+    targetScope: () => ({ source: { sourceId: 'original-project' }, revision }), assertTargetCurrent: () => { if (!target) throw Error('target revoked') } }
   const directory = (ref: ManagedArtifactRef) => resolve(root, 'context-output', sha(workspaceId), 'managed-v1', ref.id)
   const pin = (ref: ManagedArtifactRef, session = 'child') => resolve(directory(ref), 'pins', sha(session) + '.json')
   const companion = (ref: ManagedArtifactRef, session = 'child') => resolve(directory(ref), 'pin-memberships', sha(session), sha(JSON.stringify([catalog.ref.id, catalog.ref.revision])) + '.json')
   return { root, workspaceId, service, members, entries, owner, catalog: catalog.ref, request, binding, access, directory, pin, companion, deleted,
-    revokeSource: () => { source = false }, revokeTarget: () => { target = false }, denySourcePolicy: () => { sourcePolicy = false }, denyTargetPolicy: () => { targetPolicy = false }, setRevision: (value: string) => { revision = value }, sourceCalls: () => sourceCalls }
+    revokeSource: () => { source = false }, revokeTarget: () => { target = false }, denySourcePolicy: () => { sourcePolicy = false }, denyTargetPolicy: () => { targetPolicy = false }, throwTargetPolicy: () => { targetThrows = true }, targetReadCalls: () => targetReadCalls,
+    denySourceRelation: (member: ManagedArtifactRef, catalog: ManagedArtifactRef) => { deniedRelation = `${member.id}:${catalog.id}` }, setRevision: (value: string) => { revision = value }, sourceCalls: () => sourceCalls }
 }
 
 it('existing ordinary grant retains bytes but cannot transfer original catalog membership (behavioral baseline)', async () => {
@@ -241,7 +247,7 @@ it('returns typed unavailable for an oversized original catalog owner without pu
   } finally { await f.service.close() }
 })
 
-it('uses the actual source and target authorizer independently of physical retention', async () => {
+it('keeps source authorization and target staging capability separate from ordinary body-read policy', async () => {
   const f = await fixture()
   try {
     f.denySourcePolicy()
@@ -252,12 +258,126 @@ it('uses the actual source and target authorizer independently of physical reten
   const g = await fixture()
   try {
     const scope = g.service.registerSeedDependencyTransfer(g.access)
-    expect((await g.service.confirmSeedDependencies(scope, g.request, () => true)).kind).toBe('confirmed')
+    const confirmed = await g.service.confirmSeedDependencies(scope, g.request, () => true)
+    expect(confirmed.kind).toBe('confirmed')
     const bytes = await readFile(g.pin(g.catalog)); g.denyTargetPolicy()
-    expect(await g.service.reconcileSeedDependencies(scope, g.request)).toEqual({ kind: 'blocked', reason: 'policy' })
+    // T-07: ordinary read visibility is not pre-READY staging authority. Keep
+    // the real read denial, and independently revoke the captured capability.
+    expect(await g.service.reconcileSeedDependencies(scope, g.request)).toEqual(confirmed)
     expect(await readFile(g.pin(g.catalog))).toEqual(bytes)
     await expect(g.service.readExecResult({ sessionId: 'child' }, { ref: g.members[0]!, viaCatalog: g.catalog })).rejects.toThrow(/unauthorized/)
+    g.revokeTarget()
+    expect(await g.service.reconcileSeedDependencies(scope, g.request)).toEqual({ kind: 'blocked', reason: 'policy' })
   } finally { await g.service.close() }
+})
+
+it.each(['deny', 'throw'] as const)('stages with the captured target capability while ordinary target reads %s before readiness', async mode => {
+  const f = await fixture()
+  try {
+    if (mode === 'deny') f.denyTargetPolicy(); else f.throwTargetPolicy()
+    const scope = f.service.registerSeedDependencyTransfer(f.access), calls = f.targetReadCalls()
+    const confirmed = await f.service.confirmSeedDependencies(scope, f.request, () => true)
+    expect(confirmed.kind).toBe('confirmed')
+    expect(f.targetReadCalls()).toBe(calls)
+    expect(await f.service.reconcileSeedDependencies(scope, f.request)).toEqual(confirmed)
+    expect(f.targetReadCalls()).toBe(calls)
+    await expect(f.service.readExecResult({ sessionId: 'child' }, { ref: f.members[0]!, viaCatalog: f.catalog })).rejects.toThrow(mode === 'deny' ? /unauthorized/ : /incomplete target/)
+    expect(f.targetReadCalls()).toBeGreaterThan(calls)
+  } finally { await f.service.close() }
+})
+
+it.each(['catalog', 'member'] as const)('blocks an original %s source identity incompatible with the captured target even when source reads permit it', async mismatch => {
+  const f = await fixture(0, undefined, 'original-', { [mismatch]: 'other-original-source' })
+  try {
+    expect(await f.service.readExecResult({ sessionId: 'parent' }, { ref: f.members[0]!, viaCatalog: f.catalog })).toMatchObject({ frames: [{ data: 'eA==' }] })
+    expect(await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)).toEqual({ kind: 'blocked', reason: 'policy' })
+    await expect(readFile(f.pin(f.catalog))).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { await f.service.close() }
+})
+
+it('preserves legacy source-less root authority without inventing an original source', async () => {
+  const f = await fixture()
+  try {
+    const sink = await f.service.beginResult(f.service.registerResultScope({ operationId: 'legacy-source-less', sessionId: 'parent', callId: 'legacy' }, () => true), 'text-utf8-v1')
+    await sink.write(Buffer.from('legacy original'))
+    const result = await sink.finish('complete'); if (result.kind !== 'committed') throw Error('legacy root fixture refused')
+    expect(await f.service.readResult({ sessionId: 'parent' }, { ref: result.ref })).toMatchObject({ data: { kind: 'text', text: 'legacy original' } })
+    const request = { ...f.request, artifacts: [{ ref: result.ref, origins: [], uses: [{ kind: 'result' as const }] }] }
+    f.throwTargetPolicy()
+    const confirmed = await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), request, () => true)
+    expect(confirmed.kind).toBe('confirmed')
+    expect(JSON.parse(await readFile(resolve(f.directory(result.ref), 'operation.json'), 'utf8')).owner).not.toHaveProperty('source')
+    expect(await f.service.readResult({ sessionId: 'child' }, { ref: result.ref })).toMatchObject({ data: { kind: 'text', text: 'legacy original' } })
+  } finally { await f.service.close() }
+})
+
+it('renews NEW source authorization after quota preflight before the first target mutation', async () => {
+  const f = await fixture()
+  try {
+    const inventory = await readdir(resolve(f.directory(f.catalog), '..'), { recursive: true }), mutations = controls.mutations
+    let denied = false
+    controls.afterReaddir = path => { if (path === resolve(f.directory(f.catalog), '../..')) { denied = true; f.denySourcePolicy() } }
+    expect(await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), f.request, () => true)).toEqual({ kind: 'blocked', reason: 'policy' })
+    expect(denied).toBe(true); expect(controls.mutations).toBe(mutations)
+    expect(await readdir(resolve(f.directory(f.catalog), '..'), { recursive: true })).toEqual(inventory)
+  } finally { controls.afterReaddir = undefined; await f.service.close() }
+})
+
+it('blocks the reviewed late source-policy denial after the first real target pin publication without rolling it back', async () => {
+  const f = await fixture()
+  try {
+    const scope = f.service.registerSeedDependencyTransfer(f.access)
+    let denied = false
+    controls.afterRead = path => { if (path === f.pin(f.catalog)) { denied = true; f.denySourcePolicy() } }
+    expect(await f.service.confirmSeedDependencies(scope, f.request, () => true)).toEqual({ kind: 'blocked', reason: 'policy' })
+    expect(denied).toBe(true); controls.afterRead = undefined
+    const pin = await readFile(f.pin(f.catalog)), calls = f.sourceCalls(), mutations = controls.mutations
+    expect(JSON.parse(pin.toString())).toMatchObject({ operationId: 'original-catalog', state: 'committed', seedTransfer: f.binding })
+    await expect(readFile(f.pin(f.members[0]!))).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await f.service.reconcileSeedDependencies(scope, f.request)).toEqual({ kind: 'blocked', reason: 'unavailable' })
+    expect(await readFile(f.pin(f.catalog))).toEqual(pin)
+    expect(f.sourceCalls()).toBe(calls); expect(controls.mutations).toBe(mutations)
+  } finally { controls.afterRead = undefined; await f.service.close() }
+})
+
+it('renews each member-via-catalog relation when a shared member loses visibility during an unrelated root publication', async () => {
+  const f = await fixture()
+  try {
+    const original = f.service.registerResultDependencyScope({ ...f.owner, operationId: 'another-original-catalog' }, () => true, f.entries)
+    const sink = await f.service.beginResult(original, 'json-utf8-v1')
+    await sink.write(Buffer.from(JSON.stringify({ version: 1, kind: 'result-dependencies', entries: f.entries })))
+    const result = await sink.finish('complete'); if (result.kind !== 'committed') throw Error('second original catalog fixture refused')
+    expect(await f.service.settleResultDependencyMembership(original, result.ref)).toBe('ready')
+    const catalogs = [f.catalog, result.ref].sort((a, b) => a.id.localeCompare(b.id))
+    // Identical catalog bodies give identical non-ID ref fields. The first
+    // relation must survive when the same member is later seen via the second.
+    const request = { ...f.request, artifacts: catalogs.map(ref => ({ ...f.request.artifacts[0]!, ref })) }
+    let denied = false
+    controls.afterRead = path => { if (path === f.pin(catalogs[1]!)) { denied = true; f.denySourceRelation(f.members[0]!, catalogs[0]!) } }
+    expect(await f.service.confirmSeedDependencies(f.service.registerSeedDependencyTransfer(f.access), request, () => true)).toEqual({ kind: 'blocked', reason: 'policy' })
+    expect(denied).toBe(true); controls.afterRead = undefined
+    await expect(f.service.readExecResult({ sessionId: 'parent' }, { ref: f.members[0]!, viaCatalog: catalogs[0]! })).rejects.toThrow(/unauthorized/)
+    expect(await f.service.readExecResult({ sessionId: 'parent' }, { ref: f.members[0]!, viaCatalog: catalogs[1]! })).toMatchObject({ frames: [{ data: 'eA==' }] })
+    await expect(readFile(f.pin(f.members[0]!))).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { controls.afterRead = undefined; await f.service.close() }
+})
+
+it('renews NEW source authorization after final integrity confirmation while PASSIVE can confirm the exact issued work', async () => {
+  const f = await fixture()
+  try {
+    const scope = f.service.registerSeedDependencyTransfer(f.access)
+    let denied = false
+    controls.afterRead = path => {
+      if (path === resolve(f.directory(f.members[0]!), 'operation.json') && existsSync(f.companion(f.members[1]!))) { denied = true; f.denySourcePolicy() }
+    }
+    expect(await f.service.confirmSeedDependencies(scope, f.request, () => true)).toEqual({ kind: 'blocked', reason: 'policy' })
+    expect(denied).toBe(true); controls.afterRead = undefined
+    const paths = [f.pin(f.catalog), ...f.members.flatMap(ref => [f.pin(ref), f.companion(ref)])]
+    const before = await Promise.all(paths.map(path => readFile(path))), calls = f.sourceCalls(), mutations = controls.mutations
+    expect((await f.service.reconcileSeedDependencies(scope, f.request)).kind).toBe('confirmed')
+    expect(await Promise.all(paths.map(path => readFile(path)))).toEqual(before)
+    expect(f.sourceCalls()).toBe(calls); expect(controls.mutations).toBe(mutations)
+  } finally { controls.afterRead = undefined; await f.service.close() }
 })
 
 it('passive recovery never touches captured source hooks or an aborted source signal', async () => {

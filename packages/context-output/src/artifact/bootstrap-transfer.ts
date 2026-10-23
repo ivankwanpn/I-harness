@@ -15,7 +15,8 @@ import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
 interface Registration { access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean }
-interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string } }
+interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
+interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
 export function createSeedDependencyTransfer(deps: {
   root: string; options: ContextOutputOptions; directory(id: string): string; quota(): number;
   mutate<T>(work: () => Promise<T>): Promise<T>;
@@ -45,15 +46,17 @@ export function createSeedDependencyTransfer(deps: {
     } catch (cause) { return Promise.resolve({ kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : 'conflict' }) }
     return deps.mutate(async () => {
       const { access } = registration, binding = access.binding, passive = caller === undefined
+      let targetSourceId: string
       const check = () => {
         if (!deps.available(binding.targetSessionId) || !deps.available(binding.targetDocumentId)) throw new TransferBlocked('unavailable')
         if (registration.revoked) throw new TransferBlocked('policy')
         try {
           if (access.targetAvailable() !== true) throw new Error('target unavailable')
           access.assertTargetCurrent()
-          const target = captureTarget(access.targetScope())
+          const observed = access.targetScope(), target = captureTarget(observed)
           if (registration.target !== undefined && registration.target !== target) throw new Error('target revision changed')
           registration.target ??= target
+          targetSourceId = observed.source.sourceId
         } catch { registration.revoked = true; throw new TransferBlocked('policy') }
         try {
           if (!passive) {
@@ -69,6 +72,29 @@ export function createSeedDependencyTransfer(deps: {
         check()
         const roots = [...request.artifacts].sort((a, b) => canonicalCompare(a.ref, b.ref)), operations = new Map<string, ArtifactOperation>()
         const publications = new Map<string, Publication>(), closure = createTransferClosure(deps.options.workspaceId, binding)
+        // These are immutable relation descriptors for this attempt, never
+        // cached authorization decisions. A shared member retains every via.
+        const sourceRelations = new Map<string, SourceRelation>()
+        function sourceRelation(ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef): SourceRelation {
+          const key = canonicalJsonData([ref, viaCatalog ?? null])
+          let relation = sourceRelations.get(key)
+          if (!relation) { relation = { ref, ...(viaCatalog ? { viaCatalog } : {}) }; sourceRelations.set(key, relation) }
+          return relation
+        }
+        async function renew(relations: Iterable<SourceRelation>) {
+          if (passive) return
+          for (const relation of relations) {
+            check()
+            await wait(deps.authorized(access.sourceAccess, relation.ref, relation.viaCatalog, relation.viaCatalog !== undefined))
+          }
+        }
+        function publication(path: string, value: Publication['value'], relation: SourceRelation) {
+          const existing = publications.get(path)
+          if (existing) {
+            if (canonicalJsonData(existing.value) !== canonicalJsonData(value)) throw new TransferBlocked('conflict')
+            existing.relations.add(relation)
+          } else publications.set(path, { path, value, relations: new Set([relation]) })
+        }
         async function operation(ref: ManagedArtifactRef) {
           const key = canonicalJsonData(ref), prior = operations.get(key)
           if (prior) return prior
@@ -78,21 +104,22 @@ export function createSeedDependencyTransfer(deps: {
           await wait(readVerifiedArtifactBytes(deps.root, deps.directory(ref.id), ref, 0, 0))
           operations.set(key, value); return value
         }
-        async function targetPolicy(value: ArtifactOperation, viaCatalog?: ManagedArtifactRef) {
-          if ((value.owner.source || viaCatalog) && (!deps.options.authorizeResult || !await wait(Promise.resolve(deps.options.authorizeResult({ sessionId: binding.targetSessionId }, {
-            workspaceId: deps.options.workspaceId, owner: structuredClone(value.owner), ref: structuredClone(value.ref!), ...(viaCatalog ? { visibleVia: structuredClone(viaCatalog) } : {}),
-          }))))) throw new TransferBlocked('policy')
+        function targetCompatible(value: ArtifactOperation) {
+          check()
+          // The genuine captured preparation scope is staging authority before
+          // READY. Ordinary target read visibility is deliberately not queried.
+          if (value.owner.source && value.owner.source.sourceId !== targetSourceId) throw new TransferBlocked('policy')
         }
-        function retain(value: ArtifactOperation) {
+        function retain(value: ArtifactOperation, relation: SourceRelation) {
           const ref = value.ref!, directory = deps.directory(ref.id), pinId = sha(binding.targetDocumentId)
           const pin: ArtifactPin = { version: 1, documentId: binding.targetDocumentId, sessionId: binding.targetSessionId, operationId: value.owner.operationId, revision: ref.revision, state: 'committed', seedTransfer: binding }
-          publications.set(resolve(directory, 'pins', pinId + '.json'), { path: resolve(directory, 'pins', pinId + '.json'), value: pin })
-          publications.set(resolve(directory, 'access', sha(binding.targetSessionId) + '.json'), { path: resolve(directory, 'access', sha(binding.targetSessionId) + '.json'), value: { version: 1, sessionId: binding.targetSessionId, revision: ref.revision, pinId } })
+          publication(resolve(directory, 'pins', pinId + '.json'), pin, relation)
+          publication(resolve(directory, 'access', sha(binding.targetSessionId) + '.json'), { version: 1, sessionId: binding.targetSessionId, revision: ref.revision, pinId }, relation)
         }
         for (const artifact of roots) {
-          const value = await operation(artifact.ref)
-          if (!passive) await wait(deps.authorized(access.sourceAccess, artifact.ref))
-          await targetPolicy(value); closure.root(artifact, value.owner); retain(value)
+          const value = await operation(artifact.ref), relation = sourceRelation(artifact.ref)
+          await renew([relation])
+          targetCompatible(value); closure.root(artifact, value.owner); retain(value, relation)
         }
         for (const artifact of roots) {
           const use = artifact.uses.find(use => use.kind === 'dependency-catalog')
@@ -107,14 +134,15 @@ export function createSeedDependencyTransfer(deps: {
             const key = canonicalJsonData(memberRef)
             if (canonical.has(key)) return
             canonical.add(key)
-            if (!passive) await wait(deps.authorized(access.sourceAccess, memberRef, artifact.ref, true))
-            await targetPolicy(member, artifact.ref); retain(member)
+            const relation = sourceRelation(memberRef, artifact.ref)
+            await renew([relation])
+            targetCompatible(member); retain(member, relation)
             const record: TransferMembership = { version: 2, kind: 'result-dependency-transfer', workspaceId: deps.options.workspaceId, documentId: binding.targetDocumentId, sessionId: binding.targetSessionId,
               memberRef, catalogRef: artifact.ref, catalogOperationId: catalog.owner.operationId, sourceId: entry.sourceId, ordinal, catalogOwner: catalog.owner,
               memberOperationId: member.owner.operationId, manifestDigest: binding.manifestDigest, transferOperationId: binding.operationId, sourceSessionId: binding.sourceSessionId }
             if (!validTransferMembership(record)) throw new TransferBlocked('unavailable')
             const path = deps.membership.companion(memberRef, binding.targetDocumentId, artifact.ref)
-            publications.set(path, { path, value: record })
+            publication(path, record, relation)
           }, use.count))
         }
         // All original metadata, catalog EOF and source witnesses are verified
@@ -131,7 +159,11 @@ export function createSeedDependencyTransfer(deps: {
         }
         if (!passive && unfinished.length) {
           await wait(requireSpace(deps.root, deps.quota(), unfinished.reduce((n, item) => n + Buffer.byteLength(JSON.stringify(item.value)) + 4096, 0)))
-          for (const { path, value } of unfinished) {
+          // Preflight may outlive branch/ref visibility even when the source
+          // runtime and captured project revision remain current.
+          await renew(sourceRelations.values())
+          for (const { path, value, relations } of unfinished) {
+            await renew(relations)
             const parent = dirname(path), isCompanion = 'kind' in value && value.kind === 'result-dependency-transfer'
             const directories = isCompanion ? [dirname(parent), parent] : [parent]
             for (const directory of directories) {
@@ -139,7 +171,9 @@ export function createSeedDependencyTransfer(deps: {
               try { await wait(mkdir(directory)) } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; check() }
               await wait(ownedPath(deps.root, directory))
             }
+            await renew(relations)
             check(); metadataOutcome(await wait(continueAtomicJson(deps.root, path, value, () => { check(); return true })))
+            await renew(relations)
           }
         }
         // A surviving source is irrelevant to passive confirmation. Only exact
@@ -149,7 +183,10 @@ export function createSeedDependencyTransfer(deps: {
           if (canonicalJsonData(await wait(deps.membership.operation(value.ref!))) !== canonicalJsonData(value)) throw new TransferBlocked('conflict')
           await wait(readVerifiedArtifactBytes(deps.root, deps.directory(value.id), value.ref!, 0, 0))
         }
-        for (const artifact of roots) await targetPolicy(await operation(artifact.ref))
+        for (const value of operations.values()) targetCompatible(value)
+        // No source callbacks in PASSIVE. NEW must renew all direct and via
+        // relations after the last publication/integrity await before success.
+        await renew(sourceRelations.values())
         check(); return { kind: 'confirmed', closureDigest: closure.finish() }
       } catch (cause) {
         return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException).code === 'ENOENT' ? 'unavailable' : 'unknown' }
