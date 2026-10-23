@@ -227,3 +227,14 @@ it('owner close is reentrant and late settle cannot revive either port', async (
   pending.settle(); expect((await lease.update(f.interests)).available).toBe(false)
   expect(source.close).toHaveBeenCalledTimes(1)
 })
+it('a content-classified atomic candidate retarget requires fresh canonical coverage', async () => {
+  const f = await fixture(), first = f.watch.acquired.promise, initial = f.lease.update(f.interests)
+  const source = await first; source.reset(); await initial
+  const candidate = join(f.root, 'AGENTS.md'), mapped = join(f.root, 'actual', 'AGENTS.md'), realpath = fs.realpath.bind(fs)
+  vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => String(args[0]) === candidate ? mapped : realpath(...args))
+  source.change(candidate, 'change')
+  expect(f.events.at(-1)).toMatchObject({ kind: 'changed', available: false, paths: [candidate] })
+  const acquired = f.watch.acquired.promise, update = f.lease.update(f.interests), replacement = await acquired
+  expect(replacement.selection.roots).toContain(mapped)
+  replacement.reset(); expect((await update).available).toBe(true)
+})

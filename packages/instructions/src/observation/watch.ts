@@ -176,7 +176,12 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
           const changed = [...new Set(matched.flatMap(value => value.paths))]
           const remap = matched.some(value => value.mapping) || changed.length > 0 && event.changes.some(change => change.kind !== 'change')
           if (remap) { mappingVersion++; mappingDirty = true; affect('reset', changed) }
-          else if (changed.length) affect('changed', changed)
+          else if (changed.length) {
+            // W1 may classify atomic replacement as change. That can replace a
+            // regular candidate with a symlink, so content alone cannot certify
+            // its routing alias. Revalidate only on this observed invalidation.
+            mappingVersion++; mappingDirty = true; affect('changed', changed)
+          }
         } catch { mappingDirty = true; affect('reset') }
       }
     }
