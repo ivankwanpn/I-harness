@@ -52,6 +52,8 @@ export { SettingsPatchError, patchJsonDocumentKeepingComments } from "./storage/
 export { SettingsStore, resolveSettingsPath, updateSettings } from "./storage/single-store.ts"
 export { LayeredSettingsStore, createLayeredStore } from "./storage/layered-store.ts"
 export { watchSettings } from "./observation/watch-settings.ts"
+export type { SettingsWatchState, SettingsWatchError, SettingsWatchOptions, SettingsWatchHandle } from "./observation/watch-settings.ts"
+export type { SettingsSourceStamp } from "./observation/source-stamp.ts"
 export * from './context-subsystems.ts'
 export { normalizeInstructions, resolveInstructionPolicy } from "./instructions.ts"
 export type { SettingsInstructions, InstructionPolicy } from "./instructions.ts"

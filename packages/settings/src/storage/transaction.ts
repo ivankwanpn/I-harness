@@ -5,12 +5,13 @@ import { InstructionMigrationError, instructionDocumentHash } from "./instructio
 
 /** One store owns the whole read/stage/write/publish operation, including failed writes. */
 export class SettingsWriteQueue {
-  private tail: Promise<unknown> = Promise.resolve()
+  private tail: Promise<void> = Promise.resolve()
   run<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.tail.then(operation)
-    this.tail = next.catch(() => {})
+    this.tail = next.then(() => {}, () => {})
     return next
   }
+  drain(): Promise<void> { return this.tail }
 }
 
 /** The digest recheck detects foreign changes, but is not filesystem CAS: hosts

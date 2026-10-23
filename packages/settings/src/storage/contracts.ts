@@ -1,4 +1,6 @@
 import type { Telemetry } from "@i-harness/telemetry"
+import type { FsWatchService } from "@i-harness/fs-watch"
+import type { SettingsWatchError } from "../observation/watch-settings.ts"
 import type { Settings } from "../schema/types.ts"
 import type { LayeredRoots } from "./layers.ts"
 
@@ -32,10 +34,11 @@ export interface LayeredStoreOptions {
   configDir?: string
   /** Workspace root for the workspace layer default (absent → process.cwd()). */
   workspace?: string
-  /** WHY: preserve the existing option (test/watch.test.ts:51) while
-   * detection is event-driven. A number sets watcher-error retry delay
-   * (default 500ms); `false` disables watching entirely. */
+  /** Numeric values are deprecated and ignored; W1 owns retry timing.
+   * `false` disables watching entirely. */
   watchIntervalMs?: number | false
+  watchService?: FsWatchService
+  onWatchError?: (failure: SettingsWatchError) => void
   /** M40 A6: host telemetry stream for the hot-reload change notification
    * (`settings/changed` — the manifest code is declared; this is its producer).
    * Per-change emits carry `data: { path }` (the changed file). Absent → the

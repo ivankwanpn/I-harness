@@ -506,8 +506,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   let shutdownRequested = false
   let shutdownComplete = false
   const cleaned = new Set<string>()
-  const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], () => {
-    if (!shutdownRequested) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
+  const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], async () => {
+    if (!shutdownRequested) await mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   })
   let policySync: Promise<void> | undefined
   const syncPolicy = () => {
@@ -537,7 +537,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           try { await dispose(); cleaned.add(name) }
           catch (cause) { failures.push({ name, cause }) }
         }
-        await once("trust watcher", () => trustWatcher.dispose())
+        await once("trust watcher fence", () => trustWatcher.dispose())
         await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())
         await once("plugin observer", () => stopPluginObserver())
@@ -556,6 +556,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("native context", () => nativeContext.close())
         await once("approvals", () => approvals.flush())
         await once("plugins", () => plugins.close())
+        // A refresh may await creating session assemblies. Fence early, but
+        // join only after their owners can settle shutdown dependencies.
+        await once("trust watcher", () => trustWatcher.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
         if (cleaned.has("session service")) await once("coordinator", () => coordinator.close())

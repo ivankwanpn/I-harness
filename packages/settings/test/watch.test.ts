@@ -2,7 +2,7 @@
 // interval, even for the workspace's ignored-segment root (src/index.ts:1544).
 import { describe, expect, it } from "vitest"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rename, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLayeredStore, watchSettings } from "../src/index.ts"
@@ -53,9 +53,10 @@ describe("fs-watch settings hot reload", () => {
   it("an external truncate→write to the WORKSPACE layer fires exactly one onChange with the changed path", async () => {
     const { root, file } = await workspaceLayer()
     const changed: string[] = []
-    const watcher = watchSettings(file, (path) => changed.push(path), { intervalMs: 60_000 })
+    const watcher = watchSettings(file, (path) => { changed.push(path) }, { intervalMs: 60_000 })
     try {
-      await sleep(300)
+      await watcher.ready
+      await sleep(100)
       expect(changed).toEqual([]) // pre-existing state is only a baseline
       await writeFile(file, "")
       await sleep(30) // shorter than fs-watch's 100ms awaitWriteFinish stability
@@ -69,7 +70,7 @@ describe("fs-watch settings hot reload", () => {
       await sleep(300)
       expect(changed).toEqual([file])
     } finally {
-      watcher.dispose()
+      await watcher.close()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -84,7 +85,7 @@ describe("fs-watch settings hot reload", () => {
       watchIntervalMs: 60_000,
       telemetry: { emit: (event) => emitted.push(event), close: () => {} },
     })
-    store.onChange((path) => changed.push(path))
+    store.onChange((path) => { changed.push(path) })
     try {
       await store.load()
       await sleep(300)
@@ -102,7 +103,7 @@ describe("fs-watch settings hot reload", () => {
       expect(store.get().fontSize).toBe(15)
       expect(changed).toEqual([file])
     } finally {
-      store.dispose()
+      await store.close()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -112,7 +113,7 @@ describe("fs-watch settings hot reload", () => {
     await mkdir(join(root, ".i-harness"))
     const file = join(root, ".i-harness", "settings.json")
     const changed: string[] = []
-    const watcher = watchSettings(file, (path) => changed.push(path), { intervalMs: 60_000 })
+    const watcher = watchSettings(file, (path) => { changed.push(path) }, { intervalMs: 60_000 })
     try {
       await sleep(300)
       expect(changed).toEqual([])
@@ -127,7 +128,7 @@ describe("fs-watch settings hot reload", () => {
       await waitFor(() => changed.length === 3)
       expect(changed).toEqual([file, file, file])
     } finally {
-      watcher.dispose()
+      await watcher.close()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -136,9 +137,10 @@ describe("fs-watch settings hot reload", () => {
     const root = await mkdtemp(join(tmpdir(), "ih-settings-missing-dir-"))
     const file = join(root, ".i-harness", "settings.json")
     const changed: string[] = []
-    const watcher = watchSettings(file, (path) => changed.push(path), { intervalMs: 60_000 })
+    const watcher = watchSettings(file, (path) => { changed.push(path) }, { intervalMs: 60_000 })
     try {
-      await sleep(300)
+      await watcher.ready
+      await sleep(100)
       expect(changed).toEqual([])
       await mkdir(join(root, ".i-harness"))
       await writeFile(file, '{"fontSize":15}')
@@ -146,9 +148,26 @@ describe("fs-watch settings hot reload", () => {
       await sleep(200)
       expect(changed).toEqual([file])
     } finally {
-      watcher.dispose()
+      await watcher.close()
       await rm(root, { recursive: true, force: true })
     }
+  })
+
+  it("reconciles atomic replacement and ignored-parent removal/recreation without sibling callbacks", async () => {
+    const { root, file } = await workspaceLayer(), changed: string[] = []
+    const watcher = watchSettings(file, path => { changed.push(path) }, { intervalMs: 60000 })
+    try {
+      await watcher.ready; await sleep(100)
+      const replacement = join(root, ".i-harness", "replacement.tmp")
+      await writeFile(replacement, '{"fontSize":15}'); await rename(replacement, file)
+      await waitFor(() => changed.length === 1)
+      await rm(join(root, ".i-harness"), { recursive: true, force: true })
+      await waitFor(() => changed.length === 2)
+      await mkdir(join(root, ".i-harness")); await writeFile(file, '{"fontSize":16}')
+      await writeFile(join(root, ".i-harness", "session.json"), '{}')
+      await waitFor(() => changed.length === 3); await sleep(200)
+      expect(changed).toEqual([file, file, file])
+    } finally { await watcher.close(); await rm(root, { recursive: true, force: true }) }
   })
 
   it.each(["global", "project"] as const)("the %s layer reloads without polling", async (layer) => {
@@ -161,7 +180,7 @@ describe("fs-watch settings hot reload", () => {
       watchIntervalMs: 60_000,
     })
     const changed: string[] = []
-    store.onChange((path) => changed.push(path))
+    store.onChange((path) => { changed.push(path) })
     try {
       await store.load()
       await sleep(300)
@@ -171,7 +190,7 @@ describe("fs-watch settings hot reload", () => {
       expect(changed).toEqual([file])
       expect(store.get().fontSize).toBe(15)
     } finally {
-      store.dispose()
+      await store.close()
       await rm(root, { recursive: true, force: true })
     }
   })
@@ -180,7 +199,7 @@ describe("fs-watch settings hot reload", () => {
     const { root, file } = await workspaceLayer()
     const changed: string[] = []
     const store = createLayeredStore({ files: [file], watchIntervalMs: false })
-    store.onChange((path) => changed.push(path))
+    store.onChange((path) => { changed.push(path) })
     try {
       await store.load()
       await writeFile(file, JSON.stringify({ fontSize: 15 }))
@@ -188,7 +207,7 @@ describe("fs-watch settings hot reload", () => {
       expect(store.get().fontSize).toBe(14)
       expect(changed).toEqual([])
     } finally {
-      store.dispose()
+      await store.close()
       await rm(root, { recursive: true, force: true })
     }
   })

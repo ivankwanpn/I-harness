@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { Settings } from "../schema/types.ts"
 import { normalizeSettings } from "../normalize/settings.ts"
-import { watchSettings } from "../observation/watch-settings.ts"
+import { watchSettings, safeWatchWarning, type SettingsWatchHandle, type SettingsWatchError } from "../observation/watch-settings.ts"
+import { stampBytes, sameSourceStamp, type SettingsSourceStamp } from "../observation/source-stamp.ts"
 import { loadRevisionMeta } from "./revision.ts"
 import { mergeRawLayers, resolveLayeredDefaults, type LayerSource } from "./layers.ts"
 import { parseDocumentTolerant, patchJsonDocumentKeepingComments, SettingsPatchError } from "./json-patch.ts"
@@ -31,18 +32,11 @@ export class LayeredSettingsStore {
   private revision: Record<string, number> = {}
   private readonly queue = new SettingsWriteQueue()
   private listeners = new Set<(path: string) => void>()
-  private watcher: { dispose: () => void } | undefined
-  // WHY: an in-flight reload calls load(), which must not reopen a disposed
-  // watcher (test/watch-events.test.ts:190).
+  private watcher: SettingsWatchHandle | undefined
+  private sourceStamps = new Map<string, SettingsSourceStamp>()
+  private reloadJob: Promise<void> | undefined
+  private closeJob: Promise<void> | undefined
   private disposed = false
-  /** W1 conflate state: a reload is in flight, and the detections that arrived
-   * while it was — arrival-ordered and deduped (a file re-observed inside its
-   * own window, e.g. the settled half of a non-atomic write, is not a new
-   * change). BOTH settle paths resolve this queue — see recheckPendingChange.
-   * The paths are part of the state, not decoration: the re-check reports under
-   * a pending detection's path, never under the one that started the reload in
-   * flight (measured: the wrong path is user-visible in `data.path`). */
-  private reloadInFlight = false
   private reloadPending: string[] = []
 
   constructor(options: LayeredStoreOptions = {}) {
@@ -56,18 +50,29 @@ export class LayeredSettingsStore {
 
   isLoaded(): boolean { return this.loaded }
 
-  load(): Promise<Settings> { return this.queue.run(() => this.read()) }
+  load(): Promise<Settings> {
+    if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
+    return this.queue.run(() => this.read())
+  }
 
   private async read(): Promise<Settings> {
     const raws = new Map<string, Record<string, unknown>>()
+    const stamps = new Map<string, SettingsSourceStamp>()
     for (const source of this.resolvedRoots) {
       if (source.path === null) continue
-      const text = await readFile(source.path, "utf8").catch(() => undefined)
-      if (text === undefined) continue
-      const raw = parseDocumentTolerant(text)
+      let bytes: Buffer
+      try { bytes = await readFile(source.path) }
+      catch (error) {
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error
+        stamps.set(source.path, { kind: "missing" }); continue
+      }
+      stamps.set(source.path, stampBytes(bytes))
+      const raw = parseDocumentTolerant(bytes.toString("utf8"))
       instructionMigrationMeta(raw, source.path)
       raws.set(source.path, raw)
     }
+    this.sourceStamps = stamps
     this.rawsByPath = raws
     for (const source of this.resolvedRoots) source.raws = source.path === null ? undefined : raws.get(source.path)
     this.publish()
@@ -89,6 +94,7 @@ export class LayeredSettingsStore {
   }
 
   set(input: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings> {
+    if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     assertInstructionData(input)
     if (Object.hasOwn(input, "instructions")) validateInstructions(input.instructions)
     let patch = structuredClone(input)
@@ -107,6 +113,7 @@ export class LayeredSettingsStore {
   }
 
   reset(): Promise<Settings> {
+    if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     return this.queue.run(async () => {
       if (!this.loaded) await this.read()
       const defaults = normalizeSettings(undefined)
@@ -120,6 +127,7 @@ export class LayeredSettingsStore {
   sources(): LayerSource[] { return structuredClone(this.resolvedRoots) }
 
   onChange(cb: (path: string) => void): () => void {
+    if (this.disposed) return () => {}
     this.listeners.add(cb)
     return () => { this.listeners.delete(cb) }
   }
@@ -128,10 +136,32 @@ export class LayeredSettingsStore {
     return this.load()
   }
 
+  /** Terminal fence: new mutations/reads reject; already accepted work joins. */
   dispose(): void {
+    if (this.disposed) return
+    this.fence()
+    void this.close().catch(() => safeWatchWarning("close"))
+  }
+
+  private fence(): void {
+    if (this.disposed) return
     this.disposed = true
+    this.reloadPending.length = 0
+    this.listeners.clear()
     this.watcher?.dispose()
-    this.watcher = undefined
+  }
+
+  close(): Promise<void> {
+    this.fence()
+    if (this.closeJob) return this.closeJob
+    const job = Promise.resolve().then(async () => {
+      const results = await Promise.allSettled([this.watcher?.close(), this.reloadJob, this.queue.drain()])
+      const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Settings store cleanup incomplete")
+    })
+    this.closeJob = job
+    void job.catch(() => { if (this.closeJob === job) this.closeJob = undefined })
+    return job
   }
 
   /** Highest-priority EXISTING source; the write target. */
@@ -177,6 +207,7 @@ export class LayeredSettingsStore {
       text = JSON.stringify(doc, null, 2)
     }
     await writeSettingsDocument(master.path, text)
+    this.sourceStamps.set(master.path, stampBytes(Buffer.from(text, "utf8")))
     this.rawsByPath.set(master.path, doc)
     master.raws = doc
     this.publish()
@@ -185,6 +216,7 @@ export class LayeredSettingsStore {
   /** Import targets only the host-selected global profile, never the master
    * merely because it happens to have the highest precedence. */
   migrateInstructions(input: LegacyInstructionImport): Promise<Settings> {
+    if (this.disposed) return Promise.reject(new Error("Settings store is closed"))
     const selected = this.options.instructionProfilePath ?? this.resolvedRoots.find((source) => source.label === "global")?.path
     const matches = selected && isAbsolute(selected) ? this.resolvedRoots.filter((candidate) => candidate.path === resolve(selected)) : []
     const source = matches.length === 1 ? matches[0] : undefined
@@ -195,12 +227,14 @@ export class LayeredSettingsStore {
     return this.queue.run(async () => {
       if (!this.loaded) await this.read()
       const staged = await stageInstructionImport(request)
+      let text = staged.text
       if (staged.changed) {
         const revision = loadRevisionMeta(staged.raw)
         staged.raw._revision = { ...revision, instructions: (revision.instructions ?? 0) + 1 }
-        const text = patchJsonDocumentKeepingComments(staged.text, staged.raw, ["instructions", "_instructionsMigration"])
+        text = patchJsonDocumentKeepingComments(staged.text, staged.raw, ["instructions", "_instructionsMigration"])
         await writeSettingsDocument(request.profilePath, text, request.expectedDocumentHash)
       }
+      this.sourceStamps.set(source.path!, stampBytes(Buffer.from(text, "utf8")))
       this.rawsByPath.set(source.path!, staged.raw)
       source.raws = staged.raw
       this.publish()
@@ -208,115 +242,74 @@ export class LayeredSettingsStore {
     })
   }
 
-  /** WHY: use fs-watch's explicit file roots, baseline and 100ms write
-   * stability instead of polling (packages/fs-watch/src/index.ts:145).
-   * Changed paths reload the merged view and notify onChange/telemetry;
-   * W1 state-based conflate is unchanged (test/watch-events.test.ts:115). */
   private ensureWatcher(): void {
-    if (this.disposed || this.watcher !== undefined || this.options.watchIntervalMs === false) return
-    const intervalMs = this.options.watchIntervalMs ?? 500
-    const paths = this.resolvedRoots
-      .map((s) => s.path)
-      .filter((p): p is string => p !== null && p !== undefined)
-    if (paths.length === 0) return
-    this.watcher = watchSettings(paths, (path) => this.handleWatchedChange(path), { intervalMs })
-  }
-
-  /**
-   * W1 conflate: at most one `reloadFromDisk()` in flight, and a detection that
-   * lands while one is in flight is absorbed UNLESS the disk moved again behind
-   * it — the settle re-check compares STATE, never time.
-   *
-   * The baseline `before` is snapshotted synchronously and compared AFTER the
-   * await, so two detections landing inside one reload's latency both compare
-   * against the same pre-change view and both emit. That is one of the three
-   * sources of the double report: the watcher can re-report one write (its own
-   * out-of-order capture — guarded there now) and a non-atomic `writeFile`
-   * (truncate → write) genuinely presents two `mtime:size` states, so a single
-   * write can legitimately deliver two detections. The conflate absorbs the
-   * second one here.
-   *
-   * The re-check is what keeps the conflate honest, and why it is not a
-   * debounce: the pending detection starts a fresh reload whose baseline is the
-   * state the in-flight reload produced. A detection that merely re-observed
-   * the change just reported compares equal and emits nothing; a genuinely
-   * separate write that the in-flight reload did not read differs and fires
-   * once. Two real writes therefore stay two reports, no matter how close.
-   */
-  private handleWatchedChange(path: string): void {
-    if (this.reloadInFlight) {
-      // The pending detection keeps ITS OWN path (see recheckPendingChange).
-      if (!this.reloadPending.includes(path)) this.reloadPending.push(path)
-      return
-    }
-    // NOTE: no queue clear here. This is also the re-check's entry point, and a
-    // re-check must not drop the detections queued behind the one it resolves
-    // (they drain one per cycle, see recheckPendingChange). Nothing is pending
-    // when a ROOT cycle starts: `reloadInFlight` is only ever false with an
-    // empty queue — the settle clears the flag and starts the next re-check in
-    // the same synchronous block, so no detection can slip between them.
-    this.reloadInFlight = true
-    // The pre-reload view is the change baseline: reloadFromDisk → load()
-    // ALREADY assigns this.current, so comparing against this.current here
-    // would always compare the merged view to itself (the dormant
-    // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
-    const before = this.current
-    void this.reloadFromDisk().then((settings) => {
-      const reported = JSON.stringify(settings) !== JSON.stringify(before)
-      if (reported) {
-        for (const cb of [...this.listeners]) cb(path)
-        this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
-      }
-      this.reloadInFlight = false
-      this.recheckPendingChange(reported ? path : undefined)
-    }).catch(() => {
-      // A reload that threw (a torn read of a non-atomic writer's file, a
-      // document the tolerant parser rejects) must not wedge the handler — and
-      // must NOT drop the pending detection either. The watcher advanced its
-      // snapshot to the state that raised the failure when it fired, so a
-      // settled state observed DURING the failed reload is never re-detected:
-      // dropping it here would lose the change outright (pre-conflate, that
-      // detection's own reload read the settled state and reported it). So the
-      // failure path resolves the pending exactly as the success path does —
-      // and it reported nothing, so no path is excluded below.
-      this.reloadInFlight = false
-      this.recheckPendingChange(undefined)
+    if (this.disposed || this.watcher || this.options.watchIntervalMs === false) return
+    const paths = this.resolvedRoots.map(source => source.path).filter((path): path is string => path !== null)
+    if (!paths.length) return
+    this.watcher = watchSettings(paths, path => this.handleWatchedChange(path), {
+      service: this.options.watchService, baseline: this.sourceStamps,
+      onError: failure => this.report(failure),
     })
   }
 
-  /**
-   * Resolve ONE detection that arrived while a reload was in flight, from
-   * EITHER settle path (the success path and the `catch` — a reload that threw
-   * reported nothing, so it excludes no path). The entry starts a fresh reload
-   * whose comparison baseline is the state the previous one produced
-   * (`this.current` — unchanged by a reload that threw). A detection that
-   * merely re-observed the change just reported compares equal and emits
-   * nothing; a write the previous reload did not read differs and reports once,
-   * under its OWN path.
-   *
-   * ONE entry per cycle, never the whole queue: an entry's change may be read
-   * by a later cycle than the one that drained the entry before it (this reload
-   * may itself fail, or may have read the disk before that write landed), and
-   * the watcher advanced its snapshot when it fired — so a dropped entry is a
-   * change that is never reported again. Each remaining entry gets its own
-   * cycle this way; one whose change is already covered compares equal, emits
-   * nothing, and is gone.
-   *
-   * `reportedPath` is the file the settled reload has ALREADY reported
-   * (undefined when it reported nothing). The re-check prefers a pending path
-   * different from it: that event is already out, so naming the same file again
-   * would attribute the next transition to a file whose only other detection is
-   * its own re-observation — the settled half of a non-atomic write, measured
-   * to be visible to the poll — while another pending file's change has not
-   * been reported at all. When nothing else is pending it re-checks that one
-   * file anyway; the state comparison, not this choice, decides what fires.
-   */
-  private recheckPendingChange(reportedPath: string | undefined): void {
-    const index = this.reloadPending.findIndex((p) => p !== reportedPath)
-    if (index === -1 && this.reloadPending.length === 0) return
-    const next = this.reloadPending.splice(index === -1 ? 0 : index, 1)[0]!
-    this.handleWatchedChange(next)
+  private report(failure: SettingsWatchError): void {
+    if (this.disposed || !this.options.onWatchError) { safeWatchWarning(failure.phase); return }
+    try { void Promise.resolve(this.options.onWatchError(failure)).catch(() => safeWatchWarning(failure.phase)) }
+    catch { safeWatchWarning(failure.phase) }
   }
+
+  private notify(path: string): void {
+    for (const listener of [...this.listeners]) {
+      if (this.disposed) return
+      if (!this.listeners.has(listener)) continue
+      try { void Promise.resolve(listener(path)).catch(error => this.report({ phase: "consumer", error, path })) }
+      catch (error) { this.report({ phase: "consumer", error, path }) }
+    }
+    if (this.disposed) return
+    try { void Promise.resolve(this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })).catch(error => this.report({ phase: "consumer", error, path })) }
+    catch (error) { this.report({ phase: "consumer", error, path }) }
+  }
+
+  // Capture both sides inside the same queued read: intervening queued writes
+  // cannot contaminate attribution. Public reloadFromDisk retains its surface.
+  private watchedRead(): Promise<{ settings: Settings; beforeEffective: Settings; changedSourcePaths: string[] }> {
+    return this.queue.run(async () => {
+      const beforeEffective = this.current
+      const before = new Map(this.sourceStamps)
+      const settings = await this.read()
+      const changedSourcePaths = this.resolvedRoots.flatMap(source => source.path !== null
+        && !sameSourceStamp(before.get(source.path), this.sourceStamps.get(source.path)) ? [source.path] : [])
+      return { settings, beforeEffective, changedSourcePaths }
+    })
+  }
+
+  private handleWatchedChange(path: string): Promise<void> | undefined {
+    if (this.disposed) return
+    if (!this.reloadPending.includes(path)) this.reloadPending.push(path)
+    if (this.reloadJob) return this.reloadJob
+    const job = Promise.resolve().then(async () => {
+      while (!this.disposed && this.reloadPending.length) {
+        this.reloadPending.shift()
+        try {
+          const result = await this.watchedRead()
+          if (this.disposed) break
+          if (JSON.stringify(result.settings) !== JSON.stringify(result.beforeEffective)) {
+            for (const changed of result.changedSourcePaths) {
+              if (this.disposed) break
+              this.notify(changed)
+            }
+          }
+        } catch (error) { if (!this.disposed) this.report({ phase: "read", error }) }
+      }
+    })
+    this.reloadJob = job
+    void job.finally(() => {
+      if (this.reloadJob === job) this.reloadJob = undefined
+      if (!this.disposed && this.reloadPending.length) this.handleWatchedChange(this.reloadPending[0]!)
+    }).catch(() => {})
+    return job
+  }
+
 }
 
 /** Convenience factory for the layered store. */
