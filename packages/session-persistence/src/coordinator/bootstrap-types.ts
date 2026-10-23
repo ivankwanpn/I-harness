@@ -10,7 +10,14 @@ export type BootstrapTarget = { kind: 'new' } | { kind: 'existing-empty'; expect
 export interface BootstrapInitial { inputId: string; text: string; parentSessionId?: string; startedAt: number; expiresAt: number }
 export interface BootstrapRequest { invocation: BootstrapInvocation; target: BootstrapTarget; metadata: BootstrapCallerMetadata; lineage: BootstrapLineage; seed: CompiledSemanticSeed; initial?: BootstrapInitial }
 export interface BootstrapDependencyPort { confirm(request: BootstrapDependencyRequest, current: () => boolean): Promise<BootstrapDependencyOutcome>; reconcile(request: BootstrapDependencyRequest): Promise<BootstrapDependencyOutcome> }
-export interface BootstrapGuards { signal?: AbortSignal; assertCurrent(): void; dependencies: BootstrapDependencyPort }
+export interface BootstrapTargetPreparationRequest { invocation: BootstrapInvocation; manifestDigest: string }
+export type BootstrapTargetPreparationOutcome = { kind: 'confirmed' } | { kind: 'blocked'; reason: 'unknown'|'unavailable'|'conflict'|'policy' }
+export interface BootstrapTargetPreparationPort {
+  confirm(request: BootstrapTargetPreparationRequest, current: () => boolean): Promise<BootstrapTargetPreparationOutcome>;
+  reconcile(request: BootstrapTargetPreparationRequest): Promise<BootstrapTargetPreparationOutcome>;
+  assertTargetCurrent(): void;
+}
+export interface BootstrapGuards { signal?: AbortSignal; assertCurrent(): void; dependencies: BootstrapDependencyPort; targetPreparation?: BootstrapTargetPreparationPort }
 export interface BootstrapReceipt { version: 1; invocation: BootstrapInvocation; manifestDigest: string; seedLength: number; dependencyClosureDigest: string; seed?: FactReceipt; completion: FactReceipt; initial?: { inputId: string; seq: number; startedAt: number; expiresAt: number } }
 export type BootstrapOutcome = { kind: 'ready'|'already-ready'; receipt: BootstrapReceipt; document: ManagedDocument }
   | { kind: 'not-issued'; reason: 'cancelled'|'stale-source'|'unsupported' }

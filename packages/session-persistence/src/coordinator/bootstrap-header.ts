@@ -11,11 +11,13 @@ const digest = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{
 const id = (x: unknown): x is string => typeof x === 'string' && x.length > 0 && x.length <= 256
 const count = (x: unknown): x is number => Number.isSafeInteger(x) && (x as number) >= 0
 export const sameBootstrapData = (a: unknown, b: unknown): boolean => canonicalJsonData(a) === canonicalJsonData(b)
-function fields(value: unknown, required: string[], optional: string[] = []): asserts value is Record<string, any> {
+export function bootstrapFields(value: unknown, required: string[], optional: string[] = []): asserts value is Record<string, any> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || !isStrictFactData(value)
-    || required.some(key => !Object.hasOwn(value, key)) || Object.keys(value).some(key => !required.includes(key) && !optional.includes(key))
+    || Object.values(Object.getOwnPropertyDescriptors(value)).some(field => !field.enumerable)
+    || required.some(key => !Object.hasOwn(value, key)) || Object.getOwnPropertyNames(value).some(key => !required.includes(key) && !optional.includes(key))
     || Object.values(value).some(x => x === undefined)) bad()
 }
+const fields: typeof bootstrapFields = bootstrapFields
 export function captureBootstrapInvocation(value: BootstrapInvocation): BootstrapInvocation {
   fields(value, ['version','operationId','targetSessionId','createdAt','requestDigest'])
   if (value.version !== 1 || typeof value.operationId !== 'string' || !/^[\x21-\x7e]{1,237}$/.test(value.operationId) || !id(value.targetSessionId)

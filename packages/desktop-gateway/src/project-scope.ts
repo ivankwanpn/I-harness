@@ -2,9 +2,13 @@ import { createHash } from "node:crypto"
 import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
+import { captureBootstrapTargetPreparationRequest, type BootstrapTargetPreparationRequest, type BootstrapTargetPreparationOutcome } from '@i-harness/session-persistence'
+import { isStrictFactData, canonicalJsonData } from '@i-harness/core-session'
 import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
+import { captureBootstrapProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
+export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
 export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
 
 interface Binding { bound: boolean; projectId?: string }
@@ -41,6 +45,12 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   let referenceFailure: string | undefined
   const observed = new Set<string>()
   const pendingChanges = new Set<string>()
+  const scopeUpdates = new Map<string, number>()
+  let referenceUpdates = 0
+  function trackScopes<T>(ids: readonly string[], job: Promise<T>): Promise<T> {
+    for (const id of ids) scopeUpdates.set(id, (scopeUpdates.get(id) ?? 0) + 1)
+    return job.finally(() => { for (const id of ids) { const count = scopeUpdates.get(id)! - 1; if (count) scopeUpdates.set(id, count); else scopeUpdates.delete(id) } })
+  }
   const withdrawn = new Set<string>()
   const requests = new Map<string, number>()
   const nextRequest = (id: string) => { const next = (requests.get(id) ?? 0) + 1; requests.set(id, next); return next }
@@ -67,15 +77,23 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     const pending = loading.get(id)
     if (pending) return pending
     const job = coordinator.getDocument(key(id)).then((document): Binding => {
-      if (document === undefined) { const value = { bound: false }; bindings.set(id, value); return value }
-      if (!object(document) || document.version !== 1 || Object.keys(document).some((field) => !["version", "projectId"].includes(field))) throw new Error("Invalid session project binding")
-      const projectId = document.projectId === undefined ? undefined : identifier(document.projectId)
-      const value = { bound: true, ...(projectId ? { projectId } : {}) }
+      const value = parseBinding(document)
       bindings.set(id, value)
       return value
     }).finally(() => { loading.delete(id) })
     loading.set(id, job)
     return job
+  }
+  function parseBinding(document: unknown): Binding {
+    if (document === undefined) return { bound: false }
+    if (!object(document) || !isStrictFactData(document) || document.version !== 1
+      || Object.getOwnPropertyNames(document).some(field => !['version', 'projectId'].includes(field))
+      || Object.values(Object.getOwnPropertyDescriptors(document)).some(field => !field.enumerable || field.value === undefined)) throw new Error('Invalid session project binding')
+    return { bound: true, ...(Object.hasOwn(document, 'projectId') ? { projectId: identifier(document.projectId) } : {}) }
+  }
+  function observeBinding(id: string, value: Binding) {
+    if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
+    bindings.set(id, value)
   }
   function serial<T>(id: string, work: () => Promise<T>): Promise<T> {
     const job = (operations.get(id) ?? Promise.resolve()).catch(() => undefined).then(work)
@@ -91,7 +109,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     // Coordinator background document errors are reported rather than thrown.
     // Readback is the commit check before exposing or acknowledging ownership.
     const saved = await coordinator.getDocument(key(id))
-    if (!object(saved) || saved.version !== 1 || saved.projectId !== projectId) throw new Error("Could not persist session project binding")
+    const confirmed = parseBinding(saved)
+    if (!confirmed.bound || confirmed.projectId !== projectId) throw new Error("Could not persist session project binding")
     bindings.set(id, { bound: true, ...(projectId ? { projectId } : {}) })
   }
   async function resolveOwner(id: string, ownedOperation?: string, reading = false): Promise<Binding> {
@@ -183,6 +202,127 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     for (const id of projectIds) pendingChanges.delete(id)
   }
   return {
+    prepareBootstrapInheritance(input: BootstrapProjectCapture): BootstrapProjectPreparation {
+      const capture = captureBootstrapProject(input), id = capture.invocation.targetSessionId
+      const projectId = capture.requestIntent.project.kind === 'project' ? capture.requestIntent.project.projectId : undefined
+      let active = true, targetBaseline: string | undefined, sourceBaseline: string | undefined, attemptEpoch: string | undefined
+      const fail = (reason: 'unknown'|'unavailable'|'conflict'|'policy'): never => { throw Object.assign(new Error('Bootstrap project ' + reason), { bootstrapReason: reason }) }
+      const lifetime = () => { assertOpen(); if (!active || !capture.targetAvailable()) { active = false; fail('unavailable') } }
+      const epoch = () => `${projectId ?? 'unassigned'}:${revisions.get(projectId ?? '') ?? 0}:refs:${referenceRevision}`
+      const available = () => {
+        lifetime()
+        if (attemptEpoch !== undefined && attemptEpoch !== epoch()) { active = false; fail('policy') }
+        if (referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) fail('policy')
+        assertAvailable(projectId)
+      }
+      const targetRevision = () => `${epoch()}:binding:${bindingRevisions.get(id) ?? 0}`
+      const assertTargetCurrent = () => {
+        available()
+        if (!bindings.get(id)?.bound || bindings.get(id)?.projectId !== projectId || targetBaseline === undefined || targetBaseline !== targetRevision()) fail('policy')
+      }
+      const sourceRevision = () => {
+        if (!capture.sourceSessionId) return epoch() + ':explicit-import'
+        const chain: string[] = [], seen = new Set<string>()
+        let cursor: string | undefined = capture.sourceSessionId
+        while (cursor) {
+          if (seen.has(cursor) || seen.size >= 32 || !bindings.has(cursor)) fail('policy')
+          seen.add(cursor); chain.push(`${cursor}:${bindingRevisions.get(cursor) ?? 0}:${canonicalJsonData(bindings.get(cursor))}`)
+          if (bindings.get(cursor)?.bound) break
+          cursor = parents.get(cursor)
+        }
+        if (liveOwner(capture.sourceSessionId) !== projectId) fail('policy')
+        return epoch() + ':' + canonicalJsonData(chain)
+      }
+      const newWork = (current: () => boolean) => {
+        available()
+        if (!capture.sourceAvailable() || !current()) fail('policy')
+        capture.assertNewWorkCurrent()
+      }
+      const assertSourceCurrent = () => {
+        newWork(() => true)
+        if (sourceBaseline === undefined || sourceBaseline !== sourceRevision()) fail('policy')
+      }
+      async function readTargetBinding(): Promise<Binding> {
+        try { return parseBinding(await coordinator.getDocument(key(id))) }
+        catch (error) {
+          // A previously acquired getter cannot survive an observation that
+          // its durable authority is no longer verifiable. Initial uncertain
+          // saves remain recoverable by exact passive readback.
+          if (targetBaseline !== undefined) active = false
+          throw error
+        }
+      }
+      async function prepare(value: BootstrapTargetPreparationRequest, passive: boolean, current: () => boolean): Promise<BootstrapTargetPreparationOutcome> {
+        let request: BootstrapTargetPreparationRequest
+        try {
+          request = captureBootstrapTargetPreparationRequest(value)
+          if (canonicalJsonData(request.invocation) !== canonicalJsonData(capture.invocation)) return { kind: 'blocked', reason: 'conflict' }
+        } catch { return { kind: 'blocked', reason: 'conflict' } }
+        return serial(id, async () => {
+          try {
+            available()
+            attemptEpoch ??= epoch()
+            if (targetBaseline !== undefined) assertTargetCurrent()
+            const generation = epoch()
+            const check = () => { available(); if (generation !== epoch()) fail('policy'); if (!passive) { newWork(current); if (sourceBaseline !== undefined && sourceBaseline !== sourceRevision()) fail('policy') } }
+            check()
+            const inspection = await coordinator.inspectBootstrap(capture.invocation)
+            check()
+            if (!['reserved', 'ready'].includes(inspection.kind) || !inspection.token || !('manifestDigest' in inspection.token) || inspection.token.manifestDigest !== request.manifestDigest
+              || canonicalJsonData(inspection.invocation) !== canonicalJsonData(capture.invocation)) fail('conflict')
+            if (!passive) {
+              if (capture.sourceSessionId) { await resolveOwner(capture.sourceSessionId, undefined, true); check() }
+              const revision = sourceRevision()
+              if (sourceBaseline !== undefined && sourceBaseline !== revision) fail('policy')
+              sourceBaseline ??= revision
+              assertSourceCurrent()
+            }
+            await loading.get(id); check()
+            // Always refresh durable identity: an earlier save may have landed
+            // even though its response/readback did not confirm it.
+            const own = await readTargetBinding(); check()
+            observeBinding(id, own)
+            if (own.bound && own.projectId !== projectId) fail('conflict')
+            if (!own.bound) {
+              if (passive || targetBaseline !== undefined) fail('unavailable')
+              check()
+              bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
+              await coordinator.putDocument(key(id), { version: 1, ...(projectId ? { projectId } : {}) }); check()
+              const saved = await readTargetBinding(); check()
+              if (!saved.bound || saved.projectId !== projectId) fail('unavailable')
+              observeBinding(id, saved)
+            }
+            observed.add(id)
+            if (projectId) {
+              const declared = projects.get(projectId)!
+              // Do not enter catalog(): its invalidation drain may itself be
+              // waiting for this admitted bootstrap to finish.
+              let resolved: ConfirmedProjectScope
+              try { resolved = await resolveScope(declared) }
+              catch (error) { if (targetBaseline !== undefined) active = false; throw error }
+              check()
+              if (canonicalJsonData(resolved) !== canonicalJsonData(projects.get(projectId))) { if (targetBaseline !== undefined) active = false; fail('policy') }
+            }
+            check()
+            targetBaseline ??= targetRevision()
+            assertTargetCurrent()
+            return { kind: 'confirmed' }
+          } catch (error) {
+            return { kind: 'blocked', reason: (error as { bootstrapReason?: 'unknown'|'unavailable'|'conflict'|'policy' }).bootstrapReason ?? 'unavailable' }
+          }
+        })
+      }
+      return {
+        targetPreparation: Object.freeze({ confirm: (request: BootstrapTargetPreparationRequest, current: () => boolean) => prepare(request, false, current), reconcile: (request: BootstrapTargetPreparationRequest) => prepare(request, true, () => true), assertTargetCurrent }),
+        targetScope(): BootstrapTargetScope {
+          assertTargetCurrent()
+          const scope = projectId ? projects.get(projectId)! : undefined
+          return { ...(projectId ? { projectId } : {}), ...(scope ? { scope: { id: scope.id, name: scope.name, roots: [...scope.roots], primaryRoot: scope.primaryRoot! } } : {}), revision: targetBaseline! }
+        },
+        assertSourceCurrent,
+        close() { active = false },
+      }
+    },
     async authorityFor(id: string): Promise<() => AuthorityState> {
       await resolveOwner(id)
       observed.add(id)
@@ -192,6 +332,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     configureReferences(paths: readonly string[]): Promise<void> {
       const requested = [...paths]
       referenceRevision++
+      referenceUpdates++
       const initialFence = observed.size ? moveOptions.authorityChanged?.([...observed]) ?? Promise.resolve() : Promise.resolve()
       void initialFence.catch(() => {})
       return catalog(async () => {
@@ -212,7 +353,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         references = Object.freeze([...new Set(confirmed)])
         referenceRevision++
         if (observed.size) await moveOptions.authorityChanged?.([...observed])
-      })
+      }).finally(() => { referenceUpdates-- })
     },
     configure(value: unknown): Promise<{ projectId: string }> {
       const snapshot = structuredClone(value)
@@ -222,7 +363,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       // Publish the admission generation before canonicalization or queued work.
       const initialFence = changed([declared.id])
       void initialFence.catch(() => {})
-      return catalog(async () => {
+      return trackScopes([declared.id], catalog(async () => {
         await initialFence
         try {
           const project = await resolveScope(declared)
@@ -236,7 +377,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
           if (error instanceof ProjectFoldersUnavailable) { assertOpen(); projects.set(declared.id, blocked(declared)); await changed([declared.id]) }
           throw error
         }
-      })
+      }))
     },
     sync(value: unknown): Promise<{ synchronized: true }> {
       const snapshot = structuredClone(value)
@@ -253,7 +394,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       const initialIds = [...removed, ...declarations.filter(project => withdrawn.has(project.id) || JSON.stringify(projects.get(project.id)) !== JSON.stringify(project)).map(project => project.id)]
       const initialFence = changed(initialIds)
       void initialFence.catch(() => {})
-      return catalog(async () => {
+      return trackScopes([...declaredIds], catalog(async () => {
         await initialFence
         const confirmed = await Promise.all(declarations.map(async (project) => {
           try { return await resolveScope(project) }
@@ -271,7 +412,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         await changed(affected)
         await changed(retries, false)
         return { synchronized: true as const }
-      })
+      }))
     },
     revoke(projectId: string): Promise<{ revoked: boolean }> {
       try { identifier(projectId) } catch (error) { return Promise.reject(error) }
@@ -333,7 +474,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       return {projectId,revision,scope:{id:context.id,name:context.name,roots:[...context.roots],primaryRoot:context.primaryRoot!}}
     },
     move(id: string, expectedOwner: string | undefined, projectId: string | undefined): Promise<{ sessionId: string; projectId?: string; executionWorkspace: string }> {
-      return serial(id, () => fence.exclusive(id, async () => {
+      return fence.exclusive(id, () => serial(id, async () => {
         const meta = await ensureVisible(id)
         if (meta.origin === "subagent" || meta.origin === "approval-review" || (meta.origin === "team" && meta.parentSession)) throw new Error("Session is unavailable for project move")
         if (!moveOptions.assertIdle) throw new Error("Idle project move inspection is unavailable")
@@ -375,10 +516,10 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         })
         return { sessionId: id, ...(projectId ? { projectId } : {}), executionWorkspace: _workspace }
         } finally { if (!alreadyOwned) await coordinator.releaseOwnership(id) }
-      }, async () => {
+      }), async () => {
         if (!moveOptions.assertIdle) throw new Error("Idle project move inspection is unavailable")
         await moveOptions.assertIdle(id)
-      }))
+      })
     },
     async state(id: string): Promise<{ sessionId: string; projectId?: string }> {
       const projectId = await projectFor(id)

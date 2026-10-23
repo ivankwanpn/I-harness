@@ -29,6 +29,92 @@ const request = ():persistence.BootstrapRequest => ({ invocation: { version: 1, 
   target: { kind: 'new' }, metadata: { title: 'original' }, lineage: { origin: 'fork', parentSession: 'parent' },
   seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' }, records: [] } })
 const guards = { assertCurrent() {}, dependencies: { async confirm() { throw new Error('empty dependencies must not call port') }, async reconcile() { throw new Error('empty dependencies must not call port') } } }
+it('rejects hidden bootstrap fields before reservation and preserves ordinary model metadata', async () => {
+  const { coordinator } = await setup(), r = request()
+  Object.defineProperty(r.metadata, 'hiddenAuthority', { value: 'not JSON', enumerable: false })
+  expect(await coordinator.bootstrapSemanticTarget(r, guards)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+  expect((await coordinator.inspectBootstrap(r.invocation)).kind).toBe('absent')
+  const ordinary = request(); ordinary.metadata.modelSelection = { provider: 'test', model: 'model', reasoningEffort: 'high' }
+  expect((await coordinator.bootstrapSemanticTarget(ordinary, guards)).kind).toBe('ready')
+})
+it('prepares an empty target before completion outside its session operation and passively reconciles before READY', async () => {
+  const { coordinator } = await setup(), r = request(), calls: string[] = []
+  const targetPreparation = {
+    async confirm(input: any, current: () => boolean) {
+      calls.push('confirm'); expect(current()).toBe(true)
+      expect(input.invocation).toEqual(r.invocation)
+      expect(await coordinator.inspectBootstrap(r.invocation)).toMatchObject({ kind: 'reserved', token: { manifestDigest: input.manifestDigest } })
+      await expect(coordinator.profile('target')).rejects.toThrow()
+      return { kind: 'confirmed' as const }
+    },
+    async reconcile() { calls.push('reconcile'); return { kind: 'confirmed' as const } },
+    assertTargetCurrent() { calls.push('current') },
+  }
+  expect((await coordinator.bootstrapSemanticTarget(r, { ...guards, targetPreparation })).kind).toBe('ready')
+  expect(calls[0]).toBe('confirm'); expect(calls).toContain('reconcile'); expect(calls.at(-1)).toBe('current')
+  calls.length = 0
+  expect((await coordinator.resumeSemanticTarget(r.invocation, { ...guards, assertCurrent() { throw new Error('source gone') }, targetPreparation })).kind).toBe('already-ready')
+  expect(calls[0]).toBe('reconcile')
+})
+it('keeps empty target reserved when configured preparation is blocked or stale', async () => {
+  const { coordinator, root } = await setup(), r = request()
+  const targetPreparation = { async confirm() { return { kind: 'blocked', reason: 'unavailable' } }, async reconcile() { throw new Error('not reached') }, assertTargetCurrent() {} }
+  expect(await coordinator.bootstrapSemanticTarget(r, { ...guards, targetPreparation })).toMatchObject({ kind: 'blocked', reason: 'dependency-unavailable', token: { phase: 'dependencies' } })
+  expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(1)
+})
+it.each(['host', 'dependency', 'seed', 'confirmation'])('rechecks target authority after the actual %s await before issuing or exposing READY', async cut => {
+  const { coordinator, backend, root } = await setup(), r = dependent(), calls: string[] = []
+  let available = true
+  const append = backend.appendOwnedBatch!, confirm = backend.confirmBootstrapFrames!
+  backend.appendOwnedBatch = async (...args) => { const result = await append(...args); if (cut === 'seed' && args[3].key.batchId.endsWith(':seed')) available = false; return result }
+  backend.confirmBootstrapFrames = async (...args) => { const result = await confirm(...args); if (cut === 'confirmation') available = false; return result }
+  const closure = 'b'.repeat(64)
+  const targetPreparation = {
+    async confirm() { calls.push('host'); if (cut === 'host') available = false; return { kind: 'confirmed' as const } },
+    async reconcile() { calls.push('reconcile-host'); return { kind: 'confirmed' as const } },
+    assertTargetCurrent() { if (!available) throw new Error('target revoked') },
+  }
+  const outcome = await coordinator.bootstrapSemanticTarget(r, { assertCurrent() {}, targetPreparation, dependencies: {
+    async confirm() { calls.push('dependency'); if (cut === 'dependency') available = false; return { kind: 'confirmed', closureDigest: closure } },
+    async reconcile() { calls.push('reconcile-dependency'); return { kind: 'confirmed', closureDigest: closure } },
+  } })
+  expect(outcome).toMatchObject({ kind: 'blocked', reason: 'dependency-unavailable' })
+  expect(calls[0]).toBe('host')
+  if (cut === 'host') expect(calls).not.toContain('dependency')
+  const bytes = await readFile(join(root, 'target.jsonl'), 'utf8')
+  expect(bytes.includes('bootstrap:operation:complete')).toBe(cut === 'confirmation')
+  if (cut === 'host' || cut === 'dependency') expect(bytes.trimEnd().split('\n')).toHaveLength(1)
+  await expect(coordinator.openManagedDocument('target')).rejects.toThrow()
+})
+it('captures the preparation callbacks before the first await and rejects non-closed outcomes', async () => {
+  const { coordinator, root } = await setup(), r = request()
+  const targetPreparation = {
+    async confirm() { return Object.defineProperty({ kind: 'confirmed' as const }, 'hidden', { value: true }) },
+    async reconcile() { return { kind: 'confirmed' as const } }, assertTargetCurrent() {},
+  }
+  const pending = coordinator.bootstrapSemanticTarget(r, { ...guards, targetPreparation })
+  targetPreparation.confirm = async () => ({ kind: 'confirmed' })
+  expect(await pending).toMatchObject({ kind: 'blocked', reason: 'dependency-unavailable' })
+  expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(1)
+})
+it('rechecks target authority at the original seed issue guard after backend awaits and permits a fresh attempt', async () => {
+  const { coordinator, backend, root } = await setup(), r = seeded(), append = backend.appendOwnedBatch!
+  let available = true, cut = true
+  backend.appendOwnedBatch = async (...args) => {
+    if (cut && args[3].key.batchId.endsWith(':seed')) {
+      cut = false
+      await readFile(join(root, 'target.jsonl'))
+      available = false
+    }
+    return append(...args)
+  }
+  const targetPreparation = { async confirm() { return { kind: 'confirmed' as const } }, async reconcile() { return { kind: 'confirmed' as const } }, assertTargetCurrent() { if (!available) throw new Error('revoked') } }
+  expect(await coordinator.bootstrapSemanticTarget(r, { ...guards, targetPreparation })).toMatchObject({ kind: 'blocked', reason: 'dependency-unavailable' })
+  expect((await readFile(join(root, 'target.jsonl'), 'utf8')).trimEnd().split('\n')).toHaveLength(1)
+  available = true
+  expect((await coordinator.resumeSemanticTarget(r.invocation, { ...guards, targetPreparation }, r)).kind).toBe('ready')
+  expect((await readFile(join(root, 'target.jsonl'), 'utf8')).match(/"batchId":"bootstrap:operation:seed"/g)).toHaveLength(1)
+})
 function seeded(initial=false):any {
   const r:any=request(),source=createSession();append(source,{type:'user/message',text:'original source'})
   const exported=exportConversationSeed(source,{kind:'session',sessionId:'parent'},{kind:'all'})

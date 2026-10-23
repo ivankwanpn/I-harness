@@ -11,6 +11,7 @@ import { heldFactOwner, issuingFactOwner } from './fact-owner.ts'
 import { compileSemanticSeed } from '../semantic-seed.ts'
 import { isStrictFactData } from '@i-harness/core-session'
 import { ownBackendOutcome } from './fact-outcome.ts'
+import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
 
 export interface ManagedEntry {
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -21,6 +22,10 @@ const emptyPrefix=():JournalPrefix=>({eventCount:0,bodyBytes:0,prefixDigest:lega
 function current(guards:BootstrapGuards,entry?:ManagedEntry) {
   if(guards.signal?.aborted||entry?.revoked)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'})
   try{guards.assertCurrent()}catch(error){throw Object.assign(new Error('FACT_PRECONDITION_STALE'),{code:'FACT_PRECONDITION_STALE',cause:error})}
+}
+function targetCurrent(guards: BootstrapGuards) {
+  try { guards.targetPreparation?.assertTargetCurrent() }
+  catch (cause) { throw Object.assign(new Error('Bootstrap target unavailable'), { code: 'FACT_TARGET_UNAVAILABLE', cause }) }
 }
 function knownToken(entry:ManagedEntry):BootstrapResumeToken {
   const b=entry.bootstrap!,digest=b.stage?JSON.parse(b.stage.headerBytes).semanticSeed.manifestDigest:b.manifestDigest
@@ -64,6 +69,20 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
 export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const read=(invocation:BootstrapInvocation)=>backend.readBootstrapState!(invocation)
+  async function prepareTarget(stage: BootstrapHeaderStage, guards: BootstrapGuards, reconcile: boolean, entry: ManagedEntry): Promise<boolean> {
+    if (!guards.targetPreparation) return true
+    if (!reconcile) current(guards, entry)
+    try {
+      const request = captureBootstrapTargetPreparationRequest({ invocation: stage.invocation, manifestDigest: manifest(stage) })
+      const outcome = captureBootstrapTargetPreparationOutcome(reconcile
+        ? await guards.targetPreparation.reconcile(request)
+        : await guards.targetPreparation.confirm(request, () => { try { current(guards, entry); return true } catch { return false } }))
+      if (outcome.kind !== 'confirmed') return false
+      targetCurrent(guards)
+    } catch { return false }
+    if (!reconcile) current(guards, entry)
+    return true
+  }
   async function dependencies(stage:BootstrapHeaderStage,events:readonly SessionEvent[],guards:BootstrapGuards,reconcile:boolean,entry:ManagedEntry):Promise<string|undefined> {
     const first=events[0],artifacts=first?.type==='conversation/seed-manifest'?first.artifacts:entry.bootstrap?.request?.seed.records[0]?.type==='conversation/seed-manifest'?entry.bootstrap.request.seed.records[0].artifacts:[]
     if(!artifacts.length)return EMPTY_SEMANTIC_DEPENDENCY_DIGEST
@@ -71,7 +90,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(origin?.kind!=='session')return
     const request={operationId:stage.invocation.operationId,targetSessionId:stage.invocation.targetSessionId,manifestDigest:manifest(stage),sourceSessionId:origin.sessionId,artifacts}
     if(!reconcile)current(guards,entry)
+    targetCurrent(guards)
     const outcome=reconcile?await guards.dependencies.reconcile(request):await guards.dependencies.confirm(request,()=>{try{current(guards,entry);return true}catch{return false}})
+    targetCurrent(guards)
     if(!outcome||typeof outcome!=='object'||!importOutcome(outcome))return
     if(!reconcile)current(guards,entry)
     return outcome.kind==='confirmed'?outcome.closureDigest:undefined
@@ -80,6 +101,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const b=entry.bootstrap!,stage=b.stage!
     if(state.torn)return blocked(entry)
     checkBirth(stage,state)
+    if (!await prepareTarget(stage, guards, true, entry)) return blocked(entry, 'dependency-unavailable')
     const closure=await dependencies(stage,state.events!,guards,true,entry)
     const completion=state.events![stage.seed.seedLength]
     if(!closure||completion?.type!=='session/bootstrap'||completion.dependencyClosureDigest!==closure)return blocked(entry,'dependency-unavailable')
@@ -95,6 +117,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(checked.kind!=='committed')return blocked(entry)
       receipts.push(checked.receipt)
     }
+    targetCurrent(guards)
     entry.control!.ready();entry.ready=true;b.phase='completion';entry.headerUnknown=false
     return {kind:'already-ready',document:doc,receipt:{version:1,invocation:b.invocation,manifestDigest:manifest(stage),seedLength:stage.seed.seedLength,dependencyClosureDigest:closure,
       ...(stage.seed.seedLength?{seed:receipts[0]}:{}),completion:receipts.at(-1)!,...(stage.initial?{initial:{inputId:stage.initial.inputId,seq:stage.seed.seedLength+1,startedAt:stage.initial.startedAt,expiresAt:stage.initial.expiresAt}}:{})}}
@@ -156,6 +179,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!state.meta||!state.events||!state.prefix)return blocked(entry)
       const doc=entry.document??attach(id,entry,buildSession(state.meta,state.events),state.prefix)
       b.phase='dependencies'
+      if (!await prepareTarget(b.stage, guards, false, entry)) return blocked(entry, 'dependency-unavailable')
       const closure=await dependencies(b.stage,state.events,guards,false,entry)
       if(!closure)return blocked(entry,'dependency-unavailable')
       current(guards,entry)
@@ -177,14 +201,26 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           return blocked(entry)
         }
         current(guards,entry)
-        const result=await entry.control!.admit(phase.phase,phase.events,{...guards,assertCurrent(){current(guards,entry)}})
-        if(result.kind!=='committed'){b.pending=result.kind==='unknown'||result.kind==='conflict'||result.kind==='recovery-required'?result:undefined;return blocked(entry,result.kind==='not-issued'&&result.code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown')}
+        targetCurrent(guards)
+        const result=await entry.control!.admit(phase.phase,phase.events,{...guards,assertCurrent(){
+          current(guards,entry)
+          // Reuse the admission owner's precondition failure, without turning
+          // a target policy change into a permanent source document fault.
+          try { targetCurrent(guards) } catch (cause) { throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE', cause }) }
+        }})
+        if(result.kind!=='committed'){
+          b.pending=result.kind==='unknown'||result.kind==='conflict'||result.kind==='recovery-required'?result:undefined
+          targetCurrent(guards)
+          return blocked(entry,result.kind==='not-issued'&&result.code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown')
+        }
+        targetCurrent(guards)
         state=await read(b.invocation)
       }
       const adopted=await adopt(entry,state,guards)
       return adopted.kind==='already-ready'?{...adopted,kind:'ready'}:adopted
     } catch(error) {
       const code=(error as {code?:string}).code
+      if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
       return b.issued?blocked(entry):{kind:'refused',reason:'manifest-invalid'}
     }
@@ -192,7 +228,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest):Promise<BootstrapOutcome> {
     if(!supported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
     let captured:BootstrapInvocation,r:BootstrapRequest|undefined
-    try{captured=captureBootstrapInvocation(invocation);r=request?captureBootstrapRequest(request):undefined;if(r&&!sameBootstrapData(r.invocation,captured))throw new Error('invocation mismatch')}catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}
+    try{captured=captureBootstrapInvocation(invocation);r=request?captureBootstrapRequest(request):undefined;if(r&&!sameBootstrapData(r.invocation,captured))throw new Error('invocation mismatch');
+      const port=Object.getOwnPropertyDescriptor(guards,'targetPreparation')
+      if(port) { if(!('value' in port) || !port.enumerable)throw new TypeError('Invalid target preparation'); guards={...guards,targetPreparation:captureBootstrapTargetPreparationPort(port.value)} }
+    }catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}
     const first=r?.seed.records[0]
     if(first?.type==='conversation/seed-manifest'&&first.artifacts.length&&first.origins[0]?.kind!=='session')return Promise.resolve({kind:'refused',reason:'target-policy'})
     const id=captured.targetSessionId
