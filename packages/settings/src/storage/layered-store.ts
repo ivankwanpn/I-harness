@@ -136,7 +136,7 @@ export class LayeredSettingsStore {
     return this.load()
   }
 
-  /** Terminal fence: new mutations/reads reject; already accepted work joins. */
+  /** Terminal fence: new mutations/reads reject; accepted store operations join. */
   dispose(): void {
     if (this.disposed) return
     this.fence()
@@ -151,6 +151,8 @@ export class LayeredSettingsStore {
     this.watcher?.dispose()
   }
 
+  /** Joins accepted store operations, the watch reload queue and watcher cleanup.
+   * Async continuations returned by void subscribers remain caller-owned. */
   close(): Promise<void> {
     this.fence()
     if (this.closeJob) return this.closeJob
@@ -246,8 +248,12 @@ export class LayeredSettingsStore {
     if (this.disposed || this.watcher || this.options.watchIntervalMs === false) return
     const paths = this.resolvedRoots.map(source => source.path).filter((path): path is string => path !== null)
     if (!paths.length) return
+    // The adapter selects absolute keys; retain the committed bytes rather than
+    // letting a relative workspace key miss and trigger a second baseline read.
+    // Source paths keep their configured spelling for callback attribution.
+    const baseline = new Map([...this.sourceStamps].map(([path, stamp]) => [resolve(path), stamp]))
     this.watcher = watchSettings(paths, path => this.handleWatchedChange(path), {
-      service: this.options.watchService, baseline: this.sourceStamps,
+      service: this.options.watchService, baseline,
       onError: failure => this.report(failure),
     })
   }

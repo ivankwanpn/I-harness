@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest"
-import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises"
+import { writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { isAbsolute, join, relative } from "node:path"
 import { LayeredSettingsStore, type Settings } from "../src/index.ts"
 import { controlledLease, settle } from "./helpers/settings-lease.ts"
 vi.mock("node:fs/promises", async original => { const actual = await original<typeof import("node:fs/promises")>(); return { ...actual, readFile: vi.fn(actual.readFile) } })
@@ -9,6 +10,36 @@ vi.mock("node:fs/promises", async original => { const actual = await original<ty
 const roots: string[] = []
 afterEach(async () => { vi.restoreAllMocks(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "ih-baseline-")); roots.push(root); const a = join(root, "a.json"), b = join(root, "b.json"); await writeFile(a, '{"fontSize":14}'); await writeFile(b, '{"model":"before"}'); return { a, b } }
+
+it.each(["relative", "absolute"] as const)("initial reset preserves the committed baseline for a %s workspace auto source", async mode => {
+  const root = await mkdtemp(join(tmpdir(), "ih-workspace-baseline-")); roots.push(root)
+  await mkdir(join(root, ".i-harness"))
+  const file = join(root, ".i-harness", "settings.json")
+  await writeFile(file, '{"fontSize":14}')
+  const workspace = mode === "relative" ? relative(process.cwd(), root) : root
+  expect(isAbsolute(workspace)).toBe(mode === "absolute")
+  const selectedSpelling = join(workspace, ".i-harness", "settings.json")
+  const c = controlledLease(), paths: string[] = []
+  const store = new LayeredSettingsStore({ roots: { workspace: "auto" }, workspace, watchService: c.service })
+  const seam = store as unknown as { ensureWatcher(): void }, original = seam.ensureWatcher.bind(store)
+  // Change real bytes after the initial read/publication, before acquisition.
+  // Only an initial reset follows: a second construction read would hide this.
+  vi.spyOn(seam, "ensureWatcher").mockImplementationOnce(() => {
+    expect(store.get().fontSize).toBe(14)
+    writeFileSync(file, '{"fontSize":15}')
+    original()
+  })
+  store.onChange(path => { paths.push(path) })
+  try {
+    await store.load()
+    expect(store.sources()[0]!.path).toBe(selectedSpelling)
+    expect(store.get().fontSize).toBe(14)
+    expect(await readFile(file, "utf8")).toBe('{"fontSize":15}')
+    c.reset()
+    await vi.waitFor(() => expect(store.get().fontSize).toBe(15))
+    expect(paths).toEqual([selectedSpelling])
+  } finally { await store.close() }
+})
 
 it("initial reset uses bytes committed by load, detecting B changed at the publication boundary", async () => {
   const { a, b } = await fixture(), c = controlledLease(), paths: string[] = []
