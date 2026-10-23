@@ -1,0 +1,5 @@
+UTC=2026-10-23T23:47:46.1564765+00:00
+CWD=D:\I-harness-main\packages\session-executor
+HEAD=3aeda4f25cf916f560351fd4738294c01d5faa96
+COMMAND=pnpm exec tsc --noEmit
+EXIT_CODE=0
