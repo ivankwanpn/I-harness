@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { isNondurableSession, readGenerationActions, type CapturedActionFact, type GenerationActionEvent, type GenerationEvent, type GenerationOrigin, type ManagedAction, type ProducerFactOutcome, type SessionView } from '@i-harness/core-session'
 import { generationError } from '@i-harness/llm-seam'
-import type { AgentGenerationLifecycle } from '@i-harness/core-agent'
+import type { AgentGenerationLifecycle, AgentGenerationDependencies } from '@i-harness/core-agent'
 import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 
@@ -13,7 +13,7 @@ const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.ki
 
 /** One lifecycle per real F1 action. Durable facts alone determine allowance;
  * the only private spend information is live proof that a handoff was unsent. */
-export function createGenerationLifecycle(view: SessionView, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }): AgentGenerationLifecycle {
+export function createGenerationLifecycle(view: SessionView, ownerSessionId: string, action: ManagedAction<ProducerFactOutcome>, localTest?: { enabled: boolean; selectedClient(): import('@i-harness/llm-seam').ModelClient | undefined }, dependencies?: AgentGenerationDependencies): AgentGenerationLifecycle {
   const descriptor = Object.getOwnPropertyDescriptor(action, 'owner'), owner = descriptor && 'value' in descriptor ? descriptor.value as import('@i-harness/core-session').OwnerToken : undefined
   if (!isNondurableSession(view) && (!owner || !Object.isFrozen(owner) || descriptor?.writable !== false || descriptor.configurable !== false || owner.sessionId !== ownerSessionId || typeof owner.incarnation !== 'string' || !owner.incarnation)) throw generationError('GENERATION_UNSUPPORTED')
   const incarnation = owner?.incarnation ?? randomUUID(), retained = new Set<CapturedActionFact<ProducerFactOutcome>>()
@@ -29,7 +29,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
       }
       throw generationError('GENERATION_UNCERTAIN')
     }
-  })
+  }, dependencies?.beforeDrain)
   const scope = { ...view.header, sessionId: ownerSessionId }
   const state = (id: string) => readGenerationActions(view.events, scope).find(value => value.opened.actionId === id)
   const own = <T>(operation: Promise<T>): Promise<T> => {

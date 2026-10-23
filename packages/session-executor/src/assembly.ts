@@ -1229,8 +1229,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       status: "unconfigured" as const,
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
-    const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => action =>
-      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient })
+    const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
+      createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
     const subagent = registerSubagent(ctx, tools, {
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
       generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
@@ -1545,7 +1545,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
     const agent = createAgent(ctx, {
       ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
-      ...(managedDocument ? { generationFactory: action => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }) } : {}),
+      ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, dependencies) } : {}),
       modelActionTimeoutMs: opts.modelActionTimeoutMs,
       modelActionMaxAttempts: opts.modelActionMaxAttempts,
       summaryFactory,

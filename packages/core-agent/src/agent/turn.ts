@@ -61,17 +61,21 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
       promptSubmitted = true
       await drainHookContext(ctx, deps)
-      const { step, acceptedSeq } = await respond(lifecycle, stepStartSeq, abort, requestScope)
+      const { step, acceptedSeq, handoffBatch } = await respond(lifecycle, stepStartSeq, abort, requestScope)
       if (acceptedSeq !== undefined) generationOrigin = { kind: 'predecessor', seq: acceptedSeq }
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
-        await executeToolCalls(ctx, deps.session, deps.tools, batch, {
+        await handoffBatch(takeOwnership => executeToolCalls(ctx, deps.session, deps.tools, batch, {
           maxParallel, signal: abort, sessionId: deps.sessionId,
-          facts: agentFacts(deps).tools, registerFactSource: deps.registerFactSource, assertFactOpen: deps.assertFactOpen,
+          facts: agentFacts(deps).tools, registerFactSource: drain => {
+            const source = deps.registerFactSource!(drain)
+            takeOwnership()
+            return source
+          }, assertFactOpen: deps.assertFactOpen,
           modelGeneration: toolGenerationFactory(deps),
           ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
           ...(deps.flush ? { flush: deps.flush } : {}),
-        })
+        }))
       }
       const emptyThisStep = await closeStep(deps, lifecycle, getSteps, step)
       // Continuation: after a step with tool calls, run another step so the
@@ -110,6 +114,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
     const lifecycle: TurnLifecycle = { turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false }
     try { return await executeTurn(lifecycle, message, signal, images, inputId, options, producer) }
     catch (error) {
+      if (lifecycle.deferredFailure) return failTurn(deps, lifecycle, error)
       let failure = error
       try { await deps.generationAction?.close(signal?.aborted ? 'stopped' : 'failed') }
       catch (settlement) { failure = savingFailure(error, [settlement], 'Generation disposition requires recovery') }

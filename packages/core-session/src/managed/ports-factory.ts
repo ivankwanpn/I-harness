@@ -1,4 +1,5 @@
 import type { FactGroupDraft } from "./groups.ts"
+import { modelExchangeGroup } from './groups.ts'
 import type { FactPorts } from "./ports.ts"
 
 /** Closed constructors: each subsystem receives only its permitted producer
@@ -16,7 +17,7 @@ export function createFactPorts<Outcome>(admit: (draft: FactGroupDraft) => Promi
       auditAssistant: assistant => admit({ kind: 'assistant-audit', assistant }),
       feedback: message => admit({ kind: 'plugin-feedback', message }),
       lifecycle: event => admit({ kind: 'lifecycle', event }),
-      accept: (assistant, accepted, generation) => admit({ kind: 'exchange-acceptance', assistant, accepted, ...(generation ? { generation } : {}) }),
+      accept: (assistant, accepted, generation) => admit(modelExchangeGroup(assistant, accepted, generation)),
       usage: event => admit({ kind: 'usage', event }),
     },
     tools: {

@@ -8,9 +8,22 @@ import { acceptModelExchange } from "./exchange.ts"
 import { closeStepBoundary, closeTurnBoundary, failStepBoundary } from './boundaries.ts'
 import { savingFailure } from './saving-failure.ts'
 
-type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts' | 'generationAction'>
+type TurnFinalizationDeps = Pick<AgentDeps, "session" | "telemetry" | "flush" | 'facts' | 'sourceFacts' | 'generationAction' | 'captureModelExchange'>
 
 export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown): Promise<never> {
+  if (lifecycle.deferredFailure) {
+    try { await lifecycle.deferredFailure(error) }
+    catch (saving) {
+      if (saving instanceof AggregateError && saving.cause === error) throw saving
+      throw savingFailure(error, [saving], 'Original acceptance closure requires recovery')
+    }
+  } else await settleFailedTurn(deps, lifecycle, error)
+  throw error
+}
+
+/** Construct all original end facts once; their registered sources retain any
+ * failed captures. Deferred acceptance calls this only after disposition. */
+export async function settleFailedTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, error: unknown, beforeEnd?: () => Promise<void>, flush = true): Promise<void> {
   // Preparation hooks and context getters can refuse before the provider
   // stream opens. Close only this run's live boundaries; cold recovery and
   // tool outcomes remain owned by their existing paths.
@@ -21,15 +34,15 @@ export async function failTurn(deps: TurnFinalizationDeps, lifecycle: TurnLifecy
       // An incomplete provider step must not replay partial tool calls.
       // A completed provider/tool result keeps its existing provenance.
       if (!lifecycle.providerCompleted && !lifecycle.stepFailed) await attempt(() => failStepBoundary(deps, lifecycle))
+      if (beforeEnd) await attempt(beforeEnd)
       await attempt(() => closeStepBoundary(deps, lifecycle, { type: 'step/end' }))
     }
     await attempt(() => closeTurnBoundary(deps, lifecycle))
-    await attempt(async () => { await deps.flush?.() })
+    if (flush) await attempt(async () => { await deps.flush?.() })
     if (savingErrors.length) {
       throw savingFailure(error, savingErrors, 'session saving failed')
     }
   }
-  throw error
 }
 
 /** Raw counters belong to every ended response, including capped/refused ones.
@@ -68,11 +81,13 @@ export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telem
 
 /** The accepted fact survives an uncertain flush or Stop; tool effects still
  * wait for the awaited acceptance owner to return successfully. */
-export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1): Promise<void> {
+export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1, settlement?: Pick<ReturnType<typeof import('./acceptance-settlement.ts').createAcceptanceSettlement>, 'retain' | 'outcome'>): Promise<void> {
   let written: import("@i-harness/core-session").ExchangeAcceptedEvent | undefined
   let exactWritten: string | undefined
   let primary: unknown, failed = false
-  try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request, onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
+  try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request,
+    onCapture: settlement?.retain, onOutcome: settlement?.outcome,
+    onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
   catch (error) { primary = error; failed = true }
   lifecycle.providerCompleted = !!written && deps.session.events[written.seq!] === written && JSON.stringify(written) === exactWritten
   try {

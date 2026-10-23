@@ -4,18 +4,20 @@ import { captureFactGroup, resolveFactGroup, type FactGroupDraft } from './group
 import type { NondurableFactOutcome } from './ports.ts'
 
 /** Once-lowered standalone data. No receipt or durable authority is created. */
-export function captureMemoryFact(session: Session, draft: FactGroupDraft, assertHeld: () => void) {
+export function captureMemoryFact(session: Session, draft: FactGroupDraft, assertHeld: () => void, retainInstalledOutcome = false) {
   const capture = captureFactGroup(draft)
   let result: Promise<NondurableFactOutcome> | undefined
+  let installed: NondurableFactOutcome | undefined
   const commit = () => {
     assertHeld()
     return result ??= (async () => {
       if (capture.kind !== 'captured') return capture
-      const events = installMemoryGroup(session, resolveFactGroup(capture.group, session, session.events.length))
+      const events = installMemoryGroup(session, resolveFactGroup(capture.group, session, session.events.length), undefined, false,
+        retainInstalledOutcome ? events => { installed = { kind: 'memory-committed', durability: 'nondurable', seqs: events.map(item => item.seq!) } } : undefined)
       return { kind: 'memory-committed' as const, durability: 'nondurable' as const, seqs: events.map(item => item.seq!) }
     })()
   }
-  return { admit: commit, reconcile: commit, retryAbsent: commit, observe: () => result ?? Promise.resolve({ kind: 'not-issued' as const, code: 'FACT_RECOVERY_REQUIRED' as const }) }
+  return { admit: commit, reconcile: commit, retryAbsent: commit, observe: () => installed ? Promise.resolve(installed) : result ?? Promise.resolve({ kind: 'not-issued' as const, code: 'FACT_RECOVERY_REQUIRED' as const }) }
 }
 
 export function rejectedMemoryCapture() {

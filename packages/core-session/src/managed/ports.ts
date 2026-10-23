@@ -86,6 +86,7 @@ export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
 }
 export interface ManagedAction<Outcome = FactOutcome> {
+  captureModelExchange(...args: Parameters<AgentFacts<Outcome>['accept']>): CapturedActionFact<Outcome>
   captureRuntimeContext(record: import('../events/runtime-context.ts').RuntimeContextRecordV1, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureSoftReduction(event: import('../events/soft-reduction.ts').SoftReductionStart, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   /** Frozen diagnostics from the real writer; these scalars grant no authority. */

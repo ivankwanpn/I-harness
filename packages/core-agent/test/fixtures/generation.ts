@@ -5,4 +5,4 @@ import { createGenerationLifecycle } from '../../../session-executor/src/lifecyc
 /** Explicit built-in local-test execution for existing persistence/effect
  * controls. These invocations make no physical transport or payload claim. */
 export const localTestGeneration = (owner: FactOwner, sessionId: string, model: ModelClient) =>
-  (action: Parameters<typeof createGenerationLifecycle>[2]) => createGenerationLifecycle(owner.view, sessionId, action, { enabled: true, selectedClient: () => model })
+  (action: Parameters<typeof createGenerationLifecycle>[2], dependencies?: Parameters<typeof createGenerationLifecycle>[4]) => createGenerationLifecycle(owner.view, sessionId, action, { enabled: true, selectedClient: () => model }, dependencies)

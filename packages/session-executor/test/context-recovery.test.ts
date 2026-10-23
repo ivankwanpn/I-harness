@@ -6,13 +6,16 @@ import { expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync } from "node:fs"
 import { resolve, join } from "node:path"
 import { createServer } from 'node:http'
-import { deriveContextRecovery } from "@i-harness/core-session"
+import { decodeFactBatch, deriveContextRecovery, readGenerationActions, type BatchKey } from "@i-harness/core-session"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import { createDurableSessionLoader, createSessionService } from "../src/index.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
+import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
+import { createLoopbackProvider, writeSplitSse } from '../../core-agent/test/helpers/provider-loopback.ts'
+import { captureContextSnapshot } from '@i-harness/context-engine'
 
 const sse = (delta: object, finish_reason = "stop") => new Response(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\ndata: [DONE]\n\n`)
 it("actual submit durably recovers while a parked child and previous tool effect keep their owners", async () => {
@@ -187,4 +190,95 @@ it.each(['stop', 'unknown'] as const)('settles original accepted recovery to col
     server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
     rmWorkspaceSync(root)
   }
+}, 15000)
+
+it.each(['committed', 'absent'] as const)('retains the real borrowed first generation through unknown acceptance then %s and host close', async disposition => {
+  const base = resolve('build/context-recovery-tests'); mkdirSync(base, { recursive: true }); const root = mkdtempSync(join(base, 'borrowed-'))
+  const profile = join(root, 'profile'), config = join(root, 'config'); mkdirSync(profile); mkdirSync(config)
+  vi.stubEnv('HOME', profile); vi.stubEnv('USERPROFILE', profile); vi.stubEnv('IH_CONFIG_DIR', config)
+  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  await coordinator.create({ sessionId: 'parent' })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let key: BatchKey | undefined, ready = false, acceptanceIssues = 0, effects = 0
+  const append = backend.appendOwnedBatch!, reconcile = backend.reconcileOwnedBatch!, reconciled: string[] = []
+  backend.appendOwnedBatch = async (...args) => {
+    if (!key && args[0] === 'parent' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'model/exchange-accepted')) {
+      acceptanceIssues++; key = args[3].key
+      if (disposition === 'committed') await append(...args)
+      entered.resolve(); await release.promise
+      return { kind: 'unknown', key }
+    }
+    return append(...args)
+  }
+  backend.reconcileOwnedBatch = (...args) => {
+    reconciled.push(args[3].key.batchId)
+    return ready ? reconcile(...args) : Promise.resolve({ kind: 'unknown', key: args[3].key })
+  }
+  const finish = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSse(response, [
+    { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'continued' } },
+    { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }, { type: 'message_stop' },
+  ])
+  const server = await createLoopbackProvider('/v1/messages', [response => writeSplitSse(response, [
+    { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'borrowed-original', name: 'effect', input: {} } },
+    { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 10 } }, { type: 'message_stop' },
+  ]), finish, finish])
+  const model = createAnthropicClient({ apiKey: 'controlled-loopback', model: 'fixture', baseUrl: server.baseUrl, executionIdentity: { version: 1, runtimeId: 'borrowed-fixture', bindingLifetimeId: 'borrowed-fixture', authEpoch: 'borrowed-E', scope: 'binding-credential', coldCompatible: false } })
+  const makeService = (store: typeof coordinator) => createSessionService({ workspace: root, coordinator: store, sessionFor: createDurableSessionLoader(store), model, contextWindow: 100000, maxOutputTokens: 1024, approveAll: true, sandbox: 'danger-full-access', additionalTools: [{ name: 'effect', description: 'controlled effect', inputSchema: { type: 'object' }, execute: async () => { effects++; return 'effect' } }] })
+  const service = makeService(coordinator)
+  let pending: Promise<unknown> | undefined, hostClose: Promise<unknown> | undefined, storeClose: Promise<unknown> | undefined
+  try {
+    const assembly = await service.assemblyFor('parent'), document = assembly.managedDocument!
+    pending = service.submit('parent', 'original explicit input', new AbortController().signal).catch(error => error)
+    await Promise.race([entered.promise, pending.then(error => { throw Error('Submit settled before original receipt gate', { cause: error }) })])
+    hostClose = service.close().catch(error => error)
+    storeClose = coordinator.close().catch(error => error)
+    release.resolve()
+    const initial = await Promise.all([pending, hostClose, storeClose])
+    expect(initial[0]).toBeInstanceOf(Error)
+    const causes: unknown[] = [], seen = new Set<unknown>()
+    const visit = (error: unknown) => { if (seen.has(error)) return; seen.add(error); causes.push(error); if (error instanceof AggregateError) error.errors.forEach(visit); if (error instanceof Error && error.cause) visit(error.cause) }
+    initial.forEach(visit)
+    expect(causes.some(error => (error as { outcome?: { kind: string; key?: BatchKey } })?.outcome?.kind === 'unknown' && (error as { outcome: { key: BatchKey } }).outcome.key.batchId === key!.batchId)).toBe(true)
+    expect(server.requests).toHaveLength(1); expect(effects).toBe(0)
+    ready = true
+    expect(await document.reconcile(key!)).toMatchObject({ kind: disposition, ...(disposition === 'absent' ? { key } : {}) })
+    const retryErrors: unknown[] = []
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try { await coordinator.close(); break } catch (error) { retryErrors.push(error) }
+    }
+    const events = (await backend.read('parent')).events
+    const snapshot = captureContextSnapshot({ formatVersion: document.view.formatVersion, events }, { ownerSessionId: 'parent', surface: { systemPrompt: 's', tools: [] } })
+    const generations = readGenerationActions(events, { sessionId: 'parent' })
+    console.log('borrowed-generation-close', JSON.stringify({ disposition, key, acceptanceIssues, reconciled, initial: initial.map(error => error instanceof Error ? { name: error.name, message: error.message } : error), retryErrors: retryErrors.map(error => error instanceof Error ? error.message : error), events, snapshot, generations, requests: server.requests, effects }))
+    expect(acceptanceIssues).toBe(1)
+    expect(reconciled.every(batch => batch === key!.batchId)).toBe(true)
+    expect(events.filter(event => event.type === 'tool/result' && event.callId === 'borrowed-original')).toMatchObject([{ output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH' } }])
+    expect(events.filter(event => event.type === 'tool/dispatch')).toHaveLength(0)
+    expect(events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(disposition === 'committed' ? 1 : 0)
+    expect(events.filter(event => event.type === 'step/failed')).toHaveLength(disposition === 'absent' ? 1 : 0)
+    const resultSeq = events.find(event => event.type === 'tool/result' && event.callId === 'borrowed-original')!.seq!
+    const stepEndSeq = events.find(event => event.type === 'step/end')!.seq!, turnEndSeq = events.find(event => event.type === 'turn/end')!.seq!
+    expect(stepEndSeq).toBeGreaterThan(resultSeq); expect(turnEndSeq).toBeGreaterThan(stepEndSeq)
+    if (disposition === 'absent') {
+      const failedSeq = events.find(event => event.type === 'step/failed')!.seq!
+      expect(failedSeq).toBeGreaterThan(resultSeq); expect(stepEndSeq).toBeGreaterThan(failedSeq)
+    }
+    expect(snapshot).toMatchObject({ kind: 'captured', snapshot: { protection: { itemIds: [] } } })
+    expect(generations.filter(action => action.opened.purpose === 'main')).toHaveLength(1)
+    expect(generations.filter(action => action.opened.purpose === 'main').every(action => action.closed !== undefined)).toBe(true)
+    for (let continuation = 0; continuation < 2; continuation++) {
+      const reopened = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } }), resumed = makeService(reopened)
+      try {
+        await resumed.submit('parent', continuation ? 'cold explicit input' : 'warm reopened input', new AbortController().signal)
+        expect(server.requests).toHaveLength(continuation + 2)
+        const request = JSON.stringify(server.requests.at(-1)!.body.messages)
+        if (disposition === 'committed') { expect(request).toContain('borrowed-original'); expect(request).toContain('TOOL_ABORTED_BEFORE_DISPATCH') }
+        else expect(request).not.toContain('borrowed-original')
+        expect(effects).toBe(0)
+      } finally { await resumed.close(); await reopened.close() }
+    }
+  } finally { ready = true; release.resolve(); await pending; await hostClose; await storeClose; await service.close().catch(() => {}); await coordinator.close().catch(() => {}); await server.close(); rmWorkspaceSync(root) }
 }, 15000)

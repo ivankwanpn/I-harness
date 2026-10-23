@@ -48,21 +48,32 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       failed = true
     }
     const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
+    const drainDelegates = async () => {
+      const results = await Promise.allSettled([...sourceDrains].map(source => source.close()))
+      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (errors.length) throw new AggregateError(errors, 'Agent settlement requires recovery')
+    }
     try {
       deps.generationAction = undefined
-      deps.generationLifecycle = lifecycle = deps.generationFactory?.(action)
+      // A deferred original acceptance may still need to close this generation
+      // after its frame is reconciled. Keep that genuine source open through
+      // the original operation and delegated closures, including host close.
+      deps.generationLifecycle = lifecycle = deps.generationFactory?.(action, { async beforeDrain() {
+        try { await running } catch { /* The caller retains its original failure. */ }
+        await drainDelegates()
+      } })
       deps.inputPreparation = preparation = deps.inputPreparationFactory?.(action)
       deps.facts = action.facts
       deps.assertFactOpen = action.assertOpen.bind(action)
       deps.captureContextReduction = action.captureContextReduction?.bind(action)
       deps.captureSoftReduction = action.captureSoftReduction.bind(action)
       deps.captureInputPromotion = action.captureInputPromotion.bind(action)
+      deps.captureModelExchange = action.captureModelExchange.bind(action)
       sourceFacts = action.registerSettlementSource(async () => {
         let operationFailure: unknown
         try { await running } catch (error) { operationFailure = error }
-        const results = await Promise.allSettled([...sourceDrains].map(source => source.close()))
-        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-        if (errors.length) throw new AggregateError(errors, 'Agent settlement requires recovery')
+        await drainDelegates()
+        await lifecycle?.drain()
         if (String((operationFailure as { code?: string })?.code ?? '').startsWith('FACT_')) {
           if (['FACT_CAPTURE_FAILED', 'FACT_INVALID_GROUP'].includes((operationFailure as { code: string }).code)) throw operationFailure
           await factOwner.drain?.()
@@ -82,7 +93,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     // throws. These locals always belong to this invocation.
     try { await preparation?.close() }
     catch (error) { recordFailure(error, 'Input preparation settlement requires recovery') }
-    try { await lifecycle?.drain() }
+    try { if (!sourceFacts) await lifecycle?.drain() }
     catch (error) { recordFailure(error, 'Generation settlement requires recovery') }
     try { action.finish() }
     catch (error) { recordFailure(error, 'Action finish requires recovery') }

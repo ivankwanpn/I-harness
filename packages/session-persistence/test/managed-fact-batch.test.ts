@@ -47,3 +47,28 @@ it('quarantines invalid managed terminal drafts without invoking executable data
   await expect(source.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
   await expect(store.close()).rejects.toThrow()
 })
+
+it('captures ordinary acceptance bytes once and never issues a canceled original via reconcile', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-managed-acceptance-')), backend = createJsonlBackend(root), store = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await store.create(), document = await store.openManagedDocument(id), action = document.beginAction()
+  try {
+    await action.facts.agent.lifecycle({ type: 'conversation/semantics', version: 1, mode: 'accepted-exchange-v1' })
+    await action.facts.agent.lifecycle({ type: 'step/start', actionId: 'action', attemptId: 'attempt' })
+    const assistant = { type: 'assistant/message' as const, text: 'original' }, accepted = { type: 'model/exchange-accepted' as const, version: 1 as const, exchangeId: 'original', actionId: 'action', attemptId: 'attempt', stepStartSeq: { kind: 'prior' as const, seq: 1, expectedType: 'step/start' as const }, assistantSeq: { kind: 'group' as const, position: 0, expectedType: 'assistant/message' as const }, callSeqs: [] }
+    const original = action.captureModelExchange(assistant, accepted)
+    assistant.text = 'changed'; accepted.exchangeId = 'changed'
+    expect(await original.admit()).toMatchObject({ kind: 'committed', seqs: [2, 3], receipt: { key: { count: 2 } } })
+    expect(document.view.events.at(-1)).toMatchObject({ type: 'model/exchange-accepted', exchangeId: 'original' })
+    expect(document.view.events[2]).toMatchObject({ text: 'original' })
+    await action.facts.agent.lifecycle({ type: 'step/end' })
+    await action.facts.agent.lifecycle({ type: 'step/start', actionId: 'next', attemptId: 'next' })
+    const canceled = action.captureModelExchange({ type: 'assistant/message', text: 'never issued' }, { ...accepted, actionId: 'next', attemptId: 'next', exchangeId: 'canceled', stepStartSeq: { kind: 'prior', seq: 5, expectedType: 'step/start' } })
+    const append = backend.appendOwnedBatch!; let writes = 0
+    backend.appendOwnedBatch = async (...args) => { writes++; return append(...args) }
+    action.stop()
+    expect(await canceled.admit()).toEqual({ kind: 'not-issued', code: 'FACT_CANCELLED' })
+    expect(await canceled.reconcile()).toEqual({ kind: 'not-issued', code: 'FACT_CANCELLED' })
+    expect(writes).toBe(0)
+    expect(await original.reconcile()).toMatchObject({ kind: 'committed', seqs: [2, 3] })
+  } finally { action.finish(); await store.close() }
+})

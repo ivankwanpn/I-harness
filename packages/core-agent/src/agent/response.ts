@@ -8,8 +8,10 @@ import { createStepInput } from './step-input.ts'
 import { createAdmission, stalePreparedInput } from './admission.ts'
 import { createRecovery } from './recovery.ts'
 import { closeStepBoundary, openStepBoundary } from './boundaries.ts'
-import { acceptCompletedModelStep, reportModelUsage, closeStep } from './finalization.ts'
+import { acceptCompletedModelStep, reportModelUsage, closeStep, settleFailedTurn } from './finalization.ts'
 import { savingFailure } from './saving-failure.ts'
+import { createUnstartedCallSettlement } from './unstarted-call-settlement.ts'
+import { createAcceptanceSettlement } from './acceptance-settlement.ts'
 
 /** Own one logical response and every prepared physical attempt beneath it.
  * Hooks, inbox claims, accepted tool effects and turn lifetime stay outside. */
@@ -17,6 +19,10 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
   const prepareRequest = createStepInput(deps, context)
   return async function respond(lifecycle: TurnLifecycle, stepStartSeq: number, abort: AbortSignal | undefined, requestScope: LLMRequest['requestScope']) {
     const recovery = createRecovery(deps, context)
+    const unstarted = createUnstartedCallSettlement(deps)
+    const owned = { session: deps.session, facts: deps.facts, sourceFacts: deps.sourceFacts, generationAction: deps.generationAction, flush: deps.flush, telemetry: deps.telemetry }
+    const acceptance = createAcceptanceSettlement({ registerFactSource: deps.registerFactSource, flush: owned.flush }, unstarted.close)
+    let acceptanceStarted = false
     const admit = createAdmission(deps, context, prepareRequest, recovery)
     let responseFailure: unknown, responseFailed = false
     try {
@@ -98,18 +104,32 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       await closeStep(deps, lifecycle, getSteps, step)
       throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
     }
-    await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt))
+    unstarted.capture(step.batch)
+    acceptanceStarted = true
+    const deferredFailure = (error: unknown) => acceptance.fail(async accepted => {
+      lifecycle.providerCompleted = accepted
+      await settleFailedTurn(owned, lifecycle, error, async () => { await owned.generationAction?.close(abort?.aborted ? 'stopped' : 'failed') }, false)
+    })
+    lifecycle.deferredFailure = deferredFailure
+    await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt), acceptance)
+    await acceptance.close()
+    if (lifecycle.deferredFailure === deferredFailure) lifecycle.deferredFailure = undefined
     await deps.generationAction?.close('accepted')
     const accepted = deps.session.events.findLast(event => event.type === 'model/exchange-accepted' && event.actionId === step.identity.actionId)
     const acceptedSeq = accepted?.seq
     await recovery.resolve(prepared.measurement, abort)
-    return { step, acceptedSeq }
+    if (!step.batch.length) await unstarted.close()
+    return { step, acceptedSeq, handoffBatch: unstarted.handoff }
     } catch (error) { responseFailure = error; responseFailed = true; throw error }
     finally {
+      const savingErrors: unknown[] = []
+      if (responseFailed && !acceptanceStarted) try { await acceptance.close() } catch (saving) { savingErrors.push(saving) }
+      if (responseFailed) try { await unstarted.close() } catch (saving) { savingErrors.push(saving) }
       try { await recovery.close() }
-      catch (saving) {
-        if (responseFailed) throw savingFailure(responseFailure, [saving], 'Recovery source settlement failed')
-        throw saving
+      catch (saving) { savingErrors.push(saving) }
+      if (savingErrors.length) {
+        if (responseFailed) throw savingFailure(responseFailure, savingErrors, 'Original response settlement failed')
+        throw savingErrors.length === 1 ? savingErrors[0] : new AggregateError(savingErrors, 'Original response settlement failed')
       }
     }
   }

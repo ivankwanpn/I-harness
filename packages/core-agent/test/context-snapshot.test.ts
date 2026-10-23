@@ -1,11 +1,13 @@
 import { confirmFixtureExecution, fixtureExecutionIdentity } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, createNondurableFactOwner, type BudgetRead } from "@i-harness/core-session"
+import { append, createSession, createNondurableFactOwner, fromJSONL, toJSONL, type BudgetRead } from "@i-harness/core-session"
+import { captureContextSnapshot } from '@i-harness/context-engine'
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { wrapPreparedRequest, type ModelClient, type LLMRequest } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
+import { createLoopbackProvider, writeSplitSse } from './helpers/provider-loopback.ts'
 
 it.each(["prepare", "execution", "flush"].flatMap(boundary => ["pending", "prune", "rewind"].map(mutation => ({ boundary, mutation }))))("$mutation at held $boundary rebuilds without duplicate hooks/claims", async ({ boundary, mutation }) => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
@@ -226,6 +228,78 @@ it('omits the optional post-response diagnostic when Stop wins its actual before
   expect(session.events.filter(event => event.type === 'context/usage')).toHaveLength(1)
   expect(session.events.filter(event => event.type === 'context/budget' && event.version === 2 && event.snapshot.freshness === 'awaiting-projection')).toHaveLength(0)
   expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { admission: 'unavailable' } })
+})
+
+it.each(['stop', 'save-error'] as const)('pairs an accepted but undispatched tool call through %s and actual warm/cold continuation', async selected => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), abort = new AbortController()
+  const original = Error('original acceptance boundary ' + selected)
+  let effects = 0, interrupted = false
+  tools.register({ name: 'probe', description: 'controlled effect', inputSchema: { type: 'object' }, execute: async () => { effects++; return 'effect' } })
+  const completion = (response: Parameters<typeof writeSplitSse>[0]) => writeSplitSse(response, [
+    { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'continued' } },
+    { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 10 } }, { type: 'message_stop' },
+  ])
+  const server = await createLoopbackProvider('/v1/messages', [response => writeSplitSse(response, [
+    { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'original-call', name: 'probe', input: {} } },
+    { type: 'content_block_stop', index: 0 }, { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 10 } }, { type: 'message_stop' },
+  ]), completion, completion])
+  const model = createAnthropicClient({ model: 'fixture', apiKey: 'controlled-loopback', baseUrl: server.baseUrl, executionIdentity: fixtureExecutionIdentity })
+  const agent = createAgent(ctx, { session, sessionId: 'owner', tools, model, systemPrompt: 's', flush: async () => {
+    if (!interrupted && session.events.some(event => event.type === 'model/exchange-accepted')) {
+      interrupted = true
+      if (selected === 'stop') abort.abort(original)
+      else throw original
+    }
+  } })
+  try {
+    const first = await agent.run('original human input', abort.signal).catch(error => error)
+    const source = captureContextSnapshot(session, { ownerSessionId: 'owner', surface: { systemPrompt: 's', tools: tools.schemas() } })
+    const originalFacts = session.events.filter(event => event.type === 'tool/call' || event.type === 'tool/result' || event.type === 'tool/dispatch' || event.type === 'model/exchange-accepted' || event.type === 'context/usage')
+    const warm = await agent.followup('warm new input').catch(error => error)
+    const cold = fromJSONL(toJSONL(session))
+    const resumed = createAgent(ctx, { session: cold, sessionId: 'owner', tools, model, systemPrompt: 's' })
+    const afterRestart = await resumed.followup('cold new input').catch(error => error)
+    console.log('accepted-tool-stop-continuation', JSON.stringify({ selected, first: { name: first.name, message: first.message, cause: first.cause?.message }, originalFacts, source, warm: warm instanceof Error ? { code: (warm as { code?: string }).code, message: warm.message } : warm, afterRestart: afterRestart instanceof Error ? { code: (afterRestart as { code?: string }).code, message: afterRestart.message } : afterRestart, effects, requests: server.requests }))
+    expect(first).toBe(original)
+    expect(effects).toBe(0)
+    expect(originalFacts.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+    expect(originalFacts.filter(event => event.type === 'context/usage')).toHaveLength(1)
+    expect(originalFacts.filter(event => event.type === 'tool/dispatch')).toHaveLength(0)
+    expect(originalFacts.filter(event => event.type === 'tool/result')).toMatchObject([{ callId: 'original-call', isError: true, output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH' } }])
+    expect(warm).toMatchObject({ finalText: 'continued' })
+    expect(afterRestart).toMatchObject({ finalText: 'continued' })
+    expect(server.requests).toHaveLength(3)
+    for (const request of server.requests.slice(1)) {
+      const text = JSON.stringify(request.body.messages)
+      expect(text).toContain('original-call'); expect(text).toContain('tool_result'); expect(text).toContain('TOOL_ABORTED_BEFORE_DISPATCH')
+    }
+    expect(server.errors).toEqual([])
+  } finally { await server.close() }
+})
+
+it('preserves the nondurable acceptance observer error while its original installed source closes and later input proceeds', async () => {
+  const ctx = createContext(), original = Error('original memory acceptance observer'), tools = createToolRegistry(ctx)
+  let failed = false, sends = 0
+  const session = createSession(event => { if (!failed && event.type === 'model/exchange-accepted') { failed = true; throw original } })
+  const actual = createAnthropicClient({ model: 'm', apiKey: 'controlled' })
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error('unprepared') }, async prepare(request) {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control); sends++
+      yield { type: 'usage', usage: { inputTokens: 1000, inputTokenSemantics: 'includes-cache' } } as const
+      yield { type: 'text/chunk', text: 'accepted locally' } as const; yield { type: 'end' } as const
+    })())
+  } }
+  const agent = createAgent(ctx, { session, sessionId: 'owner', tools, model, systemPrompt: 's' })
+  expect(await agent.run('original input').catch(error => error)).toBe(original)
+  expect(session.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'context/usage')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'step/failed')).toHaveLength(0)
+  expect((await agent.followup('new input')).finalText).toBe('accepted locally')
+  expect(sends).toBe(2)
 })
 
 it("does not restore a historical read to fit when a changed surface is restored", async () => {

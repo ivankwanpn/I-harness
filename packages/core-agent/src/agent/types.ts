@@ -53,6 +53,7 @@ export interface AgentDeps {
   captureContextReduction?: NonNullable<import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureContextReduction']>
   captureSoftReduction?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureSoftReduction']
   captureInputPromotion?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureInputPromotion']
+  captureModelExchange?: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>['captureModelExchange']
   factOwner?: FactOwner
   facts?: FactPorts<ProducerFactOutcome>
   sourceFacts?: SettlementFacts<ProducerFactOutcome>
@@ -162,4 +163,5 @@ export interface AgentRegistry {
 export type TurnLifecycle = {
   turnOpen: boolean; stepOpen: boolean; providerCompleted: boolean; stepFailed: boolean
   stepEnd?: Promise<void>; stepFailure?: Promise<void>; turnEnd?: Promise<void>
+  deferredFailure?: (error: unknown) => Promise<void>
 }

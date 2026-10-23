@@ -163,8 +163,10 @@ it('joins every created close after failures while retaining busy through genera
   const primary = new Error('operation'), preparationFailure = new Error('preparation'), drainFailure = new Error('drain'), finishFailure = new Error('finish')
   const order: string[] = []
   let factories = 0
+  let originalAction: ReturnType<typeof original.beginAction> | undefined
   const owner: FactOwner = { ...original, beginAction(signal) {
     const action = original.beginAction(signal)
+    originalAction = action
     return { ...action,
       finish() { order.push('finish'); action.finish(); throw finishFailure },
       registerSettlementSource(drain) {
@@ -184,12 +186,13 @@ it('joins every created close after failures while retaining busy through genera
   const pending = settled(agent.compact!())
   try {
     await entered.promise
+    expect(() => originalAction!.assertOpen()).toThrow('FACT_CANCELLED')
     await expect(agent.run('rejected')).rejects.toMatchObject({ code: 'AGENT_BUSY' })
     expect(factories).toBe(1)
   } finally { release.resolve(); await pending }
   const errors = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(errors) : [error]
-  expect(errors((await pending).error)).toEqual([primary, preparationFailure, drainFailure, finishFailure])
-  expect(order).toEqual(['preparation', 'drain', 'finish', 'source'])
+  expect(errors((await pending).error)).toEqual([primary, preparationFailure, finishFailure, drainFailure])
+  expect(order).toEqual(['preparation', 'finish', 'source', 'drain'])
 })
 
 it('keeps the actual managed source through held acceptance and refuses new work after an unresolved owner drain', async () => {
@@ -202,7 +205,7 @@ it('keeps the actual managed source through held acceptance and refuses new work
   const factory = localTestGeneration(document, id, model)
   const agent = createAgent(ctx, {
     session: document.view, factOwner: document, sessionId: id, model, systemPrompt: '', tools: createToolRegistry(ctx),
-    generationFactory(action) { factories++; return factory(action) },
+    generationFactory(action, dependencies) { factories++; return factory(action, dependencies) },
     async flush() { if (++flushes === 2) { entered.resolve(); await release.promise } },
   })
   const first = settled(agent.run('first'))
@@ -231,4 +234,31 @@ it('keeps the actual managed source through held acceptance and refuses new work
     failDrain = false; await retained?.close(); await coordinator.close()
     await rm(root, { recursive: true, force: true })
   }
+})
+
+it.each([false, true])('preserves the actual frozen action and factory dependencies through setup and cleanup (throw-first=%s)', async throwFirst => {
+  const ctx = createContext(), session = createSession(), original = createNondurableFactOwner(session)
+  const actions: ReturnType<typeof original.beginAction>[] = [], registers: unknown[] = []
+  const owner: FactOwner = { ...original, beginAction(signal) {
+    const action = original.beginAction(signal)
+    actions.push(action); registers.push(action.registerSettlementSource)
+    return Object.freeze(action)
+  } }
+  const model = createMockClient([{ role: 'assistant', text: 'done' }]), factory = localTestGeneration(owner, 'owner', model), setup = Error('original frozen factory setup failure')
+  let factories = 0
+  const agent = createAgent(ctx, { session, factOwner: owner, sessionId: 'owner', tools: createToolRegistry(ctx), model, systemPrompt: '', generationFactory(action, dependencies) {
+    factories++
+    expect(action).toBe(actions.at(-1)); expect(Object.isFrozen(action)).toBe(true)
+    expect(action.registerSettlementSource).toBe(registers.at(-1))
+    expect(dependencies?.beforeDrain).toBeTypeOf('function')
+    if (throwFirst && factories === 1) throw setup
+    return factory(action, dependencies)
+  } })
+  if (throwFirst) await expect(agent.run('first setup')).rejects.toBe(setup)
+  expect((await agent.run('actual input')).finalText).toBe('done')
+  expect(factories).toBe(throwFirst ? 2 : 1)
+  actions.forEach((action, index) => {
+    expect(action.registerSettlementSource).toBe(registers[index])
+    expect(() => action.assertOpen()).toThrow('FACT_CANCELLED')
+  })
 })

@@ -30,7 +30,7 @@ export function createExecutionDependencies(host: Dependencies): Dependencies {
   for (const key of [
     'sharedBudget', 'generationAction', 'generationLifecycle', 'inputPreparation',
     'facts', 'sourceFacts', 'assertFactOpen', 'captureContextReduction',
-    'captureSoftReduction', 'captureInputPromotion', 'registerFactSource',
+    'captureSoftReduction', 'captureInputPromotion', 'captureModelExchange', 'registerFactSource',
   ] as const satisfies readonly (keyof Dependencies)[]) {
     Object.defineProperty(deps, key, { value: undefined, writable: true, enumerable: true })
   }

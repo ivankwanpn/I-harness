@@ -1,7 +1,7 @@
 import type { Session } from '../events/types.ts'
 import { append } from '../events/append.ts'
 import { managedSessions } from '../events/state.ts'
-import { captureFactGroup, resolveFactGroup, validInputPromotionDraft } from './groups.ts'
+import { captureFactGroup, resolveFactGroup, validInputPromotionDraft, modelExchangeGroup } from './groups.ts'
 import type { FactGroupDraft } from './groups.ts'
 import { createFactPorts } from './ports-factory.ts'
 import { isStrictFactData } from './capture.ts'
@@ -73,6 +73,21 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         return { kind: 'memory-committed', durability: 'nondurable', seqs: [seq] }
       }
       return {
+        captureModelExchange(...args) {
+          const retained = captureMemoryFact(session, modelExchangeGroup(...args), assertOpen, true)
+          let attempted: Promise<NondurableFactOutcome> | undefined
+          const admit = () => attempted ??= (async () => {
+            try { assertOpen() }
+            catch (error) {
+              const code = (error as { code?: unknown }).code
+              if (code !== 'FACT_CANCELLED' && code !== 'FACT_RECOVERY_REQUIRED') throw error
+              return { kind: 'not-issued', code }
+            }
+            return retained.admit()
+          })()
+          const observe = () => attempted ? retained.observe().then(outcome => outcome.kind === 'not-issued' ? attempted! : outcome) : retained.observe()
+          return { admit, observe, reconcile: observe }
+        },
         captureRuntimeContext(event, checkCurrent) {
           return captureMemoryFact(session, { kind: 'runtime-context', event }, () => { assertOpen(); if (!checkCurrent()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' }) })
         },

@@ -16,6 +16,10 @@ export type AcceptedDraft = DistributiveOmit<Event<'model/exchange-accepted'>, '
 }
 export type GenerationAcceptanceDraft = DistributiveOmit<Extract<GenerationActionEvent, { op: 'accepted' }>, 'seq' | 'acceptedSeq'>
 export type GenerationRecoveryDraft = Omit<Extract<GenerationActionEvent, { op: 'phase' }>, 'seq' | 'recoverySeq'>
+/** The ordinary and captured paths share this one closed acceptance group. */
+export function modelExchangeGroup(assistant: Event<'assistant/message'>, accepted: AcceptedDraft, generation?: GenerationAcceptanceDraft): Extract<FactGroupDraft, { kind: 'exchange-acceptance' }> {
+  return { kind: 'exchange-acceptance', assistant, accepted, ...(generation ? { generation } : {}) }
+}
 export type MetadataFact = Event<'plan/mode' | 'sandbox/mode' | 'todo/write' | 'goal/change' | 'schedule/change' | 'session/title' | 'context/budget' | 'context/recovery' | 'command/run' | 'command/done' | 'operator/run-end'>
 type UsageSample = Extract<Event<'context/usage'>, { version: 2; op: 'sample' }>
 export type UsageDraft = Exclude<Event<'context/usage'>, UsageSample> | (Omit<UsageSample, 'checkpoint'> & {
@@ -119,6 +123,9 @@ export function captureFactGroup(draft: FactGroupDraft):
   try {
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
+    // groupEvents supplies generation's intra-group reference by spreading
+    // that DTO. Reject executable acceptance slots before that construction.
+    if (draft.kind === 'exchange-acceptance' && !isStrictFactData(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'runtime-context' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2 || Object.getOwnPropertyNames(draft).length !== 2 || !validRuntimeContextRecord(draft.event) || Object.hasOwn(draft.event, 'seq'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'soft-reduction' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2

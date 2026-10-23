@@ -21,7 +21,10 @@ export interface AgentGenerationLifecycle {
   open(purpose: GenerationPurpose, origin: GenerationOrigin, options?: { timeoutMs?: number; maxAttempts?: number; signal?: AbortSignal; start?: { wall: number; monotonic: number }; selectedClient?: () => import('@i-harness/llm-seam').ModelClient | undefined }): Promise<AgentGenerationAction>
   drain(): Promise<void>
 }
-export type AgentGenerationFactory = (action: ManagedAction<ProducerFactOutcome>) => AgentGenerationLifecycle
+/** Construction dependency: a factory must forward this before releasing any
+ * genuine generation source that the Agent may still need for original close. */
+export interface AgentGenerationDependencies { beforeDrain(): Promise<void> }
+export type AgentGenerationFactory = (action: ManagedAction<ProducerFactOutcome>, dependencies?: AgentGenerationDependencies) => AgentGenerationLifecycle
 export type DocumentGenerationFactory = (owner: import('@i-harness/core-session').FactOwner, sessionId: string, selectedClient: () => import('@i-harness/llm-seam').ModelClient | undefined) => AgentGenerationFactory
 export interface AgentInputPreparation {
   prepare(input: import('@i-harness/core-session').PendingInput, generation: AgentGenerationAction): Promise<import('@i-harness/core-session').PreparedInputResult | undefined>
