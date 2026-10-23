@@ -68,8 +68,10 @@ export function planDiscovery(scope: InstructionScope, targets: readonly Instruc
   return { targets: plans, globals: boundedGlobals, globalLimited, interests: [...interests.values()] }
 }
 export interface BoundaryAlias { readonly lexical: string; readonly canonical: string }
-export async function resolveBoundaryAliases(plan: DiscoveryPlan): Promise<readonly BoundaryAlias[]> {
+export interface BoundaryResolution { readonly aliases: readonly BoundaryAlias[]; readonly unavailableTargets: readonly InstructionTarget[] }
+export async function resolveBoundaryAliases(plan: DiscoveryPlan): Promise<BoundaryResolution> {
   const aliases = new Map<string, BoundaryAlias>()
+  const unavailableTargets: InstructionTarget[] = []
   for (const target of plan.targets) {
     if (!target.root || target.limited) continue
     try {
@@ -80,9 +82,9 @@ export async function resolveBoundaryAliases(plan: DiscoveryPlan): Promise<reado
         const lexical = join(directory, '.git')
         aliases.set(key(lexical), { lexical, canonical: join(resolved, '.git') })
       }
-    } catch { /* Discovery diagnoses unavailable boundaries; failed resolution grants no alias. */ }
+    } catch { unavailableTargets.push(target.target) }
   }
-  return frozen([...aliases.values()])
+  return frozen({ aliases: [...aliases.values()], unavailableTargets })
 }
 export interface Slot { slotId: string; path: string; scopeRoot: string; scopeDirectory: string; kind: InstructionKind; presence: CandidatePresence; canonicalPath?: string; observedSize?: number; selected: boolean; outside: boolean; global: boolean }
 export interface DiscoveredTarget { target: InstructionTarget; scopeKey: string; slotIds: string[]; complete: boolean; message?: string }

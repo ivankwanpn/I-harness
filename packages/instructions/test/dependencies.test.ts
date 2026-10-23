@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
-import { fixture, type Fixture } from './helpers/instruction-fixture.ts'
+import { fixture, deferred, type Fixture } from './helpers/instruction-fixture.ts'
 let f: Fixture
 beforeEach(async () => { f = await fixture() })
 afterEach(async () => { vi.restoreAllMocks(); await f.cleanup() })
@@ -86,4 +86,53 @@ it.each(['changed', 'pending'] as const)('reconciles canonical Git marker %s eve
   await fs.rmdir(marker); f.observation.emit([marker])
   expect(service.snapshot().applicable[0].reliability).toBe('unavailable'); expect(service.snapshot().applicable[1]).toEqual(independent)
   const widened = await service.prepare([target]); expect(widened.text).toContain('broad-rules'); expect(widened.applicable[0].reliability).toBe('ready'); expect(widened.applicable[1]).toEqual(independent)
+})
+it('keeps one-shot alias-resolution uncertainty unavailable until mapping and watch reconciliation recover', async () => {
+  await f.write('workspace/AGENTS.md', 'broad-rules'); await f.write('workspace/real/AGENTS.md', 'narrow-rules'); await f.write('independent/AGENTS.md', 'independent-rules')
+  const alias = f.path('workspace/alias'); await fs.symlink(f.path('workspace/real'), alias, 'junction')
+  const target = { path: alias, kind: 'directory' as const }, service = f.service({ roots: [f.path('workspace'), f.path('independent')] })
+  const initial = await service.prepare([{ path: f.path('independent'), kind: 'directory' }]), independent = initial.applicable[0]
+  const realpath = fs.realpath.bind(fs); let failures = 0, successfulAliasLookups = 0
+  vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => {
+    if (String(args[0]) === alias) {
+      if (!failures) { failures++; throw Object.assign(new Error('transient alias denial'), { code: 'EACCES' }) }
+      successfulAliasLookups++
+    }
+    return realpath(...args)
+  })
+  const uncertain = await service.prepare([target])
+  expect(failures).toBe(1); expect(successfulAliasLookups).toBeGreaterThan(0); expect(uncertain.text).toContain('narrow-rules')
+  expect(uncertain.applicable[1].reliability).toBe('unavailable'); expect(uncertain.applicable[1].complete).toBe(false); expect(uncertain.applicable[0]).toEqual(independent)
+  const entered = deferred(), release = deferred(), updates = f.observation.updates
+  f.observation.duringUpdate = async () => { entered.resolve(); await release.promise }
+  const recovering = service.prepare([target]); await entered.promise
+  expect(service.snapshot().applicable[1].reliability).toBe('unavailable'); expect(service.snapshot().applicable[0]).toEqual(independent)
+  release.resolve(); const recovered = await recovering; f.observation.duringUpdate = undefined
+  expect(f.observation.updates).toBe(updates + 1); expect(recovered.applicable[1].reliability).toBe('ready'); expect(recovered.applicable[1].complete).toBe(true); expect(recovered.applicable[0]).toEqual(independent)
+  const marker = await f.dir('workspace/real/.git'); f.observation.emit([marker])
+  expect(service.snapshot().applicable[1].reliability).toBe('unavailable'); expect(service.snapshot().applicable[0]).toEqual(independent)
+  const narrowed = await service.prepare([target]); expect(narrowed.text).not.toContain('broad-rules'); expect(narrowed.text).toContain('narrow-rules')
+  f.observation.emit([], 'pending', [{ id: 'remove-marker', paths: [marker] }]); expect(service.snapshot().applicable[1].reliability).toBe('pending')
+  await fs.rmdir(marker); f.observation.emit([], 'pending', [])
+  const widened = await service.prepare([target]); expect(widened.text).toContain('broad-rules'); expect(widened.applicable[1].reliability).toBe('ready'); expect(widened.applicable[0]).toEqual(independent)
+})
+it('returns bounded unavailable evidence for permanent mapping failure and retains reconciliation work', async () => {
+  await f.write('workspace/real/AGENTS.md', 'narrow'); await f.write('independent/AGENTS.md', 'independent')
+  const alias = f.path('workspace/alias'); await fs.symlink(f.path('workspace/real'), alias, 'junction')
+  const target = { path: alias, kind: 'directory' as const }, service = f.service({ roots: [f.path('workspace'), f.path('independent')] })
+  const independent = (await service.prepare([{ path: f.path('independent'), kind: 'directory' }])).applicable[0]
+  const realpath = fs.realpath.bind(fs); let failures = 0
+  vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => { if (String(args[0]) === alias) { failures++; throw Object.assign(new Error('alias denied'), { code: 'EACCES' }) } return realpath(...args) })
+  const first = await service.prepare([target]); expect(first.applicable[1].reliability).toBe('unavailable'); expect(first.applicable[0]).toEqual(independent)
+  const previousFailures = failures, updates = f.observation.updates
+  const second = await service.prepare([target]); expect(failures).toBeGreaterThan(previousFailures); expect(failures - previousFailures).toBeLessThanOrEqual(6); expect(f.observation.updates).toBe(updates + 1)
+  expect(second.applicable[1].reliability).toBe('unavailable'); expect(second.applicable[1].complete).toBe(false); expect(second.applicable[0]).toEqual(independent)
+})
+it('treats an ordinarily missing ancestor as known absence rather than mapping failure', async () => {
+  await f.write('workspace/AGENTS.md', 'broad-rules')
+  const target = { path: f.path('workspace/missing/deeper'), kind: 'directory' as const }
+  const service = f.service({ roots: [f.path('workspace')] }), first = await service.prepare([target])
+  expect(first.reliability).toBe('ready'); expect(first.complete).toBe(true); expect(first.text).toContain('broad-rules')
+  expect(first.candidates.filter(c => c.path.includes('missing')).every(c => c.presence === 'absent')).toBe(true)
+  const updates = f.observation.updates; expect(await service.prepare([target])).toBe(first); expect(f.observation.updates).toBe(updates)
 })

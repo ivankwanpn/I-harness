@@ -132,19 +132,32 @@ export function createInstructionService(options: InstructionServiceOptions): In
         }
         // Resolve only the bounded, authorized lexical directories. Install their
         // canonical marker mappings before reading metadata under those aliases.
-        const aliases = await resolveBoundaryAliases(plan)
+        const resolution = await resolveBoundaryAliases(plan)
         if (closed) throw closedError()
         if (generation !== captured) continue
-        boundaryAliases = aliases
+        const unavailableTargets = new Set(resolution.unavailableTargets.map(t => `${t.kind}:${key(t.path)}`))
+        const mappingIncomplete = unavailableTargets.size > 0
+        // Retain verified invalidation mappings while a target cannot reconcile;
+        // neither these old mappings nor a later content read makes it ready.
+        boundaryAliases = mappingIncomplete
+          ? frozen([...new Map([...boundaryAliases, ...resolution.aliases].map(alias => [key(alias.lexical), alias])).values()])
+          : resolution.aliases
+        if (mappingIncomplete) interestsChanged = true
         const discovery = await discover(scope, plan)
         if (closed) throw closedError()
         if (generation !== captured) continue
+        for (const target of discovery.targets) {
+          if (!unavailableTargets.has(`${target.target.kind}:${key(target.target.path)}`)) continue
+          target.complete = false; target.message = 'Canonical boundary mapping unavailable'
+        }
         const retained = new Set(discovery.slots.filter(s => s.presence !== 'absent' && !s.outside).map(s => s.slotId))
         for (const id of cache.keys()) if (!retained.has(id)) cache.delete(id)
         const built = await buildSnapshot(discovery, scope.maxBytes, cache, dirty, slotState, () => !closed && generation === captured)
         if (closed) throw closedError()
         if (built.changed || generation !== captured) { for (const s of discovery.slots) dirty.add(s.slotId); continue }
-        needsBuild = false; dirty.clear(); publish(built.snapshot)
+        needsBuild = mappingIncomplete; dirty.clear()
+        for (const target of discovery.targets) if (unavailableTargets.has(`${target.target.kind}:${key(target.target.path)}`)) for (const id of target.slotIds) dirty.add(id)
+        publish(built.snapshot)
         if (closed) throw closedError()
         if (generation !== captured) continue
         return current
