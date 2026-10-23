@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { canonical, inside, key, missing, type Slot } from './discovery.ts'
+import { InstructionReadCleanupError } from './contracts.ts'
 
 export function utf8Prefix(text: string, bytes: number): string {
   const buffer = Buffer.from(text); if (buffer.length <= bytes) return text
   return new TextDecoder().decode(buffer.subarray(0, Math.max(0, bytes)), { stream: true })
 }
 export interface ReadResult { body: string; contentHash?: string; hashScope?: 'full' | 'prefix'; observedSize?: number; failure?: 'unreadable' | 'absent' | 'outside-scope'; changed?: boolean; truncated: boolean }
-export class InstructionReadCleanupError extends Error { constructor(cause: unknown) { super('Instruction file cleanup failed', { cause }) } }
 const identity = (s: { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`
 export async function readSource(slot: Slot, allowance: number): Promise<ReadResult> {
   if (allowance <= 0) return { body: '', truncated: (slot.observedSize ?? 0) > 0, observedSize: slot.observedSize }

@@ -18,3 +18,5 @@ export interface InstructionObservationPort { subscribe(listener: (event: Instru
 export interface InstructionService { prepare(targets: readonly InstructionTarget[]): Promise<InstructionSnapshot>; snapshot(): InstructionSnapshot; invalidate(paths?: readonly string[]): void; subscribe(listener: () => void): () => void; close(): Promise<void> }
 export interface InstructionServiceOptions { readonly scope: InstructionScope; readonly observation: InstructionObservationPort }
 export class InstructionConfigurationError extends Error { readonly code = 'INSTRUCTIONS_INVALID_CONFIG'; constructor(message: string) { super(message); this.name = 'InstructionConfigurationError' } }
+// Internal signal shared by content and metadata readers; the service owns reporting.
+export class InstructionReadCleanupError extends Error { constructor(cause: unknown) { super('Instruction file cleanup failed', { cause }) } }

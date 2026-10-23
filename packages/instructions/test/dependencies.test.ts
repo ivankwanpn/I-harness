@@ -64,3 +64,26 @@ it('leaves the last reliable semantic fingerprint unchanged on duplicate observa
   f.observation.listener?.({ ...f.observation.state, kind: 'changed', paths: [file] }); expect(service.snapshot()).toBe(before)
   f.observation.emit([], 'pending', [{ id: 'irrelevant', paths: [f.path('other/AGENTS.md')] }]); expect(service.snapshot()).toBe(before)
 })
+it.each(['changed', 'pending'] as const)('reconciles canonical Git marker %s events through a real junction without disturbing another root', async kind => {
+  await f.write('workspace/AGENTS.md', 'broad-rules'); await f.write('workspace/real/AGENTS.md', 'narrow-rules'); await f.write('independent/AGENTS.md', 'independent-rules')
+  await fs.symlink(f.path('workspace/real'), f.path('workspace/alias'), 'junction')
+  const target = { path: f.path('workspace/alias'), kind: 'directory' as const }
+  const service = f.service({ roots: [f.path('workspace'), f.path('independent')] })
+  const initial = await service.prepare([target, { path: f.path('independent'), kind: 'directory' }])
+  expect(initial.text).toContain('broad-rules'); const independent = initial.applicable[1]
+  const marker = f.path('workspace/real/.git')
+  f.observation.emit([f.path('workspace/real-other/.git')]); expect(service.snapshot()).toBe(initial)
+  if (kind === 'pending') {
+    f.observation.emit([], 'pending', [{ id: 'canonical-marker', paths: [marker] }])
+    expect(service.snapshot().applicable[0].reliability).toBe('pending')
+    expect((await service.prepare([target])).applicable[0].reliability).toBe('pending')
+  }
+  await f.dir('workspace/real/.git')
+  f.observation.emit(kind === 'changed' ? [marker] : [], kind, [])
+  expect(service.snapshot().applicable[0].reliability).toBe('unavailable')
+  expect(service.snapshot().applicable[1]).toEqual(independent)
+  const narrowed = await service.prepare([target]); expect(narrowed.text).not.toContain('broad-rules'); expect(narrowed.text).toContain('narrow-rules'); expect(narrowed.applicable[0].reliability).toBe('ready'); expect(narrowed.applicable[1]).toEqual(independent)
+  await fs.rmdir(marker); f.observation.emit([marker])
+  expect(service.snapshot().applicable[0].reliability).toBe('unavailable'); expect(service.snapshot().applicable[1]).toEqual(independent)
+  const widened = await service.prepare([target]); expect(widened.text).toContain('broad-rules'); expect(widened.applicable[0].reliability).toBe('ready'); expect(widened.applicable[1]).toEqual(independent)
+})

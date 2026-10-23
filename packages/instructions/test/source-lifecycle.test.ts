@@ -103,3 +103,35 @@ it('preserves file-handle cleanup failure while joining a close during an active
   await entered.promise; const closing = service.close(), cleanup = expect(closing).rejects.toThrow('handle cleanup failed'); release.resolve()
   await prepared; await cleanup; expect(f.observation.closes).toBe(1)
 })
+it.each([
+  { readFailure: false, closeFailure: false, leaseFailure: false },
+  { readFailure: false, closeFailure: true, leaseFailure: false },
+  { readFailure: false, closeFailure: true, leaseFailure: true },
+  { readFailure: true, closeFailure: true, leaseFailure: false },
+  { readFailure: true, closeFailure: true, leaseFailure: true },
+])('joins held Git marker reads and preserves original cleanup outcomes: %j', async failures => {
+  const metadata = await f.dir('metadata'), marker = await f.write('repo/.git', `gitdir: ${metadata}\n`)
+  const entered = deferred(), release = deferred(), open = fs.open.bind(fs)
+  const readError = new Error('marker read failed'), closeError = new Error('marker cleanup failed'), leaseError = new Error('lease cleanup failed')
+  let markerCloses = 0
+  vi.spyOn(fs, 'open').mockImplementation(async (...args) => {
+    const h = await open(...args)
+    if (String(args[0]) === marker) {
+      const read = h.read.bind(h), close = h.close.bind(h)
+      vi.spyOn(h, 'read').mockImplementation(async (...input: any[]) => { const result = await (read as any)(...input); entered.resolve(); await release.promise; if (failures.readFailure) throw readError; return result })
+      vi.spyOn(h, 'close').mockImplementation(async () => { markerCloses++; await close(); if (failures.closeFailure) throw closeError })
+    }
+    return h
+  })
+  if (failures.leaseFailure) f.observation.closeError = leaseError
+  const service = f.service({ cwd: f.path('repo') }), preparing = service.prepare([])
+  const prepared = expect(preparing).rejects.toMatchObject({ code: 'INSTRUCTIONS_CLOSED' })
+  await entered.promise; let closed = false
+  const closing = service.close(); const outcome = closing.then(() => ({ error: undefined }), error => ({ error }))
+  void outcome.then(() => { closed = true }); await Promise.resolve(); expect(closed).toBe(false)
+  release.resolve(); await prepared; const { error } = await outcome
+  const flatten = (value: unknown): unknown[] => value instanceof AggregateError ? value.errors.flatMap(flatten) : [value]
+  if (!failures.closeFailure) expect(error).toBeUndefined()
+  else expect(flatten(error)).toEqual([...(failures.readFailure ? [readError] : []), closeError, ...(failures.leaseFailure ? [leaseError] : [])])
+  expect(markerCloses).toBe(1); expect(f.observation.closes).toBe(1); expect(service.close()).toBe(closing)
+})

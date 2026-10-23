@@ -1,9 +1,8 @@
-import { InstructionConfigurationError, type InstructionService, type InstructionServiceOptions, type InstructionSnapshot, type InstructionTarget, type InstructionObservationEvent, type InstructionObservationState, type InstructionObservationLease } from './contracts.ts'
-import { discover, frozen, key, overlaps, paths, planDiscovery, record, scopeData, targetData, type DiscoveryPlan, type Slot } from './discovery.ts'
+import { InstructionConfigurationError, InstructionReadCleanupError, type InstructionService, type InstructionServiceOptions, type InstructionSnapshot, type InstructionTarget, type InstructionObservationEvent, type InstructionObservationState, type InstructionObservationLease } from './contracts.ts'
+import { discover, frozen, key, overlaps, paths, planDiscovery, record, resolveBoundaryAliases, scopeData, targetData, type BoundaryAlias, type DiscoveryPlan, type Slot } from './discovery.ts'
 import { applicableFingerprint, buildSnapshot, candidateFingerprint, emptySnapshot, reliability, type CachedRead } from './snapshot.ts'
 import { basename, dirname } from 'node:path'
 import { inside } from './discovery.ts'
-import { InstructionReadCleanupError } from './reader.ts'
 
 // Capture capabilities without evaluating accessors or freezing their owner.
 function method<T extends (...args: any[]) => any>(owner: unknown, name: string): T {
@@ -39,6 +38,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
   const targets = new Map<string, InstructionTarget>(), listeners = new Set<() => void>(), cache = new Map<string, CachedRead>(), dirty = new Set<string>()
   const cleanupFailures: unknown[] = []
   let plan: DiscoveryPlan = planDiscovery(scope, [])
+  let boundaryAliases: readonly BoundaryAlias[] = []
 
   function publish(next: InstructionSnapshot) {
     if (JSON.stringify({ ...next, revision: 0 }) === JSON.stringify({ ...current, revision: 0 })) return
@@ -48,8 +48,11 @@ export function createInstructionService(options: InstructionServiceOptions): In
   function boundaryAffects(changed: string, slot: Pick<Slot, 'scopeDirectory' | 'scopeRoot'>): boolean {
     return basename(changed) === '.git' && inside(slot.scopeRoot, changed) && inside(dirname(changed), slot.scopeDirectory)
   }
+  function withBoundaryAliases(changed: readonly string[]): string[] {
+    return [...changed, ...boundaryAliases.filter(alias => changed.some(path => overlaps(path, alias.canonical))).map(alias => alias.lexical)]
+  }
   function slotState(slot: Pick<Slot, 'path' | 'canonicalPath' | 'scopeDirectory' | 'scopeRoot'>) {
-    const ids = state.pending.filter(p => p.paths.some(changed => overlaps(changed, slot.path) || !!slot.canonicalPath && overlaps(changed, slot.canonicalPath) || boundaryAffects(changed, slot))).map(p => p.id)
+    const ids = state.pending.filter(p => withBoundaryAliases(p.paths).some(changed => overlaps(changed, slot.path) || !!slot.canonicalPath && overlaps(changed, slot.canonicalPath) || boundaryAffects(changed, slot))).map(p => p.id)
     return { pendingIds: ids, reliability: !healthy || !state.available ? 'unavailable' as const : ids.length ? 'pending' as const : 'ready' as const }
   }
   function affectedIds(changed?: readonly string[]): Set<string> {
@@ -66,6 +69,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
   }
   function mark(changed?: readonly string[]) {
     if (closed || disabled) return
+    if (changed) changed = withBoundaryAliases(changed)
     const ids = affectedIds(changed)
     const relevant = !changed || ids.size > 0 || plan.interests.some(i => i.candidates.some(c => changed.some(p => overlaps(p, c))))
     if (!relevant) return
@@ -126,6 +130,12 @@ export function createInstructionService(options: InstructionServiceOptions): In
           if (generation !== captured) continue
           interestsChanged = false
         }
+        // Resolve only the bounded, authorized lexical directories. Install their
+        // canonical marker mappings before reading metadata under those aliases.
+        const aliases = await resolveBoundaryAliases(plan)
+        if (closed) throw closedError()
+        if (generation !== captured) continue
+        boundaryAliases = aliases
         const discovery = await discover(scope, plan)
         if (closed) throw closedError()
         if (generation !== captured) continue

@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
-import { InstructionConfigurationError, type InstructionScope, type InstructionTarget, type InstructionKind, type InstructionWatchInterest, type CandidatePresence } from './contracts.ts'
+import { InstructionConfigurationError, InstructionReadCleanupError, type InstructionScope, type InstructionTarget, type InstructionKind, type InstructionWatchInterest, type CandidatePresence } from './contracts.ts'
 
 export const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const key = (path: string): string => process.platform === 'win32' ? normalize(path).toLowerCase() : normalize(path)
@@ -67,6 +67,23 @@ export function planDiscovery(scope: InstructionScope, targets: readonly Instruc
   })
   return { targets: plans, globals: boundedGlobals, globalLimited, interests: [...interests.values()] }
 }
+export interface BoundaryAlias { readonly lexical: string; readonly canonical: string }
+export async function resolveBoundaryAliases(plan: DiscoveryPlan): Promise<readonly BoundaryAlias[]> {
+  const aliases = new Map<string, BoundaryAlias>()
+  for (const target of plan.targets) {
+    if (!target.root || target.limited) continue
+    try {
+      const root = await canonical(target.root)
+      for (const directory of target.directories) {
+        const resolved = await canonical(directory)
+        if (!inside(root, resolved)) continue
+        const lexical = join(directory, '.git')
+        aliases.set(key(lexical), { lexical, canonical: join(resolved, '.git') })
+      }
+    } catch { /* Discovery diagnoses unavailable boundaries; failed resolution grants no alias. */ }
+  }
+  return frozen([...aliases.values()])
+}
 export interface Slot { slotId: string; path: string; scopeRoot: string; scopeDirectory: string; kind: InstructionKind; presence: CandidatePresence; canonicalPath?: string; observedSize?: number; selected: boolean; outside: boolean; global: boolean }
 export interface DiscoveredTarget { target: InstructionTarget; scopeKey: string; slotIds: string[]; complete: boolean; message?: string }
 export interface Discovery { slots: Slot[]; targets: DiscoveredTarget[] }
@@ -79,13 +96,18 @@ async function gitMarker(directory: string): Promise<'absent' | 'valid' | 'inval
     if (stat.isDirectory()) return 'valid'
     if (!stat.isFile() || stat.size > 4096) return 'invalid'
     const handle = await fs.open(path, 'r')
+    let readFailed = false, readError: unknown
     try {
       const buffer = Buffer.alloc(4096); const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
       const text = buffer.subarray(0, bytesRead).toString('utf8'); const match = /^gitdir: ([^\r\n]+)\r?\n?$/.exec(text)
       if (!match) return 'invalid'
       return (await fs.stat(resolve(directory, match[1]))).isDirectory() ? 'valid' : 'invalid'
-    } finally { await handle.close() }
-  } catch (e) { return !found && missing(e) ? 'absent' : 'invalid' }
+    } catch (error) { readFailed = true; readError = error; throw error }
+    finally {
+      try { await handle.close() }
+      catch (error) { throw new InstructionReadCleanupError(readFailed ? new AggregateError([readError, error], 'Git marker read and cleanup failed') : error) }
+    }
+  } catch (e) { if (e instanceof InstructionReadCleanupError) throw e; return !found && missing(e) ? 'absent' : 'invalid' }
 }
 export async function discover(scope: InstructionScope, plan: DiscoveryPlan): Promise<Discovery> {
   const slots = new Map<string, Slot>(); const globalIds: string[] = []; let globalComplete = !plan.globalLimited
@@ -128,7 +150,7 @@ export async function discover(scope: InstructionScope, plan: DiscoveryPlan): Pr
             if (marker === 'valid') { boundary = dir; break }
           }
         }
-      } catch { complete = false; message = 'Target boundary unavailable' }
+      } catch (error) { if (error instanceof InstructionReadCleanupError) throw error; complete = false; message = 'Target boundary unavailable' }
     }
     const ids = [...globalIds]
     for (const dir of dirs.reverse()) { const next = await group(p.root!, dir, [join(dir, 'AGENTS.md'), join(dir, 'CLAUDE.md')], false); if (!next) { complete = false; message = 'Instruction candidate limit reached'; break } ids.push(...next) }
