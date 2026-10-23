@@ -4,6 +4,7 @@ import { prepareModelRequest } from './fallback.ts'
 import { preparedControls, preparedModelClient, snapshotModelData, wrapPreparedRequest } from './wrappers.ts'
 import { isOwnedPreparedTerminal, ownPreparedTerminal } from './owned-terminal.ts'
 import { rememberModelSource } from './client-source.ts'
+import type { PreparedModelRequest } from './types.ts'
 
 /** Package-private: only the fixed retry/wait/observation implementations use
  * this composition entry. Public arbitrary callback wrappers remain unowned. */
@@ -11,9 +12,13 @@ export function withOwnedPreparedRequests(client: ModelClient, wrap: (inner: Mod
   const outer = preparedModelClient(async request => {
     const captured = snapshotModelData(request), prepared = await prepareModelRequest(client, captured)
     captured.signal?.throwIfAborted()
-    const result = wrapPreparedRequest(prepared, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
-      .stream({ ...captured, ...preparedControls(captured, control) }), retryPolicy ?? prepared.retryPolicy)
-    return isOwnedPreparedTerminal(prepared) || prepared.localExecutionIdentity ? ownPreparedTerminal(result, prepared) : result
+    function compose(inner: PreparedModelRequest): PreparedModelRequest {
+      const result = wrapPreparedRequest(inner, (stream, control, measurement) => wrap({ stream: executionRequest => stream(preparedControls(captured, executionRequest)) }, measurement)
+        .stream({ ...captured, ...preparedControls(captured, control) }), retryPolicy ?? inner.retryPolicy)
+      return isOwnedPreparedTerminal(inner) || inner.localExecutionIdentity
+        ? ownPreparedTerminal(result, { source: inner, withOutputCap: cap => compose(inner.withOutputCap(cap)) }) : result
+    }
+    return compose(prepared)
   })
   const wrapped = { ...outer, get executionIdentity() { return client.executionIdentity } }
   rememberModelSource(wrapped, () => client)
@@ -21,12 +26,13 @@ export function withOwnedPreparedRequests(client: ModelClient, wrap: (inner: Mod
 }
 
 /** Structured signal composition always invokes the same owned inner path. */
-export function withPreparedSignal(prepared: import('./types.ts').PreparedModelRequest, read: () => AbortSignal | undefined) {
+export function withPreparedSignal(prepared: PreparedModelRequest, read: () => AbortSignal | undefined): PreparedModelRequest {
   const result = wrapPreparedRequest(prepared, (stream, control) => {
     const signal = read()
     return stream(preparedControls(control ?? {}, { ...(signal ? { signal } : {}) }))
   })
-  return isOwnedPreparedTerminal(prepared) || prepared.localExecutionIdentity ? ownPreparedTerminal(result, prepared) : result
+  return isOwnedPreparedTerminal(prepared) || prepared.localExecutionIdentity
+    ? ownPreparedTerminal(result, { source: prepared, withOutputCap: cap => withPreparedSignal(prepared.withOutputCap(cap), read) }) : result
 }
 
 export interface ModelObservation<State> {

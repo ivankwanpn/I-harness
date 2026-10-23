@@ -14,12 +14,15 @@ export function assertOwnedPreparedTerminal(value: PreparedModelRequest): void {
 }
 /** Package-private composition bridge. Only fixed terminal/structured wrapper
  * implementations call it; no registrar is exported by the public facade. */
-export function ownPreparedTerminal(base: PreparedModelRequest, source?: PreparedModelRequest): PreparedModelRequest {
+export function ownPreparedTerminal(base: PreparedModelRequest, composition?: { source: PreparedModelRequest; withOutputCap(cap: number | undefined): PreparedModelRequest }): PreparedModelRequest {
+  const source = composition?.source
   owned.add(base)
   if (source) sources.set(base, source)
   const prepared: PreparedModelRequest = Object.freeze({
     ...base,
-    withOutputCap: (cap: number | undefined) => ownPreparedTerminal(base.withOutputCap(cap), source?.withOutputCap(cap)),
+    // A fixed wrapper rebuilds around its single derived inner handle. Deriving
+    // base and source independently would record a different, unexecuted source.
+    withOutputCap: (cap: number | undefined) => composition ? composition.withOutputCap(cap) : ownPreparedTerminal(base.withOutputCap(cap)),
   })
   owned.add(prepared)
   sources.set(prepared, source ?? base)

@@ -1,5 +1,5 @@
 import { systemFetch } from '@i-harness/http-transport'
-import { createPreparedPayload, type PreparedPayloadOptions } from './payload.ts'
+import { createOwnedPreparedPayload, createPreparedPayload, type PreparedPayloadOptions } from './payload.ts'
 import { ownPreparedTerminal } from './owned-terminal.ts'
 import { isExecutionControlError, type LiveExecutionIdentity } from './execution.ts'
 import { generationError, isGenerationError } from './generation.ts'
@@ -20,9 +20,10 @@ export interface HttpTerminal<State, Body> {
 /** Encoding/auth/decoding are trusted protocol roles. This fixed implementation
  * owns the complete final generation invocation, not an arbitrary generator. */
 export function createPreparedHttpPayload<Body, State>(options: Omit<PreparedPayloadOptions<Body>, 'execute'> & { transport: HttpTerminal<State, Body> }) {
-  const terminal = options.transport
-  const prepared = createPreparedPayload({ ...options, async *execute(body, serialized, control, execution) {
-    if (control.generation && terminal.fetchOverride) throw generationError('GENERATION_UNSUPPORTED')
+  const terminal = options.transport, fetchOverride = terminal.fetchOverride
+  // Ownership and invocation must select the same captured transport path.
+  const prepared = (fetchOverride ? createPreparedPayload : createOwnedPreparedPayload)({ ...options, async *execute(body, serialized, control, execution) {
+    if (control.generation && fetchOverride) throw generationError('GENERATION_UNSUPPORTED')
     let request: PreparedHttpRequest<State>
     try { request = await terminal.prepare(body, serialized, control) }
     catch (error) {
@@ -44,7 +45,7 @@ export function createPreparedHttpPayload<Body, State>(options: Omit<PreparedPay
       else {
         const issue = await execution.reserve()
         issue(request.identity)
-        response = await (terminal.fetchOverride ?? globalThis.fetch)(request.url, init)
+        response = await (fetchOverride ?? globalThis.fetch)(request.url, init)
       }
     } catch (error) {
       if (control.signal?.aborted || isGenerationError(error) || isExecutionControlError(error)) throw error
@@ -55,5 +56,5 @@ export function createPreparedHttpPayload<Body, State>(options: Omit<PreparedPay
     reportStreamActivity({ ...options.request, ...control }, 'response-start')
     yield* terminal.read(response, body, control, request.state)
   } })
-  return terminal.fetchOverride ? prepared : ownPreparedTerminal(prepared)
+  return fetchOverride ? prepared : ownPreparedTerminal(prepared)
 }
