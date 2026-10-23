@@ -1,0 +1,40 @@
+# Task 1 fix round 1 independent review
+
+## Spec compliance
+
+**❌ Needs fixes.** Reviewed exact fix range `43e6ec4f64f3a01855b0790360507c0cf75f64ac..8475aa3fa1b17270125c22b50d5695e6172ac86d` against the original findings, promoted IA contract, and `task-1-fix-round1.md`. P2 is addressed. P1's ordinary changed/pending cases are repaired, but a newly introduced swallowed alias-resolution failure can recreate the same stale-ready boundary defect.
+
+## Findings addressed
+
+- **P1, normal canonical marker observations: addressed.** [discovery.ts:71](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/discovery.ts:71) derives lexical/canonical marker mappings from already bounded target directories, checks canonical containment, and does not derive authority from event paths. [service.ts:51](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/service.ts:51) maps canonical paths for changed and pending matching; [service.ts:135](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/service.ts:135) installs those mappings before metadata discovery. Existing reset handling remains unchanged. The real-junction control at [dependencies.test.ts:67](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/test/dependencies.test.ts:67) verifies canonical marker creation/removal, immediate pending/unavailable publication, preparation and settlement, final narrow/broad rules, a similarly prefixed unrelated marker negative control, and an independent root's unchanged applicable view. The failure path below prevents full P1 acceptance.
+- **P2, marker cleanup and original error preservation: addressed.** [discovery.ts:105](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/discovery.ts:105) preserves the original marker read error and combines it with a close failure only when cleanup actually rejects. The marker catch at line 110 and discovery catch at line 153 propagate the cleanup signal into the existing joined service owner. The common signal now lives in [contracts.ts:22](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/contracts.ts:22); the content reader uses the same class. Ordinary invalid/unreadable marker behavior remains diagnosed as policy status. The five held real-file cases at [source-lifecycle.test.ts:106](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/test/source-lifecycle.test.ts:106) cover successful close, marker close failure, marker+lease failure, read+marker-close failure, and read+marker-close+lease failure; they assert joining, closed preparation, exactly-once cleanup, stable close promise, and all error values. Inspection confirms the implementation retains the original error objects in its aggregates.
+
+## Important new finding
+
+### [P1] A transient alias-resolution failure is swallowed, allowing ready publication without required canonical boundary mappings
+
+**Location:** [discovery.ts:84](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/discovery.ts:84), [service.ts:138](C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main/packages/instructions/src/service.ts:138).
+
+The new `resolveBoundaryAliases()` catch drops resolution failures and returns a partial mapping set on the assumption that subsequent discovery will diagnose the unavailable boundary. That assumption fails when a transient filesystem error clears before discovery repeats the canonical lookup. Discovery then succeeds and publishes ready evidence, although the service permanently lacks the alias mapping required to invalidate it. Clean subsequent preparation does not retry alias resolution.
+
+**Focused probe:** Used real broad/narrow instruction files and a real Windows junction. Wrapped `fs.realpath` to reject exactly its first lookup of the alias directory with `EACCES`; all subsequent lookups used the real filesystem successfully. Initial preparation reported ready. After creating `real/.git` and emitting its canonical changed path, the snapshot remained ready and subsequent preparation retained the broad rule in the identical snapshot:
+
+```json
+{"probe":"transient alias resolution failure before successful discovery","failureInjected":true,"firstReliability":"ready","immediateReliability":"ready","nextStillBroad":true,"unchangedSnapshot":true}
+```
+
+This is a failure in new fix-range code and reproduces the original P1 consequence. The passing normal alias controls do not exercise failed mapping followed by successful discovery. Do not publish ready applicability when required mapping resolution failed. Propagate or explicitly retain the failed mapping state, keep reconciliation dirty, and retry through the existing owner before returning reliable evidence. Add a causal one-shot resolution-failure control proving unavailable publication/recovery and canonical marker invalidation after recovery; no new resource owner or observation producer is needed.
+
+## Evidence and boundaries
+
+- Read the complete six-file fix diff once; the initial tool output omitted a small Git-marker block, which was recovered from that diff. No changed source was separately reread. Also read the appended fix report, exact fix brief, and fix source binding. A later line-number lookup located citations.
+- [fix1-red.log](D:/I-harness-main/.superpowers/sdd/2026-10-24-instruction-source-foundation/fix1-red.log:1) shows six causal assertion failures on the previous implementation: two canonical changed/pending readiness failures and four lost cleanup-error combinations. The successful normal-marker-close control passed. These are not timeout, missing-module, or setup failures.
+- [fix1-package-gate.log](D:/I-harness-main/.superpowers/sdd/2026-10-24-instruction-source-foundation/fix1-package-gate.log:1) records **65/65 tests across five files**, the correct package cwd, bounded workers, serial files, and exit 0. [fix1-typecheck-gate.log](D:/I-harness-main/.superpowers/sdd/2026-10-24-instruction-source-foundation/fix1-typecheck-gate.log:1) records `tsc --noEmit`, exit 0. Neither log contains test/type warnings or unhandled errors.
+- Independently recomputed **all 13 file hashes in each gate receipt** against the current files: zero package-gate mismatches and zero typecheck-gate mismatches. Receipts identify dirty fix source at the previous HEAD; [fix1-source-commit-binding.json](D:/I-harness-main/.superpowers/sdd/2026-10-24-instruction-source-foundation/fix1-source-commit-binding.json:1) binds that source to `8475aa3fa1b17270125c22b50d5695e6172ac86d` and the six-file fix range. The package identity records synthetic home/config/temp `D:/ia-gate-dba66ac909804202b372af8caa355eed`.
+- No passing suite was rerun. Ran only the single probe above because the new catch raised a concrete doubt not answered by the existing evidence. Its owned `D:/ia-review-fix1-*` directory was validated against the exact resolved parent/prefix before recursive cleanup. No product/test files, Git state, or external resource owner were modified. No subagents were dispatched.
+- Independently rechecked the root-owned Gateway diagnostic hash: `9FB750A75EC847DC97DD95D16E7EC7668B65D919BCB8208805F9A34FB93CEC68`, unchanged. No index, public export, dependencies, runtime callers, settings, or producer changes appear in this fix diff.
+- IA remains an internal injected-observation foundation. The unchanged legacy suite's isolated pass does not make its production discovery ambient-isolated; IB's real observation/migration owner and IC/ID integration remain outstanding.
+
+## Assessment
+
+**Task quality: Needs fixes.** The cleanup repair is cohesive and the normal alias repair has strong causal positive/negative controls. The new alias resolver must fail closed on incomplete mappings before IA can be accepted; the source-bound 65-test gate does not cover the reproduced transient-resolution case.
