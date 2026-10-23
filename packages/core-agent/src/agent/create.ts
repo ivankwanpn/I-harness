@@ -8,11 +8,10 @@ import { createNondurableFactOwner, isNondurableSession, isManagedFactOwner } fr
 import { trackSettlementSource } from './settlement-source.ts'
 import { savingFailure } from './saving-failure.ts'
 import { borrowApprovalGeneration } from './tool-generation.ts'
+import { createExecutionDependencies } from './dependencies.ts'
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
-  // Preserve host live getters (notably reasoning/model bindings) while the
-  // per-run fact ports remain private to this Agent instance.
-  deps = Object.create(Object.getPrototypeOf(deps),Object.getOwnPropertyDescriptors(deps)) as typeof deps
+  deps = createExecutionDependencies(deps)
   const factOwner = deps.factOwner ?? (isNondurableSession(deps.session) ? createNondurableFactOwner(deps.session) : undefined)
   if (!factOwner || factOwner.view !== deps.session) throw Object.assign(new Error('Managed Agent requires matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
   if (!isNondurableSession(deps.session) && !isManagedFactOwner(deps.session, factOwner)) throw Object.assign(new Error('Managed Agent requires actual document ownership'), { code: 'FACT_OWNER_UNSUPPORTED' })
@@ -23,6 +22,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   const requestSessionId = deps.sessionId ?? randomUUID()
   let activeOperations = 0
   async function track<T>(operation: () => Promise<T>): Promise<T> {
+    if (activeOperations > 0) throw Object.assign(new Error('Agent invocation is already active'), { code: 'AGENT_BUSY' })
     activeOperations++
     try { return await operation() }
     finally { activeOperations-- }
@@ -38,46 +38,55 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   const runTurn = createTurnRunner(ctx, deps, context, requestSessionId, maxTurns, maxParallel)
   const withFactAction = async <T>(signal: AbortSignal | undefined, operation: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     const action = factOwner.beginAction(signal ?? deps.signal)
-    deps.generationAction = undefined
-    deps.generationLifecycle = deps.generationFactory?.(action)
-    deps.inputPreparation = deps.inputPreparationFactory?.(action)
-    deps.facts = action.facts
-    deps.assertFactOpen = action.assertOpen
-    deps.captureContextReduction = action.captureContextReduction?.bind(action)
-    deps.captureSoftReduction = action.captureSoftReduction.bind(action)
-    deps.captureInputPromotion = action.captureInputPromotion.bind(action)
-    const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
-    let running: Promise<T>
-    deps.sourceFacts = action.registerSettlementSource(async () => {
-      let failure: unknown
-      try { await running } catch (error) {
-        failure = error
-      }
-      const results = await Promise.allSettled([...sourceDrains].map(source => source.close()))
-      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-      if (errors.length) throw new AggregateError(errors, 'Agent settlement requires recovery')
-      if (String((failure as { code?: string })?.code ?? '').startsWith('FACT_')) {
-        if (['FACT_CAPTURE_FAILED', 'FACT_INVALID_GROUP'].includes((failure as { code: string }).code)) throw failure
-        await factOwner.drain?.()
-      }
-    })
-    const sourceFacts = deps.sourceFacts
-    deps.registerFactSource = drain => {
-      const source = trackSettlementSource(sourceFacts, drain, () => sourceDrains.delete(source))
-      sourceDrains.add(source)
-      return source
-    }
-    running = operation(action.signal)
+    let lifecycle: AgentDeps['generationLifecycle']
+    let preparation: AgentDeps['inputPreparation']
+    let sourceFacts: AgentDeps['sourceFacts']
+    let running: Promise<T> | undefined
     let value!: T, failure: unknown, failed = false
-    try { value = await running }
-    catch (error) { failure = error; failed = true }
-    try { await deps.inputPreparation?.close(); await deps.generationLifecycle?.drain() }
-    catch (settlement) {
-      if (failed) failure = savingFailure(failure, [settlement], 'Generation settlement requires recovery')
-      else { failure = settlement; failed = true }
+    const recordFailure = (error: unknown, classification: string) => {
+      failure = failed ? savingFailure(failure, [error], classification) : error
+      failed = true
     }
-    action.finish()
-    try { await sourceFacts.close() }
+    const sourceDrains = new Set<import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>>()
+    try {
+      deps.generationAction = undefined
+      deps.generationLifecycle = lifecycle = deps.generationFactory?.(action)
+      deps.inputPreparation = preparation = deps.inputPreparationFactory?.(action)
+      deps.facts = action.facts
+      deps.assertFactOpen = action.assertOpen.bind(action)
+      deps.captureContextReduction = action.captureContextReduction?.bind(action)
+      deps.captureSoftReduction = action.captureSoftReduction.bind(action)
+      deps.captureInputPromotion = action.captureInputPromotion.bind(action)
+      sourceFacts = action.registerSettlementSource(async () => {
+        let operationFailure: unknown
+        try { await running } catch (error) { operationFailure = error }
+        const results = await Promise.allSettled([...sourceDrains].map(source => source.close()))
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, 'Agent settlement requires recovery')
+        if (String((operationFailure as { code?: string })?.code ?? '').startsWith('FACT_')) {
+          if (['FACT_CAPTURE_FAILED', 'FACT_INVALID_GROUP'].includes((operationFailure as { code: string }).code)) throw operationFailure
+          await factOwner.drain?.()
+        }
+      })
+      deps.sourceFacts = sourceFacts
+      const invocationSource = sourceFacts
+      deps.registerFactSource = drain => {
+        const source = trackSettlementSource(invocationSource, drain, () => sourceDrains.delete(source))
+        sourceDrains.add(source)
+        return source
+      }
+      running = operation(action.signal)
+      value = await running
+    } catch (error) { failure = error; failed = true }
+    // Settle every resource actually created, even when later setup or close
+    // throws. These locals always belong to this invocation.
+    try { await preparation?.close() }
+    catch (error) { recordFailure(error, 'Input preparation settlement requires recovery') }
+    try { await lifecycle?.drain() }
+    catch (error) { recordFailure(error, 'Generation settlement requires recovery') }
+    try { action.finish() }
+    catch (error) { recordFailure(error, 'Action finish requires recovery') }
+    try { await sourceFacts?.close() }
     catch (settlement) {
       if (!failed) throw settlement
       throw Object.assign(savingFailure(failure, [settlement], 'Agent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })

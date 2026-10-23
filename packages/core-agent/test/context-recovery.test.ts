@@ -14,7 +14,8 @@ function fixture(options: { failure?: () => Response; repeat?: boolean; fixed?: 
   let effects = 0, summaries = 0, hooks = 0, claims = 0
   ctx.on("agent/pre-step", () => { hooks++ })
   tools.register({ name: "write", description: "controlled effect", inputSchema: { type: "object" }, execute: async () => { effects++; return "prior outcome ".repeat(1200) } })
-  const attempts: { inputFingerprint: string; inputCost: number }[] = []
+  const attempts: { inputFingerprint: string; inputCost: number; client: ModelClient; outputCap?: number; preparation: number }[] = []
+  const preparations: { client: ModelClient; outputCap?: number }[] = []
   let reject = true
   const partialOrder: string[] = []
   const actual = createOpenAICompatibleClient({ apiKey: "controlled", model: "fixture", ...(options.fixed ? { options: { messages: [{ role: "user", content: "fixed input" }] } } : {}), fetch: async () => {
@@ -22,13 +23,16 @@ function fixture(options: { failure?: () => Response; repeat?: boolean; fixed?: 
     return options.repeat ? overflow() : sse({ content: "accepted" }, options.ending)
   } })
   const model: ModelClient = { stream: request => actual.stream(request), async prepare(request) {
+    const selectedClient = this
+    preparations.push({ client: selectedClient, outputCap: request.maxOutputTokens })
+    const preparation = preparations.length
     const prepared = await actual.prepare!(request)
     return wrapPreparedRequest(prepared, (stream, control) => (async function*() {
       if (!reject) await options.beforeRetry?.()
       const rejectingAttempt = reject
       for await (const event of stream({ ...control,
         confirmExecution(confirmation) { control?.confirmExecution?.(confirmation); partialOrder.push('confirmed') },
-        validateBeforeTransport() { control?.validateBeforeTransport?.(); attempts.push({ inputFingerprint: prepared.measurement.input.inputFingerprint, inputCost: Object.values(prepared.measurement.input.components).reduce((n, c) => n + c.heuristicTokens, 0) }) },
+        validateBeforeTransport() { control?.validateBeforeTransport?.(); attempts.push({ preparation, client: selectedClient, outputCap: prepared.measurement.output.effectiveCap, inputFingerprint: prepared.measurement.input.inputFingerprint, inputCost: Object.values(prepared.measurement.input.components).reduce((n, c) => n + c.heuristicTokens, 0) }) },
       })) {
         if (options.partial && rejectingAttempt && event.type === 'error') {
           expect(partialOrder).toEqual(['confirmed', 'http400'])
@@ -47,7 +51,7 @@ function fixture(options: { failure?: () => Response; repeat?: boolean; fixed?: 
     stepInputs: { claimAtStepBoundary() { claims++ } }, flush: () => options.flush?.(session) ?? Promise.resolve() }
   // A real earlier accepted tool body, then balanced append-only history.
   const seed = createAgentWithSummary(ctx, { ...deps, model: { async *stream() { if (!effects) yield { type: "tool_call", call: { id: "prior", name: "write", args: {} } }; else yield { type: "text/chunk", text: "earlier accepted" }; yield { type: "end" } } } })
-  return { ctx, session, deps, attempts, seed, partialOrder, get effects() { return effects }, get summaries() { return summaries }, get hooks() { return hooks }, get claims() { return claims } }
+  return { ctx, session, deps, attempts, preparations, seed, partialOrder, get effects() { return effects }, get summaries() { return summaries }, get hooks() { return hooks }, get claims() { return claims } }
 }
 
 it("recovers a real adapter context 400 with one durably changed, reduced main input and no tool replay", async () => {
@@ -79,15 +83,40 @@ it("local active pruning can recover without a summary call and retains the auth
   expect(f.session.events.some(event => event.type === "compaction/prune")).toBe(true)
 })
 
-it.each(["stop", "surface"] as const)("held retry authorization respects %s without renewing its consumed allowance", async mode => {
+it.each(["stop", "surface", "output", "effort", "model", "same-value"] as const)("held retry authorization respects %s without renewing its consumed allowance", async mode => {
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), abort = new AbortController()
   const f = fixture({ beforeRetry: async () => { entered.resolve(); await release.promise } }); await f.seed.run("original ".repeat(1500))
+  let effort = 'low'
+  Object.defineProperty(f.deps, 'reasoningEffort', { get: () => effort })
   const pending = createAgentWithSummary(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
-  await entered.promise
-  if (mode === "stop") abort.abort()
-  else f.deps.systemPrompt = "authority changed while auth held"
-  release.resolve(); expect(await pending).toBeInstanceOf(Error)
-  expect(f.attempts).toHaveLength(1); expect(f.effects).toBe(1)
+  let preparationsAtHold = 0
+  try {
+    await entered.promise
+    preparationsAtHold = f.preparations.length
+    if (mode === "stop") abort.abort()
+    if (mode === "surface") f.deps.systemPrompt = "authority changed while auth held"
+    if (mode === "output") f.deps.maxOutputTokens = 512
+    if (mode === "effort") effort = 'high'
+    if (mode === "model") f.deps.model = { ...f.deps.model }
+    if (mode === "same-value") { f.deps.systemPrompt = 'Keep authority and outcomes'; effort = 'low' }
+  } finally { release.resolve(); await pending }
+  const continues = mode === 'same-value' || mode === 'output' || mode === 'model'
+  if (continues) expect(await pending).toMatchObject({ finalText: 'accepted' })
+  else expect(await pending).toBeInstanceOf(Error)
+  expect(f.attempts).toHaveLength(continues ? 2 : 1); expect(f.effects).toBe(1)
+  if (mode === 'output' || mode === 'model') {
+    // The stale prepared retry never sends: one fresh preparation selects the
+    // live surface and borrows the same already-consumed reduced-input retry.
+    expect(f.preparations).toHaveLength(preparationsAtHold + 1)
+    expect(f.attempts[1]!.preparation).toBe(preparationsAtHold + 1)
+    expect(f.attempts[1]!.client).toBe(f.deps.model)
+    expect(f.attempts[1]!.outputCap).toBe(mode === 'output' ? 512 : 1024)
+  }
+  if (mode === 'same-value') {
+    expect(f.preparations).toHaveLength(preparationsAtHold)
+    expect(f.attempts[1]!.preparation).toBe(preparationsAtHold)
+  }
+  expect(f.session.events.filter(event => event.type === 'context/recovery' && event.state === 'retry-started')).toHaveLength(1)
   expect(deriveContextRecovery(f.session, "owned")).toMatchObject({ retryConsumed: true })
 })
 

@@ -39,7 +39,8 @@ within a configuration layer. `targetRatio` must be lower than `thresholdRatio`.
 | Module | Responsibility and state lifetime |
 |---|---|
 | `agent/types.ts` | Existing public agent contracts and the private turn-boundary flags. |
-| `agent/create.ts` | One request session identity and active-operation counter per agent; initial validation/owner assembly, public run/followup/compact/updateContext methods. |
+| `agent/create.ts` | One request session identity and exclusive invocation lease per agent; initial validation/owner assembly, public run/followup/compact/updateContext methods. |
+| `agent/dependencies.ts` | Private execution ports, fixed Session/owner/identity/initialization limits and live host reads with original receivers. |
 | `agent/context.ts` | One context meter, current compactor and mutable budget/output/automatic-compaction preferences per agent. Projection revision and request shape remain live getters. |
 | `agent/turn.ts` | One cumulative step counter per agent; one lifecycle, frozen request scope and continuation/stop-hook state per run or followup. Keeps asynchronous control at the original awaits. |
 | `agent/step-input.ts` | Input promotion and hook context folding; request assembly, prefix fingerprints and rewrite-marker history. Prefix state survives followups. |
@@ -51,9 +52,10 @@ within a configuration layer. `targetRatio` must be lower than `thresholdRatio`.
 
 The agent resolves `requestSessionId` once at construction. Each turn receives
 its own turn ID, while `steps`, call IDs, reasoning and prefix history continue
-across followups. Startup getter order remains session ID, limits, budget
-validation, compactor/output preference initialization, then the persisted call
-ID seed. `updateContext` retains its busy guard and validates selected policy
+across followups. Construction captures Session, fact owner, session ID and
+initialization limits; replacing those host properties cannot move an Agent to
+another Session. Fact-owner validation precedes invocation effects.
+`updateContext` retains its busy guard and validates selected policy
 before replacement. It invalidates admission freshness; B2 probes retain a
 compatible sample across policy-only changes. Manual compaction participates in the same operation
 accounting and remains independent of the automatic-compaction preference.
@@ -68,7 +70,16 @@ assembly, provider startup, usage attribution or batch startup. Live dependency
 getters, methods and callback receivers use the original dependency objects.
 Extracted count readers receive a live getter backed by the sole cumulative
 counter, including provider telemetry and the result after stop/save awaits.
-Overlapping run/followup operations retain the original shared-count behavior.
+`run`, `runAdmitted`, `followup` and `compact` share one invocation lease through
+all close, drain and flush outcomes. A competing direct call rejects with
+`code: 'AGENT_BUSY'` before action creation, input claim, hooks or transport.
+Direct callers must await settlement or use their existing queue. Service queues
+and active steering keep their existing owners. After settlement, sequential
+followups retain cumulative step telemetry. Failed setup settles every resource
+actually created and preserves the original error when cleanup also fails.
+Live model, effort, output and prompt changes still invalidate existing admission;
+`contextBudget()` remains a pure read. Host dependency objects may be frozen;
+Agent fact and generation ports are never assigned to them.
 
 Signed provider continuation is appended before any tool policy/cancellation
 can refuse the batch. Clean, capped, refused and empty step endings keep their

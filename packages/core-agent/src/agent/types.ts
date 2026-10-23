@@ -38,6 +38,9 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  // Host getters and callbacks use this original object; mutable preferences
+  // remain live. Session/owner/session ID and initialization limits are captured
+  // at construction. Agent-installed execution ports below are private copies.
   inputPreparationFactory?: (action: import('@i-harness/core-session').ManagedAction<ProducerFactOutcome>) => import('./generation.ts').AgentInputPreparation
   inputPreparation?: import('./generation.ts').AgentInputPreparation
   sharedGeneration?: object
@@ -126,6 +129,9 @@ export interface AgentResult {
 }
 
 export interface Agent {
+  /** Mutating invocations share one lease through final settlement. Competing
+   * run/runAdmitted/followup/compact calls reject with code AGENT_BUSY before
+   * admission or effects. Direct callers must await settlement or use their queue. */
   runAdmitted?: Agent['run']
   contextBudget?(): BudgetRead
   run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string, options?: AgentInputOptions): Promise<AgentResult>

@@ -5,7 +5,7 @@ import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 import { createAgentWithSummary } from './fixtures/agent.ts'
-import { createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from '../src/index.ts'
+import { createAgent, createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from '../src/index.ts'
 
 function makeDeps(ctx: PluginContext) {
   const session = createSession()
@@ -27,7 +27,7 @@ function makeDeps(ctx: PluginContext) {
   return { session, tools, model: undefined as unknown as ReturnType<typeof createMockClient> }
 }
 
-it("keeps initialization getter order and resolves live step callbacks with their receivers", async () => {
+it("resolves live dependency getters and step callbacks with their original receivers", async () => {
   const ctx = createContext()
   const session = createSession()
   const tools = createToolRegistry(ctx)
@@ -44,19 +44,20 @@ it("keeps initialization getter order and resolves live step callbacks with thei
   } }
   const stepInputs = { claimAtStepBoundary() { receivers.push(this) } }
   const deps: AgentDeps & AgentConfig = {
-    get sessionId() { reads.push("sessionId"); return undefined },
+    get sessionId() { receivers.push(this); reads.push("sessionId"); return undefined },
     get maxTurns() { reads.push("maxTurns"); return undefined },
     get maxParallelToolCalls() { reads.push("parallel"); return undefined },
     get budget() { reads.push("budget"); return undefined },
     get compact() { reads.push("compact"); return undefined },
     get maxOutputTokens() { reads.push("output"); return undefined },
-    get session() { reads.push("session"); return session },
+    get session() { receivers.push(this); reads.push("session"); return session },
     tools, model: initialModel, stepInputs,
     systemPrompt() { receivers.push(this); return prompt },
     modelToolSchemas() { receivers.push(this); return [{ name: prompt, description: "", inputSchema: {} }] },
   }
-  const agent = createAgentWithSummary(ctx, deps)
-  expect(reads).toEqual(["sessionId", "maxTurns", "parallel", "budget", "session", "sessionId", "compact", "output", "output", "compact", "budget", "session"])
+  const agent = createAgent(ctx, deps)
+  expect(reads).toContain('session')
+  expect(receivers.every(value => value === deps)).toBe(true)
   ctx.on("agent/pre-step", async () => {
     await Promise.resolve()
     prompt = "current"
@@ -69,7 +70,7 @@ it("keeps initialization getter order and resolves live step callbacks with thei
   expect(receivers.every(value => value === deps || value === stepInputs || value === currentModel)).toBe(true)
 })
 
-it.each(["truncated", "refused", "error"] as const)("reads the live shared step count for concurrent provider %s reports", async (ending) => {
+it.each(["truncated", "refused", "error"] as const)("retains cumulative telemetry after busy refusal and sequential provider %s reports", async (ending) => {
   const ctx = createContext()
   const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
   const release = Promise.withResolvers<void>()
@@ -89,20 +90,19 @@ it.each(["truncated", "refused", "error"] as const)("reads the live shared step 
       }
     } },
   })
-  const first = agent.run("first")
+  const first = agent.run("first").catch(error => error)
   await entered[0]!.promise
-  const second = agent.followup("second")
-  const settled = Promise.allSettled([first, second])
   try {
-    await entered[1]!.promise
-    expect(streams).toBe(2)
-  } finally { release.resolve() }
-  const outcomes = await settled
-  expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([2, 2])
-  expect(outcomes.map(outcome => outcome.status)).toEqual(["rejected", "rejected"])
+    await expect(agent.followup("busy")).rejects.toMatchObject({ code: 'AGENT_BUSY' })
+    expect(streams).toBe(1)
+  } finally { release.resolve(); await first }
+  expect(await first).toBeInstanceOf(Error)
+  await expect(agent.followup('second')).rejects.toThrow()
+  expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([1, 2])
+  expect(streams).toBe(2)
 })
 
-it.each(["stop", "flush"] as const)("reads the live shared step count after a held final %s and overlapping followup", async (boundary) => {
+it.each(["stop", "flush"] as const)("retains cumulative steps after held %s refusal and sequential followup", async (boundary) => {
   const ctx = createContext()
   const entered = Promise.withResolvers<void>()
   const release = Promise.withResolvers<void>()
@@ -120,15 +120,16 @@ it.each(["stop", "flush"] as const)("reads the live shared step count after a he
     telemetry: { emit: event => { if (event.type === "turn/end") turnCounts.push(event.data.turns) }, close() {} },
     flush: async () => { if (++saves === 2 && boundary === "flush") { entered.resolve(); await release.promise } },
   })
-  const first = agent.run("first")
+  const first = agent.run("first").then(value => ({ value }), error => ({ error }))
   await entered.promise
-  let second: Awaited<ReturnType<Agent["followup"]>>
-  try { second = await agent.followup("second") }
-  finally { release.resolve() }
+  try { await expect(agent.followup("busy")).rejects.toMatchObject({ code: 'AGENT_BUSY' }) }
+  finally { release.resolve(); await first }
   const completedFirst = await first
+  expect(completedFirst).toMatchObject({ value: { turns: 1 } })
+  const second = await agent.followup("second")
   expect(stopCounts).toEqual([1, 2])
   expect(turnCounts).toEqual([1, 2])
-  expect([completedFirst.turns, second.turns]).toEqual([2, 2])
+  expect(second.turns).toBe(2)
 })
 
 describe("agent loop", () => {
