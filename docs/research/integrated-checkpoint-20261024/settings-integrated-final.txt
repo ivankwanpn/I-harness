@@ -1,0 +1,45 @@
+$ vitest run "--maxWorkers=2" "--minWorkers=1"
+
+ RUN  v3.2.7 D:/I-harness-main/packages/settings
+
+ ✓ test/instructions.test.ts (44 tests) 316ms
+ ✓ test/sections.test.ts (34 tests) 86ms
+ ✓ test/settings.test.ts (26 tests) 46ms
+ ✓ test/prompt-cache.test.ts (15 tests) 37ms
+ ✓ test/retired-tui-keys.test.ts (6 tests) 27ms
+ ✓ test/watch-lease.test.ts (14 tests) 1029ms
+ ✓ test/watch-baseline.test.ts (8 tests) 862ms
+ ✓ test/layering.test.ts (15 tests) 7057ms
+   ✓ watchSettings (event-driven hot-reload) > fires the change callback when the file changes; dispose stops it  762ms
+   ✓ watchSettings (event-driven hot-reload) > two files changed together are both reported without dropping either path  735ms
+   ✓ M40 A6: settings/changed telemetry on hot-reload > emits settings/changed (path-payload) only on a DETECTED change — the load-time snapshot never fires  563ms
+   ✓ W1: the hot-reload conflate compares state, not time > two genuinely separate writes report 2 settings/changed (a conflate that swallows the second is the failure mode)  859ms
+   ✓ W1: the hot-reload conflate compares state, not time > a change detected inside an in-flight reload is still reported when that reload did not read it  1267ms
+   ✓ W1: the hot-reload conflate compares state, not time > two files: the report for the change detected inside a reload carries THAT file's path  1268ms
+   ✓ W1: the hot-reload conflate compares state, not time > a detection that lands while a reload FAILS is re-checked, not dropped (the watcher will not re-detect it)  1450ms
+ ✓ test/watch-events.test.ts (9 tests) 1621ms
+   ✓ duplicate pushes conflate, but a same-path write behind an already-read value gets a subsequent read  327ms
+ ✓ test/watch-io.test.ts (5 tests) 385ms
+ ✓ test/wsl-product.test.ts (4 tests) 20ms
+ ✓ test/agent-shell.test.ts (1 test) 11ms
+ ✓ test/code-mode.test.ts (3 tests) 11ms
+ ✓ test/context-subsystems.test.ts (7 tests) 5ms
+ ✓ test/model-wait.test.ts (11 tests) 5ms
+ ✓ test/watch.test.ts (9 tests) 7102ms
+   ✓ fs-watch settings hot reload > loading settings does not keep an otherwise finished process alive  303ms
+   ✓ fs-watch settings hot reload > an external truncate→write to the WORKSPACE layer fires exactly one onChange with the changed path  951ms
+   ✓ fs-watch settings hot reload > the auto WORKSPACE layer reloads once and preserves its onChange/telemetry path  1159ms
+   ✓ fs-watch settings hot reload > reports creation, deletion, and recreation of an explicitly selected settings file  1009ms
+   ✓ fs-watch settings hot reload > observes a selected file whose ignored directory is created after watching starts  861ms
+   ✓ fs-watch settings hot reload > reconciles atomic replacement and ignored-parent removal/recreation without sibling callbacks  1502ms
+   ✓ fs-watch settings hot reload > the global layer reloads without polling  443ms
+   ✓ fs-watch settings hot reload > the project layer reloads without polling  461ms
+   ✓ fs-watch settings hot reload > watchIntervalMs:false disables hot reload entirely  411ms
+ ✓ test/model-retry-limit.test.ts (10 tests) 3ms
+
+ Test Files  17 passed (17)
+      Tests  221 passed (221)
+   Start at  04:54:19
+   Duration  12.02s (transform 376ms, setup 0ms, collect 1.30s, tests 18.62s, environment 2ms, prepare 1.23s)
+
+ExitCode=0
