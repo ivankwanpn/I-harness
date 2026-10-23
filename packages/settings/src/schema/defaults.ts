@@ -10,6 +10,7 @@ import { normalizeWslExecution } from "../normalize/execution.ts"
 // retires was blocked for months by a mis-stated reason; see the correction in
 // docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
 export const SETTINGS_DEFAULTS: Settings = {
+  instructions: { enabled: true, maxBytes: 24000 },
   contextSubsystems: normalizeContextSubsystems(undefined),
   codeMode: { mode: "off" },
   autoTitle: true,

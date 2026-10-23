@@ -9,7 +9,17 @@ export interface SettingsStoreOptions {
   configDir?: string
 }
 
+/** A section draft's saved revision, checked inside the serialized write. */
+export interface SettingsRevisionGuard { section: string; expectedRevision: number }
+
 export interface LayeredStoreOptions {
+  /** Explicit host-selected global profile for legacy import when using files.
+   * Must be absolute and name exactly one configured source. Without selection,
+   * files mode cannot import or create native profile provenance. Roots mode
+   * defaults to its global source; workspace/project roots are never eligible.
+   * Selecting a profile does not itself authorize legacy probes: an explicit
+   * digest-bound migrateInstructions request is still required. */
+  instructionProfilePath?: string
   /** Explicit ordered file list (LOW → HIGH priority). Takes precedence over
    * `roots` when both are given. */
   files?: string[]
@@ -39,11 +49,11 @@ export interface SettingsStoreSurface {
   get(): Settings
   isLoaded(): boolean
   load(): Promise<Settings>
-  set(patch: Partial<Settings>): Promise<Settings>
+  set(patch: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings>
   reset(): Promise<Settings>
   getSectionRevision(name: string): number
   /** Optional unprojected source for stores that expose migrated effective views. */
-  getSectionMutationBase?(name: "llm" | "onboarding"): unknown
+  getSectionMutationBase?(name: "llm" | "onboarding" | "instructions"): unknown
   /** Optional narrow legacy-plane mutation: drop one `tui.providers` row from
    * the read-pin (see SettingsStore.dropLegacyTuiProvider). */
   dropLegacyTuiProvider?(id: string): Promise<void>

@@ -5,6 +5,7 @@ import { isRecord, booleanOf, numberInList, oneOf } from "./primitives.ts"
 import { normalizeWslExecution, normalizeCodeMode, normalizeModelWait } from "./execution.ts"
 import { normalizeAgents, normalizeLlm, normalizeLlmWithLegacy } from "./providers.ts"
 import { normalizeTui } from "./tui.ts"
+import { normalizeInstructions } from "../instructions.ts"
 
 const SANDBOX_MODES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
 
@@ -35,6 +36,7 @@ export function normalizeSettings(raw: unknown): Settings {
   if (!isRecord(raw)) {
     return {
       ...base,
+      instructions: normalizeInstructions(undefined),
       wslExecution: { ...base.wslExecution },
       contextSubsystems: normalizeContextSubsystems(undefined),
       plugins: { ...base.plugins },
@@ -51,6 +53,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    instructions: normalizeInstructions(raw.instructions),
     windowsSandboxBackend: oneOf(raw.windowsSandboxBackend, ["legacy", "psec", "wsl"] as const, base.windowsSandboxBackend),
     wslExecution: normalizeWslExecution(raw.wslExecution),
     // Older documents fetched live. Fresh stores use the cached default above.

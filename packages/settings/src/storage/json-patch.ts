@@ -71,12 +71,13 @@ export function parseDocumentTolerant(raw: string): Record<string, unknown> {
  * leading/trailing blocks — still no data loss, and a fault unsafe to fix
  * throws SettingsPatchError BEFORE writing).
  */
-export function patchJsonDocumentKeepingComments(raw: string, patch: Record<string, unknown>): string {
+export function patchJsonDocumentKeepingComments(raw: string, patch: Record<string, unknown>, replaceKeys: readonly string[] = []): string {
   const { structural, extras } = splitRawLines(raw)
   // Fail-closed: a document that does not parse even comment-stripped is left
   // untouched (the caller surfaces; the file is never destroyed).
   const baseDoc = parseDocumentTolerant(raw)
   const merged = mergeRawLayers([{ raws: baseDoc }, { raws: patch }])
+  for (const key of replaceKeys) if (Object.hasOwn(patch, key)) merged[key] = patch[key]
   const oldLines = JSON.stringify(baseDoc, null, 2).split("\n")
   const newLines = JSON.stringify(merged, null, 2).split("\n")
 
@@ -85,14 +86,15 @@ export function patchJsonDocumentKeepingComments(raw: string, patch: Record<stri
   const canonical = structural.length === oldLines.length
     && structural.every((line, i) => line === oldLines[i])
   if (!canonical) {
-    // Degraded preservation: leading + trailing comment blocks only; interior
-    // extras relocate to the end (they never delete user data, and a compact
+    // Degraded preservation: leading + trailing blocks keep their positions;
+    // interior extras relocate to the end (a compact
     // document is being normalized to the canonical layout).
     const leading = extras.filter((e) => e.anchor === 0)
     const trailing = extras.filter((e) => e.anchor === structural.length)
     return [
       ...leading.map((e) => e.text),
       ...newLines,
+      ...extras.filter((e) => e.anchor !== 0 && e.anchor !== structural.length).map((e) => e.text),
       ...trailing.map((e) => e.text),
     ].join("\n")
   }

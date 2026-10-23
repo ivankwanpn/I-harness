@@ -1,20 +1,26 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { readFile } from "node:fs/promises"
+import { isAbsolute, resolve } from "node:path"
 import type { Settings } from "../schema/types.ts"
 import { normalizeSettings } from "../normalize/settings.ts"
 import { watchSettings } from "../observation/watch-settings.ts"
 import { loadRevisionMeta } from "./revision.ts"
 import { mergeRawLayers, resolveLayeredDefaults, type LayerSource } from "./layers.ts"
 import { parseDocumentTolerant, patchJsonDocumentKeepingComments, SettingsPatchError } from "./json-patch.ts"
-import type { LayeredStoreOptions } from "./contracts.ts"
+import type { LayeredStoreOptions, SettingsRevisionGuard } from "./contracts.ts"
+import { SettingsConflictError } from "../sections.ts"
+import { assertInstructionData, validateInstructions } from "../instructions.ts"
+import { captureLegacyInstructionImport, InstructionMigrationError, instructionMigrationMeta, nativeInstructionMeta, stageInstructionImport, type LegacyInstructionImport } from "./instruction-migration.ts"
+import { SettingsWriteQueue, writeSettingsDocument } from "./transaction.ts"
 
 /**
  * A layered Settings store (SettingsStore-compatible surface — usable where a
  * SettingsStore is accepted). Sources are merged by RAW documents (deep, last
  * wins) and normalized ONCE, so unknown keys survive as long as a higher layer
  * does not override them. Writes go to the MASTER = the highest-priority
- * EXISTING source, via the comment-preserving leaf patch. Revision meta
- * (`_revision`) follows the master document.
+ * EXISTING source, via the comment-preserving leaf patch. Instructions are
+ * whole-policy replacements; other fields retain the existing deep merge.
+ * Revision meta follows each write target; the effective instructions counter
+ * sums source counters so a profile import fences drafts even below a master.
  */
 export class LayeredSettingsStore {
   private readonly options: LayeredStoreOptions
@@ -23,6 +29,7 @@ export class LayeredSettingsStore {
   private current: Settings = normalizeSettings(undefined)
   private loaded = false
   private revision: Record<string, number> = {}
+  private readonly queue = new SettingsWriteQueue()
   private listeners = new Set<(path: string) => void>()
   private watcher: { dispose: () => void } | undefined
   // WHY: an in-flight reload calls load(), which must not reopen a disposed
@@ -39,60 +46,78 @@ export class LayeredSettingsStore {
   private reloadPending: string[] = []
 
   constructor(options: LayeredStoreOptions = {}) {
-    this.options = options
+    this.options = { ...options }
     this.resolvedRoots = resolveLayeredDefaults(options)
   }
 
-  get(): Settings { return this.current }
+  get(): Settings { return structuredClone(this.current) }
+
+  getSectionMutationBase(name: "llm" | "onboarding" | "instructions"): unknown { return structuredClone(this.current[name]) }
 
   isLoaded(): boolean { return this.loaded }
 
-  async load(): Promise<Settings> {
-    this.rawsByPath.clear()
+  load(): Promise<Settings> { return this.queue.run(() => this.read()) }
+
+  private async read(): Promise<Settings> {
+    const raws = new Map<string, Record<string, unknown>>()
     for (const source of this.resolvedRoots) {
-      source.raws = undefined
       if (source.path === null) continue
       const text = await readFile(source.path, "utf8").catch(() => undefined)
       if (text === undefined) continue
       const raw = parseDocumentTolerant(text)
-      this.rawsByPath.set(source.path, raw)
-      source.raws = raw
+      instructionMigrationMeta(raw, source.path)
+      raws.set(source.path, raw)
     }
+    this.rawsByPath = raws
+    for (const source of this.resolvedRoots) source.raws = source.path === null ? undefined : raws.get(source.path)
+    this.publish()
+    this.loaded = true
+    this.ensureWatcher()
+    return this.get()
+  }
+
+  private publish(): void {
     const master = this.masterSource()
     const masterRaw = master !== undefined ? this.rawsByPath.get(master.path!) : undefined
     this.revision = loadRevisionMeta(masterRaw)
-    this.current = normalizeSettings(this.rawsByPath.size === 0 ? undefined : mergeRawLayers([...this.resolvedRoots]))
-    this.loaded = true
-    this.ensureWatcher()
-    return this.current
+    this.revision.instructions = [...this.rawsByPath.values()].reduce((sum, raw) => sum + (loadRevisionMeta(raw).instructions ?? 0), 0)
+    const merged = mergeRawLayers(this.resolvedRoots)
+    // Policies are complete sections: a higher explicit policy replaces the
+    // lower policy, so a reset can durably restore absent/native globals.
+    for (const source of this.resolvedRoots) if (source.raws && Object.hasOwn(source.raws, "instructions")) merged.instructions = source.raws.instructions
+    this.current = normalizeSettings(this.rawsByPath.size === 0 ? undefined : merged)
   }
 
-  async set(patch: Partial<Settings>): Promise<Settings> {
-    if (!this.loaded) await this.load()
-    // The first durable write must carry the new-store web default. Otherwise
-    // that newly created partial document would look like an older live policy.
-    if (this.rawsByPath.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: this.current.webSearchMode }
-    this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots, { raws: patch }]))
-    if ("llm" in patch) this.revision.llm = (this.revision.llm ?? 0) + 1
-    if ("onboarding" in patch) this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
-    if ("tui" in patch) this.revision.tui = (this.revision.tui ?? 0) + 1
-    await this.writeMaster(patch, { ...this.revision })
-    return this.current
+  set(input: Partial<Settings>, guard?: SettingsRevisionGuard): Promise<Settings> {
+    assertInstructionData(input)
+    if (Object.hasOwn(input, "instructions")) validateInstructions(input.instructions)
+    let patch = structuredClone(input)
+    assertInstructionData(guard)
+    const capturedGuard = structuredClone(guard)
+    return this.queue.run(async () => {
+      if (!this.loaded) await this.read()
+      if (capturedGuard !== undefined && this.getSectionRevision(capturedGuard.section) !== capturedGuard.expectedRevision) {
+        throw new SettingsConflictError(capturedGuard.expectedRevision, this.getSectionRevision(capturedGuard.section))
+      }
+      // First durable writes retain the new-store web default.
+      if (this.rawsByPath.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: this.current.webSearchMode }
+      await this.writeMaster(patch, Object.keys(patch))
+      return this.get()
+    })
   }
 
-  async reset(): Promise<Settings> {
-    if (!this.loaded) await this.load()
-    this.current = normalizeSettings(undefined)
-    this.revision.llm = (this.revision.llm ?? 0) + 1
-    this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
-    this.revision.tui = (this.revision.tui ?? 0) + 1
-    await this.writeMaster({}, { ...this.revision })
-    return this.current
+  reset(): Promise<Settings> {
+    return this.queue.run(async () => {
+      if (!this.loaded) await this.read()
+      const defaults = normalizeSettings(undefined)
+      await this.writeMaster(defaults as unknown as Record<string, unknown>, ["llm", "onboarding", "tui", "instructions"], Object.keys(defaults))
+      return this.get()
+    })
   }
 
   getSectionRevision(name: string): number { return this.revision[name] ?? 0 }
 
-  sources(): LayerSource[] { return this.resolvedRoots }
+  sources(): LayerSource[] { return structuredClone(this.resolvedRoots) }
 
   onChange(cb: (path: string) => void): () => void {
     this.listeners.add(cb)
@@ -125,21 +150,25 @@ export class LayeredSettingsStore {
    * patcher's parser rejects is untouched and the write throws
    * SettingsPatchError (fail-closed — never a destructive rewrite).
    */
-  private async writeMaster(patch: Record<string, unknown>, nextRevision: Record<string, number>): Promise<void> {
+  private async writeMaster(patch: Record<string, unknown>, changed: readonly string[], replaceKeys: readonly string[] = ["instructions"]): Promise<void> {
     const master = this.masterSource()
-    if (master?.path === undefined || master.path === null) return // nothing to write
-    const dir = dirname(master.path)
-    await mkdir(dir, { recursive: true })
+    if (master?.path === undefined || master.path === null) throw new SettingsPatchError("no configured settings source")
     const existing = await readFile(master.path, "utf8").catch(() => undefined)
-    const doc = existing !== undefined
-      ? mergeRawLayers([{ raws: parseDocumentTolerant(existing) }, { raws: patch }])
-      : mergeRawLayers([{ raws: {} }, { raws: patch }])
-    if (Object.keys(nextRevision).length > 0) doc._revision = { ...nextRevision }
+    const raw = existing !== undefined ? parseDocumentTolerant(existing) : {}
+    const meta = instructionMigrationMeta(raw, master.path)
+    const doc = mergeRawLayers([{ raws: raw }, { raws: patch }])
+    for (const key of replaceKeys) if (Object.hasOwn(patch, key)) doc[key] = patch[key]
+    const nextRevision = loadRevisionMeta(raw)
+    for (const name of ["llm", "onboarding", "tui", "instructions"]) if (changed.includes(name)) nextRevision[name] = (nextRevision[name] ?? 0) + 1
+    if (Object.keys(nextRevision).length > 0) doc._revision = nextRevision
+    if (meta !== undefined) doc._instructionsMigration = meta
+    else if (master.label === "global" || (master.label === "file" && this.options.instructionProfilePath !== undefined && isAbsolute(this.options.instructionProfilePath)
+      && resolve(this.options.instructionProfilePath) === master.path)) doc._instructionsMigration = nativeInstructionMeta(master.path)
 
     let text: string
     if (existing !== undefined) {
       try {
-        text = patchJsonDocumentKeepingComments(existing, doc)
+        text = patchJsonDocumentKeepingComments(existing, doc, replaceKeys)
       } catch (error) {
         // fail-closed: never destroy a document the patcher cannot read
         throw new SettingsPatchError(`cannot safely patch ${master.path}: ${error instanceof Error ? error.message : String(error)}`)
@@ -147,11 +176,36 @@ export class LayeredSettingsStore {
     } else {
       text = JSON.stringify(doc, null, 2)
     }
-    const tmp = `${master.path}.tmp`
-    await writeFile(tmp, text, "utf8")
-    await rename(tmp, master.path)
+    await writeSettingsDocument(master.path, text)
     this.rawsByPath.set(master.path, doc)
     master.raws = doc
+    this.publish()
+  }
+
+  /** Import targets only the host-selected global profile, never the master
+   * merely because it happens to have the highest precedence. */
+  migrateInstructions(input: LegacyInstructionImport): Promise<Settings> {
+    const selected = this.options.instructionProfilePath ?? this.resolvedRoots.find((source) => source.label === "global")?.path
+    const matches = selected && isAbsolute(selected) ? this.resolvedRoots.filter((candidate) => candidate.path === resolve(selected)) : []
+    const source = matches.length === 1 ? matches[0] : undefined
+    if (source?.path === undefined || source.path === null || source.label === "workspace" || source.label === "project") {
+      throw new InstructionMigrationError("invalid-request", "legacy import requires an explicitly selected global profile source")
+    }
+    const request = captureLegacyInstructionImport(input, source.path)
+    return this.queue.run(async () => {
+      if (!this.loaded) await this.read()
+      const staged = await stageInstructionImport(request)
+      if (staged.changed) {
+        const revision = loadRevisionMeta(staged.raw)
+        staged.raw._revision = { ...revision, instructions: (revision.instructions ?? 0) + 1 }
+        const text = patchJsonDocumentKeepingComments(staged.text, staged.raw, ["instructions", "_instructionsMigration"])
+        await writeSettingsDocument(request.profilePath, text, request.expectedDocumentHash)
+      }
+      this.rawsByPath.set(source.path!, staged.raw)
+      source.raws = staged.raw
+      this.publish()
+      return this.get()
+    })
   }
 
   /** WHY: use fs-watch's explicit file roots, baseline and 100ms write

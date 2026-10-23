@@ -45,7 +45,7 @@ export { FONT_SIZE_MIN, FONT_SIZE_MAX } from "./schema/defaults.ts"
 export { normalizeWslExecution, normalizeCodeMode, validModelWaitSeconds } from "./normalize/execution.ts"
 export { normalizeInputModalities } from "./normalize/providers.ts"
 export { normalizeSettings } from "./normalize/settings.ts"
-export type { SettingsStoreOptions, LayeredStoreOptions, SettingsStoreSurface } from "./storage/contracts.ts"
+export type { SettingsStoreOptions, LayeredStoreOptions, SettingsStoreSurface, SettingsRevisionGuard } from "./storage/contracts.ts"
 export type { LayerSource, LayeredRoots, LayerRaw } from "./storage/layers.ts"
 export { resolveLayeredSources, mergeRawLayers } from "./storage/layers.ts"
 export { SettingsPatchError, patchJsonDocumentKeepingComments } from "./storage/json-patch.ts"
@@ -53,6 +53,10 @@ export { SettingsStore, resolveSettingsPath, updateSettings } from "./storage/si
 export { LayeredSettingsStore, createLayeredStore } from "./storage/layered-store.ts"
 export { watchSettings } from "./observation/watch-settings.ts"
 export * from './context-subsystems.ts'
+export { normalizeInstructions, resolveInstructionPolicy } from "./instructions.ts"
+export type { SettingsInstructions, InstructionPolicy } from "./instructions.ts"
+export { previewLegacyInstructionImport, InstructionMigrationError } from "./storage/instruction-migration.ts"
+export type { LegacyInstructionImport, InstructionMigrationMeta } from "./storage/instruction-migration.ts"
 
 // Section descriptor API (Task 1 of the models plan): schemas, redacted
 // describe views, validated mutate ops and the revision-guard errors. Built on

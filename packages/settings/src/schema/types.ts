@@ -1,5 +1,6 @@
 import type { SettingsProviderProtocol } from "../sections.ts"
 import type { SettingsContextSubsystems } from "../context-subsystems.ts"
+import type { SettingsInstructions } from "../instructions.ts"
 
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
@@ -264,6 +265,7 @@ export interface SettingsOnboarding {
 /** The full, durable settings document. Every field has a default so an
  * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
+  instructions: SettingsInstructions
   contextSubsystems: SettingsContextSubsystems
   codeMode: SettingsCodeMode
   /** Automatic conversation titles. Absent documents retain the existing enabled default. */
