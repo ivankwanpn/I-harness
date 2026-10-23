@@ -238,3 +238,25 @@ it('a content-classified atomic candidate retarget requires fresh canonical cove
   expect(replacement.selection.roots).toContain(mapped)
   replacement.reset(); expect((await update).available).toBe(true)
 })
+it('reset after verification during retired close fences availability until new alias coverage', async () => {
+  const f = await fixture(), first = f.watch.acquired.promise, initial = f.lease.update(f.interests)
+  const old = await first; old.reset(); await initial
+  const closing = gate(), release = gate()
+  old.close.mockImplementation(() => { closing.resolve(); return release.promise })
+  const nextInterests = [...f.interests, { directory: join(f.root, 'new'), candidates: ['AGENTS.md', 'CLAUDE.md', '.git'].map(name => join(f.root, 'new', name)) }]
+  const acquired = f.watch.acquired.promise, update = f.lease.update(nextInterests), next = await acquired
+  next.reset(); await watchdog(closing.promise)
+  const candidate = join(f.root, 'AGENTS.md'), mapped = join(f.root, 'actual', 'AGENTS.md'), realpath = fs.realpath.bind(fs)
+  vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => String(args[0]) === candidate ? mapped : realpath(...args))
+  try {
+    const before = f.events.length
+    next.reset('overflow')
+    expect(f.events.at(-1)).toMatchObject({ kind: 'reset', available: false })
+    release.resolve(); expect((await watchdog(update)).available).toBe(false)
+    expect(f.events.slice(before).every(event => !event.available)).toBe(true)
+    expect(f.watch.sources.some(source => source.selection.roots.includes(mapped))).toBe(false)
+    const covered = f.watch.acquired.promise, refreshed = f.lease.update(nextInterests), replacement = await covered
+    expect(replacement.selection.roots).toContain(mapped)
+    replacement.reset(); expect((await refreshed).available).toBe(true)
+  } finally { release.resolve(); await update }
+})

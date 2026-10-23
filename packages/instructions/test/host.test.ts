@@ -2,9 +2,71 @@ import { expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
 import { join } from 'node:path'
 import { createFsWatchService, type FsWatchService } from '@i-harness/fs-watch'
-import { createObservedInstructionService, createInstructionObservationOwner, type InstructionScope } from '../src/index.ts'
+import { createObservedInstructionService, createInstructionObservationOwner, type InstructionScope, type InstructionObservationOwner } from '../src/index.ts'
 import { temporary } from './helpers/observation-fixture.ts'
 import { follow } from './helpers/follow-source.ts'
+
+function countedOwner(owner: InstructionObservationOwner) {
+  let ports = 0, subscriptions = 0, closes = 0
+  const observation: InstructionObservationOwner = {
+    port(scope) {
+      ports++; const port = owner.port(scope)
+      return { subscribe(listener) {
+        subscriptions++; const lease = port.subscribe(listener)
+        return { update: interests => lease.update(interests), async close() { closes++; await lease.close() } }
+      } }
+    }, beginPending: paths => owner.beginPending(paths), close: () => owner.close(),
+  }
+  return { observation, counts: () => ({ ports, subscriptions, closes }) }
+}
+
+it.each(['never-prepared', 'disabled', 'zero-budget'] as const)('factory does not register a port for a closed %s view', async mode => {
+  const temp = await temporary(), watch = createFsWatchService(), owner = createInstructionObservationOwner(watch), counted = countedOwner(owner)
+  const acquire = vi.spyOn(watch, 'acquire')
+  const scope: InstructionScope = { cwd: temp.root, roots: [temp.root], globalSources: [], enabled: mode !== 'disabled', maxBytes: mode === 'zero-budget' ? 0 : 24000 }
+  const view = createObservedInstructionService({ scope, observation: counted.observation })
+  try {
+    if (mode !== 'never-prepared') await view.prepare([])
+    await view.close()
+    expect(counted.counts()).toEqual({ ports: 0, subscriptions: 0, closes: 0 })
+    expect(acquire).not.toHaveBeenCalled()
+  } finally { await view.close(); await owner.close(); await watch.close(); await temp.remove() }
+})
+
+it('lazy factory captures immutable scope and original port method receiver at creation', async () => {
+  const temp = await temporary(), watch = createFsWatchService(), owner = createInstructionObservationOwner(watch), counted = countedOwner(owner)
+  const allowed = join(temp.root, 'allowed'), replaced = join(temp.root, 'replaced')
+  await fs.mkdir(allowed); await fs.mkdir(replaced); await fs.writeFile(join(allowed, 'AGENTS.md'), 'captured authority'); await fs.writeFile(join(replaced, 'AGENTS.md'), 'replacement authority')
+  const raw = { cwd: allowed, roots: [allowed], globalSources: [] as string[], enabled: true, maxBytes: 24000 }
+  let received: InstructionScope | undefined, correctReceiver = false
+  const original = counted.observation.port
+  counted.observation.port = function(scope) { correctReceiver = this === counted.observation; received = scope; return original.call(this, scope) }
+  const view = createObservedInstructionService({ scope: raw, observation: counted.observation })
+  try {
+    expect(counted.counts().ports).toBe(0)
+    expect(Object.isFrozen(counted.observation)).toBe(false)
+    raw.cwd = replaced; raw.roots[0] = replaced; raw.globalSources.push(join(replaced, 'AGENTS.md')); raw.enabled = false; raw.maxBytes = 0
+    counted.observation.port = () => { throw new Error('replacement method must not be consulted') }
+    const snapshot = await view.prepare([])
+    expect(snapshot.text).toContain('captured authority'); expect(snapshot.text).not.toContain('replacement authority'); expect(snapshot.reliability).toBe('ready')
+    expect(correctReceiver).toBe(true)
+    expect(received).toEqual({ cwd: allowed, roots: [allowed], globalSources: [], enabled: true, maxBytes: 24000 })
+    expect(Object.isFrozen(received)).toBe(true); expect(Object.isFrozen(received!.roots)).toBe(true)
+    await view.close(); expect(counted.counts()).toEqual({ ports: 1, subscriptions: 1, closes: 1 })
+  } finally { await view.close(); await owner.close(); await watch.close(); await temp.remove() }
+})
+
+it('factory validates scope and rejects accessor capabilities immediately without invoking getters', async () => {
+  const temp = await temporary(), watch = createFsWatchService(), owner = createInstructionObservationOwner(watch)
+  const scope: InstructionScope = { cwd: temp.root, roots: [temp.root], globalSources: [], enabled: false, maxBytes: 0 }
+  const getter = vi.fn(() => owner.port)
+  const capability = Object.create(owner, { port: { get: getter } }) as InstructionObservationOwner
+  try {
+    expect(() => createObservedInstructionService({ scope: { ...scope, cwd: 'relative' }, observation: owner })).toThrow()
+    expect(() => createObservedInstructionService({ scope, observation: capability })).toThrow()
+    expect(getter).not.toHaveBeenCalled()
+  } finally { await owner.close(); await watch.close(); await temp.remove() }
+})
 
 it.each([false, true])('real factory scopes are independent and close in either order (%s)', async reverse => {
   const temp = await temporary(), watch = createFsWatchService(), observation = createInstructionObservationOwner(watch)

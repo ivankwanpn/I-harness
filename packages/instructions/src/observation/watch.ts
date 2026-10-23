@@ -131,7 +131,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
       if (revision >= Number.MAX_SAFE_INTEGER - 1) { exhausted = true; mappingDirty = true; kind = 'availability'; paths = [] }
       revision++
       let nextPending: InstructionPendingWrite[]
-      try { nextPending = pending() } catch { mappingDirty = true; nextPending = [...state.pending] }
+      try { nextPending = pending() } catch { mappingVersion++; mappingDirty = true; nextPending = [...state.pending] }
       state = frozen({ revision, available: available(), pending: nextPending })
       const event = frozen({ ...state, kind, paths: [...paths] })
       for (const listener of [...listeners]) {
@@ -166,8 +166,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
       if (shard.status !== 'starting') shard.settle()
       if (shard.status !== 'ready') { affect('availability'); return }
       if (!event || event.kind === 'reset') {
-        mappingVersion++
-        if (!updating) mappingDirty = true
+        mappingVersion++; mappingDirty = true
         affect('reset'); return
       }
       if (event.kind === 'changed') {
@@ -182,7 +181,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
             // its routing alias. Revalidate only on this observed invalidation.
             mappingVersion++; mappingDirty = true; affect('changed', changed)
           }
-        } catch { mappingDirty = true; affect('reset') }
+        } catch { mappingVersion++; mappingDirty = true; affect('reset') }
       }
     }
     function retainCleanup(shard: Shard): Promise<void> {
@@ -239,7 +238,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         interestGeneration++; for (const shard of shards.values()) shard.generation = interestGeneration
         mappingDirty = true
         const original = new Set(shards.keys())
-        let stable = false, covered = next
+        let stable = false, covered = next, verifiedMapping: number | undefined
         for (let round = 0; round < 3; round++) {
           if (round) {
             // Retain original coverage, but retire superseded staging routes
@@ -258,16 +257,18 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
           const capturedMapping = mappingVersion
           const verified = await resolveInterests(scope, interests)
           if (stopped) return state
-          if (verified.signature === next.signature && capturedMapping === mappingVersion) { stable = true; break }
+          if (verified.signature === next.signature && capturedMapping === mappingVersion) { stable = true; verifiedMapping = capturedMapping; break }
           next = verified
         }
-        plan = covered; staging = undefined; mappingDirty = !stable
+        // Coverage is not committed until retired cleanup is joined. Any reset
+        // or mapping failure during that await must invalidate this verification.
+        plan = covered; staging = undefined; mappingDirty = true
         const wanted = new Set(covered.selections.map(roots => JSON.stringify({ roots, ignore: [], persistent: false })))
         const removed = [...shards.values()].filter(shard => !wanted.has(shard.route.selectionKey))
         for (const shard of removed) shards.delete(shard.route.selectionKey)
         const failures = errors(await Promise.allSettled(removed.map(retainCleanup)))
         if (stopped) return state
-        if (failures.length) mappingDirty = true
+        if (!failures.length && stable && verifiedMapping === mappingVersion) mappingDirty = false
         // Everything received before this synchronous capture is represented by
         // the final reset and complete pending set. IA must reread under coverage.
         publish('reset', reset ? [] : [...dirty]); return state
@@ -298,7 +299,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
           if (stopped) return Promise.resolve(state)
           // Serialize replacement transactions; each call owns its copied input.
           let copied: readonly InstructionWatchInterest[]
-          try { copied = interestData(scope, input) } catch { mappingDirty = true; publish('reset'); return Promise.resolve(state) }
+          try { copied = interestData(scope, input) } catch { mappingVersion++; mappingDirty = true; publish('reset'); return Promise.resolve(state) }
           const before = running
           const result = before ? before.then(() => update(copied)) : update(copied)
           running = result
@@ -311,7 +312,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         try {
           const matched = pendingPaths(paths)
           if (matched.length) affect('pending', matched)
-        } catch { mappingDirty = true; affect('availability') }
+        } catch { mappingVersion++; mappingDirty = true; affect('availability') }
       },
       close() {
         if (closing) return closing
