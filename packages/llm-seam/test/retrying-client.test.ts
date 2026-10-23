@@ -1,8 +1,62 @@
 import { describe, expect, it } from "vitest"
-import { backoffDelay, createRetryingClient, resolveRetryPolicy } from "../src/index.ts"
+import { backoffDelay, createRetryingClient, generationError, prepareModelRequest, resolveRetryPolicy } from "../src/index.ts"
+import { isExecutionControlError, preparedExecution } from '../src/prepared/execution.ts'
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "../src/index.ts"
 
 const REQ: LLMRequest = { messages: [], tools: [], systemPrompt: "" }
+
+it.each(['stop', 'generation', 'execution'] as const)('settles already observed usage before the original %s failure without retry/output', async mode => {
+  const stop = new AbortController()
+  const original = mode === 'generation' ? generationError('GENERATION_CLOSED') : new Error(`controlled ${mode}`)
+  const prepared = await prepareModelRequest({ async *stream() {} }, REQ)
+  const execution = preparedExecution(prepared.measurement, { validateBeforeTransport() { throw original } }, prepared.validation)
+  let attempts = 0
+  const model: ModelClient = { async *stream() {
+    attempts++
+    yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }
+    if (mode === 'stop') stop.abort(original)
+    if (mode === 'execution') execution.confirm()
+    throw original
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'always' })).stream({ ...REQ, signal: stop.signal })) events.push(event) }
+  await expect(run()).rejects.toBe(original)
+  expect(events).toEqual([{ type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }])
+  expect(attempts).toBe(1)
+  if (mode === 'execution') expect(isExecutionControlError(original)).toBe(true)
+})
+
+it('Stop while buffered success usage is being observed cannot emit completion or duplicate counters', async () => {
+  const stop = new AbortController(), original = new Error('controlled Stop during usage settlement')
+  const model: ModelClient = { async *stream() {
+    yield { type: 'usage', usage: { inputTokens: 12 } }
+    yield { type: 'usage', usage: { outputTokens: 3 } }
+    yield { type: 'end' }
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'normal', maxRetries: 1 })).stream({ ...REQ, signal: stop.signal })) { events.push(event); stop.abort(original) } }
+  await expect(run()).rejects.toBe(original)
+  expect(events).toEqual([{ type: 'usage', usage: { inputTokens: 12 } }, { type: 'usage', usage: { outputTokens: 3 } }])
+})
+
+it('Stop at the recovered transition prevents its pending content event from escaping', async () => {
+  const stop = new AbortController(), original = new Error('controlled Stop at recovered')
+  let attempts = 0
+  const model: ModelClient = { async *stream() {
+    attempts++
+    if (attempts === 1) throw Object.assign(new Error('temporary'), { code: 'SERVER' })
+    yield { type: 'text/chunk', text: 'forbidden after Stop' }
+    yield { type: 'end' }
+  } }
+  const events: LLMStreamEvent[] = []
+  const run = async () => { for await (const event of createRetryingClient(model, resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1 } })).stream({ ...REQ, signal: stop.signal })) {
+    events.push(event)
+    if (event.type === 'retry' && event.retry.phase === 'recovered') stop.abort(original)
+  } }
+  await expect(run()).rejects.toBe(original)
+  expect(events.filter(event => event.type !== 'retry')).toEqual([])
+  expect(attempts).toBe(2)
+})
 
 function streamOf(events: LLMStreamEvent[]): AsyncIterable<LLMStreamEvent> {
   return (async function* () {

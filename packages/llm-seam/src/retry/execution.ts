@@ -26,30 +26,38 @@ function createRetryingExecution(client: ModelClient, policy: ResolvedRetryPolic
       const pendingUsage: LLMStreamEvent[] = []
       try {
         for await (const ev of client.stream(request)) {
+          // Usage is an observation of the physical attempt, even when Stop
+          // arrives between its production and delivery to this boundary.
+          if (ev.type === "usage") pendingUsage.push(ev)
           request.signal?.throwIfAborted()
           const output = ev.type === "tool_call" || ((ev.type === "text/chunk" || ev.type === "reasoning") && ev.text.length > 0)
           if (output) produced = true
-          if (ev.type === "usage") { pendingUsage.push(ev); continue }
+          if (ev.type === "usage") continue
           if (ev.type === "error") { failure = ev.error; failureEvent = ev; failed = true; break }
           if (recovery && (output || ev.type === "end")) {
             yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
             recovery = undefined
           }
-          if (ev.type === "end") { yield* pendingUsage; yield ev; return }
+          if (ev.type === "end") {
+            yield* pendingUsage.splice(0)
+            request.signal?.throwIfAborted()
+            yield ev
+            return
+          }
+          request.signal?.throwIfAborted()
           yield ev
         }
       } catch (error) { failure = error; failed = true }
+      // Settle already observed counters before every failure exit, including
+      // cancellation and branded execution/generation controls. Drain once so
+      // Stop during success-usage delivery cannot report them a second time.
+      yield* pendingUsage.splice(0)
       request.signal?.throwIfAborted()
       if (!failed) {
         if (recovery) yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
-        yield* pendingUsage
         return
       }
       if (isGenerationError(failure) || isExecutionControlError(failure)) throw failure
-      // These counters belong to the failed physical attempt. Publish before
-      // its retry boundary resets the consumer's attempt-local accumulator.
-      // They do not count as content or change the retry/discard decision.
-      yield* pendingUsage
       const code = retryErrorCode(failure)
       const retryable = !TERMINAL_CODES.has(code ?? "") && (policy.mode === "always" || policy.retryableCodes.includes(code ?? ""))
       const budgetExhausted = policy.mode === "normal" && attemptNo >= policy.maxRetries

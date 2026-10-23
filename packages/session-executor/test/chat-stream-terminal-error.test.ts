@@ -11,6 +11,7 @@ import { createProviderRuntime } from '../../provider-runtime/src/index.ts'
 import type { CredentialStore } from '../../credentials/src/index.ts'
 import { createSessionService } from '../src/index.ts'
 import { rmWorkspaceSync } from './helpers.ts'
+import * as chatUsage from '../../llm-openai-compatible/src/stream/usage.ts'
 
 const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`
 const failure = { error: { message: 'Fixture temporary server error private-fixture-9182', type: 'server_error', code: 'server_error' } }
@@ -203,6 +204,49 @@ it('genuine Stop cancels capacity waiting after the actual failed response conne
     expect(f.bodies).toHaveLength(1)
     expect((await f.facts()).filter(event => event.type === 'model/exchange-accepted')).toEqual([])
   } finally { stop.abort(); await run.catch(() => {}); await f.close() }
+})
+
+it('genuine Stop after observed localhost usage retains its original attempt billing and allows later work', async () => {
+  let parsedUsage = false
+  const nextRead = Promise.withResolvers<void>(), closed = Promise.withResolvers<void>()
+  const originalMap = chatUsage.mapUsage, originalRead = ReadableStreamDefaultReader.prototype.read
+  // Observation only: real usage mapper and real response reads remain intact.
+  // A new read after mapping means the usage frame has crossed the waiting
+  // wrapper and the retry owner is now waiting for the next provider frame.
+  const mapping = vi.spyOn(chatUsage, 'mapUsage').mockImplementation(value => { const usage = originalMap(value); if (usage?.inputTokens === 12) parsedUsage = true; return usage })
+  const reading = vi.spyOn(ReadableStreamDefaultReader.prototype, 'read').mockImplementation(function (this: ReadableStreamDefaultReader) { if (parsedUsage) nextRead.resolve(); return originalRead.call(this) })
+  const f = await fixture((response, ordinal) => {
+    if (ordinal > 1) { response.end(success); return }
+    response.on('close', () => closed.resolve())
+    response.write(frame({ usage: { prompt_tokens: 12, completion_tokens: 3 } }))
+    // Remain open without any content/error/end until the caller actually Stops.
+  }, { retries: 1 })
+  const stop = new AbortController()
+  let runSignal: AbortSignal | undefined
+  const assembly = await f.service.assemblyFor(f.id)
+  assembly.ctx.on('agent/pre-step', payload => { runSignal = (payload as { signal: AbortSignal }).signal })
+  const run = f.service.submit(f.id, 'stop after usage', stop.signal)
+  void run.catch(() => {})
+  try {
+    await nextRead.promise
+    stop.abort()
+    const error = await run.catch(error => error)
+    expect(error).toBe(runSignal!.reason)
+    await closed.promise
+    expect(f.bodies).toHaveLength(1); expect(f.effects()).toBe(0)
+    const facts = await f.facts()
+    expect(facts.filter(event => event.type === 'context/attempt' && event.op === 'reserve')).toHaveLength(1)
+    expect(facts.filter(event => event.type === 'context/attempt' && event.op === 'settle').map(event => event.disposition)).toEqual(['unknown'])
+    expect(facts.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage' || event.type === 'tool/call' || event.type === 'tool/dispatch')).toEqual([])
+    expect(f.events.filter(event => event.type === 'provider/usage').map(event => event.data)).toEqual([{ inputTokens: 12, inputTokenSemantics: 'includes-cache', outputTokens: 3 }])
+    const step = facts.find(event => event.type === 'step/start'), physical = facts.find(event => event.type === 'context/attempt' && event.op === 'reserve')
+    expect(f.usageOwners).toEqual([{ attemptId: step?.type === 'step/start' ? step.attemptId : undefined, physicalAttemptId: physical?.type === 'context/attempt' ? physical.attemptId : undefined }])
+    await expect(f.service.submit(f.id, 'valid follow-up after Stop', new AbortController().signal)).resolves.toBeUndefined()
+    expect(f.service.liveAssembly(f.id)).toBe(assembly)
+    expect(f.bodies).toHaveLength(2); expect(f.effects()).toBe(0)
+    expect((await f.facts()).filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+    expect(f.events.filter(event => event.type === 'provider/usage')).toHaveLength(2)
+  } finally { stop.abort(); await run.catch(() => {}); mapping.mockRestore(); reading.mockRestore(); await f.close() }
 })
 
 it.each([false, true])('an actual allowance of one refuses retry after observed output=%s without minting an unsent allowance', async output => {

@@ -55,10 +55,21 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
     confirm(received: import("@i-harness/llm-seam").ExecutionReceipt) { receipt = { ...received, actionId, attemptId } },
     discard() { return discard(true) },
     async accept(ev: LLMStreamEvent) {
+      // Billing observations may finish crossing the stream boundary after
+      // Stop. Accumulate them on this original attempt without publishing
+      // content or accepting completion; the failure owner reports them.
+      if (ev.type === 'usage') {
+        for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+          const value = ev.usage[field]
+          if (typeof value === "number" && Number.isFinite(value)) stepUsage[field] = value
+        }
+        if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
+        return
+      }
+      abort?.throwIfAborted()
       stepReasoning.checkPublication()
-      if (abort?.aborted) throw new Error("agent aborted")
       if (providerEnded && ["text/chunk", "tool_call", "reasoning"].includes(ev.type)) throw Object.assign(new Error("Model produced content after completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
-      if (ev.type !== "reasoning" && ev.type !== "usage" && ev.type !== "activity") await stepReasoning.flush()
+      if (ev.type !== "reasoning" && ev.type !== "activity") await stepReasoning.flush()
       switch (ev.type) {
         case "activity":
           modelActivity = ev.activity
@@ -105,17 +116,6 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry" | 
           toolCallsThisStep += 1
           break
         }
-        case "usage":
-          // M5 T2. This `case` is the ONLY thing that turns a provider report
-          // into something the host can see: the switch has no default and no
-          // exhaustiveness assert, so without it the event is dropped in
-          // silence — the run looks perfect and the numbers are simply absent.
-          for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
-            const value = ev.usage[field]
-            if (typeof value === "number" && Number.isFinite(value)) stepUsage[field] = value
-          }
-          if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
-          break
         case "error": {
           const modelFailure = modelFailureFacts(ev.error)
           deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: modelFailure?.message ?? "Model request failed.", ...(modelFailure ? { modelFailure } : {}) } })

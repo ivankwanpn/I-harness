@@ -3,7 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createSession } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createTelemetry, type Telemetry, type TelemetryEvent } from "@i-harness/telemetry"
-import { createRetryingClient, resolveRetryPolicy, type ModelClient } from "@i-harness/llm-seam"
+import { createRetryingClient, generationError, resolveRetryPolicy, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
 
 // M5 / T2, half one: "以 provider 回報為事實".
@@ -72,6 +72,59 @@ const usageEvents = (emitted: TelemetryEvent[]): TelemetryEvent[] =>
   emitted.filter((e) => e.type === "provider/usage")
 
 describe("core-agent provider usage (M5 T2)", () => {
+  it.each(['stop', 'generation'] as const)('retains one failed-attempt usage report and original %s identity after the boundary closes', async mode => {
+    const ctx = createContext(), session = createSession(), stop = new AbortController(), { telemetry, events } = spyTelemetry()
+    const original = mode === 'stop' ? new Error('controlled Stop') : generationError('GENERATION_CLOSED')
+    let attempts = 0, effects = 0
+    const tools = createToolRegistry(ctx)
+    tools.register({ name: 'effect', description: 'controlled', inputSchema: { type: 'object' }, execute: async () => { effects++; return {} } })
+    const model = createRetryingClient({ async *stream() {
+      attempts++
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }
+      if (mode === 'stop') stop.abort(original)
+      throw original
+    } }, resolveRetryPolicy({ mode: 'always' }))
+    await expect(createAgent(ctx, { session, tools, model, systemPrompt: '', telemetry }).run('fail', stop.signal)).rejects.toBe(original)
+    expect(usageEvents(events).map(event => event.data)).toEqual([{ inputTokens: 12, outputTokens: 3 }])
+    expect(attempts).toBe(1); expect(effects).toBe(0)
+    expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage' || event.type === 'tool/dispatch')).toEqual([])
+  })
+
+  it('usage alone may settle after Stop; subsequent content/tool/end stays blocked with the original reason', async () => {
+    const ctx = createContext(), session = createSession(), stop = new AbortController(), { telemetry, events } = spyTelemetry()
+    const original = new Error('controlled Stop before delivered usage')
+    const model: ModelClient = { async *stream() {
+      stop.abort(original)
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }
+      yield { type: 'text/chunk', text: 'forbidden after Stop' }
+      yield { type: 'tool_call', call: { name: 'effect', args: {} } }
+      yield { type: 'end' }
+    } }
+    await expect(createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry }).run('fail', stop.signal)).rejects.toBe(original)
+    expect(usageEvents(events).map(event => event.data)).toEqual([{ inputTokens: 12, outputTokens: 3 }])
+    expect(session.events.filter(event => event.type === 'assistant/message' || event.type === 'model/exchange-accepted' || event.type === 'context/usage' || event.type === 'tool/call')).toEqual([])
+  })
+
+  it('retains the original Stop when its one usage-report attempt also fails', async () => {
+    const ctx = createContext(), session = createSession(), stop = new AbortController()
+    const original = new Error('controlled Stop'), observation = new Error('usage observer failed')
+    let reports = 0
+    const model = createRetryingClient({ async *stream() {
+      yield { type: 'usage', usage: { inputTokens: 12, outputTokens: 3 } }
+      stop.abort(original)
+      throw original
+    } }, resolveRetryPolicy({ mode: 'always' }))
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: '', telemetry: {
+      emit(event) { if (event.type === 'provider/usage') { reports++; throw observation } }, close() {},
+    } })
+    const failure = await agent.run('fail', stop.signal).catch(error => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect(failure.cause).toBe(original)
+    expect(failure.errors).toEqual([original, observation])
+    expect(reports).toBe(1)
+    expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage' || event.type === 'tool/dispatch')).toEqual([])
+  })
+
   it('standard telemetry isolates a failed usage sink while retaining the original failure and later progress', async () => {
     const ctx = createContext(), session = createSession(), original = new Error('original provider failure'), events: TelemetryEvent[] = []
     let sends = 0
