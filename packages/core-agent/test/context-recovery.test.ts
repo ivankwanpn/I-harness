@@ -3,7 +3,7 @@ import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, deriveMessages, deriveContextRecovery, fromJSONL, toJSONL } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { wrapPreparedRequest, type ModelClient } from "@i-harness/llm-seam"
+import { modelFailureFacts, wrapPreparedRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createOpenAICompatibleClient } from "../../llm-openai-compatible/src/index.ts"
 import { createAgentWithSummary } from './fixtures/agent.ts'
 
@@ -147,8 +147,28 @@ it.each(["failure", "stop"] as const)("a %s during the resolution checkpoint kee
   const pending = createAgentWithSummary(f.ctx, f.deps).followup("continue", abort.signal).catch(error => error)
   if (mode === "stop") { await entered.promise; abort.abort(); release.resolve() }
   expect(await pending).toBeInstanceOf(Error)
-  expect(deriveContextRecovery(f.session, "owned")?.state).not.toBe("resolved")
+  expect(deriveContextRecovery(f.session, "owned")).toMatchObject({ state: 'blocked', retryConsumed: true })
+  expect(deriveContextRecovery(fromJSONL(toJSONL(f.session)), "owned")).toMatchObject({ state: 'blocked', retryConsumed: true })
+  expect(f.session.events.filter(event => event.type === 'context/recovery').map(event => event.state)).toEqual(['required', 'retry-started', 'resolved', 'blocked'])
+  expect(f.session.events.filter(event => event.type === 'assistant/message' && event.text === 'accepted')).toHaveLength(1)
   expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
+})
+
+it.each(['failure', 'stop'] as const)('records only blocked when %s interrupts the pre-resolution checkpoint', async mode => {
+  const original = Error('original pre-resolution checkpoint failure'), abort = new AbortController()
+  let armed = false, acceptedFlushes = 0
+  const f = fixture({ flush: async session => {
+    if (armed && session.events.some(event => event.type === 'assistant/message' && event.text === 'accepted') && ++acceptedFlushes === 2) {
+      if (mode === 'stop') abort.abort(original)
+      else throw original
+    }
+  } })
+  await f.seed.run('original '.repeat(1500)); armed = true
+  const failure = await createAgentWithSummary(f.ctx, f.deps).followup('continue', abort.signal).catch(error => error)
+  expect(failure).toBe(original)
+  expect(f.session.events.filter(event => event.type === 'context/recovery').map(event => event.state)).toEqual(['required', 'retry-started', 'blocked'])
+  expect(deriveContextRecovery(fromJSONL(toJSONL(f.session)), 'owned')).toMatchObject({ state: 'blocked', retryConsumed: true })
+  expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1); expect(f.summaries).toBe(1)
 })
 
 it.each([
@@ -169,7 +189,10 @@ it.each([
 it("a second confirmed overflow blocks durably across calibration loss and reload", async () => {
   const f = fixture({ repeat: true }); await f.seed.run("original ".repeat(1500))
   const agent = createAgentWithSummary(f.ctx, f.deps)
-  await expect(agent.followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  const rejected = await agent.followup("continue").catch(error => error)
+  expect(rejected).toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  expect(rejected).not.toBeInstanceOf(AggregateError)
+  expect(modelFailureFacts(rejected.cause)).toMatchObject({ code: 'CONTEXT_WINDOW_EXCEEDED', reason: 'context-limit' })
   expect(f.attempts).toHaveLength(2); expect(f.summaries).toBe(1)
   expect(deriveContextRecovery(f.session, "owned")).toMatchObject({ state: "blocked", retryConsumed: true })
   agent.updateContext!({ ...f.deps, maxOutputTokens: 512 })
@@ -177,6 +200,40 @@ it("a second confirmed overflow blocks durably across calibration loss and reloa
   const restored = fromJSONL(toJSONL(f.session))
   await expect(createAgentWithSummary(f.ctx, { ...f.deps, session: restored }).followup("continue")).rejects.toMatchObject({ code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
   expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
+})
+
+const errorTree = (error: unknown): unknown[] => [error, ...(error instanceof AggregateError ? error.errors.flatMap(errorTree) : []), ...(error instanceof Error && error.cause ? errorTree(error.cause) : [])]
+
+it.each(['required', 'blocked'] as const)('retains the original HTTP overflow when the %s save barrier fails', async state => {
+  const saving = Error(`original ${state} barrier failure`)
+  let armed = false
+  const f = fixture({ repeat: true, flush: async session => { if (armed && deriveContextRecovery(session, 'owned')?.state === state) throw saving } })
+  await f.seed.run('original '.repeat(1500)); armed = true
+  const failure = await createAgentWithSummary(f.ctx, f.deps).followup('continue').catch(error => error)
+  expect(failure).toBeInstanceOf(AggregateError)
+  expect(errorTree(failure)).toContain(saving)
+  expect(errorTree(failure).some(error => modelFailureFacts(error)?.reason === 'context-limit')).toBe(true)
+  expect(f.attempts).toHaveLength(state === 'required' ? 1 : 2)
+  expect(f.effects).toBe(1)
+  expect(failure.recoveryBlocked).not.toBe(true)
+})
+
+it('preserves the resolution failure alongside the real blocked correction barrier failure', async () => {
+  const checkpoint = Error('original resolved checkpoint failure'), saving = Error('original blocked correction failure')
+  let armed = false
+  const f = fixture({ flush: async session => {
+    if (!armed) return
+    const state = deriveContextRecovery(session, 'owned')?.state
+    if (state === 'resolved') throw checkpoint
+    if (state === 'blocked') throw saving
+  } })
+  await f.seed.run('original '.repeat(1500)); armed = true
+  const failure = await createAgentWithSummary(f.ctx, f.deps).followup('continue').catch(error => error)
+  expect(failure).toBeInstanceOf(AggregateError)
+  expect(errorTree(failure)).toContain(checkpoint)
+  expect(errorTree(failure)).toContain(saving)
+  expect(f.attempts).toHaveLength(2); expect(f.effects).toBe(1)
+  expect(f.session.events.filter(event => event.type === 'context/recovery' && event.state === 'blocked')).toHaveLength(1)
 })
 
 it("fixed input and an output cap edit cannot masquerade as recovery progress", async () => {

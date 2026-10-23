@@ -5,6 +5,7 @@ import type { GenerationEvent, GenerationAttemptEvent, GenerationActionEvent } f
 import type { InputPreparationEvent, PreparedInputResult } from '../events/input-preparation.ts'
 
 type Event<K extends SessionEvent['type']> = Extract<SessionEvent, { type: K }>
+export type RecoverySettlementFact = Omit<Event<'context/recovery'>, 'state' | 'seq' | 'ignorable'> & { state: 'blocked' | 'resolved' }
 export type CodeSettlementFact = Event<'code/result' | 'code/output'>
   | (Omit<Event<'code/cell'>, 'state'> & { state: 'completed' | 'failed' | 'terminated' | 'interrupted' })
 export interface InputFacts<Outcome = FactOutcome> {
@@ -48,6 +49,7 @@ export interface FactPorts<Outcome = FactOutcome> {
   delivery: DeliveryFacts<Outcome>; metadata: MetadataFacts<Outcome>; compaction: LegacyCompactionFacts<Outcome>
 }
 export interface SettlementFacts<Outcome = FactOutcome> {
+  recovery: { capture(event: RecoverySettlementFact): CapturedSettlementFact<Outcome> }
   softReduction: { capture(event: import('../events/soft-reduction.ts').SoftReductionTerminalDraft): CapturedSettlementFact<Outcome> }
   inputPreparation: { capture(event: Extract<InputPreparationEvent, { op: 'completed' | 'failed' }>): CapturedSettlementFact<Outcome> }
   generation: { capture(event: Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>): CapturedSettlementFact<Outcome> }

@@ -32,6 +32,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
     return validSettlementEvent(kind, event) ? captureMemoryFact(session, draft, assertHeld) : rejectedMemoryCapture()
   }
   const source: SettlementFacts<NondurableFactOutcome> = {
+    recovery: { capture: event => capture('recovery', event, { kind: 'metadata', event }) },
     softReduction: { capture(event) {
       assertHeld()
       return validSoftTerminalDraft(event) && event.publication === 'none' ? captureMemoryFact(session, { kind: 'soft-reduction', event }, assertHeld) : rejectedMemoryCapture()

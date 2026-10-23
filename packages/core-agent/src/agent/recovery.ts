@@ -5,6 +5,8 @@ import { modelFailureFacts } from "@i-harness/llm-seam"
 import type { PreparedRequestMeasurement } from "@i-harness/token-meter"
 import type { AgentDeps } from "./types.ts"
 import type { AgentContext } from "./context.ts"
+import { createRecoverySettlement } from './recovery-settlement.ts'
+import { savingFailure } from './saving-failure.ts'
 
 export interface RecoveryAdmissionState {
   reductionAttempts?: import('@i-harness/context-engine').ReductionAttempts
@@ -12,29 +14,37 @@ export interface RecoveryAdmissionState {
   recoveryId?: string
   recoveryInputFingerprint?: string
 }
+type BlockedRecoveryError = Error & { code: 'CONTEXT_WINDOW_EXCEEDED'; recoveryBlocked: true }
+export type RecoveryRequirement = { kind: 'not-applicable' } | { kind: 'required' } | { kind: 'blocked'; error: BlockedRecoveryError }
 const cost = (measurement: PreparedRequestMeasurement) => Object.values(measurement.input.components).reduce((total, c) => ({ tokens: total.tokens + c.heuristicTokens, bytes: total.bytes + c.textUtf8Bytes + c.structuredBytes + c.binaryBytes }), { tokens: 0, bytes: 0 })
 
 /** One model-attempt owner; no inbox claims, hooks, tools or reset lane. */
 export function createRecovery(deps: AgentDeps, context: AgentContext) {
+  const terminal = createRecoverySettlement(deps)
   const ownerSessionId = context.ownedBudget.ownerSessionId
   let lastFailure: unknown
   const current = (measurement: PreparedRequestMeasurement) => deriveContextRecovery(deps.session, ownerSessionId, { ...measurement.input, providerId: context.metadata()?.providerId ?? measurement.input.providerId })
   const flush = async (signal?: AbortSignal) => { await deps.flush?.(); signal?.throwIfAborted() }
-  const fact = async (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
+  const draft = (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
     // Fold results may include the event envelope. Always publish only fields
     // from the scalar contract, never an inherited seq/type.
     const { version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
       inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint,
       identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint } = previous
-    const event = { type: 'context/recovery' as const, version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
+    return { type: 'context/recovery' as const, version, ownerSessionId, recoveryId, logicalStepSeq, bindingFingerprint, rejectedInputFingerprint,
       inputTokens, contextLimit, providerId, modelId, protocol, shapeFingerprint, bindingConfigFingerprint, identityCoverage, inputCost, inputBytes, retryConsumed, retryInputFingerprint, state, ...extra }
-    if (state === 'retry-started' && deps.generationAction) await deps.generationAction.phase(event)
+  }
+  const fact = async (previous: ContextRecoveryFacts, state: ContextRecoveryFacts["state"], extra: Partial<ContextRecoveryFacts> = {}) => {
+    const event = draft(previous, state, extra)
+    if (state === 'blocked' || state === 'resolved') await terminal.publish({ ...event, state })
+    else if (state === 'retry-started' && deps.generationAction) await deps.generationAction.phase(event)
     else committedFactSeqs(await agentFacts(deps).metadata.admit(event))
   }
-  const blocked = async (previous: ContextRecoveryFacts, reason: string, signal?: AbortSignal): Promise<never> => {
-    await fact(previous, "blocked", { reason }); await flush(signal)
-    throw Object.assign(new Error(`prompt_too_long: ${reason}`, { cause: lastFailure }), { code: "CONTEXT_WINDOW_EXCEEDED", recoveryBlocked: true })
+  const persistBlocked = async (previous: ContextRecoveryFacts, reason: string, signal?: AbortSignal): Promise<BlockedRecoveryError> => {
+    await fact(previous, "blocked", { reason }); await terminal.checkpoint(signal)
+    return Object.assign(new Error(`prompt_too_long: ${reason}`, { cause: lastFailure }), { code: "CONTEXT_WINDOW_EXCEEDED" as const, recoveryBlocked: true as const })
   }
+  const blocked = async (previous: ContextRecoveryFacts, reason: string, signal?: AbortSignal): Promise<never> => { throw await persistBlocked(previous, reason, signal) }
   const progressed = (previous: ContextRecoveryFacts, measurement: PreparedRequestMeasurement) => {
     const input = measurement.input, candidateCost = cost(measurement)
     return input.coverage !== "incomplete" && !input.overriddenInputFields.some(field => field === "messages" || field === "system")
@@ -45,9 +55,10 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
       && previous.inputBytes !== undefined && candidateCost.bytes <= previous.inputBytes
   }
   return {
-    async require(error: unknown, measurement: PreparedRequestMeasurement, logicalStepSeq: number, signal?: AbortSignal) {
+    close: terminal.close,
+    async require(error: unknown, measurement: PreparedRequestMeasurement, logicalStepSeq: number, signal?: AbortSignal): Promise<RecoveryRequirement> {
       const failure = modelFailureFacts(error)
-      if (failure?.code !== "CONTEXT_WINDOW_EXCEEDED" || failure.reason !== "context-limit") return false
+      if (failure?.code !== "CONTEXT_WINDOW_EXCEEDED" || failure.reason !== "context-limit") return { kind: 'not-applicable' }
       lastFailure = error
       const previous = current(measurement), input = measurement.input, measured = cost(measurement)
       const metadata = context.metadata()
@@ -58,8 +69,8 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         inputCost: measured.tokens, inputBytes: measured.bytes, retryConsumed: previous?.state !== "resolved" && (previous?.retryConsumed === true || previous?.state === "retry-started"), state: "required",
         ...(failure.inputTokens !== undefined ? { inputTokens: failure.inputTokens } : {}), ...(failure.contextLimit !== undefined ? { contextLimit: failure.contextLimit } : {}) }
       await fact(required, "required"); await flush(signal)
-      if (required.retryConsumed) await blocked(required, "The changed-input recovery attempt was also rejected; automatic retry is exhausted", signal)
-      return true
+      if (required.retryConsumed) return { kind: 'blocked', error: await persistBlocked(required, "The changed-input recovery attempt was also rejected; automatic retry is exhausted", signal) }
+      return { kind: 'required' }
     },
     async admit(measurement: PreparedRequestMeasurement, state: RecoveryAdmissionState, signal?: AbortSignal): Promise<"clear" | "authorized" | "rebuild"> {
       const previous = current(measurement)
@@ -97,12 +108,10 @@ export function createRecovery(deps: AgentDeps, context: AgentContext) {
         // Accepted main output must be durable before declaring its recovery
         // successful. A failed/aborted resolution barrier stays inspectable.
         await flush(signal)
-        await fact(previous, "resolved"); await flush(signal)
+        await fact(previous, "resolved"); await terminal.checkpoint(signal)
       } catch (error) {
-        await fact(previous, "blocked", { reason: "Accepted main recovery resolution checkpoint did not complete" })
-        // Persist the conservative state even when Stop was the reason. The
-        // enclosing failed-turn owner remains responsible for save failures.
-        try { await deps.flush?.() } catch { /* original checkpoint failure wins */ }
+        try { await terminal.correct({ ...draft(previous, "blocked", { reason: "Accepted main recovery resolution checkpoint did not complete" }), state: 'blocked' }) }
+        catch (saving) { throw savingFailure(error, [saving], 'Recovery correction saving failed') }
         throw error
       }
     },

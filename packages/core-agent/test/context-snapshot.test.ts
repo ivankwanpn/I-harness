@@ -1,7 +1,7 @@
 import { confirmFixtureExecution, fixtureExecutionIdentity } from "./fixtures/execution.ts"
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, type BudgetRead } from "@i-harness/core-session"
+import { append, createSession, createNondurableFactOwner, type BudgetRead } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAnthropicClient } from "../../llm-anthropic/src/index.ts"
 import { wrapPreparedRequest, type ModelClient, type LLMRequest } from "@i-harness/llm-seam"
@@ -98,6 +98,9 @@ it("retains accepted measured usage when Stop arrives during the acceptance flus
   expect(effects).toBe(0)
   expect(session.events.filter(event => event.type === "model/exchange-accepted")).toHaveLength(1)
   expect(session.events.find(event => event.type === "context/usage")).toMatchObject({ checkpoint: { reportedInputTokens: 1000 } })
+  expect(session.events.filter(event => event.type === 'context/usage')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'context/budget' && event.version === 2 && event.snapshot.freshness === 'awaiting-projection')).toHaveLength(0)
+  expect(session.events.filter(event => event.type === 'tool/dispatch')).toHaveLength(0)
   expect(agent.contextBudget!()).toMatchObject({ kind: "ready", snapshot: { admission: "unavailable", requestContext: expect.any(Object) } })
 })
 
@@ -124,10 +127,17 @@ it("a failed post-response observation preserves accepted usage and blocks the n
       confirmFixtureExecution({ ...prepared, measurement }, control)
       yield { type: "usage", usage: { inputTokens: 1000, inputTokenSemantics: "includes-cache" } } as const
       yield { type: "text/chunk", text: "accepted" } as const
-      yield { type: "end", providerContinuation: unsupported as never } as const
+      yield { type: "end", providerContinuation: { protocol: 'anthropic-messages', version: 1, blocks: [] } as never } as const
     })())
   } }
-  const agent = createAgent(ctx, { session, sessionId: "owner", tools, model, systemPrompt: "s" })
+  let injected = false
+  const agent = createAgent(ctx, { session, sessionId: "owner", tools, model, systemPrompt: "s", flush: async () => {
+    // Fail coordinates only after the real plain-data acceptance is installed.
+    if (!injected && session.events.some(event => event.type === 'model/exchange-accepted')) {
+      injected = true
+      append(session, { type: 'user/message', text: unsupported as never })
+    }
+  } })
   await agent.run("anchor")
   expect(session.events.find(event => event.type === "context/usage")).toMatchObject({ checkpoint: { reportedInputTokens: 1000 } })
   expect(session.events.filter(event => event.type === "model/exchange-accepted")).toHaveLength(1)
@@ -136,6 +146,86 @@ it("a failed post-response observation preserves accepted usage and blocks the n
   expect(saved.kind === "ready" && saved.snapshot.postResponseContextRevision).toBeUndefined()
   await expect(agent.followup("next")).rejects.toMatchObject({ code: "CONTEXT_SNAPSHOT_UNSUPPORTED" })
   expect(preparations).toBe(1); expect(Object.isFrozen(unsupported)).toBe(false)
+})
+
+it('rejects an opaque continuation before acceptance without accepted calibration', async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  const actual = createAnthropicClient({ model: 'm', apiKey: 'controlled' })
+  const opaque = new (class { value = 'opaque' })()
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error('unprepared') }, async prepare(request) {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control)
+      yield { type: 'usage', usage: { inputTokens: 1000, inputTokenSemantics: 'includes-cache' } } as const
+      yield { type: 'text/chunk', text: 'rejected' } as const
+      yield { type: 'end', providerContinuation: opaque as never } as const
+    })())
+  } }
+  const failure = await createAgent(ctx, { session, sessionId: 'owner', tools, model, systemPrompt: 's' }).run('anchor').catch(error => error)
+  expect(failure).toMatchObject({ cause: { code: 'FACT_INVALID_GROUP' } })
+  expect(session.events.filter(event => event.type === 'model/exchange-accepted' || event.type === 'context/usage')).toHaveLength(0)
+  expect(Object.isFrozen(opaque)).toBe(false)
+})
+
+it.each(['usage', 'telemetry'] as const)('preserves acceptance checkpoint failure when secondary %s completion fails', async selected => {
+  const primary = Error('original acceptance flush failure'), secondary = Error('original completion failure')
+  const ctx = createContext(), session = createSession(event => { if (selected === 'usage' && event.type === 'context/usage') throw secondary }), tools = createToolRegistry(ctx)
+  const actual = createAnthropicClient({ model: 'm', apiKey: 'controlled' })
+  let sends = 0, flushed = false
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error('unprepared') }, async prepare(request) {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control); sends++
+      yield { type: 'usage', usage: { inputTokens: 1000, inputTokenSemantics: 'includes-cache' } } as const
+      yield { type: 'text/chunk', text: 'accepted' } as const; yield { type: 'end' } as const
+    })())
+  } }
+  const agent = createAgent(ctx, { session, sessionId: 'owner', tools, model, systemPrompt: 's',
+    telemetry: { emit(event) { if (selected === 'telemetry' && event.type === 'provider/usage') throw secondary }, close() {} },
+    flush: async () => { if (!flushed && session.events.some(event => event.type === 'model/exchange-accepted')) { flushed = true; throw primary } },
+  })
+  const failure = await agent.run('anchor').catch(error => error)
+  expect(failure).toBeInstanceOf(AggregateError)
+  expect(failure.cause).toBe(primary); expect(failure.errors).toEqual([primary, secondary])
+  expect(sends).toBe(1)
+  expect(session.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'context/usage')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'tool/dispatch')).toHaveLength(0)
+  expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { admission: 'unavailable' } })
+})
+
+it('omits the optional post-response diagnostic when Stop wins its actual before-issue race', async () => {
+  const ctx = createContext(), session = createSession(), owner = createNondurableFactOwner(session), tools = createToolRegistry(ctx)
+  const begin = owner.beginAction, outcomes: unknown[] = []
+  owner.beginAction = signal => {
+    const action = begin(signal), admit = action.facts.metadata.admit
+    action.facts.metadata.admit = async event => {
+      if (event.type === 'context/budget' && event.version === 2 && event.snapshot.freshness === 'awaiting-projection') {
+        action.stop()
+        const outcome = await admit(event); outcomes.push(outcome); return outcome
+      }
+      return admit(event)
+    }
+    return action
+  }
+  let sends = 0
+  const actual = createAnthropicClient({ model: 'm', apiKey: 'controlled' })
+  const model: ModelClient = { executionIdentity: fixtureExecutionIdentity, async *stream() { throw Error('unprepared') }, async prepare(request) {
+    const prepared = await actual.prepare!(request)
+    return wrapPreparedRequest(prepared, (_stream, control, measurement) => (async function*() {
+      confirmFixtureExecution({ ...prepared, measurement }, control); sends++
+      yield { type: 'usage', usage: { inputTokens: 1000, inputTokenSemantics: 'includes-cache' } } as const
+      yield { type: 'text/chunk', text: 'accepted' } as const; yield { type: 'end' } as const
+    })())
+  } }
+  const agent = createAgent(ctx, { session, factOwner: owner, sessionId: 'owner', tools, model, systemPrompt: 's' })
+  await expect(agent.run('anchor')).rejects.toThrow(/aborted/)
+  expect(outcomes).toEqual([{ kind: 'not-issued', code: 'FACT_CANCELLED' }])
+  expect(sends).toBe(1)
+  expect(session.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'context/usage')).toHaveLength(1)
+  expect(session.events.filter(event => event.type === 'context/budget' && event.version === 2 && event.snapshot.freshness === 'awaiting-projection')).toHaveLength(0)
+  expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { admission: 'unavailable' } })
 })
 
 it("does not restore a historical read to fit when a changed surface is restored", async () => {

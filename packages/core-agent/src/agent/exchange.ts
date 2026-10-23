@@ -38,5 +38,6 @@ export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flu
   if (written?.type !== 'model/exchange-accepted') throw new Error('Committed acceptance is unavailable')
   input.onAccepted?.(written)
   await deps.flush?.()
+  signal?.throwIfAborted()
   return acceptedSeq
 }

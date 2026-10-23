@@ -1,8 +1,9 @@
 import { types } from 'node:util'
 import { isStrictFactData } from './capture.ts'
 import { validateResultFact } from '../results/validate.ts'
+import { validContextEvent } from '../events/context.ts'
 
-export type SettlementEventKind = 'tool-result' | 'code' | 'delivery' | 'rewind' | 'retention' | 'lifecycle' | 'usage' | 'assistant-audit'
+export type SettlementEventKind = 'recovery' | 'tool-result' | 'code' | 'delivery' | 'rewind' | 'retention' | 'lifecycle' | 'usage' | 'assistant-audit'
 const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'])
 const lifecycle = new Set(['step/end', 'turn/end', 'step/failed', 'reasoning'])
 const terminal = new Set(['completed', 'failed', 'terminated', 'interrupted'])
@@ -23,6 +24,9 @@ export function validSettlementEvent(kind: SettlementEventKind, event: unknown):
       validateResultFact(event, 10)
     }
     switch (kind) {
+      case 'recovery': return type.value === 'context/recovery' && isStrictFactData(event)
+        && !Object.hasOwn(event, 'seq') && !Object.hasOwn(event, 'ignorable')
+        && validContextEvent(event) && 'state' in event && (event.state === 'blocked' || event.state === 'resolved')
       case 'tool-result': return type.value === 'tool/result'
       case 'code': {
         if (type.value === 'code/result' || type.value === 'code/output') return true

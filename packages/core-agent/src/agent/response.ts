@@ -15,9 +15,11 @@ import { savingFailure } from './saving-failure.ts'
  * Hooks, inbox claims, accepted tool effects and turn lifetime stay outside. */
 export function createResponseRunner(deps: AgentDeps & AgentConfig, context: AgentContext, modelLoop: ReturnType<typeof createModelLoop>, getSteps: () => number) {
   const prepareRequest = createStepInput(deps, context)
-  const recovery = createRecovery(deps, context)
-  const admit = createAdmission(deps, context, prepareRequest, recovery)
   return async function respond(lifecycle: TurnLifecycle, stepStartSeq: number, abort: AbortSignal | undefined, requestScope: LLMRequest['requestScope']) {
+    const recovery = createRecovery(deps, context)
+    const admit = createAdmission(deps, context, prepareRequest, recovery)
+    let responseFailure: unknown, responseFailed = false
+    try {
     let physicalStepStartSeq = stepStartSeq
     const candidateState: import("./execution.ts").CandidateExecutionState & import('./recovery.ts').RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, reductionAttempts: { count: 0, staleRebuilds: 0 }, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
     let candidate: Awaited<ReturnType<typeof admit>>
@@ -29,6 +31,7 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       let physicalAttempts = 0, observed = false, rebuild = false
       let attemptFailure: unknown, failed = false
       let streamFailure: unknown, streamFailed = false
+      let semanticBlocked: Error | undefined
       try {
         try {
           for await (const ev of candidate.prepared.stream({ generation: deps.sharedBudget?.control ?? deps.generationAction?.control(candidateState.recoveryId ? 'recovery' : 'main'), confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: activeCandidate.validateBeforeTransport, onTransportIssue: () => { physicalAttempts++; candidateState.hasStartedSend = true } })) {
@@ -60,7 +63,8 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
           } else if (!streamStep.result().providerEnded && failure?.code === "CONTEXT_WINDOW_EXCEEDED" && failure.reason === "context-limit") {
             await streamStep.discard()
             await closeStepBoundary(deps,lifecycle,{type:'step/end'})
-            await recovery.require(error, candidate.prepared.measurement, stepStartSeq, abort)
+            const required = await recovery.require(error, candidate.prepared.measurement, stepStartSeq, abort)
+            if (required.kind === 'blocked') { semanticBlocked = required.error; throw semanticBlocked }
             // Reopen only the physical model boundary. Hooks, admitted inputs
             // and prior accepted tool effects belong to the logical step.
             const failedStart = deps.session.events[streamStep.result().identity.stepStartSeq]
@@ -71,7 +75,7 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
         }
         } catch (error) {
         const alreadyRetained = error instanceof AggregateError && Object.getOwnPropertyDescriptor(error, 'cause')?.value === streamFailure
-        attemptFailure = streamFailed && error !== streamFailure && !alreadyRetained
+        attemptFailure = streamFailed && error !== streamFailure && error !== semanticBlocked && !alreadyRetained
           ? savingFailure(streamFailure, [error], 'model attempt saving failed') : error
         failed = true
         throw attemptFailure
@@ -100,5 +104,13 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
     const acceptedSeq = accepted?.seq
     await recovery.resolve(prepared.measurement, abort)
     return { step, acceptedSeq }
+    } catch (error) { responseFailure = error; responseFailed = true; throw error }
+    finally {
+      try { await recovery.close() }
+      catch (saving) {
+        if (responseFailed) throw savingFailure(responseFailure, [saving], 'Recovery source settlement failed')
+        throw saving
+      }
+    }
   }
 }

@@ -88,20 +88,34 @@ export function createOwnedBudget(session: Session, ownerSessionId: string, fres
       return result
     },
     async checkpoint() { await drainRetirements(); if (latest.kind === "ready" && latest.observation) committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 2, snapshot: latest.observation })) },
-    async record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined) {
-      await drainRetirements()
-      if (accepted && session.events[accepted.seq!] === accepted) {
-        const sample = calibration.recordAccepted(measurement.input, accepted.request, accepted, usage)
-        if (sample.kind === "sample") { calibrationRevision++; committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage({ type: "context/usage", version: 2, op: "sample", checkpoint: { ...sample.checkpoint, accepted: { ...sample.checkpoint.accepted, acceptedSeq: { kind: 'prior', seq: sample.checkpoint.accepted.acceptedSeq, expectedType: 'model/exchange-accepted' } } } })) }
-      }
+    async record(measurement: PreparedRequestMeasurement, usage: Parameters<typeof calibration.recordAccepted>[3], accepted: ExchangeAcceptedEventV2 | undefined, signal?: AbortSignal) {
       // Accepted provider output belongs to this owned attempt. A subsequent
       // local edit becomes unavailable until admission measures it again.
       let postResponseContextRevision: string | undefined
       try { const observation = readContextCoordinates(session, { ownerSessionId }); if (observation.kind === "available") postResponseContextRevision = observation.observationRevision } catch { /* Observation cannot revoke real usage. */ }
       if (latest.kind === "ready") {
-        latest = { ...latest, snapshot: freezePreparedFacts({ ...latest.snapshot, ...(postResponseContextRevision ? { postResponseContextRevision } : {}), admission: "unavailable", reason: "Accepted output awaits the next protocol projection" }),
-          ...(latest.observation ? { observation: freezePreparedFacts({ ...latest.observation, freshness: 'awaiting-projection' as const, ...(postResponseContextRevision ? { postResponseContextRevision } : {}) }) } : {}) }
-        if (latest.observation) committedFactSeqs(await facts().metadata.admit({ type: "context/budget", version: 2, snapshot: latest.observation }))
+        const { postResponseContextRevision: _previousRevision, ...snapshot } = latest.snapshot
+        let observation = latest.observation
+        if (observation) {
+          const { postResponseContextRevision: _previousObservationRevision, ...previous } = observation
+          observation = freezePreparedFacts({ ...previous, freshness: 'awaiting-projection' as const, ...(postResponseContextRevision ? { postResponseContextRevision } : {}) })
+        }
+        latest = { ...latest, snapshot: freezePreparedFacts({ ...snapshot, ...(postResponseContextRevision ? { postResponseContextRevision } : {}), admission: "unavailable", reason: "Accepted output awaits the next protocol projection" }),
+          ...(observation ? { observation } : {}) }
+      }
+      await drainRetirements()
+      if (accepted && session.events[accepted.seq!] === accepted) {
+        const sample = calibration.recordAccepted(measurement.input, accepted.request, accepted, usage)
+        if (sample.kind === "sample") { calibrationRevision++; committedFactSeqs(await (settlement()?.lifecycle ?? facts().agent).usage({ type: "context/usage", version: 2, op: "sample", checkpoint: { ...sample.checkpoint, accepted: { ...sample.checkpoint.accepted, acceptedSeq: { kind: 'prior', seq: sample.checkpoint.accepted.acceptedSeq, expectedType: 'model/exchange-accepted' } } } })) }
+      }
+      if (latest.kind === 'ready') {
+        if (latest.observation && !signal?.aborted) {
+          const outcome = await facts().metadata.admit({ type: "context/budget", version: 2, snapshot: latest.observation })
+          // This derived observation may be omitted on proved cancellation or
+          // backend-proven absence. Neither grants capacity or revokes usage.
+          // Issued uncertainty and failed installation remain real failures.
+          if (outcome.kind !== 'absent' && !(outcome.kind === 'not-issued' && outcome.code === 'FACT_CANCELLED')) committedFactSeqs(outcome)
+        }
       }
     },
   }

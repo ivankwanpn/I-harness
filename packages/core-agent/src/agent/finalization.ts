@@ -48,14 +48,21 @@ export function reportModelUsage(deps: Pick<AgentDeps, "telemetry">, { stepUsage
   } })
 }
 
-export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2) {
+export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "ownedBudget">, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, accepted?: import("@i-harness/core-session").ExchangeAcceptedEventV2, signal?: AbortSignal) {
   const { stepUsage } = step
-  reportModelUsage(deps, step)
+  let reporting: unknown, reportFailed = false
+  try { reportModelUsage(deps, step) }
+  catch (error) { reporting = error; reportFailed = true }
 
   // Acceptance owns assistant/native persistence; this owner only reports usage
   // and calibrates the measured request that produced the completed response.
   // The caller has the accepted fact. A later Stop cannot revoke real usage.
-  await context.ownedBudget.record(measurement, stepUsage, accepted)
+  try { await context.ownedBudget.record(measurement, stepUsage, accepted, signal) }
+  catch (saving) {
+    if (reportFailed) throw savingFailure(reporting, [saving], 'Accepted usage saving failed')
+    throw saving
+  }
+  if (reportFailed) throw reporting
 
 }
 
@@ -64,12 +71,19 @@ export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telem
 export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1): Promise<void> {
   let written: import("@i-harness/core-session").ExchangeAcceptedEvent | undefined
   let exactWritten: string | undefined
+  let primary: unknown, failed = false
   try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request, onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
-  finally {
-    lifecycle.providerCompleted = !!written && deps.session.events[written.seq!] === written && JSON.stringify(written) === exactWritten
-    if (lifecycle.providerCompleted) await completeModelStep(deps, context, step, measurement, written?.type === "model/exchange-accepted" && written.version === 2 ? written : undefined)
+  catch (error) { primary = error; failed = true }
+  lifecycle.providerCompleted = !!written && deps.session.events[written.seq!] === written && JSON.stringify(written) === exactWritten
+  try {
+    if (lifecycle.providerCompleted) await completeModelStep(deps, context, step, measurement, written?.type === "model/exchange-accepted" && written.version === 2 ? written : undefined, signal)
     else reportModelUsage(deps, step)
   }
+  catch (saving) {
+    if (failed) throw savingFailure(primary, [saving], 'Accepted model completion saving failed')
+    throw saving
+  }
+  if (failed) throw primary
 }
 
 export async function closeStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {

@@ -46,6 +46,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     return pending
   }
   return {
+    recovery: { capture: event => capture('recovery', event, { kind: 'metadata', event }) },
     softReduction: { capture(event) {
       assertHeld()
       return validSoftTerminalDraft(event) && event.publication === 'none' ? records.capture({ kind: 'soft-reduction', event })
