@@ -1,0 +1,15 @@
+# Scoped partial-output retry recovery acceptance
+
+Root accepted the full range `80ad360f595a3522857fdb5779836591a69bd1cc..732a5201bdc7f17c60d75df0f9594a59390205a6`, including initial24f5794c and correction732a5201. Fresh independent review found one Important reasoning-save provenance ordering defect and one Minor unnecessary common-case scan; the same reviewer verified both corrections. Integrated MAIN commits aree528c03a and12803c47. Product0.1.13-rc.1/Session12 remain unchanged.
+
+- [Implementation, actual fault distinctions and fix addendum](failed-attempt-recovery-review-20261024/task-1-report.md).
+- [Initial independent review](failed-attempt-recovery-review-20261024/task-1-review.md) and [scoped re-review: Approved](failed-attempt-recovery-review-20261024/task-1-fix1-review.md).
+- [Root audit](failed-attempt-recovery-review-20261024/root-audit.json) checked15final files against actual Git blobs and their covering tested bytes, plus208retained evidence files, with0mismatches. [Audit script](failed-attempt-recovery-review-20261024/root-audit.mjs).
+
+Partial text/tool responses now settle precise original never-dispatched outcomes and derive only fully proven terminal audit closure. Retry proceeds through the unchanged candidate guard, action/deadline and transport owners. Failed audit stays suppressed and original effects are not replayed. Real pending human input, equal-text current-source changes, binding/surface changes, Stop and genuine unresolved facts still fence the old candidate. Private original-error association is diagnostic only and does not serialize raw provider errors.
+
+Initial final gates: core-session558passed; core-agent397passed/35failed with one separately reproduced overlapping-run unhandled rejection; connected31passed; seam27passed; fourtypespassed. Six previous model-recovery failures now pass, with zero new failed names. Corrective coverage: Agent38passed/3known baseline failures, Session84passed, connected34passed and strengthened save controls12passed; relevant types passed. These scopes overlap and are not added into a synthetic total. The final four corrected files directly match covering runtime receipts; no type-only exception is needed for them.
+
+Committed-but-unacknowledged result/audit/end/reasoning saves genuinely reconcile original operations, retain exact outcomes once, close and support cold follow-up. Backend-proven absence remains recovery-required and cannot be bypassed by a new action. Explicit management of the original capture's retryAbsent is later persistence/recovery work; this acceptance does not claim permanent-absence recovery. Retained late-result/missing-end journals prove conservative cold classification.
+
+The35other Agent failures and original overlapping-run rejection remain release obligations; comparison used exact BASE runtime bytes and a bounded identical test selection. The semantic-fork, native fixture, SQLite, IC-C large-result reduction, actual child/caller, instruction-consumer, unified events and R6 gates are not completed here. No public release/push/tag is part of this scoped acceptance.
