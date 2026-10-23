@@ -43,6 +43,7 @@ function pushStream(): PushStream {
     }
   }
   const stream: PushStream = {
+    ready: Promise.resolve(),
     delivered: 0,
     emit(event) { if (!ended) send({ value: event, done: false }) },
     fail(error) { ended = true; send(error) },
