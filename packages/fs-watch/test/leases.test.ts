@@ -1,31 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { createFsWatchService, type WatchCursor, type WatchLease, type WatchNotification } from "../src/index.ts"
-import { gate, PushWatcher, turns } from "./helpers/push-watcher.ts"
+import { gate, PushRoute, PushWatcher, turns } from "./helpers/push-watcher.ts"
 import { resolve } from "node:path"
 
-const seam = vi.hoisted(() => ({ watch: vi.fn() }))
+const seam = vi.hoisted(() => ({ watch: vi.fn(), route: vi.fn() }))
 vi.mock("chokidar", () => ({ watch: seam.watch }))
+vi.mock("node:fs", async importOriginal => ({ ...await importOriginal<typeof import("node:fs")>(), watch: seam.route }))
 vi.mock("node:fs/promises", () => ({ readdir: async () => [] }))
 let natives: PushWatcher[]
 beforeEach(() => {
   vi.useFakeTimers()
   natives = []
+  seam.route.mockReset().mockImplementation((_path, _options, callback) => {
+    const route = new PushRoute(); route.on("change", callback); return route
+  })
   seam.watch.mockReset().mockImplementation(() => {
     const native = new PushWatcher(); natives.push(native); return native
   })
 })
 afterEach(() => vi.useRealTimers())
-const selection = { roots: ["missing-watch-root"], persistent: false }
+const selection = { roots: ["."], persistent: false }
 async function start() { for (const native of natives) native.ready(); await turns() }
 async function flush() { await vi.advanceTimersByTimeAsync(101); await turns() }
 
 describe("explicit watch service leases", () => {
   it("shares equivalent selections only within the owning service and copies options", async () => {
     const service = createFsWatchService(), other = createFsWatchService()
-    const options = { roots: ["missing-watch-root", "./missing-watch-root"], ignore: ["z", "a", "z"], persistent: false }
+    const options = { roots: [".", "./"], ignore: ["z", "a", "z"], persistent: false }
     const a = service.acquire(options)
     options.roots[0] = "mutated"; options.ignore[0] = "mutated"
-    const b = service.acquire({ roots: [resolve("missing-watch-root")], ignore: ["a", "z"], persistent: false })
+    const b = service.acquire({ roots: [resolve(".")], ignore: ["a", "z"], persistent: false })
     const c = other.acquire(selection)
     const d = service.acquire({ ...selection, persistent: true })
     try {

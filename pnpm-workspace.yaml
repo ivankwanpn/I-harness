@@ -9,3 +9,6 @@ allowBuilds:
   ffmpeg-static: true # Bundled media decoder for read_video (platform binary installer).
 
 ignoreWorkspaceCycles: true
+
+patchedDependencies:
+  chokidar@5.0.0: patches/chokidar@5.0.0.patch

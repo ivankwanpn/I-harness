@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  chokidar@5.0.0: e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0
+
 importers:
 
   .:
@@ -721,7 +724,7 @@ importers:
     dependencies:
       chokidar:
         specifier: ^5.0.0
-        version: 5.0.0
+        version: 5.0.0(patch_hash=e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0)
 
   packages/goal:
     dependencies:
@@ -5831,7 +5834,7 @@ snapshots:
 
   check-error@2.1.3: {}
 
-  chokidar@5.0.0:
+  chokidar@5.0.0(patch_hash=e2afb9471a8a2ae78f929484a87567d98dc48d48d873caa329ffcf14c5dc12f0):
     dependencies:
       readdirp: 5.1.1
 

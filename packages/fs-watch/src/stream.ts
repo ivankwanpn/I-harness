@@ -1,9 +1,10 @@
 import { watch, type FSWatcher } from "chokidar"
-import { existsSync } from "node:fs"
-import { readdir } from "node:fs/promises"
+import { existsSync, watch as watchRoute } from "node:fs"
+import { lstat, readdir } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { type as osType } from "node:os"
 import { FsWatchError, type FsWatchEvent, type FsWatcher, type FsWatcherOptions } from "./types.ts"
+import { routingPlan } from "./routing.ts"
 
 export const DEFAULT_IGNORE = ["node_modules", ".git", ".i-harness", "dist"] as const
 const posix = (path: string) => path.replace(/\\/g, "/")
@@ -52,14 +53,9 @@ export function createFsWatcher(options: FsWatcherOptions): FsWatcher {
   if ((forced && forced !== "false" && forced !== "0") || osType() === "OS400") {
     throw new FsWatchError("FS_WATCH_POLLING", "Native watching required; polling is forced by this environment")
   }
-  const roots = opts.roots.map(posix)
   const ignore = new Set<string>([...DEFAULT_IGNORE, ...opts.ignore!])
-  const ignored = (path: string) => {
-    const full = posix(resolve(path))
-    // Explicit roots and their routing ancestors are authoritative, including missing ignored parents.
-    return !roots.some(root => root === full || root.startsWith(`${full}/`))
-      && full.split("/").some(segment => ignore.has(segment))
-  }
+  const routing = routingPlan(opts.roots, ignore)
+  const ignored = routing.ignored
   let ended = false, explicitClose = false, nativeReady = false, healthy = false
   let terminal: FsWatchError | undefined
   let readyResolve!: () => void, readyReject!: (error: unknown) => void
@@ -129,12 +125,52 @@ export function createFsWatcher(options: FsWatcherOptions): FsWatcher {
     finishReady()
   }).catch(error => fail(new FsWatchError("FS_WATCH_BACKEND", "Baseline failed", { cause: error })))
   let watcher: FSWatcher | undefined
+  const routeClosers: Array<() => Promise<void>> = []
+  const routeProbes = new Map<string, Promise<void>>()
+  const topologyChanged = () => fail(new FsWatchError("FS_WATCH_GAP", "Selected watch routing topology changed"))
   try {
+    // Shallow handles cover only precomputed routing directories. Chokidar
+    // stays on the original selection: scanning ancestors with it would stat
+    // every sibling before applying its ignore predicate.
+    for (const directory of routing.directories) {
+      try {
+        const route = watchRoute(directory, { persistent: opts.persistent, recursive: false }, (name, filename) => {
+          if (ended || name !== "rename") return
+          if (filename === null) { topologyChanged(); return }
+          const path = resolve(directory, filename.toString())
+          if (routing.topology(path)) { topologyChanged(); return }
+          // A previously missing selection might now be a directory/junction.
+          // Inspect only the ORIGINAL selected path, never an event-derived
+          // read scope. Ordinary candidate-file renames retain their deltas.
+          const original = routing.original(path)
+          if (original && !routeProbes.has(original)) {
+            const probe = lstat(original).then(stats => {
+              if (!ended && (stats.isDirectory() || stats.isSymbolicLink())) topologyChanged()
+            }, error => {
+              if (!ended && error.code !== "ENOENT" && error.code !== "ENOTDIR") {
+                fail(new FsWatchError("FS_WATCH_BACKEND", "Routing topology inspection failed", { cause: error }))
+              }
+            }).finally(() => { routeProbes.delete(original) })
+            routeProbes.set(original, probe)
+          }
+        })
+        let closed = false
+        const done = new Promise<void>(resolve => route.once("close", () => { closed = true; resolve() }))
+        route.on("error", error => fail(new FsWatchError("FS_WATCH_BACKEND", "Native routing watcher failed", { cause: error })))
+        routeClosers.push(() => { if (!closed) route.close(); return done })
+      } catch (error) {
+        // An existing ancestor will observe the appearance of a missing route.
+        const code = (error as NodeJS.ErrnoException).code
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw error
+      }
+    }
     watcher = watch(opts.roots, { persistent: opts.persistent, ignoreInitial: false,
       awaitWriteFinish: false, usePolling: false, ignored })
     watcher.on("ready", () => { nativeReady = true; finishReady() })
     watcher.on("all", (name: string, path: string) => {
       if (ended) return
+      if (name === "addDir") routing.directory(path)
+      if (!routing.selected(path)) return
       const kind = name === "addDir" ? "add" : name === "unlinkDir" ? "unlink" : name
       if (kind !== "add" && kind !== "change" && kind !== "unlink") return
       const event: FsWatchEvent = { path, kind }
@@ -175,8 +211,9 @@ export function createFsWatcher(options: FsWatcherOptions): FsWatcher {
       readyReject(new FsWatchError("FS_WATCH_CLOSED", "Watcher closed before readiness"))
       for (const waiter of waiters.splice(0)) waiter.resolve({ value: undefined, done: true })
       closing = (async () => {
-        // Join both resources even if one fails. A failed native close remains retryable.
-        const results = await Promise.allSettled([startup, (async () => {
+        // Join baseline, probes and every handle even if one fails. Failed
+        // native closes remain retryable; completed handles are not closed twice.
+        const results = await Promise.allSettled([startup, ...routeProbes.values(), ...routeClosers.map(async close => close()), (async () => {
           if (!backendClosed) { await watcher?.close(); backendClosed = true }
         })()])
         const failed = results.find(result => result.status === "rejected")

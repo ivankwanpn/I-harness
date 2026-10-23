@@ -16,6 +16,11 @@ export class PushWatcher extends EventEmitter {
   fail(error = new Error("backend fault")) { this.emit("error", error) }
 }
 
+/** Public shallow fs.watch boundary; close completion is an event, not a promise. */
+export class PushRoute extends EventEmitter {
+  close = vi.fn(() => { this.emit("close") })
+}
+
 export async function turns(count = 20) {
   for (let i = 0; i < count; i++) await Promise.resolve()
 }

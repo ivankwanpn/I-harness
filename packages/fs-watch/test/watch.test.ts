@@ -39,23 +39,27 @@ describe("createFsWatcher", () => {
     const w = createFsWatcher({ roots: [dir] })
     try {
       const it = w.events[Symbol.asyncIterator]()
-      await sleep(readinessMargin)
+      const file = join(dir, "a.txt")
+      const nextKind = (kind: string, previous?: string) => withTimeout((async () => {
+        for (;;) {
+          const event = await it.next()
+          expect(event.done).toBe(false)
+          expect(event.value.path).toBe(file)
+          if (event.value.kind === kind) return event.value
+          // Native delivery may repeat the prior kind; it is not a write count.
+          expect(event.value.kind).toBe(previous)
+        }
+      })(), 8000, kind)
+      await w.ready
       await writeFile(join(dir, "a.txt"), "x")
-      const e1 = await withTimeout(it.next(), 8000, "add")
-      expect(e1.done).toBe(false)
-      expect(e1.value.kind).toBe("add")
-      expect(e1.value.path).toBe(join(dir, "a.txt"))
+      await nextKind("add")
 
-      await sleep(200) // let awaitWriteFinish's stability window settle
       await writeFile(join(dir, "a.txt"), "xy")
-      const e2 = await withTimeout(it.next(), 8000, "change")
-      expect(e2.value.kind).toBe("change")
-      expect(e2.value.path).toBe(join(dir, "a.txt"))
+      await nextKind("change", "add")
+      expect(await readFile(file, "utf8")).toBe("xy")
 
-      await sleep(200)
       await unlink(join(dir, "a.txt"))
-      const e3 = await withTimeout(it.next(), 8000, "unlink")
-      expect(e3.value.kind).toBe("unlink")
+      await nextKind("unlink", "change")
     } finally {
       await w.close()
       await cleanup()
