@@ -36,9 +36,11 @@ it.each([false, true])("contradictory dispatch invalidates the actual candidate 
     },
   }
   let candidate: Awaited<ReturnType<ReturnType<typeof createAdmission>>> | undefined
+  let recovery: ReturnType<typeof createRecovery> | undefined
   try {
     const context = createAgentContext(deps, "owner")
-    const admit = createAdmission(deps, context, createStepInput(deps, context), createRecovery(deps, context))
+    recovery = createRecovery(deps, context)
+    const admit = createAdmission(deps, context, createStepInput(deps, context), recovery)
     const admitted = await admit(action.signal, { sessionId: "owner", turnId: "guard" }, () => 1)
     candidate = admitted
     const before = candidate.captured
@@ -83,10 +85,13 @@ it.each([false, true])("contradictory dispatch invalidates the actual candidate 
   } finally {
     try { candidate?.execution.close() }
     finally {
-      action.finish()
-      const settled = await Promise.allSettled(sources.map(source => source.close()))
-      const errors = settled.flatMap(result => result.status === "rejected" ? [result.reason] : [])
-      if (errors.length) throw new AggregateError(errors, "Freshness fixture settlement requires recovery")
+      try { await recovery?.close() }
+      finally {
+        action.finish()
+        const settled = await Promise.allSettled(sources.map(source => source.close()))
+        const errors = settled.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, "Freshness fixture settlement requires recovery")
+      }
     }
   }
 })
