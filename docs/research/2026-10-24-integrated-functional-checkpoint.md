@@ -9,6 +9,8 @@ These are independently reviewed scoped changes integrated into `codex/v0.1.13-d
 | IC-C hard-pressure/source pages | 807d2cc0..97cdda48 | 2630feb2 | Spec/quality approved with evidence qualifications |
 | Retired settings leaf | a41230d9..85beea4a | 85beea4a | Fresh independent review approved |
 | P3 Agent contract tests | 07ac8fc9..f5bf396e | 665126e1 | Fresh Sol review approved; later P2 integration close hook still required |
+| P4 Agent compaction policy tests | 444e356f..cd83f7f1 | 9fc102ea | Fresh Sol review approved; 58 scoped tests and typecheck pass |
+| S1 schedule deadline driver Tasks1–2 | 8493641c..c86df70b | 43eadb6c | Fresh Sol review approved; shipping Task3 remains reserved |
 
 The preserved [reports and reviews](integrated-checkpoint-20261024/) contain full hashes, actual test counts, failure identities, compatibility costs and scope limits. Original raw request/event/evidence material remains in the named local SDD/worktree locations; this tracked checkpoint is not a claim that every raw file was embedded into Git.
 
@@ -38,6 +40,14 @@ The downstream43pass/16fail comparison was identical to BASE. Fourteen real stee
 
 The separately reviewed P3 packet recovers10previously unreachable deep-request/reasoning/unknown-effect controls: exactly the same14names now all pass. It proves composed-signal cancellation, exact deep data, timer/prefix behavior and actual stale transport/reduction refusal. Its HTTP fixture uses an actual Anthropic adapter with stub fetch and configured-budget heuristic fit; provider capacity remains unknown. When P2's actual recovery-close interface lands, root must retain/name/close that real helper in the freshness fixture and rerun the combined-source gate.
 
-P2 terminal recovery/Stop remains active in its isolated worktree, and P4 actual Agent compaction-policy fixture qualification is active separately. Main/child instruction request integration, actual semantic callers/native inheritance, unified event delivery, remaining UI/source/schedule/native work, R6 and final packaged release gates remain unfinished. No push, tag or release was performed for this checkpoint.
+P4 actual Agent compaction-policy qualification is accepted and integrated: 58 tests and typecheck pass with declared local text-only summary capability, actual source coverage and honest protected/reduced-over-target behavior. P2 terminal recovery/Stop is source-frozen at fc113394 and under fresh full-range review, not integrated. Its isolated Agent17old failures are covered by the separate P3/P4 packets on MAIN; the combined Agent suite must still be run after P2 and its fixture close hook land. Main/child instruction request integration, actual semantic callers/native inheritance, unified event delivery, remaining UI/source/native work, R6 and final packaged release gates remain unfinished. No push, tag or release was performed for this checkpoint.
+
+## Schedule deadline library
+
+The accepted S1 Tasks1–2 packet replaces the library start-mode interval with one real nearest-deadline timeout and explicit mutation/clock/resume invalidation. Manual tick remains available, delivery retains its original host acceptance owner and identities, and unchanged failed/no-progress sources are not automatically retried. Stop fences further handoffs; close joins original work and retains a failed known disposer for retry. This does not add shipping idle model wakeups or background start calls.
+
+The final frozen schedule package gate passed70/70 (including40driver tests), with typecheck and diff check exit0. Root matched both physical SHA256 values and committed Git blobs; independent Sol review found no open product findings. Intermediate raw RED/GREEN receipts show their actual assertion results, but do not independently reconstruct every historical source snapshot or worker flag. An incorrectly cited missing Git-status file was explicitly corrected; a separately timed new status receipt proves the same reviewed HEAD was then clean, without pretending to recover historical evidence. These limits remain in the tracked report/review.
+
+Task3 exact-Session filtering and real managed-host shipping qualification are still reserved until P2 releases the shared assembly owner. Library acceptance does not complete S1, Task6 or the release gate.
 
 Latest user quota policy: all subsequent implementation/review/correction subagents use GPT-6.1Sol until changed. The two active Astra workers handed off preserved partial work and existing receipts; Sol resumed those same checkouts without restarting completed steps.
