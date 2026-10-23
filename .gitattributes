@@ -2,6 +2,9 @@
 /packages/sandbox-windows-psec/native/** text=auto eol=lf
 /packages/sandbox-windows-psec/protocol.md text eol=lf
 
+# pnpm parses and hashes these exact patch bytes on every platform.
+/patches/chokidar@5.0.0.patch text eol=lf
+
 # Keep shipped executable and exact upstream license/source-notice bytes.
 /packages/sandbox-windows-psec/artifacts/** -text
 /packages/sandbox-windows-psec/native/msys/notices/** -text
