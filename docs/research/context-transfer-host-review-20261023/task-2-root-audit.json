@@ -1,0 +1,37 @@
+{
+  "utc": "2026-10-23T14:15:37.180Z",
+  "root": "C:/Users/inkik/.codex/worktrees/context-host-transfer/I-harness-main",
+  "head": "ac2147b8e1f9375c1421fde68a862c5b4746b5aa",
+  "base": "af4a65256d61c4f0dcd76fd7990a0fafea984851",
+  "physicalFiles": 2750,
+  "changedBlobs": 12,
+  "allRecordedBlobs": 2750,
+  "physicalReleaseFiles": 1,
+  "logs": [
+    {
+      "label": "fix1-final-bootstrap",
+      "exit": 0,
+      "bytes": 519,
+      "sha256": "07acfc24d12ab1236c356ad0cd6c1d910a20d8fa275edae5270bcdbd36879b90"
+    },
+    {
+      "label": "fix1-broker-positive",
+      "exit": 0,
+      "bytes": 370,
+      "sha256": "6afb50c04d2cdfd18952320219df75243699370f3f3f75b89f20edde684f3833"
+    },
+    {
+      "label": "fix1-persistence-types",
+      "exit": 0,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "fix1-jsonl-types",
+      "exit": 0,
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,157 @@
+{
+  "at": "2026-10-23T15:35:00.431Z",
+  "base": "fc71742db138c1018994edf94e954fdc3bff5f58",
+  "head": "41ad97d39fa1f056ef55cd55c7411b501e6ef130",
+  "bindingSha256": "c3f2f0e04e835024796b53747d4b18d9869a549943443b126017fc131348cea2",
+  "physicalFiles": 2806,
+  "ownedNormalized": 4,
+  "runs": [
+    {
+      "name": "q1",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q1b",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q1c",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q2",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q3",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q4",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q4b",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q5",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q6",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "q7",
+      "exitCode": 0,
+      "finalDifferences": []
+    },
+    {
+      "name": "reach",
+      "exitCode": 1,
+      "finalDifferences": [
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t1",
+      "exitCode": 2,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t1b",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t2",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t3",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t4",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t5",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t6",
+      "exitCode": 2,
+      "finalDifferences": [
+        "packages/core-session/test/semantic-seed-result-refs.test.ts",
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    },
+    {
+      "name": "t6b",
+      "exitCode": 0,
+      "finalDifferences": [
+        "packages/desktop-gateway/test/bootstrap-transfer.test.ts"
+      ]
+    }
+  ],
+  "errors": []
+}

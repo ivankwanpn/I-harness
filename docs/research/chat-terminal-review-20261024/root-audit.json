@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-23T16:11:12.516Z",
+  "head": "bf3dac6b906b25993d59f6944cfafa15c0c42661",
+  "evidence": [
+    {
+      "dir": "C:/ih-r5-evidence-20261023",
+      "head": "3422c5627056a0e17db63c614d95d9f4917b4e3f",
+      "bindings": 12,
+      "indexedFiles": 66,
+      "bindingHash": "743b9dcfe3338b98ad9a6504e8e7729f117fb40c45f0a1e2c2c17d5ed4c788d2"
+    },
+    {
+      "dir": "C:/ih-r5-fix1-20261023",
+      "head": "bf3dac6b906b25993d59f6944cfafa15c0c42661",
+      "bindings": 5,
+      "indexedFiles": 35,
+      "bindingHash": "020c60ab2397ca5b0034812bbbb41db10950e8aa72a3ce5aedde33e361168355"
+    }
+  ],
+  "currentFiles": 12,
+  "errors": []
+}

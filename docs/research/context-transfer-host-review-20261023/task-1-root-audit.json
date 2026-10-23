@@ -1,0 +1,37 @@
+{
+  "utc": "2026-10-23T14:15:36.779Z",
+  "root": "D:/I-harness-main",
+  "head": "afd10203e169114f01297d0a5edffacf7b43f99d",
+  "base": "af4a65256d61c4f0dcd76fd7990a0fafea984851",
+  "physicalFiles": 4178,
+  "changedBlobs": 13,
+  "allRecordedBlobs": 0,
+  "physicalReleaseFiles": 1798,
+  "logs": [
+    {
+      "label": "f1ct",
+      "exit": 0,
+      "bytes": 16,
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9"
+    },
+    {
+      "label": "f1all",
+      "exit": 0,
+      "bytes": 6097,
+      "sha256": "0714d3af7719b9039e0242da4e6b62767deecb7d01feb68f4e6c56f372607d64"
+    },
+    {
+      "label": "f1nt",
+      "exit": 0,
+      "bytes": 1620,
+      "sha256": "49cfe820307acf2ccb083d2f4f0df1d5c112303f9fe43ab80b3fe0b9f6c67469"
+    },
+    {
+      "label": "f1nty",
+      "exit": 0,
+      "bytes": 16,
+      "sha256": "5a3973f79ed9becd5f23c4feff467513814de7ea381d75a4d2e339aa8b8edca9"
+    }
+  ],
+  "errors": []
+}

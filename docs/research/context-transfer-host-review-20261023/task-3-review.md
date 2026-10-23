@@ -1,0 +1,54 @@
+# Task 3 independent spec and quality review
+
+## Spec Compliance
+
+**✅ Spec compliant for Task 3's host/artifact composition scope.** Reviewed `fc71742db138c1018994edf94e954fdc3bff5f58..41ad97d39fa1f056ef55cd55c7411b501e6ef130` against the implementation brief, frozen contracts, and normative plan including T-06 through T-09. No blocking defect found in the four changed files. This approves a callable composition primitive and controlled storage continuation, not shipping caller cutover or end-to-end long-session execution.
+
+- The actual Desktop host supplies `projects.prepareBootstrapInheritance` to the existing native runtime (`packages/desktop-gateway/src/host.ts:228`). The runtime invokes that factory and delegates to its existing `contextOutput` owner, without a new artifact store, authority registry, copied request roots, execution assembly, or queue (`packages/desktop-gateway/src/context-runtime.ts:77`, `:92`, `:121`).
+- Invocation, intent and host function capture use the existing strict broker capture; source access is synchronously validated and detached. The manifest is captured before the broker await and becomes admissible only after genuine confirmation and currentness (`packages/desktop-gateway/src/context-runtime.ts:79`, `:89`, `:97`, `:105`). Binding strings are checked before registration, the same scope is retained, and actual service request capture preserves the complete first request (`:114`, `:121`; unchanged `packages/context-output/src/artifact/bootstrap-transfer.ts:37`).
+- NEW delegates current source checks and authorization to the original broker/artifact owners. Absence of source access creates a permanently passive registration, and a malformed/missing NEW predicate cannot route into passive reconciliation (`packages/desktop-gateway/src/context-runtime.ts:119`, `:125`, `:134`). Supplied source identity disagreement rejects in either mode. The actual coordinator rejects anonymous artifacts before the adapter is used (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:116`).
+- Target identity derives from the broker's current target scope and the existing workspace source identity function, not DTO roots. Attempt close invalidates synchronously without releasing durable pins or closing the shared service (`packages/desktop-gateway/src/context-runtime.ts:91`, `:129`, `:134`). The existing broker retains its revision baseline across confirm/reconcile and invalidates ABA (`packages/desktop-gateway/src/project-scope.ts:208`, `:214`, `:265`, `:307`).
+- Real none and empty-observation seeds run target preparation with zero dependency callbacks; real nonempty staging reaches READY, then text and catalog-member reads work through the supplied service with no execution assembly (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:89`, `:104`). The ordinary target authorizer and successful-page guards remain unchanged in the diff; subsequent target visibility denial is asserted (`:101`).
+- The distinct catalog-only fixture uses separate result/catalog indices, preserves both through reset and whole-group replacement, and removes them through rewind (`packages/core-session/test/semantic-seed-result-refs.test.ts:8`, `:25`). Existing same-ref and invalid-manifest tests remain.
+
+**⚠️ Obligations outside this diff remain explicit.** T-06 coordinator guard capture, all T-07 source-identity combinations, all T-08 publication positions, observer typed unauthorized reasons, and complete final-page behavior are predominantly unchanged foundation behavior. This review checked the specific composition risks below and accepts the recorded unchanged-scope qualification; it does not independently re-review every foundation path. Actual fork/spawn/router/SDK/CLI/Desktop intent transport and invocation remain Task 4 (`docs/superpowers/plans/2026-10-23-context-transfer-host.md:137`, `:143`). Product 0.1.13-rc.1 / Session11 and decomposition credit do not advance here.
+
+## Strengths
+
+- The positive tests use real JSONL reservations, the genuine broker, actual artifact bytes/catalog membership, and the existing read service. They do not return a desired closure digest from a success stub (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:26`, `:89`). The filesystem wrappers call real `link`/`read` before injecting the selected interruption (`:16`).
+- Tests distinguish source document/runtime lifecycle, attempt lifetime, target policy, and source pin release. Cold adoption closes the original runtime and broker and reopens fresh owners; source hooks/profile/visibility are forbidden, subsequent NEW use is refused, and a missing target pin is not recreated (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:124`). Separate document deletion exercises normal source pin release while preserving target reads (`:239`).
+- Publication interruption tests hit real member pin publication, assert incomplete target state, and demonstrate fresh NEW recovery for close/ABA. Lost-response recovery uses a landed member access write and checks original top-level artifact bytes, including original operations, remain unchanged (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:194`, `:215`). Real body-read revocation/ABA tests deny the read (`:230`).
+- Exact-request mutations cover operation, source, target, manifest, origins, full refs and uses; synchronous host/source-access capture and proxy/getter rejection are exercised (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:142`, `:174`).
+
+## Issues
+
+### Critical
+
+None found in this task diff.
+
+### Important
+
+None found in this task diff.
+
+### Minor / coverage limits
+
+- **The new composition suite is selective rather than an exhaustive publication matrix.** Its interruption points are member pin and member access publication; the source-exclusion control removes source visibility before NEW. It does not newly repeat every root/member source-identity mismatch, authorization change at every publication boundary, or passive source-signal case at the Gateway layer (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:165`, `:194`, `:215`). The unchanged artifact suite supplies the broader controls. This is acceptable reuse, not evidence that every combination was tested through the new adapter.
+- **The staging profile assertion observes the runtime's profile wrapper, not every conceivable coordinator caller.** The fixture's counter and positive assertion establish no ordinary target profile access through that runtime during staging (`packages/desktop-gateway/test/bootstrap-transfer.test.ts:37`, `:93`). The focused broker inspection additionally confirms its staging path uses `inspectBootstrap` and project documents (`packages/desktop-gateway/src/project-scope.ts:269`, `:283`). Do not describe the counter alone as a universal public-profile/snapshot/open interception test.
+
+## Qualification and retained limitations
+
+- Inspected recorded raw summaries: q7 new adapter **16/16**, q6 final core fixture **10/10**, q2 context-output **169/169**, q4b native dependencies/result readers **28/28**. q1c is **112/113**, with the disclosed `Exclusive owned fact backend is required` native-fork fixture failure; q3 is **63/64**, retaining the original `CONSUMED-PROOF-ONLY` fork RED. The six package typecheck replacements are recorded exit 0 (`task-3-report.md:73`, `:79`, `:80`; `.tmp/t3c/commit-binding.json`). No clean-BASE runtime reproduction of the native-fork fixture failure is claimed by this review.
+- Normal reachability remains exit 1 with **seven NEW rows**; the genuine production `BootstrapDependencyPort` type use explains the reduction from the accepted eight. No audit/baseline/exemption changes occur in this diff. Shipping caller work remains necessary (`task-3-report.md:86`, `:108`, `:111`). The previously reproduced SQLite parameter-3 failure and earlier diagnostic/noise obligations remain carried limitations, not newly verified or repaired here (`task-3-report.md:110`).
+- Independently hashed all **2,806** q7 manifest paths against current physical files: **zero mismatches**. Independently compared q1c/q2/q3/q4b manifests to q7: differences are exactly the two changed test files; q6 differs only in the Gateway test. All recorded raw-log hashes match the binding (**zero mismatches**). The binding SHA256 matches `c3f2f0e04e835024796b53747d4b18d9869a549943443b126017fc131348cea2` and names the exact reviewed HEAD. The recorded normalized Git binding is evidence supplied by the implementer; this review did not rerun Git commands.
+- Earlier unchanged scopes are reusable on this evidence; they are not a fresh single run of the final complete source tree. The final changed test files were rerun in their affected suites. Historical q1 checkout-copy execution and corrected setup/type-fixture failures are retained but excluded from accepted qualification. The 1,874 generated physical inventory entries are not asserted as production source or pre/post-bound inputs (`task-3-report.md:69`, `:102`, `:104`).
+
+## Review method and focused outside-diff checks
+
+- Read the supplied exact review package; the first tool output truncated its middle, so the omitted portions were recovered in bounded chunks. No changed source file was separately reread. A final diff-only line-number extraction supplied exact citations.
+- **Named risk: invocation/manifest substitution or target-baseline refresh through the adapter.** Checked only `bootstrap-project.ts:16` and `project-scope.ts:205` preparation implementation: strict detached capture, exact coordinator invocation/token check, immutable baseline and permanent epoch invalidation resolve the concern.
+- **Named risk: the reused scope failing to bind full requests or passive calls invoking NEW source authorization.** Checked `artifact/bootstrap-transfer.ts:28` through its transfer implementation: synchronous full-request capture, same-scope request agreement, passive source-check exclusion, renewal before/around publication and after integrity, target identity compatibility, and confirmation-only passive publications resolve the concern.
+- **Named risk: claimed earlier qualification referring to different product bytes or logs.** Inspected the existing runner/manifest producer, commit-binding records, selected raw summaries, and performed read-only hash/manifest comparisons. No test, runtime probe, package suite, Git command, index operation, HEAD change, or product edit was performed. The only written artifact is this requested review.
+
+## Assessment
+
+**Task quality: Approved.** The adapter is small and composes existing ownership and authorization boundaries; the tests demonstrate real positive continuation and real interruption/read effects. Acceptance is task-scoped, with unchanged foundation coverage reused transparently and the legacy fork, reachability, SQLite and actual caller-cutover obligations retained.
