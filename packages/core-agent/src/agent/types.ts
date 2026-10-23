@@ -19,8 +19,8 @@ export interface AgentBudgetConfig {
 export interface AgentConfig {
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number
-  /** Prompt for every request. A STRING is fixed for the session. A FUNCTION is
-   * resolved at the start of each step, for prompts that carry a fact the
+  /** Prompt for every request. A STRING is read from the live host dependency;
+   * a FUNCTION is resolved at the start of each step, for prompts that carry a fact the
    * session can change while the agent runs (the sandbox policy: see
    * session-executor/src/assembly.ts). */
   systemPrompt: string | (() => string)
