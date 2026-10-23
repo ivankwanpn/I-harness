@@ -5,6 +5,8 @@ import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 import { createAgentWithSummary } from './fixtures/agent.ts'
+import { checkpoint, seedSummaryHistory, summaryModel } from './fixtures/summary-model.ts'
+import type { LLMRequest } from '@i-harness/llm-seam'
 import { createAgent, createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from '../src/index.ts'
 
 function makeDeps(ctx: PluginContext) {
@@ -452,11 +454,17 @@ describe("agent abort", () => {
   it("rejects immediately when the signal is already aborted", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    deps.model = createMockClient([{ role: "assistant", text: "x" }])
+    let transports = 0, effects = 0
+    deps.model = { async *stream() { transports++; yield { type: 'end' } } }
+    deps.tools.register({ name: 'effect', description: '', inputSchema: {}, async execute() { effects++; return {} } })
     const ac = new AbortController()
     ac.abort()
     const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p", signal: ac.signal })
-    await expect(agent.run("do it")).rejects.toThrow(/aborted/i)
+    const before = deps.session.events.slice()
+    await expect(agent.run("do it")).rejects.toMatchObject({ code: 'FACT_CANCELLED' })
+    expect(transports).toBe(0)
+    expect(effects).toBe(0)
+    expect(deps.session.events).toEqual(before)
   })
 
   it("stops a mid-run loop when a tool aborts the signal", async () => {
@@ -574,22 +582,43 @@ describe("agent compaction seam", () => {
   it("auto-compacts at a step boundary when under pressure", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
+    const groups = seedSummaryHistory(deps.session), archive = structuredClone(deps.session.events), summary = summaryModel()
+    const requests: LLMRequest[] = [], telemetry: TelemetryEvent[] = []
+    let effects = 0
+    deps.tools.unregister('read')
+    deps.tools.register({ name: 'read', description: '', inputSchema: {}, async execute() { effects++; return 'unexpected replay' } })
     deps.model = {
-      async *stream() {
-        yield { type: "text/chunk", text: "summary and reply ".repeat(40) }
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: 'reply' }
         yield { type: "end" }
       },
     }
     const agent = createAgentWithSummary(ctx, {
       ...deps, systemPrompt: "p",
-      compact: { contextWindow: 1000, thresholdRatio: 0.1, retainTokens: 0 },
+      telemetry: { emit: event => telemetry.push(event), close() {} },
+      compact: { contextWindow: 10000, thresholdRatio: 0.1, retainTokens: 0, prune: false,
+        summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } },
     })
-    const result = await agent.run("z".repeat(300)) // ~75 tokens ≥ 50 threshold → compacts at step 1's boundary
-    expect(deps.session.events.some((e) => e.type === "compaction/summary")).toBe(true)
-    const summary = deps.session.events.find((e) => e.type === "compaction/summary") as { text: string }
-    const msgs = deriveMessages(deps.session)
-    expect(msgs[0]).toEqual({ role: "user", content: summary.text })
-    expect(result.finalText).toContain("summary and reply")
+    const current = 'z'.repeat(300)
+    expect((await agent.run(current)).finalText).toBe('reply')
+    const replacements = deps.session.events.filter(event => event.type === 'compaction/replacement')
+    expect(replacements).toHaveLength(1)
+    expect(replacements[0]).toMatchObject({ text: checkpoint, insertBefore: groups[0]!.coverage[0]!.item,
+      coverage: groups.slice(0, 6).flatMap(group => group.coverage) })
+    expect(deps.session.events.slice(0, archive.length)).toEqual(archive)
+    expect(summary.requests).toHaveLength(1)
+    expect(JSON.stringify(summary.requests[0]!.messages)).not.toContain(current)
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.messages).toEqual([{ role: 'user', content: checkpoint },
+      ...deriveMessages({ ...deps.session, events: archive }).slice(6 * 3), { role: 'user', content: current }])
+    expect(requests[0]!.messages.filter(message => message.content === current)).toHaveLength(1)
+    expect(requests[0]!.messages.filter(message => message.role === 'tool').map(message => message.toolCallId)).toEqual(['old-6'])
+    const attempt = telemetry.find(event => event.type === 'compaction/attempt' && event.data.outcome === 'success')
+    expect(attempt?.data).toMatchObject({ reason: 'auto', outcomeState: 'reduced-over-target', publication: 'nondurable', attempts: 1 })
+    expect(attempt!.data.tokensAfter).toBeLessThan(attempt!.data.tokensBefore as number)
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
+    expect(effects).toBe(0)
   })
 
   it("no compact config → no engine, identical behavior", async () => {
@@ -599,23 +628,103 @@ describe("agent compaction seam", () => {
     const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: "p" })
     await agent.run("task")
     expect(deps.session.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
   })
 
-  it("explicit agent.compact() appends the compaction events", async () => {
+  it("explicit agent.compact() publishes complete replacement coverage and resumes the same session", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
-    deps.model = { async *stream() { yield { type: "text/chunk", text: "reply ".repeat(85) }; yield { type: "end" } } } // ≥ 500 chars (M34 ⑦c summary floor)
+    const groups = seedSummaryHistory(deps.session), archive = structuredClone(deps.session.events), summary = summaryModel()
+    const requests: LLMRequest[] = []
+    let effects = 0
+    deps.tools.unregister('read')
+    deps.tools.register({ name: 'read', description: '', inputSchema: {}, async execute() { effects++; return 'unexpected replay' } })
+    deps.model = { async *stream(request) { requests.push(request); yield { type: "text/chunk", text: requests.length === 1 ? 'reply' : 'continued' }; yield { type: "end" } } }
     const agent = createAgentWithSummary(ctx, {
       ...deps, systemPrompt: "p",
-      compact: { contextWindow: 100000, retainTokens: 0 }, // window huge so auto never fires
+      compact: { contextWindow: 100000, retainTokens: 0, auto: false, prune: false,
+        summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } },
     })
-    await agent.run("task")
+    expect((await agent.run("task")).finalText).toBe('reply')
+    expect(summary.requests).toHaveLength(0)
+    const before = deps.session.events.slice()
+    const taskSeq = deps.session.events.findLast(event => event.type === 'user/message' && event.text === 'task')!.seq!
     // `compact?` is optional on the Agent interface (registry fakes may lack
     // it), but createAgent always returns one — assert it exists for the call.
-    const res = await agent.compact!()
-    expect(res.compacted).toBe(true)
-    expect(res.shadowedSeqs.length).toBeGreaterThan(0)
-    expect(deps.session.events.slice(-3).map((e) => e.type)).toEqual(["compaction/start", "compaction/summary", "compaction/end"])
+    // Active-turn inputs are protected automatically. After turn/end, callers
+    // explicitly retain a completed task through the public protectedSeqs API.
+    const res = await agent.compact!(undefined, { protectedSeqs: [taskSeq] })
+    expect(res).toMatchObject({ compacted: true, outcome: 'ready', publication: 'nondurable', summary: checkpoint })
+    const replacements = deps.session.events.filter(event => event.type === 'compaction/replacement')
+    expect(replacements).toHaveLength(1)
+    expect(replacements[0]!.coverage).toEqual(groups.flatMap(group => group.coverage))
+    expect(res.shadowedSeqs).toEqual([...new Set(groups.flatMap(group => group.coverage.flatMap(row => row.sources.map(source => source.seq))))])
+    expect(deps.session.events.slice(0, before.length)).toEqual(before)
+    expect(deps.session.events.slice(before.length).map(event => event.type)).toEqual(['compaction/replacement'])
+    expect(summary.requests).toHaveLength(1)
+    const selected = JSON.stringify(summary.requests[0]!.messages)
+    for (const group of groups) expect(selected).toContain(group.callId)
+    expect(selected).not.toContain('"content":"task"')
+    expect((await agent.followup('next task')).finalText).toBe('continued')
+    expect(requests).toHaveLength(2)
+    expect(requests[0]!.messages).toEqual([...deriveMessages({ ...deps.session, events: archive }), { role: 'user', content: 'task' }])
+    expect(requests[1]!.messages).toEqual([{ role: 'user', content: checkpoint }, { role: 'user', content: 'task' },
+      { role: 'assistant', content: 'reply' }, { role: 'user', content: 'next task' }])
+    expect(effects).toBe(0)
+  })
+
+  it('keeps sole current human input protected without preparing or calling a summary', async () => {
+    const ctx = createContext(), deps = makeDeps(ctx), summary = summaryModel()
+    const requests: LLMRequest[] = []
+    deps.model = { async *stream(request) { requests.push(request); yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } } }
+    const agent = createAgentWithSummary(ctx, { ...deps, tools: createToolRegistry(ctx), systemPrompt: '', compact: { contextWindow: 10000, thresholdRatio: 0.01,
+      retainTokens: 0, summarizationModel: summary.model, summaryLimits: { contextWindow: 20000 } } })
+    const current = 'protected current task '.repeat(80)
+    expect((await agent.run(current)).finalText).toBe('done')
+    expect(requests[0]!.messages).toEqual([{ role: 'user', content: current }])
+    expect(deps.session.events.some(event => event.type === 'compaction/replacement')).toBe(false)
+    const taskSeq = deps.session.events.find(event => event.type === 'user/message' && event.text === current)!.seq!
+    expect(await agent.compact!(undefined, { protectedSeqs: [taskSeq] })).toMatchObject({ compacted: false, outcome: 'blocked', publication: 'none', blockedReason: 'no-eligible-source' })
+    expect(summary.preparations).toHaveLength(0)
+    expect(summary.requests).toHaveLength(0)
+    expect(deriveMessages(deps.session)).toEqual([{ role: 'user', content: current }, { role: 'assistant', content: 'done' }])
+  })
+
+  it('refuses unknown summary output before transport while the neutral main client remains usable', async () => {
+    const ctx = createContext(), deps = makeDeps(ctx)
+    seedSummaryHistory(deps.session)
+    let summaries = 0
+    const requests: LLMRequest[] = []
+    deps.model = { async *stream(request) { requests.push(request); yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } } }
+    const agent = createAgentWithSummary(ctx, { ...deps, systemPrompt: '', compact: { contextWindow: 10000, auto: false,
+      summarizationModel: { async *stream() { summaries++; yield { type: 'text/chunk', text: checkpoint }; yield { type: 'end' } }, }, summaryLimits: { contextWindow: 20000 } } })
+    expect((await agent.run('current')).finalText).toBe('done')
+    const before = deps.session.events.slice()
+    expect(await agent.compact!()).toMatchObject({ compacted: false, outcome: 'blocked', publication: 'none', blockedReason: 'output-unknown' })
+    expect(summaries).toBe(0)
+    expect(deps.session.events).toEqual(before)
+    expect((await agent.followup('continue')).finalText).toBe('done')
+    expect(requests[1]!.messages).toEqual([...deriveMessages({ ...deps.session, events: before }), { role: 'user', content: 'continue' }])
+    expect(agent.contextBudget!()).toMatchObject({ kind: 'ready', snapshot: { coverage: 'neutral-only', admission: 'unavailable', capSupport: 'unknown' } })
+  })
+
+  it('measures actual local summary input and preserves explicit text eligibility through cap derivation', async () => {
+    const summary = summaryModel()
+    const small = await summary.model.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'small' }] })
+    const large = await summary.model.prepare!({ systemPrompt: '', tools: [], messages: [{ role: 'user', content: 'large '.repeat(1000) }] })
+    expect(large.measurement.input.components.visibleText.heuristicTokens).toBeGreaterThan(small.measurement.input.components.visibleText.heuristicTokens)
+    expect(large.measurement.input.inputFingerprint).not.toBe(small.measurement.input.inputFingerprint)
+    const selected = large.withOutputCap(512)
+    expect(selected.textOutput).toEqual({ status: 'allowed', reason: 'ordinary-text' })
+    expect(selected.measurement.input).toEqual(large.measurement.input)
+    expect(selected.measurement.output).toMatchObject({ configuredCap: 512, capSupport: 'unknown' })
+    expect(selected.validation).toMatchObject({ status: 'partial', coverage: 'neutral-only', native: 'unverified' })
+    expect(summary.requests).toHaveLength(0)
+    const chunks = []
+    for await (const event of selected.stream()) chunks.push(event)
+    expect(chunks).toEqual([{ type: 'text/chunk', text: checkpoint }, { type: 'end' }])
+    expect(summary.requests).toHaveLength(1)
+    expect(summary.requests[0]).toMatchObject({ maxOutputTokens: 512, messages: [{ role: 'user', content: 'large '.repeat(1000) }] })
   })
 })
 
