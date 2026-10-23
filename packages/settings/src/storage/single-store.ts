@@ -118,6 +118,9 @@ export class SettingsStore {
   }
 
   private async save(doc: Record<string, unknown>, changed: readonly string[]): Promise<Settings> {
+    // Raw extension data survives ordinary writes, but these known retired
+    // preferences must not be restored by merging that data with the snapshot.
+    for (const key of ["theme", "busyEnter", "transcriptMode"]) delete doc[key]
     const meta = instructionMigrationMeta(this.raw, this.filename)
     doc._instructionsMigration = meta ?? nativeInstructionMeta(this.filename)
     const revision = { ...this.revision }
