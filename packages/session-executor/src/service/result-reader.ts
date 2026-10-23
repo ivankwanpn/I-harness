@@ -38,6 +38,9 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
         try { await lease?.release() }
         catch (cause) { result = resultPageFailure(cause) }
       }
+      // A denial has no body to revoke. Preserve its typed reason after release;
+      // only a successfully read page needs the final currentness checks.
+      if ('kind' in result) return result
       try {
         assertScope()
         if (options.coordinator) {

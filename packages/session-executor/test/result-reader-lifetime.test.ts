@@ -73,3 +73,20 @@ it.each(['producer', 'reader'] as const)('retries a %s admission when last relea
     expect(await sink.finish('complete')).toMatchObject({ kind: 'committed' })
   } finally { await next.release(); await reader.release(); await f.close() }
 })
+
+it.each([
+  { caller: 's', reason: 'unavailable' },
+  { caller: 'other', reason: 'unauthorized' },
+])('discards a page but preserves an existing denial when $caller is archived during final release', async ({ caller, reason }) => {
+  const f = await fixture()
+  await f.coordinator.create({ sessionId: 'other' })
+  let archivedDuringRelease = false
+  controls.close = async () => {
+    await f.coordinator.updateMeta(caller, { archived: true })
+    archivedDuringRelease = true
+  }
+  try {
+    expect(await f.service.readResultPage!(caller, { ref: f.ref })).toEqual({ kind: 'unavailable', reason })
+    expect(archivedDuringRelease).toBe(true)
+  } finally { controls.close = undefined; await f.close() }
+})
