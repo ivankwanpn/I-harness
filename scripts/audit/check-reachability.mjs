@@ -141,6 +141,31 @@ function buildFixture() {
   // index regression: a dot-directory is gitignored scratch, never repo source.
   put("packages/alpha/.hidden/sneaky.ts", "export function HiddenOrphan() { return 1 }\n")
 
+  // Packaged copies are not source consumers. Keep real consumers with the
+  // same directory names below src, in another package, and beside the outputs.
+  put("packages/inventory/src/index.ts", [
+    "export function PackagedReleaseOnly() {}",
+    "export function PackagedVersionOnly() {}",
+    "export function PackagedOutOnly() {}",
+    "export function SourceReleaseUsed() {}",
+    "export function SourceVersionUsed() {}",
+    "export function SourceOutUsed() {}",
+    "export function OtherPackageReleaseUsed() {}",
+    "export function DesktopReleaseNotesUsed() {}",
+    "export function NewSourceUsed() {}",
+  ].join("\n"))
+  for (const [path, name] of [
+    ["packages/desktop/release/I-harness/resources/gateway/cli/src/use.ts", "PackagedReleaseOnly"],
+    ["packages/desktop/release-fixture/I-harness/resources/gateway/cli/src/use.ts", "PackagedVersionOnly"],
+    ["packages/desktop/out/main/use.ts", "PackagedOutOnly"],
+    ["packages/desktop/src/release/use.ts", "SourceReleaseUsed"],
+    ["packages/desktop/src/release-fixture/use.ts", "SourceVersionUsed"],
+    ["packages/desktop/src/out/use.ts", "SourceOutUsed"],
+    ["packages/inventory/release/use.ts", "OtherPackageReleaseUsed"],
+    ["packages/desktop/releaseNotes/use.ts", "DesktopReleaseNotesUsed"],
+    ["packages/new-source/src/use.ts", "NewSourceUsed"],
+  ]) put(path, `import { ${name} } from "@i-harness/inventory"\n${name}()\n`)
+
   // class 1 regression: a named re-export belongs to its DECLARER, not to the
   // file that re-exports it -- and a barrel that merely MENTIONS the name is
   // not an origin for it, or the mention that makes it used would be silenced.
@@ -1293,6 +1318,34 @@ SELF_TEST_CASES.push({
     return indexTree(root)
       .map((f) => f.rel)
       .filter((rel) => rel.split("/").includes(".hidden"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: desktop generated copies cannot mask unused exports; real source still consumes them",
+  expect: [
+    "@i-harness/inventory#PackagedReleaseOnly",
+    "@i-harness/inventory#PackagedVersionOnly",
+    "@i-harness/inventory#PackagedOutOnly",
+  ],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/inventory#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "index: only declared desktop output roots are excluded",
+  expect: [
+    "packages/desktop/src/release/use.ts",
+    "packages/desktop/src/release-fixture/use.ts",
+    "packages/desktop/src/out/use.ts",
+    "packages/desktop/releaseNotes/use.ts",
+  ],
+  run(root) {
+    return indexTree(root).map((f) => f.rel)
+      .filter((rel) => rel.startsWith("packages/desktop/"))
   },
 })
 
@@ -2980,7 +3033,7 @@ function runSelfTest() {
 // after the consts a `main()`-driving case reaches. See the note there.
 
 // ------------------------------------------------------------------ file index
-function collectTs(dir, out = []) {
+function collectTs(dir, out = [], root = dir) {
   let ents
   try { ents = readdirSync(dir, { withFileTypes: true }) } catch { return out }
   for (const e of ents) {
@@ -2989,7 +3042,11 @@ function collectTs(dir, out = []) {
     // walking .superpowers/ made the file count track scratch, not the repo.
     if (e.name.startsWith(".") && e.isDirectory()) continue
     const full = join(dir, e.name)
-    if (e.isDirectory()) collectTs(full, out)
+    // These repository-relative generated roots are declared in .gitignore.
+    // Packaged gateway copies contain TS, but are not production source uses.
+    // Anchor at the scan root so src/release-* and other packages still count.
+    if (e.isDirectory() && /^packages\/desktop\/(?:out|release(?:-[^/]*)?)$/.test(relative(root, full).split("\\").join("/"))) continue
+    if (e.isDirectory()) collectTs(full, out, root)
     else if (/\.tsx?$/.test(e.name)) out.push(full)
   }
   return out
