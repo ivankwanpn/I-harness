@@ -27,5 +27,6 @@ export interface ManagedDocument extends FactPorts {
   revokeNewWork(): void
   reconcile(key: BatchKey): Promise<import('@i-harness/core-session').FactOutcome>
   drain(): Promise<void>
+  settleFinishedActions(): Promise<void>
   close(): Promise<void>
 }

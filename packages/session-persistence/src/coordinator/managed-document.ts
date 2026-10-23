@@ -46,6 +46,7 @@ type Pending = {
     receipt?: FactReceipt;
     issued: boolean;
     cleanupReported?: boolean;
+    installationFailure?: { error: unknown };
 };
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
@@ -58,9 +59,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const owner = Object.freeze({ sessionId: id, incarnation });
     const maxPendingGroups = options?.maxPendingGroups ?? 64, targetBytes = options?.coalesceTargetBytes ?? 262144;
     const capacity = createFactCapacity(maxPendingGroups), queue: Entry[] = [];
-    const sourceDrains = new Set<{
+    const sourceDrains = new Map<{
         close(): Promise<void>;
-    }>();
+    }, { action?: Action; finished?: () => boolean; closeRequested: boolean }>();
     const inputSources = new Set<ReturnType<typeof createReceivedInputSource>>();
     const actionControllers = new Set<AbortController>();
     const ownedActions = new WeakSet<object>();
@@ -68,6 +69,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const recoveryHolds = new Set<object>();
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let pump: Promise<void> = Promise.resolve();
+    let settlingFinished: Promise<void> | undefined;
     const held = heldFactOwner(owner, ownership, () => {
         if (closed)
             throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
@@ -121,8 +123,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             current.receipt = receipt;
             try {
                 current.install();
+                current.installationFailure = undefined;
             }
-            catch {
+            catch (error) {
+                current.installationFailure = { error };
                 failQueued();
                 return { results: current.entries.map(() => ({ kind: 'recovery-required', code: 'FACT_INSTALL_FAILED', receipt })), observe: false, cleanupDiagnostic };
             }
@@ -296,13 +300,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 inputSources.delete(source);
             });
             required.source = source;
-            sourceDrains.add(source);
+            sourceDrains.set(source, { closeRequested: false });
             inputSources.add(source);
             return source;
         },
         beginAction(signal) {
             if (!bootstrapReady) throw new FactRecoveryRequiredError();
             const cancel = new AbortController();
+            let finished = false;
             const action: Action = { signal: signal ? AbortSignal.any([signal, cancel.signal]) : cancel.signal, stopped: false, cancel }, authorization = { action, required: false };
             assertAuthorized(authorization);
             actionControllers.add(cancel);
@@ -330,6 +335,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     cancel.abort();
                 },
                 finish() {
+                    finished = true;
                     action.stopped = true;
                     actionControllers.delete(cancel);
                 },
@@ -344,6 +350,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         },
                         reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group),
                         quarantineCapture: failSource,
+                        onCloseRequested() {
+                            const entry = sourceDrains.get(source);
+                            if (entry) entry.closeRequested = true;
+                        },
                         holdRecovery() {
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             recoveryHolds.add(source); capacity.holdOptional(source);
@@ -355,7 +365,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source) }, reconcilePending);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
-                    sourceDrains.add(source);
+                    sourceDrains.set(source, { action, finished: () => finished, closeRequested: false });
                     return source;
                 },
             };
@@ -396,11 +406,43 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (pending || quarantined || sourceFault)
                 throw new FactRecoveryRequiredError();
         },
+        settleFinishedActions() {
+            held.assertHeld();
+            if (closing || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
+            if (settlingFinished) return settlingFinished;
+            const eligible = [...sourceDrains].filter(([, entry]) => entry.finished?.() === true && entry.closeRequested);
+            const originalPending = pending;
+            const attempt = (async () => {
+                const errors: unknown[] = [];
+                if (originalPending) {
+                    // Only this captured frame's actual finished owners may
+                    // resolve the prerequisite of their original close calls.
+                    const qualified = originalPending.entries.every(entry => !entry.bootstrap
+                        && eligible.some(([source, metadata]) => metadata.action === entry.authorization.action
+                            && (!entry.authorization.required || entry.authorization.source === source)));
+                    if (!qualified || pending !== originalPending) throw new FactRecoveryRequiredError();
+                    if (closing || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
+                    const outcome = await document.reconcile(originalPending.batch.key);
+                    if (outcome.kind !== 'committed' && outcome.kind !== 'absent')
+                        throw Object.assign(new FactRecoveryRequiredError(), { cause: Object.assign(new Error('Original pending frame requires recovery', originalPending.installationFailure ? { cause: originalPending.installationFailure.error } : undefined), { outcome }) });
+                }
+                for (const [source] of eligible) {
+                    try { await source.close(); } catch (error) { errors.push(error); }
+                }
+                await pump;
+                if (closing || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED', ...(errors.length ? { cause: new AggregateError(errors, 'Original source settlement failed') } : {}) });
+                if (pending || quarantined || sourceFault || recoveryHolds.size || errors.length)
+                    throw Object.assign(new FactRecoveryRequiredError(), errors.length ? { cause: new AggregateError(errors, 'Original source settlement failed') } : {});
+            })();
+            settlingFinished = attempt;
+            void attempt.then(() => { if (settlingFinished === attempt) settlingFinished = undefined; }, () => { if (settlingFinished === attempt) settlingFinished = undefined; });
+            return attempt;
+        },
         async close() {
             if (closed)
                 return;
             document.revokeNewWork();
-            const drains = await Promise.allSettled([...sourceDrains].map(source => source.close()));
+            const drains = await Promise.allSettled([...sourceDrains.keys()].map(source => source.close()));
             await pump;
             if (pending || quarantined || sourceFault || recoveryHolds.size || drains.some(result => result.status === 'rejected'))
                 throw new FactRecoveryRequiredError();

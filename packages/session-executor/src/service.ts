@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { subscribe, validateImages, contextStateFromBudget, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
+import { subscribe, validateImages, contextStateFromBudget, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
 import { prepareInputExecution } from './lifecycle/input-preparation.ts'
 import { runManualGeneration } from './lifecycle/manual-generation.ts'
@@ -786,12 +786,24 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       }
       let preparedInput: Awaited<ReturnType<typeof prepareInputExecution>> | undefined
       void completeSubmission(async () => {
+        const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
+          ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
+        const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
+        try { await priorDocument?.settleFinishedActions() }
+        catch (failure) {
+          if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {
+            try { await priorAssembly.inbox.admit(input, controller.signal) }
+            catch (saving) { throw new AggregateError([failure, saving], 'Input receipt requires recovery', { cause: failure }) }
+          }
+          throw failure
+        }
+        controller.signal.throwIfAborted()
+        if (closed || closing.has(sessionId) || failedClose.has(sessionId)) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
         const assembly = opts.coordinator ? await prepareInputExecution({
           ownerSessionId: sessionId,
           acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
           assemble: () => getOrCreate(sessionId),
-          input: { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
-            ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) },
+          input,
           alreadyAdmitted: !!options?.admittedInputId, signal: controller.signal,
           modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           localTestEnabled: opts.modelPolicy === 'test-mock',

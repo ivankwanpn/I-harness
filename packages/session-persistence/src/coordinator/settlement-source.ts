@@ -11,6 +11,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
   holdRecovery(): void
+  onCloseRequested(): void
 }, released: () => void, reconcilePending?: () => Promise<void>): SettlementFacts {
   let active = true, closing: Promise<void> | undefined
   const assertHeld = () => {
@@ -25,6 +26,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
       : records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, retained))
   }
   const close = () => {
+    operations.onCloseRequested()
     if (!active) return Promise.resolve()
     if (closing) return closing
     const pending = (async () => {
