@@ -225,6 +225,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
     projectFor:projects.nativeScopeFor,
     resultReadScopeFor:projects.resultReadScopeFor,
+    prepareBootstrapInheritance:projects.prepareBootstrapInheritance,
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
       const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
