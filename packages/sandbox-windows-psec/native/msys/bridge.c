@@ -7,7 +7,15 @@
 static int status_fd;
 static CRITICAL_SECTION status_lock;
 static int status_lock_ready;
-struct output_state { int master, fd; volatile LONG ended; };
+struct lifecycle {
+    CRITICAL_SECTION lock;
+    int wake[2], pending, child, child_exited, child_status, output_ended;
+    int stop_requested, stop_submitted, owner_terminal;
+    void *owner_thread;
+    ih_sigset_t wait_set;
+    struct input_state *input;
+};
+struct output_state { int master, fd; struct lifecycle *life; };
 struct input_frame { unsigned int length; char id[129]; unsigned char bytes[16384]; };
 struct input_state {
     int master, ended, stopping;
@@ -16,6 +24,7 @@ struct input_state {
     struct input_frame frames[8];
     CRITICAL_SECTION lock;
     HANDLE wake;
+    int stop_wake[2];
 };
 static void write_all(int fd, const void *input, size_t length) {
     const unsigned char *bytes = input;
@@ -60,6 +69,128 @@ static int read_all(int fd, void *output, size_t length) {
     }
     return 0;
 }
+/* Called with life->lock held: one readable byte represents the predicate.
+ * Both pipe ends are nonblocking; EAGAIN preserves an existing readable wake. */
+static void wake_lifecycle(struct lifecycle *life) {
+    if (!life->pending) {
+        unsigned char byte = 1;
+        int64_t count;
+        do { count = write(life->wake[1], &byte, 1); } while (count < 0 && *__errno() == 4);
+        if (count != 1 && !(count < 0 && *__errno() == 11)) fail("wake-lifecycle");
+        life->pending = 1;
+    }
+}
+static void make_wake(int descriptors[2]) {
+    if (pipe(descriptors) < 0) fail("pipe-wake");
+    for (int i = 0; i < 2; i++) {
+        int flags = fcntl(descriptors[i], 3);
+        if (flags < 0 || fcntl(descriptors[i], 4, flags | 0x4000) < 0 || fcntl(descriptors[i], 2, 1) < 0) fail("fcntl-wake");
+    }
+}
+static void stop_delivery(struct input_state *input) {
+    EnterCriticalSection(&input->lock);
+    int first = !input->stopping;
+    input->stopping = input->ended = 1;
+    LeaveCriticalSection(&input->lock);
+    if (first) {
+        unsigned char byte = 1;
+        int64_t count;
+        do { count = write(input->stop_wake[1], &byte, 1); } while (count < 0 && *__errno() == 4);
+        if (count != 1 && !(count < 0 && *__errno() == 11)) fail("wake-stop-input");
+        if (!SetEvent(input->wake)) fail("wake-input-stop");
+    }
+}
+static void caught_child(int signal_number) { (void)signal_number; }
+#ifdef IH_MSYS_CONTROLLED_TRACE
+static void trace_owner(const char *operation, int result, uint64_t value) {
+    char line[192]; int length = snprintf(line, sizeof(line), "TRACE %s %d %llu\n", operation, result, (unsigned long long)value);
+    EnterCriticalSection(&status_lock); write_all(status_fd, line, length); LeaveCriticalSection(&status_lock);
+}
+#else
+#define trace_owner(operation, result, value) ((void)0)
+#endif
+static void publish_root(struct lifecycle *life, int status) {
+    EnterCriticalSection(&life->lock);
+    life->child_status = status; life->child_exited = 1;
+    LeaveCriticalSection(&life->lock);
+    int code = (status & 127) ? 128 + (status & 127) : (status >> 8) & 255;
+    char line[64];
+    int length = snprintf(line, sizeof(line), "ROOT %d\n", code);
+    EnterCriticalSection(&status_lock); write_all(status_fd, line, length); LeaveCriticalSection(&status_lock);
+    stop_delivery(life->input);
+    EnterCriticalSection(&life->lock);
+    life->owner_terminal = 1; wake_lifecycle(life);
+    LeaveCriticalSection(&life->lock);
+}
+/* After handoff, this is the ONLY caller of kill(original_child) or waitpid.
+ * The PID remains an unreaped child identity until this same thread observes
+ * its terminal status. A controller wake is notification, never stop intent. */
+static void *own_root(void *context) {
+    struct lifecycle *life = context;
+    int signal_number = 0, initial = 1;
+    trace_owner("owner-start", 0, life->wait_set);
+    for (;;) {
+        EnterCriticalSection(&life->lock);
+        int stop = life->stop_requested && !life->stop_submitted;
+        if (stop) life->stop_submitted = 1;
+        LeaveCriticalSection(&life->lock);
+        if (initial || signal_number == IH_SIGCHLD || stop) {
+            int status, observed;
+            do { observed = waitpid(life->child, &status, IH_WNOHANG); } while (observed < 0 && *__errno() == 4);
+            trace_owner("waitpid-return", observed, (uint64_t)stop);
+            if (observed < 0) fail("waitpid-event");
+            if (observed == life->child) { publish_root(life, status); return NULL; }
+            if (observed != 0) fail("waitpid-identity");
+            if (stop) {
+                int killed = kill(life->child, 9);
+                trace_owner("kill-return", killed, (uint64_t)*__errno());
+                if (killed < 0) {
+                    do { observed = waitpid(life->child, &status, IH_WNOHANG); } while (observed < 0 && *__errno() == 4);
+                    if (observed != life->child) fail("kill-owned-child");
+                } else {
+                    /* N2-10: only a requested stop uses this exact-child
+                     * blocking reap. MSYS may omit SIGCHLD after early kill. */
+                    trace_owner("stop-waitpid-enter", 0, 0);
+                    do { observed = waitpid(life->child, &status, 0); } while (observed < 0 && *__errno() == 4);
+                    trace_owner("stop-waitpid-return", observed, 0);
+                    if (observed != life->child) fail("stop-waitpid-identity");
+                }
+                publish_root(life, status); return NULL;
+            }
+        }
+        initial = 0;
+        trace_owner("sigwait-enter", signal_number, 0);
+        int error = sigwait(&life->wait_set, &signal_number);
+        trace_owner("sigwait-return", error, (uint64_t)signal_number);
+        if (error) { *__errno() = error; fail("sigwait-owned-child"); }
+    }
+}
+static void request_stop(struct lifecycle *life) {
+    EnterCriticalSection(&life->lock);
+    life->stop_requested = 1;
+    /* The owner is joinable through the controller's later pthread_join.
+     * Its terminal boundary uses this same lock; no wake targets a joined ID. */
+    int error = life->owner_terminal ? 0 : pthread_kill(life->owner_thread, IH_SIGUSR1);
+    LeaveCriticalSection(&life->lock);
+    if (error) { *__errno() = error; fail("pthread-kill-owner"); }
+    trace_owner("controller-stop-wake", error, 0);
+}
+static int consume_lifecycle(struct lifecycle *life) {
+    EnterCriticalSection(&life->lock);
+    if (life->pending) {
+        unsigned char bytes[64];
+        for (;;) {
+            int64_t count = read(life->wake[0], bytes, sizeof(bytes));
+            if (count > 0 || (count < 0 && *__errno() == 4)) continue;
+            if (!(count < 0 && *__errno() == 11)) fail("drain-wake");
+            break;
+        }
+        life->pending = 0;
+    }
+    int complete = life->child_exited && life->output_ended;
+    LeaveCriticalSection(&life->lock);
+    return complete;
+}
 static int valid_id(unsigned char ch) {
     return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
         (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == ':';
@@ -70,7 +201,7 @@ static void *relay_output(void *context) {
     if (!buffer) fail("malloc-output");
     for (;;) {
         struct ih_pollfd fd = {state->master, 1, 0};
-        int ready = poll(&fd, 1, 100);
+        int ready = poll(&fd, 1, -1);
         if (ready < 0 && *__errno() == 4) continue;
         if (ready < 0) fail("poll-output");
         if (!fd.revents) continue;
@@ -82,7 +213,9 @@ static void *relay_output(void *context) {
         write_all(state->fd, buffer, (size_t)length);
     }
     free(buffer);
-    InterlockedExchange(&state->ended, 1);
+    EnterCriticalSection(&state->life->lock);
+    state->life->output_ended = 1; wake_lifecycle(state->life);
+    LeaveCriticalSection(&state->life->lock);
     return NULL;
 }
 static void *deliver_input(void *context) {
@@ -104,12 +237,15 @@ static void *deliver_input(void *context) {
         unsigned int offset = 0;
         int error = 0;
         while (offset < frame->length) {
-            struct ih_pollfd fd = {state->master, 4, 0};
-            int ready = poll(&fd, 1, 100);
+            struct ih_pollfd fds[2] = {{state->master, 4, 0}, {state->stop_wake[0], 1, 0}};
+            int ready = poll(fds, 2, -1);
             if (ready < 0 && *__errno() == 4) continue;
             if (ready < 0) { error = *__errno(); break; }
-            if (!(fd.revents & 4)) {
-                if (fd.revents & (8 | 16 | 32)) { error = 5; break; }
+            EnterCriticalSection(&state->lock); int stopping = state->stopping; LeaveCriticalSection(&state->lock);
+            if (stopping) { error = 125; break; }
+            if (fds[1].revents & (8 | 16 | 32)) fail("input-stop-wake-closed");
+            if (!(fds[0].revents & 4)) {
+                if (fds[0].revents & (8 | 16 | 32)) { error = 5; break; }
                 continue;
             }
             int64_t count = write(state->master, frame->bytes + offset, 1);
@@ -120,7 +256,7 @@ static void *deliver_input(void *context) {
         EnterCriticalSection(&state->lock);
         if (error) delivery_error(frame->id, error); else ack(frame->id, 0);
         state->head = (state->head + 1) % 8; state->count--;
-        if (!state->count && state->end_id[0]) { ack(state->end_id, 0); state->end_id[0] = 0; }
+        if (!state->count && state->end_id[0]) { ack(state->end_id, state->stopping ? 125 : 0); state->end_id[0] = 0; }
         LeaveCriticalSection(&state->lock);
     }
 }
@@ -135,6 +271,13 @@ int main(int argc, char **argv) {
     }
     status_fd = raw[2];
     struct ih_winsize size = {(uint16_t)rows, (uint16_t)cols, 0, 0};
+    ih_sigset_t wait_set, original_mask;
+    struct ih_sigaction original_child_action, child_action;
+    if (sigemptyset(&wait_set) || sigaddset(&wait_set, IH_SIGCHLD) || sigaddset(&wait_set, IH_SIGUSR1)) fail("make-signal-set");
+    int mask_error = pthread_sigmask(IH_SIG_BLOCK, &wait_set, &original_mask);
+    if (mask_error) { *__errno() = mask_error; fail("block-owner-signals"); }
+    child_action.handler = caught_child; child_action.flags = 0;
+    if (sigemptyset(&child_action.mask) || sigaction(IH_SIGCHLD, &child_action, &original_child_action)) fail("catch-child-signal");
     int master;
     int child = forkpty(&master, NULL, NULL, &size);
     if (child < 0) fail("forkpty");
@@ -146,6 +289,7 @@ int main(int argc, char **argv) {
         if (*end || !workload_job || !AssignProcessToJobObject(workload_job, GetCurrentProcess())) fail("assign-child-job");
         if (!CloseHandle(workload_job)) fail("close-child-job");
         for (int i = 0; i < 3; i++) close(raw[i]);
+        if (sigaction(IH_SIGCHLD, &original_child_action, NULL) || pthread_sigmask(IH_SIG_SETMASK, &original_mask, NULL)) _exit(91);
         execv(argv[6], (const char *const *)(argv + 6));
         _exit(127);
     }
@@ -156,22 +300,35 @@ int main(int argc, char **argv) {
     write_all(status_fd, "READY\n", 6);
     unsigned char *buffer = malloc(16384);
     if (!buffer) fail("malloc");
-    int child_exited = 0, child_status = 0;
+    struct lifecycle life;
+    InitializeCriticalSection(&life.lock);
+    life.pending = life.child_exited = life.child_status = life.output_ended = 0; life.child = child;
+    life.stop_requested = life.stop_submitted = life.owner_terminal = 0; life.owner_thread = NULL; life.wait_set = wait_set;
+    make_wake(life.wake);
     struct input_state *input = malloc(sizeof(struct input_state));
     if (!input) fail("malloc-input");
     input->master = master; input->ended = input->stopping = 0; input->head = input->tail = input->count = 0; input->end_id[0] = 0;
     InitializeCriticalSection(&input->lock);
     input->wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     if (!input->wake) fail("create-input-wake");
+    make_wake(input->stop_wake);
+    life.input = input;
     void *input_thread;
     if (pthread_create(&input_thread, NULL, deliver_input, input)) fail("pthread-input");
-    struct output_state output = {master, raw[1], 0};
+    struct output_state output = {master, raw[1], &life};
     void *output_thread;
     if (pthread_create(&output_thread, NULL, relay_output, &output)) fail("pthread-create");
+    EnterCriticalSection(&life.lock);
+    int owner_error = pthread_create(&life.owner_thread, NULL, own_root, &life);
+    LeaveCriticalSection(&life.lock);
+    if (owner_error) { *__errno() = owner_error; fail("pthread-root-owner"); }
     for (;;) {
-        struct ih_pollfd fds[1] = {{raw[0], 1, 0}};
-        int ready = poll(fds, 1, 100);
-        if (ready < 0 && *__errno() != 4) fail("poll");
+        if (consume_lifecycle(&life)) break;
+        struct ih_pollfd fds[2] = {{raw[0], 1, 0}, {life.wake[0], 1, 0}};
+        int ready = poll(fds, 2, -1);
+        if (ready < 0 && *__errno() == 4) continue;
+        if (ready < 0) fail("poll");
+        if (fds[1].revents & (8 | 16 | 32)) fail("lifecycle-wake-closed");
         if (fds[0].revents & (1 | 16)) {
             unsigned char header[8], id[129];
             if (read_all(raw[0], header, 8) < 0) fail("controller-eof");
@@ -215,30 +372,15 @@ int main(int argc, char **argv) {
                  * Let MSYS record SIGKILL before the nested Job terminates any
                  * remaining descendants; direct Win32 termination can lose
                  * the runtime's POSIX exit status. */
-                if (!child_exited && kill(child, 9) < 0) { ack((char *)id, *__errno()); continue; }
+                stop_delivery(input);
+                request_stop(&life);
             }
             ack((char *)id, 0);
         }
-        if (!child_exited) {
-            int observed = waitpid(child, &child_status, 1);
-            if (observed == child) {
-                int code = (child_status & 127) ? 128 + (child_status & 127) : (child_status >> 8) & 255;
-                char line[64];
-                int length = snprintf(line, sizeof(line), "ROOT %d\n", code);
-                EnterCriticalSection(&status_lock); write_all(status_fd, line, length); LeaveCriticalSection(&status_lock);
-                child_exited = 1;
-            } else if (observed < 0 && *__errno() != 4) fail("waitpid");
-        }
-        if (child_exited && InterlockedCompareExchange(&output.ended, 0, 0)) break;
     }
-    if (pthread_join(output_thread, NULL)) fail("pthread-join");
-    if (!child_exited) {
-        while (waitpid(child, &child_status, 0) < 0) if (*__errno() != 4) fail("waitpid");
-        int code = (child_status & 127) ? 128 + (child_status & 127) : (child_status >> 8) & 255;
-        char line[64];
-        int length = snprintf(line, sizeof(line), "ROOT %d\n", code);
-        EnterCriticalSection(&status_lock); write_all(status_fd, line, length); LeaveCriticalSection(&status_lock);
-    }
+    if (pthread_join(life.owner_thread, NULL) || pthread_join(output_thread, NULL)) fail("pthread-join");
+    int child_status = life.child_status;
+    stop_delivery(input);
     EnterCriticalSection(&input->lock);
     int pending = input->count != 0; input->stopping = 1;
     LeaveCriticalSection(&input->lock);
@@ -251,7 +393,9 @@ int main(int argc, char **argv) {
         TerminateProcess(GetCurrentProcess(), (child_status & 127) ? 128 + (child_status & 127) : (child_status >> 8) & 255);
     }
     if (!SetEvent(input->wake) || pthread_join(input_thread, NULL)) fail("join-input");
-    close(master); CloseHandle(input->wake); DeleteCriticalSection(&input->lock); DeleteCriticalSection(&status_lock);
+    close(master); close(input->stop_wake[0]); close(input->stop_wake[1]);
+    close(life.wake[0]); close(life.wake[1]); DeleteCriticalSection(&life.lock);
+    CloseHandle(input->wake); DeleteCriticalSection(&input->lock); DeleteCriticalSection(&status_lock);
     free(buffer); free(input);
     return (child_status & 127) ? 128 + (child_status & 127) : (child_status >> 8) & 255;
 }

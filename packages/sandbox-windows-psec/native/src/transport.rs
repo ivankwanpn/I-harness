@@ -1,8 +1,13 @@
+pub(crate) mod operations;
+mod queues;
+use crate::runner::{notifications::EventSender, waits::NativeWait};
 use crate::{
     error::{Error, Result},
     ffi::Handle,
     protocol::Spec,
 };
+use operations::Gate;
+use queues::{Sender, TrySendError};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle},
@@ -10,10 +15,8 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
     },
     thread::{self, JoinHandle},
-    time::Duration,
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -23,6 +26,16 @@ use windows_sys::Win32::{
     },
 };
 pub const CHUNK: usize = 16384;
+pub(crate) fn cancel_worker(worker: &JoinHandle<()>, gate: &Gate) {
+    if gate.pending() {
+        let ok = unsafe { CancelSynchronousIo(worker.as_raw_handle()) };
+        gate.record_cancel(if ok == 0 {
+            unsafe { GetLastError() }
+        } else {
+            0
+        });
+    }
+}
 pub enum Event {
     RetainedHandle(Handle),
     Input(String, Result<()>),
@@ -76,7 +89,7 @@ fn into_file(handle: Handle) -> std::fs::File {
     std::mem::forget(handle);
     unsafe { std::fs::File::from_raw_handle(raw) }
 }
-fn close_worker_file(file: std::fs::File, events: &SyncSender<Event>) -> Result<()> {
+fn close_worker_file(file: std::fs::File, events: &EventSender) -> Result<()> {
     let mut handle = Handle(file.into_raw_handle());
     match handle.close() {
         Ok(()) => Ok(()),
@@ -236,22 +249,29 @@ impl PreparedIo {
             Ok(())
         }
     }
-    pub fn start(mut self, events: SyncSender<Event>, mut out: std::fs::File) -> RunningIo {
+    pub fn start(mut self, events: EventSender, mut out: std::fs::File) -> RunningIo {
         let pending_handles = std::mem::take(&mut self.child);
         let discard = Arc::new(AtomicBool::new(false));
         let stop_input = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
-        let (frame_tx, frame_rx) = mpsc::sync_channel::<Frame>(32);
+        let (frame_tx, frame_rx) = queues::channel::<Frame>(32);
         let discard_out = discard.clone();
         let dropped_out = dropped.clone();
-        let out_events = events.clone();
+        let out_events = events.worker();
+        let output_slot = out_events.clone();
+        let output_gate = Gate::new(events.inbox.clone());
+        let output_operation = output_gate.clone();
         let output = thread::spawn(move || {
             let result = (|| -> Result<()> {
-                for frame in frame_rx {
+                while let Ok(frame) = frame_rx.recv() {
                     if discard_out.load(Ordering::Acquire) {
                         dropped_out.fetch_add(frame.data.len() as u64, Ordering::Relaxed);
                         continue;
                     }
+                    let Some(_operation) = output_operation.begin() else {
+                        dropped_out.fetch_add(frame.data.len() as u64, Ordering::Relaxed);
+                        continue;
+                    };
                     let mut bytes = Vec::with_capacity(frame.data.len() + 5);
                     bytes.push(frame.channel);
                     bytes.extend_from_slice(&(frame.data.len() as u32).to_le_bytes());
@@ -263,7 +283,7 @@ impl PreparedIo {
                         }
                     }
                 }
-                if !discard_out.load(Ordering::Acquire) {
+                if let Some(_operation) = output_operation.begin() {
                     out.write_all(&[3, 0, 0, 0, 0])
                         .and_then(|_| out.flush())
                         .map_err(|e| Error::io("write output-end", e))?;
@@ -274,9 +294,16 @@ impl PreparedIo {
             let _ = out_events.send(Event::Output(result));
         });
         let mut readers = vec![];
+        let mut slots = vec![output_slot];
+        let mut gates = vec![output_gate];
+        let mut reader_controller = vec![];
         for (channel, handle) in self.outputs.drain(..) {
+            reader_controller.push(channel == 4);
             let tx = frame_tx.clone();
-            let events = events.clone();
+            let events = events.worker();
+            slots.push(events.clone());
+            let gate = Gate::new(events.inbox.clone());
+            gates.push(gate.clone());
             let discard = discard.clone();
             let dropped = dropped.clone();
             readers.push(thread::spawn(move || {
@@ -288,6 +315,9 @@ impl PreparedIo {
                         let mut ready = false;
                         let mut root = false;
                         loop {
+                            let Some(_operation) = gate.begin() else {
+                                break;
+                            };
                             let available = reader
                                 .fill_buf()
                                 .map_err(|e| Error::io("read MSYS controller", e))?;
@@ -337,30 +367,25 @@ impl PreparedIo {
                 let mut buf = [0u8; CHUNK];
                 let result = (|| -> Result<()> {
                     loop {
+                        let Some(operation) = gate.begin() else {
+                            break;
+                        };
                         let n = match file.read(&mut buf) {
                             Ok(0) => break,
                             Ok(n) => n,
                             Err(e) if e.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => break,
                             Err(e) => return Err(Error::io("read workload output", e)),
                         };
-                        let mut frame = Frame {
+                        drop(operation);
+                        let frame = Frame {
                             channel,
                             data: buf[..n].to_vec(),
                         };
-                        loop {
+                        if let Err(frame) = tx.send(frame) {
                             if discard.load(Ordering::Acquire) {
-                                dropped.fetch_add(n as u64, Ordering::Relaxed);
-                                break;
-                            }
-                            match tx.try_send(frame) {
-                                Ok(()) => break,
-                                Err(TrySendError::Full(f)) => {
-                                    frame = f;
-                                    thread::sleep(Duration::from_millis(5));
-                                }
-                                Err(TrySendError::Disconnected(_)) => {
-                                    return Err(Error::state("output writer disconnected"));
-                                }
+                                dropped.fetch_add(frame.data.len() as u64, Ordering::Relaxed);
+                            } else {
+                                return Err(Error::state("output writer disconnected"));
                             }
                         }
                     }
@@ -371,16 +396,22 @@ impl PreparedIo {
                 let _ = events.send(Event::Reader(result));
             }));
         }
+        let frame_tx_keep = frame_tx.controller();
         drop(frame_tx);
-        let (input_tx, input_rx) = mpsc::sync_channel::<Input>(8);
+        let (input_tx, input_rx) = queues::channel::<Input>(8);
         let input_handle = self.input.take().expect("prepared input ownership");
-        let input_events = events.clone();
+        let input_events = events.worker();
+        slots.push(input_events.clone());
+        let input_gate = Gate::new(events.inbox.clone());
+        gates.push(input_gate.clone());
         let input_stop = stop_input.clone();
+        let sealed = Arc::new(AtomicBool::new(false));
+        let input_sealed = sealed.clone();
         let msys = self.msys;
         let input = thread::spawn(move || {
             let mut file = into_file(input_handle);
             loop {
-                match input_rx.recv_timeout(Duration::from_millis(10)) {
+                match input_rx.recv() {
                     Ok(command) if msys => {
                         let id = match &command {
                             Input::Bytes(id, _)
@@ -388,7 +419,12 @@ impl PreparedIo {
                             | Input::Resize(id, _, _)
                             | Input::Stop(id) => id.clone(),
                         };
-                        let result = if input_stop.load(Ordering::Acquire) {
+                        let operation = input_gate.begin();
+                        let result = if operation.is_none()
+                            || input_stop.load(Ordering::Acquire)
+                            || (input_sealed.load(Ordering::Acquire)
+                                && !matches!(command, Input::Stop(_)))
+                        {
                             Err(Error::state("input cancelled"))
                         } else {
                             crate::msys::packet(&command).and_then(|bytes| {
@@ -396,18 +432,21 @@ impl PreparedIo {
                                     .map_err(|e| Error::io("write MSYS controller", e))
                             })
                         };
+                        drop(operation);
                         // Success is acknowledged by the adapter after delivery/ioctl.
                         if result.is_err() {
                             let _ = input_events.send(Event::Input(id, result));
                         }
                     }
                     Ok(Input::Bytes(id, data)) => {
-                        let result = if input_stop.load(Ordering::Acquire) {
+                        let operation = input_gate.begin();
+                        let result = if operation.is_none() || input_stop.load(Ordering::Acquire) {
                             Err(Error::state("input cancelled"))
                         } else {
                             file.write_all(&data)
                                 .map_err(|e| Error::io("write workload stdin", e))
                         };
+                        drop(operation);
                         let _ = input_events.send(Event::Input(id, result));
                     }
                     Ok(Input::End(id)) => {
@@ -420,12 +459,7 @@ impl PreparedIo {
                     Ok(Input::Stop(..)) => {
                         unreachable!("MSYS cancellation only enters its controller queue")
                     }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        if input_stop.load(Ordering::Acquire) {
-                            break;
-                        }
-                    }
+                    Err(()) => break,
                 }
             }
             if let Err(error) = close_worker_file(file, &input_events) {
@@ -433,8 +467,25 @@ impl PreparedIo {
             }
             let _ = input_events.send(Event::InputClosed);
         });
+        let mut waits = vec![];
+        for worker in std::iter::once(&output)
+            .chain(readers.iter())
+            .chain(std::iter::once(&input))
+        {
+            waits.push(NativeWait::new(
+                worker.as_raw_handle(),
+                events.inbox.clone(),
+            ));
+        }
         RunningIo {
             pending_handles,
+            frames: frame_tx_keep,
+            waits,
+            slots,
+            joined: false,
+            gates,
+            reader_controller,
+            sealed,
             input_tx: Some(input_tx),
             input: Some(input),
             output: Some(output),
@@ -451,14 +502,21 @@ impl PreparedIo {
     }
 }
 pub struct RunningIo {
+    frames: Sender<Frame>,
+    waits: Vec<Result<NativeWait>>,
+    slots: Vec<EventSender>,
+    joined: bool,
+    gates: Vec<Arc<Gate>>,
+    reader_controller: Vec<bool>,
+    sealed: Arc<AtomicBool>,
     pub pending_handles: Vec<Handle>,
-    pub input_tx: Option<SyncSender<Input>>,
+    input_tx: Option<Sender<Input>>,
     input: Option<JoinHandle<()>>,
     output: Option<JoinHandle<()>>,
     readers: Vec<JoinHandle<()>>,
     console: Option<Console>,
     console_thread: Option<JoinHandle<()>>,
-    events: SyncSender<Event>,
+    events: EventSender,
     discard: Arc<AtomicBool>,
     stop_input: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
@@ -466,6 +524,26 @@ pub struct RunningIo {
     msys: bool,
 }
 impl RunningIo {
+    pub fn ensure_waits(&mut self) -> Result<()> {
+        let mut errors = vec![];
+        for wait in &mut self.waits {
+            match wait {
+                Ok(wait) => {
+                    if let Err(error) = wait.ensure_registered() {
+                        errors.push(error);
+                    }
+                }
+                Err(error) => errors.push(error.clone()),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            let mut error = Error::state("worker exit registration failed");
+            error.cleanup = errors;
+            Err(error)
+        }
+    }
     pub fn close_pending_handles(&mut self) -> Vec<Error> {
         let mut errors = vec![];
         for h in &mut self.pending_handles {
@@ -491,6 +569,14 @@ impl RunningIo {
             return Err(Error::state("input already ended"));
         }
         let end = matches!(&input, Input::End(_));
+        if matches!(&input, Input::Stop(_)) {
+            return self
+                .input_tx
+                .as_ref()
+                .ok_or_else(|| Error::state("input closed"))?
+                .priority(input)
+                .map_err(|_| Error::state("private stop already pending or input closed"));
+        }
         match self
             .input_tx
             .as_ref()
@@ -528,46 +614,95 @@ impl RunningIo {
     }
     pub fn stop_input(&mut self) {
         self.stop_input.store(true, Ordering::Release);
-        self.input_tx.take();
+        self.gates.last().unwrap().stop();
+        if let Some(tx) = self.input_tx.take() {
+            tx.close(false);
+        }
         self.input_ended = true;
         if let Some(thread) = &self.input {
-            unsafe {
-                CancelSynchronousIo(thread.as_raw_handle());
-            }
+            cancel_worker(thread, self.gates.last().unwrap());
         }
     }
     pub fn seal_input(&mut self) {
+        self.sealed.store(true, Ordering::Release);
         // Reject workload data while retaining the private MSYS controller so
         // its observer can report waitpid after the workload Job is cancelled.
         self.input_ended = true;
     }
     pub fn cancel_output(&self) {
         self.discard.store(true, Ordering::Release);
+        for (index, gate) in self.gates[..self.gates.len() - 1].iter().enumerate() {
+            if index == 0 || !self.reader_controller[index - 1] {
+                gate.stop();
+            }
+        }
+        for frame in self.frames.close(true) {
+            self.dropped
+                .fetch_add(frame.data.len() as u64, Ordering::Relaxed);
+        }
         if let Some(thread) = &self.output {
-            unsafe {
-                CancelSynchronousIo(thread.as_raw_handle());
+            cancel_worker(thread, &self.gates[0]);
+        }
+        for (index, thread) in self.readers.iter().enumerate() {
+            if !self.reader_controller[index] {
+                cancel_worker(thread, &self.gates[index + 1]);
+            }
+        }
+    }
+    pub fn cancellation_pending(&self) -> bool {
+        self.gates.iter().any(|gate| gate.pending())
+    }
+    pub fn retry_cancel(&mut self) {
+        let workers = self
+            .output
+            .iter()
+            .chain(self.readers.iter())
+            .chain(self.input.iter())
+            .chain(self.console_thread.iter());
+        for (index, worker) in workers.enumerate() {
+            if self.waits[index].is_err() {
+                self.waits[index] =
+                    NativeWait::new(worker.as_raw_handle(), self.events.inbox.clone());
+            }
+            if let Ok(wait) = &mut self.waits[index] {
+                let _ = wait.ensure_registered();
+            }
+            if let Some(gate) = self.gates.get(index) {
+                if gate.pending() {
+                    cancel_worker(worker, gate);
+                }
             }
         }
     }
     pub fn close_console(&mut self) {
         if let Some(console) = self.console.take() {
-            let events = self.events.clone();
+            let events = self.events.worker();
+            self.slots.push(events.clone());
             self.console_thread = Some(thread::spawn(move || {
                 drop(console);
                 let _ = events.send(Event::ConsoleClosed);
             }));
+            self.waits.push(NativeWait::new(
+                self.console_thread.as_ref().unwrap().as_raw_handle(),
+                self.events.inbox.clone(),
+            ));
         }
     }
     pub fn settled(&self) -> bool {
-        self.input.as_ref().is_none_or(JoinHandle::is_finished)
-            && self.output.as_ref().is_none_or(JoinHandle::is_finished)
-            && self.readers.iter().all(JoinHandle::is_finished)
-            && self
-                .console_thread
-                .as_ref()
-                .is_none_or(JoinHandle::is_finished)
+        (self.joined
+            || self
+                .waits
+                .iter()
+                .all(|wait| wait.as_ref().is_ok_and(NativeWait::signaled)))
             && self.console.is_none()
     }
+    pub fn fully_joined(&self) -> bool {
+        self.joined && self.waits.is_empty()
+    }
+    pub fn inbox(&self) -> Arc<crate::runner::notifications::Inbox> {
+        self.events.inbox.clone()
+    }
+
     pub fn discarded(&self) -> u64 {
         self.dropped.load(Ordering::Acquire)
     }
@@ -575,25 +710,75 @@ impl RunningIo {
         self.discard.load(Ordering::Acquire)
     }
     pub fn join(&mut self) -> Result<()> {
-        let threads = self
-            .input
-            .take()
-            .into_iter()
-            .chain(self.output.take())
-            .chain(self.readers.drain(..))
-            .chain(self.console_thread.take());
-        for t in threads {
-            if t.join().is_err() {
-                return Err(Error::state("I/O thread panicked"));
+        let mut errors = vec![];
+        if !self.joined {
+            if !self.settled() {
+                return Err(Error::state("worker actual thread exit is unconfirmed"));
             }
+            for slot in &self.slots {
+                if !slot.terminal_published() {
+                    errors.push(Error::state("worker exited without terminal result"));
+                }
+            }
+            errors.extend(join_workers(
+                self.input
+                    .take()
+                    .into_iter()
+                    .chain(self.output.take())
+                    .chain(self.readers.drain(..))
+                    .chain(self.console_thread.take()),
+            ));
+            self.joined = true;
         }
-        Ok(())
+        self.waits.retain_mut(|wait| match wait {
+            Ok(wait) => match wait.retire() {
+                Ok(()) => false,
+                Err(error) => {
+                    errors.push(error);
+                    true
+                }
+            },
+            Err(error) => {
+                errors.push(error.clone());
+                true
+            }
+        });
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            let mut error = Error::state("I/O worker cleanup failed");
+            error.cleanup = errors;
+            Err(error)
+        }
     }
+}
+
+fn join_workers(workers: impl IntoIterator<Item = JoinHandle<()>>) -> Vec<Error> {
+    let mut errors = vec![];
+    for worker in workers {
+        if worker.join().is_err() {
+            errors.push(Error::state("I/O thread panicked"));
+        }
+    }
+    errors
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn one_failed_join_cannot_skip_later_started_workers() {
+        let workers = [
+            thread::spawn(|| panic!("first worker failure")),
+            thread::spawn(|| panic!("second worker failure")),
+        ];
+        let errors = join_workers(workers);
+        assert_eq!(
+            errors.len(),
+            2,
+            "both started workers must be joined and both failures retained"
+        );
+    }
     #[test]
     fn prepared_close_failure_keeps_handle_for_retry() {
         let (read, write) = pipe(false).unwrap();

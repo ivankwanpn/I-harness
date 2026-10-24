@@ -1,7 +1,16 @@
-param([switch]$Test, [string]$MsysSdkDirectory)
+param([switch]$Test, [string]$MsysSdkDirectory, [switch]$BridgeOnly, [string]$ControlledOutputDirectory, [switch]$ControlledTrace)
 $ErrorActionPreference = 'Stop'
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $packageRoot 'native/Cargo.toml'
+if ($BridgeOnly -ne [bool]$ControlledOutputDirectory -or ($BridgeOnly -and $Test)) { throw 'Controlled bridge build requires both -BridgeOnly and a fresh -ControlledOutputDirectory, without -Test.' }
+if ($ControlledTrace -and !$BridgeOnly) { throw 'Controlled call tracing is available only for isolated bridge builds.' }
+if ($BridgeOnly) {
+  $ControlledOutputDirectory = [IO.Path]::GetFullPath($ControlledOutputDirectory)
+  $controlledRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot '../../.tmp')).TrimEnd('\') + '\'
+  if (!$ControlledOutputDirectory.StartsWith($controlledRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Controlled bridge output must stay in this worktree-owned .tmp directory; copy evidence after the controlled run.' }
+  if (Test-Path -LiteralPath $ControlledOutputDirectory) { throw 'Controlled bridge output must be fresh; existing evidence is never overwritten.' }
+  New-Item -ItemType Directory -Path $ControlledOutputDirectory | Out-Null
+}
 $vcvars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat'
 if (!(Test-Path -LiteralPath $vcvars)) { throw 'Installed VS2022 BuildTools vcvars64.bat is required; this script never installs a compiler.' }
 if (!$Test) {
@@ -21,15 +30,16 @@ if (!$Test) {
   }
   $bridgeSource = Join-Path $packageRoot 'native/msys/bridge.c'
   $loaderSource = Join-Path $packageRoot 'native/msys/import-path.c'
-  $bridgeObject = Join-Path $packageRoot 'native/target/msys-bridge.obj'
-  $loaderObject = Join-Path $packageRoot 'native/target/msys-loader.obj'
+  $bridgeObject = if ($BridgeOnly) { Join-Path $ControlledOutputDirectory 'msys-bridge.obj' } else { Join-Path $packageRoot 'native/target/msys-bridge.obj' }
+  $loaderObject = if ($BridgeOnly) { Join-Path $ControlledOutputDirectory 'msys-loader.obj' } else { Join-Path $packageRoot 'native/target/msys-loader.obj' }
   New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'native/target') | Out-Null
-  $compileBridge = '"' + $vcvars + '" >nul && cl /nologo /W4 /WX /c /O2 /GS- /Zl /Fo"' + $bridgeObject + '" "' + $bridgeSource + '" && cl /nologo /W4 /WX /c /O2 /GS- /Zl /Fo"' + $loaderObject + '" "' + $loaderSource + '"'
+  $traceDefine = if ($ControlledTrace) { ' /DIH_MSYS_CONTROLLED_TRACE' } else { '' }
+  $compileBridge = '"' + $vcvars + '" >nul && cl /nologo /W4 /WX /c /O2 /GS- /Zl' + $traceDefine + ' /Fo"' + $bridgeObject + '" "' + $bridgeSource + '" && cl /nologo /W4 /WX /c /O2 /GS- /Zl /Fo"' + $loaderObject + '" "' + $loaderSource + '"'
   & $env:ComSpec /d /s /c $compileBridge
   if ($LASTEXITCODE -ne 0) { throw "MSYS adapter compilation failed: $LASTEXITCODE" }
   $kernelImport = @(Get-ChildItem -LiteralPath 'C:/Program Files (x86)/Windows Kits/10/Lib' -Directory | Sort-Object Name | ForEach-Object { Join-Path $_.FullName 'um/x64/kernel32.lib' } | Where-Object { Test-Path -LiteralPath $_ }) | Select-Object -Last 1
   if (!$kernelImport) { throw 'Installed Windows SDK x64 import libraries are required.' }
-  $adapter = Join-Path $packageRoot 'native/target/i-harness-msys-pty.exe'
+  $adapter = if ($BridgeOnly) { Join-Path $ControlledOutputDirectory 'i-harness-msys-pty.exe' } else { Join-Path $packageRoot 'native/target/i-harness-msys-pty.exe' }
   $taskBuildPath = $env:PATH
   try {
     $env:PATH = 'C:/Program Files/Git/usr/bin;' + $taskBuildPath
@@ -42,6 +52,7 @@ if (!$Test) {
     if ($LASTEXITCODE -ne 0 -or $dllNames.Count -ne 2 -or 'kernel32.dll' -notin $dllNames -or 'msys-2.0.dll' -notin $dllNames -or $sections -notmatch '\.ihmsys') { throw 'MSYS adapter template must have exactly the system/MSYS imports and its reserved binding slot.' }
   } finally { $env:PATH = $taskBuildPath }
   $adapterSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $adapter).Hash.ToLowerInvariant()
+  if ($BridgeOnly) { Write-Output "Controlled bridge $adapter"; Write-Output "SHA256 $adapterSha256"; exit 0 }
   [IO.File]::WriteAllText((Join-Path $packageRoot 'native/msys/bridge.sha256'), $adapterSha256 + "`n", (New-Object Text.UTF8Encoding($false)))
 }
 $cargoAction = if ($Test) { 'test' } else { 'build --release' }

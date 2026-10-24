@@ -1,3 +1,4 @@
+use super::notifications::EventSender;
 use super::running::{PreparedOwner, Running};
 use crate::{
     command_line::quote,
@@ -6,12 +7,11 @@ use crate::{
     job::Job,
     policy::Effective,
     protocol,
-    transport::{Event, PreparedIo},
+    transport::PreparedIo,
 };
 use std::{
     mem::{size_of, zeroed},
     ptr::null,
-    sync::mpsc::SyncSender,
 };
 use windows_sys::Win32::{
     Foundation::*,
@@ -221,7 +221,7 @@ impl Prepared {
         self,
         info: PROCESS_INFORMATION,
         id: String,
-        events: SyncSender<Event>,
+        events: EventSender,
         output: std::fs::File,
     ) -> Running {
         let io = self.io.start(events, output);

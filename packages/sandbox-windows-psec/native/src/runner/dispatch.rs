@@ -1,3 +1,4 @@
+use super::notifications::EventSender;
 use super::{
     control::Control,
     prepared::Prepared,
@@ -7,9 +8,9 @@ use super::{
 use crate::{
     error::{Error, Result},
     protocol::{self, Action},
-    transport::{Event, Input},
+    transport::Input,
 };
-use std::{collections::HashSet, sync::mpsc::SyncSender};
+use std::collections::HashSet;
 
 pub(super) struct Dispatch {
     prepared: Option<Prepared>,
@@ -34,7 +35,7 @@ impl Dispatch {
         &mut self,
         control: Control,
         running: &mut Option<Running>,
-        events_tx: &SyncSender<Event>,
+        events_tx: &EventSender,
         output: &mut Option<std::fs::File>,
     ) -> Result<()> {
         match control {
@@ -179,7 +180,7 @@ impl Dispatch {
         id: &str,
         effective_policy_digest: String,
         running: &mut Option<Running>,
-        events_tx: &SyncSender<Event>,
+        events_tx: &EventSender,
         output: &mut Option<std::fs::File>,
     ) -> Result<()> {
         if !self.commit_allowed {

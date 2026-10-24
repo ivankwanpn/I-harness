@@ -1,25 +1,28 @@
 mod control;
 mod dispatch;
 mod event_drain;
+pub(crate) mod notifications;
 mod prepared;
 mod running;
 mod status;
+mod tree;
+pub(crate) mod waits;
 
 use crate::{
     error::{Error, Result},
     transport::PrivateIo,
 };
-use control::{Control, controls};
+use control::controls;
 use dispatch::Dispatch;
 use event_drain::drain_events;
 use running::Running;
-use std::{sync::mpsc, time::Duration};
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use {
     crate::{protocol, transport::Event},
     prepared::Prepared,
-    std::{thread, time::Instant},
+    std::thread,
     windows_sys::Win32::{Foundation::*, System::Threading::*},
 };
 #[cfg(test)]
@@ -35,43 +38,176 @@ pub fn run() -> Result<()> {
     let private = PrivateIo::capture()?;
     status::initialize(private.status)?;
     let mut output = Some(private.output);
-    let controls = controls(private.control);
-    let (events_tx, events) = mpsc::sync_channel(64);
+    let inbox = notifications::Inbox::new();
+    let mut controls = controls(private.control, inbox.clone())?;
+    let events_tx = inbox.sender();
     let mut dispatch = Dispatch::new();
     let mut running: Option<Running> = None;
-    loop {
-        drain_events(&events, &mut running)?;
+    let result = (|| -> Result<()> {
+        loop {
+            if inbox.take_failure() {
+                return Err(Error::state("native lifecycle publication failed"));
+            }
+            drain_events(&inbox, &mut running)?;
+            if let Some(r) = running.as_mut() {
+                r.observe()?;
+            }
+            if running.as_ref().is_some_and(Running::waiting_for_io) {
+                running.as_mut().unwrap().join_io();
+                drain_events(&inbox, &mut running)?;
+                running.as_mut().unwrap().report_io_settled()?;
+            }
+            if dispatch.release_running(&mut running)? {
+                return Ok(());
+            }
+            dispatch.check_timeout(&mut running)?;
+            if running.is_none() && dispatch.finish_prepared_on_eof()? {
+                return Ok(());
+            }
+            if let Some(control) = inbox.take_control() {
+                dispatch.handle(control, &mut running, &events_tx, &mut output)?;
+                continue;
+            }
+            inbox.wait(running.as_ref().and_then(Running::deadline));
+        }
+    })();
+    // One explicit fatal owner, with a single absolute drain bound. No status
+    // output is attempted after status/transport failure.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    if result.is_err() {
         if let Some(r) = running.as_mut() {
-            r.observe()?;
+            r.stop(true);
         }
-        if running.as_ref().is_some_and(Running::waiting_for_io) {
-            // Join before draining the workers' final events and publishing settlement.
-            running.as_mut().unwrap().join_io();
-            drain_events(&events, &mut running)?;
-            running.as_mut().unwrap().report_io_settled()?;
+        while let Some(r) = running.as_mut() {
+            event_drain::drain_quiet(&inbox, r);
+            let _ = r.advance(false);
+            if r.waiting_for_io() {
+                r.join_io();
+                event_drain::drain_quiet(&inbox, r);
+                r.mark_quiet_io();
+            }
+            if r.release() {
+                running.take();
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            inbox.take_failure();
+            inbox.wait(Some(
+                r.deadline()
+                    .filter(|at| *at > Instant::now())
+                    .unwrap_or(deadline)
+                    .min(deadline),
+            ));
         }
-        if dispatch.release_running(&mut running)? {
-            return Ok(());
-        }
-        dispatch.check_timeout(&mut running)?;
-        if running.is_none() && dispatch.finish_prepared_on_eof()? {
-            return Ok(());
-        }
-        let control = match controls.recv_timeout(Duration::from_millis(10)) {
-            Ok(c) => c,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(_) => Control::Eof,
-        };
-        dispatch.handle(control, &mut running, &events_tx, &mut output)?;
     }
+    controls.stop();
+    let mut step = 0u32;
+    while !controls.finished() && Instant::now() < deadline {
+        // STOP-ONLY: cover the admitted synchronous read's check-to-call race.
+        controls.stop();
+        let delay = Duration::from_millis((1u64 << step.min(7)).min(100));
+        step += 1;
+        inbox.wait(Some((Instant::now() + delay).min(deadline)));
+        while inbox.try_recv().is_ok() {}
+        while inbox.take_control().is_some() {}
+    }
+    if controls.finished() {
+        if let Err(error) = controls.join() {
+            std::mem::forget(controls);
+            return Err(error);
+        }
+    } else {
+        std::mem::forget(controls);
+        return Err(Error::state(
+            "control reader actual exit remains unconfirmed",
+        ));
+    }
+    // Running's dependent fields are retained on incomplete teardown.
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn event_fixture(
+        mode: &str,
+        argument: &str,
+    ) -> (Running, std::sync::Arc<notifications::Inbox>) {
+        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../artifacts/win32-x64/i-harness-windows-helper.exe")
+            .canonicalize()
+            .unwrap();
+        let helper = helper
+            .to_str()
+            .unwrap()
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(helper.to_str().unwrap())
+            .to_owned();
+        let (mut prepared, path) = prepared_fixture_with_argv(
+            "unrestricted",
+            Some(vec![
+                helper,
+                "--self-child".into(),
+                mode.into(),
+                argument.into(),
+            ]),
+        );
+        let info = prepared
+            .create_suspended(&prepared.effective.digest.clone())
+            .unwrap();
+        let inbox = notifications::Inbox::new();
+        let running = prepared.into_running(
+            info,
+            "controlled-event-owner".into(),
+            inbox.sender(),
+            std::fs::File::create(path.join("output.bin")).unwrap(),
+        );
+        (running, inbox)
+    }
+    fn settle_event_fixture(running: &mut Running, inbox: &notifications::Inbox) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut root_before_tree = false;
+        while Instant::now() < deadline {
+            event_drain::drain_quiet(inbox, running);
+            running.advance(false).unwrap();
+            root_before_tree |= running.root_reported && !running.tree_reported;
+            if running.waiting_for_io() {
+                running.join_io();
+                event_drain::drain_quiet(inbox, running);
+                running.mark_quiet_io();
+            }
+            if running.root_reported && running.tree_reported && running.io_reported {
+                assert!(running.release());
+                return root_before_tree;
+            }
+            inbox.wait(Some(running.deadline().unwrap_or(deadline).min(deadline)));
+        }
+        running.stop(true);
+        panic!("event owner did not obtain root/tree/I/O ACK before controlled deadline");
+    }
+    #[test]
+    fn owned_member_exit_completes_retained_tree_with_no_job_hint_source() {
+        let (mut running, inbox) = event_fixture("spawn-descendant", "350");
+        running.resume().unwrap();
+        assert!(
+            settle_event_fixture(&mut running, &inbox),
+            "original root exit must precede the retained descendant's factual exit"
+        );
+    }
+    #[test]
+    fn cancellation_before_root_exit_settles_from_native_waits_without_job_hints() {
+        let (mut running, inbox) = event_fixture("never-read", "unused");
+        running.resume().unwrap();
+        running.stop(true);
+        settle_event_fixture(&mut running, &inbox);
+        assert!(running.root_reported && running.tree_reported && running.io_reported);
+    }
     #[test]
     fn private_msys_stop_write_failure_does_not_emit_an_unmatched_public_response() {
-        let (tx, rx) = mpsc::sync_channel(1);
+        let rx = notifications::Inbox::new();
+        let tx = rx.sender();
         tx.send(Event::Input(
             "_owned-stop".into(),
             Err(Error::state("controller closed before delivery")),
@@ -155,7 +291,8 @@ mod tests {
             0,
             "attribute list must be destroyed before the PSEC backing owner moves"
         );
-        let (tx, rx) = mpsc::sync_channel(64);
+        let rx = notifications::Inbox::new();
+        let tx = rx.sender();
         let mut r = p.into_running(
             info,
             "failed-commit".into(),
@@ -248,7 +385,8 @@ mod tests {
             ]),
         );
         let info = p.create_suspended(&p.effective.digest.clone()).unwrap();
-        let (tx, rx) = mpsc::sync_channel(64);
+        let rx = notifications::Inbox::new();
+        let tx = rx.sender();
         let mut r = p.into_running(
             info,
             "retained-retry".into(),

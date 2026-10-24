@@ -1,12 +1,15 @@
+use super::notifications::Inbox;
 use super::{
     running::Running,
     status::{failure, status},
 };
 use crate::{error::Result, transport::Event};
-use std::sync::mpsc::Receiver;
 
-pub(super) fn drain_events(events: &Receiver<Event>, running: &mut Option<Running>) -> Result<()> {
-    while let Ok(event) = events.try_recv() {
+pub(super) fn drain_events(events: &Inbox, running: &mut Option<Running>) -> Result<()> {
+    for _ in 0..40 {
+        let Ok(event) = events.try_recv() else {
+            break;
+        };
         match event {
             Event::RetainedHandle(handle) => {
                 if let Some(r) = running.as_mut() {
@@ -52,4 +55,19 @@ pub(super) fn drain_events(events: &Receiver<Event>, running: &mut Option<Runnin
         }
     }
     Ok(())
+}
+
+pub(super) fn drain_quiet(events: &Inbox, running: &mut Running) {
+    for _ in 0..40 {
+        let Ok(event) = events.try_recv() else {
+            break;
+        };
+        match event {
+            Event::RetainedHandle(handle) => running.retain_handle(handle),
+            Event::Reader(Err(error)) | Event::Output(Err(error)) => running.remember(error),
+            Event::Bridge(crate::msys::Observation::Root(code)) => running.observe_msys_root(code),
+            Event::BridgeDone(result) => running.observe_bridge_done(result),
+            _ => {}
+        }
+    }
 }
