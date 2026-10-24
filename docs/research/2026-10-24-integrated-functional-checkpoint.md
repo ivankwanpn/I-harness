@@ -15,6 +15,7 @@ These are independently reviewed scoped changes integrated into `codex/v0.1.13-d
 | P2 original recovery/acceptance terminal settlement | ca54230b..fc113394 | 190c2eb1,bbca3c79 | Fresh Sol review approved within explicit host-close/reopen qualification; still-open service management remains open |
 | P2/P3 integration fixture | bbca3c79..bd052a4d | bd052a4d | Scoped reviewer approved; actual combined core-agent495/495 and typecheck pass |
 | S2 same-service original settlement | 9de94630..72e19b01 | 3aeda4f2 | Fresh Sol review approved against S2-01..11; combined MAIN S1/S2 gate48/48 and typecheck pass |
+| IC-B0 observed saved settings | 6d911a89..e982939b | 27931083,c6d377a9 | Fresh Sol full-range review approved; settings230/230, Desktop29/29 and two typechecks pass |
 
 The preserved [reports and reviews](integrated-checkpoint-20261024/) contain full hashes, actual test counts, failure identities, compatibility costs and scope limits. Original raw request/event/evidence material remains in the named local SDD/worktree locations; this tracked checkpoint is not a claim that every raw file was embedded into Git.
 
@@ -35,6 +36,10 @@ One shared-library watch lease replaces the settings adapter's private raw strea
 Root recomputed52selected physical bindings and15changed Git blobs without mismatch. This selected binding is not whole packaged-runtime attestation. Adapter callbacks returning promises are joined; asynchronous continuations from layered void subscribers remain caller-owned as explicitly documented. Gateway fences its trust watcher early and joins after dependent owners settle.
 
 The separate root fix removes only three known retired root preferences from ordinary single-store saves, preserving unknown extensions and instruction provenance. It passed110affected tests and typecheck with fresh review. After all settings changes were combined on MAIN, the actual D:-checkout whole settings gate passed **221/221 across17files**, exit0, at863f7f79. This includes the real filesystem and relative-workspace controls; it is not a release-wide gate.
+
+IC-B0 subsequently adds strict observed loading inside the existing SettingsStore queue. One captured buffer supplies comment-tolerant parse, raw instruction validation, immutable isolated optional validation, normalization/publication and the source stamp. The validator's actual void/Promise completion is joined; async rejection does not publish defaults or advance state/revisions. First actual ENOENT initializes defaults only for a never-loaded store, later missing preserves last-good, and the missing result cannot be mistaken for loaded settings. Ordinary tolerant load and write semantics remain unchanged.
+
+Both real Desktop startup and locked edit consumers now use this same observed read/value validator, replacing their former JSON.parse validation followed by a second tolerant load. Causal tests retain actual comment-bearing rejection, atomic replacement swapping the second read, and premature async-validation publication. Final scoped source passed settings230/230 across18files, Desktop29/29 across6files and both typechecks. Root matched all8physical/Git bindings, and fresh full-range Sol review approved; the retained generic policy-sync/close warning and Windows actual ENOENT platform-oracle limit are recorded. This is the IC-B saved-read dependency, not proof that main/child model instruction consumers are connected.
 
 ## Agent lifetime and remaining obligations
 

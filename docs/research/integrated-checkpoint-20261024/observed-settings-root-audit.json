@@ -1,0 +1,47 @@
+{
+  "head": "e982939b97734efbd33f6049fe3f610101319653",
+  "observedAt": "2026-10-24T00:43:34.9450291+00:00",
+  "rows": [
+    {
+      "path": "packages/desktop-gateway/src/host.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/desktop-gateway/src/settings-file.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/desktop-gateway/test/observed-settings.test.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/settings/src/index.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/settings/src/storage/contracts.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/settings/src/storage/observed-read.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/settings/src/storage/single-store.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    },
+    {
+      "path": "packages/settings/test/observed-load.test.ts",
+      "physicalMatch": true,
+      "gitMatch": true
+    }
+  ],
+  "status": []
+}
