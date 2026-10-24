@@ -32,7 +32,7 @@ The rest of Desktop host, service, assembly, CLI and current-context owners are 
 
 ```ts
 export interface ObservedSettingsLoadOptions {
-  validate?: (document: Readonly<Record<string, unknown>>) => void
+  validate?: (document: Readonly<Record<string, unknown>>) => void | Promise<void>
 }
 export type ObservedSettingsLoad =
   | { kind: 'loaded'; settings: Settings; stamp: { kind: 'present'; sha256: string } }
@@ -43,7 +43,7 @@ loadObserved(options?: ObservedSettingsLoadOptions): Promise<ObservedSettingsLoa
 
 - Capture the optional validator function before entering the queue. Read the selected filename exactly once as bytes; use existing stampBytes on those bytes and parseDocumentTolerant on their UTF8 text. Comments accepted by the existing store remain accepted here. Do not use a second stat/read to attest the parsed data.
 - Reject malformed JSON/nonobject document, ENOTDIR, unreadable input, invalid supplied instructions, or invalid migration metadata. Validate raw supplied instruction fields before normalization can erase malformed values. Absent fields remain defaultable. Rejecting does not publish, clear last-good state, change revisions or mark a previously unloaded store loaded.
-- Invoke the optional validator once against an isolated recursively immutable JSON-data copy, never the raw object that will be published. It must not mutate the saved projection or source stamp. A validator throw, including undefined, remains a rejection and leaves the store unchanged; do not log the raw document or thrown private data.
+- Invoke the optional validator once against an isolated recursively immutable JSON-data copy, never the raw object that will be published, and await its actual completion within the same queue. It must not mutate the saved projection or source stamp. A synchronous throw or rejected Promise, including undefined, remains a rejection and leaves the store unchanged; do not log the raw document or thrown private data.
 - After all validations succeed, publish using the same existing normalize/revision owner and return a detached settings snapshot plus same-byte stamp. A caller mutating the returned settings cannot mutate store state.
 - Only ENOENT yields kind:missing. If this store has never loaded, initialize its existing native defaults/empty raw/revision state once (so the actual locked edit path does not perform another tolerant read); do not manufacture a present stamp. If already loaded, preserve the entire last-good state/revisions. The missing result has no settings field, so consumers must explicitly decide first-run defaults versus unavailable later policy. The future policy host owns its seen-present distinction.
 - Ordinary load() keeps its current tolerant fallback behavior. set/reset/migrateInstructions keep their queue and persistence semantics. This method does not claim protection against unobserved external writes after the read; it only eliminates validation/load double-reading and attests the exact read bytes.
@@ -79,3 +79,7 @@ expect(store.getSectionRevision('instructions')).toBe(previousRevision)
 ## Root self-review
 
 The method is a narrow variant of an existing store read, not another store. Missing first-run defaults are explicit and do not overwrite loaded last-good data; comments, same-byte validation, source stamps, strict supplied-policy checks and original write queue are covered. The real Desktop consumers eliminate the old two-read path. CLI settingsPath threading, live watch-policy owner, request/producer pins, read targets and instruction UI remain later IC-B work and are not claimed by this leaf dependency. Root has already authorized continuous implementation; no new confirmation is required for this reversible scoped work.
+
+Root ruling B0-01: this Windows Node reports ENOENT for a document path beneath a regular file. Preserve that failed platform-oracle receipt and classify the actual read errno; do not add a parent stat or claim single-read knowledge of parent creatability. Use a real directory-as-document rejection plus explicit controlled ENOTDIR/EACCES/EIO read errors for those negative branches.
+
+Root ruling B0-02: a TypeScript void callback can still be supplied by an async function. The original nonawaited validator proposal would publish before that valid callback settled. The new method explicitly accepts void|Promise<void> and awaits it inside the existing queue, keeping the captured bytes/stamp unchanged. Add a held async validator and rejected async validator causal RED/GREEN: no early publication or queued write, no unhandled rejection, and unchanged last-good/loaded/revisions on failure. No timer, second read or new validation owner is authorized.
