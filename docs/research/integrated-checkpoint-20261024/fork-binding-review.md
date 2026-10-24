@@ -1,0 +1,61 @@
+# F0 connected owner review — Task 1
+
+Spec review: **Needs Fixes**. Quality review: **Needs Fixes**.
+
+Reviewed frozen NATIVE range `ca81bdd2ec944105b9fd62534a932336e587179e..ab314b81e70a75c884fa4edf572db567f638357e`, branch `codex/fork-binding-observation-20261024`, in `C:/Users/inkik/.codex/worktrees/context-native-transfer/I-harness-main`. This is the full 11-file connected owner change, not a helper-only review. The complete approved tracked plan, root F0-01 through F0-06 rulings, SDD progress, implementation report, source-freeze manifests and relevant raw evidence were read. F0-02's dependency-ordered cleanup overrides the draft's unconditional cleanup wording.
+
+Review was read-only: no runtime, tests, builds, Git mutations, product edits or subagents. The only written file is this report. The four protected untracked retirement directories were not opened, run, edited or removed. Findings below are source-level causal analyses, not claims of newly executed failing tests.
+
+## Findings
+
+### [P1] Bootstrap outside the callback can change observed existing metadata without revocation
+
+Primary location: `packages/session-persistence/src/coordinator/binding-observation.ts:35–40`, especially the `if (!inherited) return` at line 36. Connected entry points: `packages/session-persistence/src/index.ts:60–61`. Actual mutation path: `packages/session-persistence/src/coordinator/bootstrap.ts:137` and JSONL `src/backend/bootstrap-header.ts:114–130`.
+
+Scenario: an observation captures an existing empty ancestor's metadata and pauses its callback. From an independent async context on the **same coordinator**, call the existing bootstrap owner on that ancestor using a valid `existing-empty` request, its original creation time/header digest/empty prefix, and a new lineage. The facade's check passes because no pending mutation exists and there is no inherited observation callback context. Bootstrap shares the already pinned actual session ownership slot, so OS exclusion does not stop it. Its real backend can publish a replacement header containing changed `parentSession`/`origin`, then bootstrap completion. Neither facade entry point registers a pending mutation or revokes/join scopes. Consequently the observation still returns its old captured metadata and `assertCurrent()` remains successful. The existing-session profile lane has already been released, so that lane does not prevent this path either.
+
+This is relevant to an un-managed empty ancestor even when F1 correctly opens its actual source ManagedDocument before observing. The ancestor is part of the policy lineage captured by the scope. It is not direct backend/file mutation and does not require a second coordinator or mismatched lock root. The exception for the exact captured **target** bootstrap cannot authorize bootstrap rewrites of an observed existing ancestor.
+
+Required correction: place bootstrap admission on the same owner fence for overlapping existing identities and track pending bootstrap work before its first await, while preserving the exact captured target's callback exception and original bootstrap ownership/reconciliation. Rejecting conflicting external bootstrap admission is also acceptable if it closes both the already-active-scope and bootstrap-first observation races. Add an actual JSONL/coordinator control showing that a valid existing-empty ancestor rewrite cannot leave the old metadata observation current; retain the existing original-target promotion and malformed-request refusal controls.
+
+### [P2] Array capture executes an unchecked inherited iterator and bypasses the 64-ID bound
+
+Location: `packages/session-persistence/src/coordinator/binding-observation.ts:94–101`.
+
+The code validates `supplied.length`, own key count and data descriptors, then captures with `existing = [...supplied]`. It does not require an ordinary array prototype, exclude proxies, or capture numeric own descriptor values. An empty Array subclass with a prototype `Symbol.iterator` yielding 65 distinct safe IDs passes the own-key/length validation (`length === 0`, only the own `length` key). Spread executes that inherited caller code and produces 65 IDs. The subsequent validation does not recheck the captured length, so the owner proceeds to acquire 66 session pins and corresponding binding leases before profiles. An unbounded iterator can also prevent validation from completing at all.
+
+This violates the frozen bounded/plain capture contract and the claim that request validation does not execute caller accessors/code. It can amplify native lease work outside the intended bound without malformed IDs or a fake backend.
+
+Required correction: reject proxy/non-plain array inputs and capture the validated numeric own data descriptors directly without consulting caller iteration behavior. Check the final captured set's bound too. Add a refusal control with an Array subclass or changed array prototype whose inherited iterator would produce extra IDs; assert that its iterator is not executed and no acquisition occurs.
+
+### [P2] AbortSignal method dispatch can strand a registered scope outside the cleanup path
+
+Primary location: `packages/session-persistence/src/coordinator/binding-observation.ts:113–120`; related retirement location: line 164.
+
+The validation at line 99 proves only the native `aborted` getter's brand. A genuine `AbortController().signal` can still have an own `addEventListener` override (or a subclass override) that throws. This signal passes validation. Line 113 then registers the scope, and line 120 invokes the caller-visible method **before** the acquisition/callback try/catch and before assigning `scope.cleanup`. If that method throws, the observation rejects but its registered `done` promise never settles. A subsequent ordinary `coordinator.close()` or intersecting mutation waits on that scope forever. No kernel fault or malicious backend is needed. An overridden throwing `removeEventListener` at line 164 likewise bypasses disposal and completion settlement after actual leases have been acquired.
+
+Required correction: use captured native signal/EventTarget operations with the genuine signal receiver, and ensure all work after registration, including listener installation/removal, is covered by lifetime settlement and cleanup. The branded getter should also be used consistently rather than consulting a shadowable `signal.aborted` property after validating the native getter. Add controls with genuine signals whose instance methods throw, proving either rejection before registration or complete scope/resource settlement and bounded subsequent close.
+
+## Connected owner assessment
+
+The central claim conversion is coherent: pins, temporary repair borrows and persistent promotion share actual slot acquisition flights; temporary cleanup carries object identity; a new borrower waits for an existing release flight; `ownerOf` reports actual native held state while debt separately refuses usable authority. Real load/create/adopt consumers have been converted away from temporary booleans. Successful loadOwned and original bootstrap promotion retain live ownership.
+
+The normal observation path registers synchronously, checks keyed pending mutation admission, pins sorted actual session leases before sorted exact binding-document leases, performs existing-session profiles in short lanes, and invokes the callback outside lanes/docChain. Captured metadata/binding values are immutable. Target profiling is avoided. Metadata updates, binding puts, local deletion and facade retirement revoke before their first await and join outside the writer lane/chain. The AsyncLocalStorage stack handles nested disjoint callbacks' outer self-waits. The bootstrap admission gap above is an additional real metadata mutation path not covered by those fences.
+
+Deletion captures its manifest before joining and acquires the actual manifest document leases under session ownership. The raw shared-lock controls establish cooperative OS exclusion for document writes and external deletion; they are stronger than callback-only mocks. JSONL observed reads separately check storage-root availability and tombstone state before and after IO, accept only the document read's ENOENT as absent, and retain tolerant legacy getDocument semantics. No unsupported SQLite backend or native host coverage was invented.
+
+Close first fences/revokes observations and joins their whole recorded lifetimes. Observation/managed cleanup failure prevents blanket dependent session ownership release while independent write-behind/document drainage remains attempted. Same-owner managed unknown recovery retains its original key and lease. Failed native release with consumed `held=false` is retained as debt instead of being reclassified by a later no-op; the complementary held=true path retries the same native capability. These decisions match F0-02/F0-03. The signal exception gap above is outside the currently covered lifetime path and must be closed before claiming complete settlement.
+
+The API carries only metadata/binding observations. It does not fabricate replay permission from ownerOf, revision, session ID, or view length. The source event-array/append witness remains a separate real ManagedDocument caller responsibility. The staged interface appears capable of supporting F1 after the owner fixes; this review does not require F1 implementation inside this packet.
+
+## Evidence assessment and acceptance boundary
+
+The final raw persistence log records **227 passing tests and one failing original F1 baseline**, with 31 passing files/one failing file. The failure is `semantic-fork-baseline.test.ts`, which still exposes `CONSUMED-PROOF-ONLY`; it is not a full green package result. The final JSONL log records **264 passing tests** in 21 files. Both final package-CWD typecheck exit receipts are zero. The 32 observation controls and six strict JSONL reader controls are present in the final sources.
+
+I independently computed SHA256 of all 11 reviewed files and compared them with the recorded `freeze-comparison.json` entries; all match. `final-freeze/manifest.json` records source bytes before final validation (its Git HEAD field is still BASE, honestly reflecting precommit validation), `committed-source/manifest.json` binds the same byte hashes to `ab314b81...`, and the comparison records no mismatches. The full-range stat/patch and empty `f1-paths-unchanged.patch` support the report's range and unchanged F1 oracle/path claims.
+
+The early RED evidence is capability-absence RED, with the separate initial ESM spy setup failure retained. The later raw edge REDs distinguish swallowed ordinary self-put conflict, concurrent disposal reentry, and mismatched invocation bootstrap acceptance. Setup failures such as `read.mockClear is not a function` remain visible, with corrected receipts separate. The native release tests use real OS acquisition plus controlled throws around the primitive boundary; they do not prove an induced kernel CloseHandle failure. The five pending-acquisition cuts and abort control join real acquisitions and account for temporary native handles. These are appropriately scoped causal controls, but they do not cover the three findings above.
+
+No fake green, oracle rewrite, reseed, reachability waiver, or shipping consumer was introduced by this range. The existing nonempty semantic source test has an empty external dependency closure and performs a cold backend read; it is not evidence for nonempty result catalog/member transfer or an ordinary CLI cold target reopen. F0 owner acceptance remains staged. F1 must still supply the real `acquireCliForkTransfer` consumer, actual stdio fork request, nonempty catalog/member transfer, ordinary target read after cold restart, original-invocation adoption, and production reachability over the final vertical range. Those are acknowledged later obligations, not additional F0 findings.
+
+Acceptance recommendation: address P1 and both P2 lifetime/capture findings, run their causal controls and affected package checks with fresh source-bound receipts, then obtain a fresh connected review of the updated full range. Do not promote this frozen packet to owner approval yet.

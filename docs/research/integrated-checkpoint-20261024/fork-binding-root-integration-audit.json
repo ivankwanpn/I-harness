@@ -1,0 +1,21 @@
+{
+  "head": "6dcbae98105c24a050d8be7db51b77a842fb7c91",
+  "currentHead": "4c131a7139e5e44cbb081996c19606c608df5034",
+  "observedAt": "2026-10-24T12:40:19.496Z",
+  "sealedEntries": 123,
+  "reviewedFiles": 11,
+  "copies": 1080,
+  "trackedSourceFiles": 2928,
+  "knownFailure": [
+    {
+      "file": "D:/I-harness-main/packages/session-persistence/test/semantic-fork-baseline.test.ts",
+      "fullName": "fork archives only the current summary and typed tail, without consumed proof bodies"
+    }
+  ],
+  "failures": [],
+  "limits": [
+    "Whole persistence suite remains failed on the explicitly preserved F1 oracle; no shipping fork acceptance.",
+    "Copied-entry smoke is persistence/JSONL behavior only, not Gateway host/RPC or installed app.",
+    "Raw physical copied files match MAIN; canonical Git identities are checked separately."
+  ]
+}
