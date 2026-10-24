@@ -1034,7 +1034,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       try { await opts.coordinator?.closeManagedDocument(id); writableSessions.delete(id); inputInboxes.delete(id); failedClose.delete(id) }
       catch (error) { failedClose.add(id); failures.push(error) }
     }
-    if (defaultInstructions) {
+    // Retained assembly publications still own pins in this shared source.
+    // Reader-only cleanup debt is independent and must not prevent its close.
+    if (defaultInstructions && ownedAssemblies().size === 0) {
       try { await defaultInstructions.close(); defaultInstructions = undefined }
       catch (error) { failures.push(error) }
     }
