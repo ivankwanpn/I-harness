@@ -10,6 +10,7 @@
     "gateway": "node --import tsx src/cli.ts"
   },
   "dependencies": {
+    "@i-harness/fs-watch": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/provider": "workspace:*",
     "@i-harness/usage-stats": "workspace:*",

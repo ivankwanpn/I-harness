@@ -81,11 +81,12 @@ export async function completeModelStep(deps: Pick<AgentDeps, "session" | "telem
 
 /** The accepted fact survives an uncertain flush or Stop; tool effects still
  * wait for the awaited acceptance owner to return successfully. */
-export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1, settlement?: Pick<ReturnType<typeof import('./acceptance-settlement.ts').createAcceptanceSettlement>, 'retain' | 'outcome'>): Promise<void> {
+export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, context: Pick<AgentContext, "ownedBudget">, lifecycle: TurnLifecycle, step: ModelStep, measurement: import("@i-harness/token-meter").PreparedRequestMeasurement, signal?: AbortSignal, request?: import("@i-harness/core-session").AcceptedRequestAttributionV1, settlement?: Pick<ReturnType<typeof import('./acceptance-settlement.ts').createAcceptanceSettlement>, 'retain' | 'outcome'>): Promise<import('./request-context.ts').AcceptedExchange> {
   let written: import("@i-harness/core-session").ExchangeAcceptedEvent | undefined
   let exactWritten: string | undefined
   let primary: unknown, failed = false
-  try { await acceptModelExchange(deps, { identity: step.identity, step, signal, request,
+  let accepted: import('./request-context.ts').AcceptedExchange | undefined
+  try { accepted = await acceptModelExchange(deps, { identity: step.identity, step, signal, request,
     onCapture: settlement?.retain, onOutcome: settlement?.outcome,
     onAccepted(event) { written = event; exactWritten = JSON.stringify(event) } }) }
   catch (error) { primary = error; failed = true }
@@ -99,6 +100,7 @@ export async function acceptCompletedModelStep(deps: TurnFinalizationDeps, conte
     throw saving
   }
   if (failed) throw primary
+  return accepted!
 }
 
 export async function closeStep(deps: Pick<AgentDeps, "session" | "telemetry" | 'facts' | 'sourceFacts'>, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {

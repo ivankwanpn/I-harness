@@ -302,7 +302,8 @@ export async function main(argv: string[]): Promise<number> {
   // trap the web fix hit — see docs/audit/2026-09-10-m62-web-sandbox-not-wired.md).
   // Loaded once for both, rather than per-knob.
   const { SettingsStore, resolveSettingsPath } = await import("@i-harness/settings")
-  const settings = new SettingsStore()
+  const settingsPath = resolveSettingsPath()
+  const settings = new SettingsStore({ path: settingsPath })
   await settings.load()
   // Explicit flag, then environment, then persisted choice. Invalid explicit values refuse.
   const windowsSandboxBackend = windowsBackendIdx >= 0 ? args[windowsBackendIdx + 1]
@@ -463,6 +464,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const opts: HeadlessOptions = {
+    instructionSettingsPath: settingsPath,
     codeMode: { ...settings.get().codeMode, ...(codeModeValue === undefined ? {} : { mode: codeModeValue as "off" | "mixed" | "only" }) },
     workspace: process.cwd(),
     approveAll: yes,
@@ -473,8 +475,8 @@ export async function main(argv: string[]): Promise<number> {
     windowsSandboxBackend,
     wslExecution,
     webSearchMode: settings.get().webSearchMode,
-    webCacheRoot: join(dirname(resolveSettingsPath()), "web-cache"),
-    workspaceRuntimeCacheRoot: join(dirname(resolveSettingsPath()), "workspace-runtime"),
+    webCacheRoot: join(dirname(settingsPath), "web-cache"),
+    workspaceRuntimeCacheRoot: join(dirname(settingsPath), "workspace-runtime"),
     // The window is NOT supplied here — `runHeadless` resolves the model binding
     // and the assembly fills it in. See the resolution above.
     compact: { auto: compactAuto },
@@ -653,7 +655,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { settings, credentials, runtime } = await loadProviderRuntime()
+  const { settings, settingsPath, credentials, runtime } = await loadProviderRuntime()
   // W6 T4: this host's diagnostics instance. It goes in HERE rather than before
   // the load because the redactor's second source needs BOTH halves of what
   // `loadProviderRuntime()` returns — the settings that name the refs and the
@@ -663,7 +665,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   // validation), so no record is being missed.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
-    ...executionServiceOptionsFor(settings),
+    ...executionServiceOptionsFor(settings, settingsPath),
     // Explicit process consent uses the existing answerer; no flag preserves
     // this stdio host's unanswered asks, independently of Desktop settings.
     ...(sdkApprovesTools(args) ? { approveAll: true } : {}),
@@ -854,7 +856,9 @@ async function runSdkCommand(args: string[]): Promise<number> {
   })
 
   let teardownPromise: Promise<void> | undefined
-  const teardown = (): Promise<void> => teardownPromise ??= (async () => {
+  const teardown = (): Promise<void> => {
+    if (teardownPromise) return teardownPromise
+    const pending = Promise.resolve().then(async () => {
     rl.close()
     await server.close()
     await service.close()
@@ -864,7 +868,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
     // installed instance behind (the process may outlive the command in tests).
     boot.diagnostics.close()
     boot.uninstall()
-  })()
+    })
+    teardownPromise = pending
+    void pending.catch(() => { if (teardownPromise === pending) teardownPromise = undefined })
+    return pending
+  }
   rl.on("close", () => { void teardown() })
   const onSignal = (): void => { void teardown() }
   process.on("SIGINT", onSignal)
@@ -910,11 +918,11 @@ async function runAcpCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { settings, credentials, runtime } = await loadProviderRuntime()
+  const { settings, settingsPath, credentials, runtime } = await loadProviderRuntime()
   // W6 T4: same seam as the sdk path above, same reason — see there.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
-    ...executionServiceOptionsFor(settings),
+    ...executionServiceOptionsFor(settings, settingsPath),
     codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",
@@ -948,14 +956,20 @@ async function runAcpCommand(args: string[]): Promise<number> {
   const connection = server.connect(stream)
 
   let teardownPromise: Promise<void> | undefined
-  const teardown = (): Promise<void> => teardownPromise ??= (async () => {
+  const teardown = (): Promise<void> => {
+    if (teardownPromise) return teardownPromise
+    const pending = Promise.resolve().then(async () => {
     connection.close()
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
     // W6 T4: last, for the reason spelled out in the sdk path's teardown.
     boot.diagnostics.close()
     boot.uninstall()
-  })()
+    })
+    teardownPromise = pending
+    void pending.catch(() => { if (teardownPromise === pending) teardownPromise = undefined })
+    return pending
+  }
   const onSignal = (): void => { void teardown() }
   process.on("SIGINT", onSignal)
   process.on("SIGTERM", onSignal)

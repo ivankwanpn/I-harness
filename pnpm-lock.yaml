@@ -563,6 +563,9 @@ importers:
       '@i-harness/fs-search':
         specifier: workspace:*
         version: link:../fs-search
+      '@i-harness/fs-watch':
+        specifier: workspace:*
+        version: link:../fs-watch
       '@i-harness/goal':
         specifier: workspace:*
         version: link:../goal
@@ -1280,6 +1283,9 @@ importers:
       '@i-harness/fs-search':
         specifier: workspace:*
         version: link:../fs-search
+      '@i-harness/fs-watch':
+        specifier: workspace:*
+        version: link:../fs-watch
       '@i-harness/guard-approval':
         specifier: workspace:*
         version: link:../guard-approval

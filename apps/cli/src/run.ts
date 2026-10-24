@@ -17,6 +17,7 @@ import { dirname, join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { resolveSettingsPath } from '@i-harness/settings'
 import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import { PluginRegistry, toMcpServerConfigs, toSubagentRoles } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
@@ -24,6 +25,7 @@ import { maybeAutoTitle } from "@i-harness/session-title"
 import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
+  createInstructionEnvironment, type InstructionEnvironment,
   openExecutorDocument, actionMetadataFacts, createTitleGenerationContext,
   type AssemblyOptions,
   type ModelPolicy,
@@ -136,6 +138,8 @@ export class HeadlessCleanupError extends Error {
 }
 
 export interface HeadlessOptions {
+  instructionSettingsPath?: string
+  instructionEnvironment?: InstructionEnvironment
   codeMode?: import("@i-harness/settings").SettingsCodeMode
   workspace: string
   mockScript?: MockStep[]
@@ -449,6 +453,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
 
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+  const settingsPath = opts.instructionSettingsPath ?? resolveSettingsPath()
+  let ownedInstructions: InstructionEnvironment | undefined
   let initialInput: Awaited<ReturnType<typeof openCliInput>> | undefined
   // M72 Ⅱ / M73: the session model's resolved pair, read where the binding
   // resolves (the mount try below) and consumed TWICE — the assembly build,
@@ -509,7 +515,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     const runtimeNow = (): Promise<ProviderRuntime> => {
       runtimePromise ??= opts.providerRuntime !== undefined
         ? Promise.resolve(opts.providerRuntime)
-        : loadProviderRuntime().then((loaded) => {
+        : loadProviderRuntime({ settingsPath }).then((loaded) => {
             // W6 T4: the handle this line used to DROP. §3.5's declared refs
             // (`settings.llm.providers[*].apiKeyEnv`) are resolved through this
             // store and registered on the CLI's redactor — the second source of
@@ -628,6 +634,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
+      instructionEnvironment: opts.instructionEnvironment ?? (ownedInstructions ??= createInstructionEnvironment({ settingsPath })),
       modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       videoAudioAnalyzer: async input => (await runtimeNow()).analyzeVideoAudio?.(input) ?? { status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." },
       ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
@@ -1029,9 +1036,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     // A process cleanup failure rejects shutdown and retains the coordinator;
     // success is acknowledged only after the assembly's native owners drain.
-    try { await initialInput?.close(); await assembly?.dispose() }
+    const cleanup = async () => {
+      ownedInstructions?.dispose()
+      const outcomes = await Promise.allSettled([initialInput?.close(), assembly?.dispose()])
+      const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new AggregateError(failures, 'Headless instruction owner prerequisites incomplete')
+      await ownedInstructions?.close()
+    }
+    try { await cleanup() }
     catch (cause) {
-      throw new HeadlessCleanupError(cause, async () => { await assembly?.dispose(); await opts.coordinator?.close() }, primaryRunFailure)
+      throw new HeadlessCleanupError(cause, async () => { await cleanup(); await opts.coordinator?.close() }, primaryRunFailure)
     }
     // Disposal joins task/notification save queues and may schedule registry
     // metadata writes. The final store barrier must follow those producers.

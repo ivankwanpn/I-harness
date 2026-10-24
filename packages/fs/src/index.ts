@@ -12,7 +12,7 @@ import { parsePatch, applyPatch, type RewindCapture } from "./patch.ts"
 import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
 import { ESCALATION_TARGETS, resolveCallPolicy } from "@i-harness/sandbox"
 import { fileReadPage, type FileReadArgs, type FileReadPage, type FileReadPolicy } from "./range-read.ts"
-export type { FileReadPolicy } from "./range-read.ts"
+export type { FileReadPolicy, InstructionReadScope } from "./range-read.ts"
 
 export { FsToolError, softFail, type FsToolErrorCode, type FsToolFailure } from "./error.ts"
 export { writeFileAtomic } from "./atomic.ts"
@@ -117,6 +117,7 @@ function denialMessage(denial: SandboxDenial): string {
 }
 
 export interface FsToolDeps {
+  observeInstructionTarget?: (target: { path: string; kind: 'file' | 'directory' }, exec: ToolExec) => Promise<import('./range-read.ts').InstructionReadScope>
   readPolicy?: FileReadPolicy
   workspace: string
   /** M16: WRITE confinement. The assembly builds this from the session's sandbox
@@ -252,8 +253,13 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     execute: async (args, exec) => {
       exec?.abortSignal?.throwIfAborted()
       const result = await softFail(async () => {
-        const content = await readFile(resolvePath(deps.workspace, args.path), { encoding: "utf8", signal: exec?.abortSignal })
-        return deps.readPolicy ? fileReadPage(content, args, deps.readPolicy) : { content }
+        const target = resolvePath(deps.workspace, args.path)
+        const content = await readFile(target, { encoding: "utf8", signal: exec?.abortSignal })
+        // Page validation is part of a successful read. Invalid digest/offset
+        // requests must not produce a new incidental instruction selection.
+        if (deps.readPolicy) fileReadPage(content, args, deps.readPolicy)
+        const scope = exec && deps.observeInstructionTarget ? await deps.observeInstructionTarget({ path: target, kind: 'file' }, exec).catch(() => ({ status: 'unavailable' as const, reason: 'mapping-unavailable' as const })) : undefined
+        return deps.readPolicy ? fileReadPage(content, args, deps.readPolicy, scope) : { content, ...(scope ? { instruction_scope: scope } : {}) }
       })
       exec?.abortSignal?.throwIfAborted()
       if (deps.readPolicy && "error" in result) {
@@ -310,14 +316,18 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       return out
     }),
   }
-  const list_dir: Tool<{ path: string }, { entries: string[] } | FsToolFailure> = {
+  const list_dir: Tool<{ path: string }, { entries: string[]; instruction_scope?: import('./range-read.ts').InstructionReadScope } | FsToolFailure> = {
     name: "list_dir",
     description: "list a directory",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
     approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "list_dir", implementation),
-    execute: async ({ path }) => softFail(async () => ({ entries: await readdir(resolvePath(deps.workspace, path)) })),
+    execute: async ({ path }, exec) => softFail(async () => {
+      const target = resolvePath(deps.workspace, path), entries = await readdir(target)
+      const scope = exec && deps.observeInstructionTarget ? await deps.observeInstructionTarget({ path: target, kind: 'directory' }, exec).catch(() => ({ status: 'unavailable' as const, reason: 'mapping-unavailable' as const })) : undefined
+      return { entries, ...(scope ? { instruction_scope: scope } : {}) }
+    }),
   }
   const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
     name: "edit",

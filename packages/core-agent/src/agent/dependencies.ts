@@ -12,7 +12,7 @@ export function createExecutionDependencies(host: Dependencies): Dependencies {
     'autoCompactionEnabled', 'generationFactory', 'inputPreparationFactory', 'summaryFactory',
     'sharedGeneration', 'ensureWritableContext', 'executionIdentity', 'bindingForStep',
     'modelBindingIdentity', 'budgetBinding', 'contextMetadata', 'modelToolSchemas',
-    'modelOverheadTokens', 'isSubagent', 'telemetry', 'flush', 'stepInputs',
+    'modelOverheadTokens', 'isSubagent', 'telemetry', 'flush', 'stepInputs', 'requestContext',
   ] as const satisfies readonly (keyof Dependencies)[]
   for (const key of live) Object.defineProperty(deps, key, {
     enumerable: true,

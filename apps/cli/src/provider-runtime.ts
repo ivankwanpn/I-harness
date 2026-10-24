@@ -14,7 +14,7 @@ import { createWorkspaceRuntime } from "@i-harness/workspace-runtime"
  * Capture configuration synchronously; resolve dependencies only for a new WSL
  * assembly, never during a stdio handshake or for a disabled/native surface.
  */
-export function executionServiceOptionsFor(settings: SettingsStore, settingsPath = resolveSettingsPath()): Pick<SessionServiceOptions, "sandbox" | "windowsSandboxBackend" | "wslExecutionFor" | "webSearchMode" | "webCacheRoot" | "contextOutputSettingsPath"> {
+export function executionServiceOptionsFor(settings: SettingsStore, settingsPath = resolveSettingsPath()): Pick<SessionServiceOptions, "sandbox" | "windowsSandboxBackend" | "wslExecutionFor" | "webSearchMode" | "webCacheRoot" | "contextOutputSettingsPath" | 'instructionSettingsPath'> {
   const saved = settings.get(), backend = process.env.IH_WINDOWS_SANDBOX ?? saved.windowsSandboxBackend
   if (backend !== "legacy" && backend !== "psec" && backend !== "wsl") throw new Error("IH_WINDOWS_SANDBOX requires legacy, psec or wsl")
   const distribution = process.env.IH_WSL_DISTRIBUTION ?? saved.wslExecution.distribution
@@ -26,7 +26,7 @@ export function executionServiceOptionsFor(settings: SettingsStore, settingsPath
   const configuration = Object.freeze({ distribution, networkAccess: network === undefined ? saved.wslExecution.networkAccess : network === "allow",
     workspaceDependencies: dependencies === undefined ? saved.wslExecution.workspaceDependencies : dependencies === "true" })
   const home = dirname(settingsPath)
-  return { sandbox: saved.sandboxMode, windowsSandboxBackend: backend, webSearchMode: saved.webSearchMode, webCacheRoot: join(home, "web-cache"), contextOutputSettingsPath: settingsPath,
+  return { instructionSettingsPath: settingsPath, sandbox: saved.sandboxMode, windowsSandboxBackend: backend, webSearchMode: saved.webSearchMode, webCacheRoot: join(home, "web-cache"), contextOutputSettingsPath: settingsPath,
     wslExecutionFor: () => {
       if (backend !== "wsl" || !configuration.workspaceDependencies) return configuration
       return createWorkspaceRuntime({ cacheRoot: join(home, "workspace-runtime") }).resolve(configuration, { installIfMissing: true }).then(runtime => {
@@ -76,6 +76,7 @@ export async function loadProviderRuntime(options: {
   registry?: ProviderRegistry
 } = {}): Promise<{
   settings: SettingsStore
+  settingsPath: string
   credentials: CredentialStore
   runtime: ProviderRuntime
 }> {
@@ -89,6 +90,7 @@ export async function loadProviderRuntime(options: {
   )
   return {
     settings,
+    settingsPath,
     credentials,
     runtime: createProviderRuntime({
       settings,

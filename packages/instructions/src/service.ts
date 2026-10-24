@@ -209,6 +209,9 @@ export function createInstructionService(options: InstructionServiceOptions): In
         if (errors.length === 1) throw errors[0]
         if (errors.length > 1) throw new AggregateError(errors, 'Instruction cleanup failed')
       })
+      // Retry the same captured original lease after a transient close failure.
+      // The closed fence and irrecoverable file-cleanup failures remain held.
+      void closing.catch(() => { closing = undefined })
       closed = true; generation++; cache.clear(); publish({ ...emptySnapshot(false), applicable: current.applicable.map(a => ({ ...a, reliability: 'unavailable' as const, complete: false })) }); listeners.clear()
       return closing
     },

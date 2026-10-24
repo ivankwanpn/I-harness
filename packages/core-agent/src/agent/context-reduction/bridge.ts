@@ -9,6 +9,7 @@ import type { AgentConfig, AgentDeps } from '../types.ts'
 import type { createOwnedBudget } from '../budget.ts'
 import { createReductionPublication } from './publication.ts'
 import { softWorkFacts } from './automatic.ts'
+import { assertCurrentRepresentable } from '../current-representability.ts'
 
 interface Proof { source: ContextSnapshot; groups: readonly ReductionGroup[]; rewrites: readonly ReductionRewrite[]; rewriteIdentity: string; current: RequestEvidence; assessmentRevision: string; afterKey: string; targetReady: boolean }
 /** Snapshots expose only immutable data. All clients, assessments and proofs stay private. */
@@ -17,10 +18,10 @@ export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCand
   let ports: ContextReductionPorts
   const capture = () => { refresh(); const value = captureCandidate(); evidence.set(value.snapshot, value); return value.snapshot }
   const current = (source: ContextSnapshot, groups: readonly ReductionGroup[]) => {
-    try { const prior = evidence.get(source), now = captureCandidate(); return bindingCurrent() && !!prior && prior.model === now.model && prior.bindingIdentity === now.bindingIdentity && reductionSourceCurrent(source, groups, now.snapshot, requireSurface) }
+    try { const prior = evidence.get(source), now = captureCandidate(); return bindingCurrent() && !!prior && (!deps.requestContext || deps.requestContext.current(prior.instructions)) && prior.model === now.model && prior.bindingIdentity === now.bindingIdentity && reductionSourceCurrent(source, groups, now.snapshot, requireSurface) }
     catch { return false }
   }
-  const preparationCurrent = (proof: Proof) => ports.current(proof.source, proof.groups) && sameRequestCandidate(proof.current, captureCandidate()) && ownedBudget.assessmentRevision() === proof.assessmentRevision
+  const preparationCurrent = (proof: Proof) => ports.current(proof.source, proof.groups) && (!deps.requestContext || deps.requestContext.current(proof.current.instructions)) && sameRequestCandidate(proof.current, captureCandidate()) && ownedBudget.assessmentRevision() === proof.assessmentRevision
   const publish = createReductionPublication(deps, (source, groups, rewrites, token) => {
     const proof = proofs.get(token)
     return !!proof && proof.source === source && proof.groups === groups && proof.rewrites === rewrites && proof.rewriteIdentity === projectionFingerprint(rewrites) && preparationCurrent(proof)
@@ -30,7 +31,7 @@ export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCand
     return { type: 'context/soft-reduction', version: 1, op: 'terminal', ownerSessionId: softStart.ownerSessionId, sequenceId: softStart.sequenceId,
       startSeq: { kind: 'prior', seq: softStart.seq, expectedType: 'context/soft-reduction' }, workKey: softStart.workKey, sourceKey: softStart.sourceKey,
       outcome: proof.targetReady ? 'target-ready' : 'reduced-over-target', publication: 'committed', consumedBeforeKey: softStart.workKey, consumedAfterKey: proof.afterKey }
-  }, publicationAbsent)
+  }, publicationAbsent, source => evidence.get(source)?.instructions)
   async function prepare(source: ContextSnapshot, groups: readonly ReductionGroup[], rewrites: readonly ReductionRewrite[]): Promise<ReductionPreparation> {
     if (!ports.current(source, groups)) return { kind: 'stale' }
     const prior = evidence.get(source)!, now = captureCandidate(), assessmentRevision = ownedBudget.assessmentRevision()
@@ -41,7 +42,9 @@ export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCand
       }).projection)
       const request = buildContextRequest({ conversation, surface: now.snapshot.surface }, { sessionId: deps.sessionId, signal, requestScope })
       const prepared = await prepareModelRequest(prior.model, request)
+      assertCurrentRepresentable(now, prepared)
       const assessed = ownedBudget.probe(prepared, now, rewrites.length > 0, policy.reserveRatio, policy)
+      assertCurrentRepresentable(now, assessed.prepared)
       const pressure = assessed.decision.pressure
       const targetReady = assessed.capacityFit === 'yes' && pressure.kind === 'known' && pressure.targetReady
       const token = Object.freeze({}), proof = { source, groups, rewrites, rewriteIdentity: projectionFingerprint(rewrites), current: now, assessmentRevision,
@@ -57,6 +60,7 @@ export function createReductionBridge(deps: AgentDeps & AgentConfig, captureCand
           || pressure.kind === 'known' && input.components.system.heuristicTokens + input.components.toolSchemas.heuristicTokens > pressure.target, proof: token }
     } catch (error) {
       if ((error as { code?: string }).code === 'CONTEXT_INPUT_STALE') return { kind: 'stale' }
+      if ((error as { code?: string }).code === 'CONTEXT_CURRENT_UNREPRESENTABLE') return { kind: 'blocked', reason: 'source-unrepresentable' }
       if (modelFailureFacts(error)?.reason === 'native-replay') return { kind: 'blocked', reason: 'source-unrepresentable' }
       return { kind: 'blocked', reason: 'capacity-unavailable' }
     }

@@ -38,6 +38,7 @@ export interface AgentConfig {
 }
 
 export interface AgentDeps {
+  requestContext?: import('./request-context.ts').SessionRequestContext
   // Host getters and callbacks use this original object; mutable preferences
   // remain live. Session/owner/session ID and initialization limits are captured
   // at construction. Agent-installed execution ports below are private copies.

@@ -4,6 +4,7 @@ import { projectionFingerprint } from "@i-harness/token-meter"
 import type { ModelClient } from "@i-harness/llm-seam"
 
 export interface RequestEvidence {
+  readonly instructions?: import('./request-context.ts').InstructionRequestEvidence
   readonly executionIdentity?: import("@i-harness/llm-seam").LiveExecutionIdentity
   readonly snapshot: ContextSnapshot
   readonly model: ModelClient

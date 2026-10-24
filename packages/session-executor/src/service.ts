@@ -36,6 +36,7 @@ import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { createContextStateReader } from "./service/context-state.ts"
 import { createResultPageReader } from './service/result-reader.ts'
+import { createInstructionEnvironment, createProjectInstructionEnvironment } from './context/instructions/index.ts'
 import type { ResultPageQuery, ResultPageResult } from '@i-harness/context-output'
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
@@ -284,6 +285,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { error: modelFailure?.message ?? "Session execution failed.", ...(modelFailure ? { modelFailure } : {}) }
   }
   let closed = false
+  let defaultInstructions: ReturnType<typeof createProjectInstructionEnvironment> | undefined
+  const instructions = () => opts.instructionEnvironment ?? (defaultInstructions ??= opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
   let currentSandbox = opts.sandbox
   const cancelledParents = new Set<string>()
   const notificationAdmissions = new Map<string, Promise<void>>()
@@ -573,6 +576,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           assembly = await createSessionAssembly({
             prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
+            instructionEnvironment: instructions(),
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
@@ -615,6 +619,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           assembly = await createSessionAssembly({
             prepareHumanInput: opts.transformPrompt ? text => opts.transformPrompt!(assembly, text) : undefined,
             ...opts,
+            instructionEnvironment: instructions(),
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
@@ -789,7 +794,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
-        try { await priorDocument?.settleFinishedActions() }
+        try { await priorAssembly?.settleRuntimeContextPublications(); await priorDocument?.settleFinishedActions() }
         catch (failure) {
           if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {
             try { await priorAssembly.inbox.admit(input, controller.signal) }
@@ -996,8 +1001,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size) return
+    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size && !defaultInstructions) return
     closed = true
+    defaultInstructions?.dispose()
     for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
       revokeSession(id); stopNotifications(id)
     }
@@ -1029,6 +1035,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       catch (error) { failedClose.add(id); failures.push(error) }
     }
     if (failures.length) throw new AggregateError(failures, "Session service process cleanup incomplete")
+    if (defaultInstructions) { await defaultInstructions.close(); defaultInstructions = undefined }
     if (failure !== undefined) throw failure
   }
 

@@ -23,8 +23,12 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
     const owned = { session: deps.session, facts: deps.facts, sourceFacts: deps.sourceFacts, generationAction: deps.generationAction, flush: deps.flush, telemetry: deps.telemetry }
     const acceptance = createAcceptanceSettlement({ registerFactSource: deps.registerFactSource, flush: owned.flush }, unstarted.close)
     let acceptanceStarted = false
-    const admit = createAdmission(deps, context, prepareRequest, recovery)
+    const admit = createAdmission(deps, context, prepareRequest, recovery, candidate => {
+      if (candidate.instructions) acceptance.retainContext(deps.requestContext!.retain(candidate.instructions))
+    })
     let responseFailure: unknown, responseFailed = false
+    let success: { step: import('./model-step.ts').ModelStep; accepted: import('./request-context.ts').AcceptedExchange; candidate: import('./request-snapshot.ts').RequestEvidence; issued?: import('@i-harness/llm-seam').ExecutionReceipt & { actionId: string; attemptId: string } } | undefined
+    try {
     try {
     let physicalStepStartSeq = stepStartSeq
     const candidateState: import("./execution.ts").CandidateExecutionState & import('./recovery.ts').RecoveryAdmissionState & { staleRebuilds: number; compacted: boolean } = { staleRebuilds: 0, compacted: false, reductionAttempts: { count: 0, staleRebuilds: 0 }, epochRebuilds: 0, hasStartedSend: false, hasObservedOutput: false }
@@ -38,9 +42,10 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       let attemptFailure: unknown, failed = false
       let streamFailure: unknown, streamFailed = false
       let semanticBlocked: Error | undefined
+      let pendingReceipt: import('@i-harness/llm-seam').ExecutionReceipt | undefined, issuedReceipt: (import('@i-harness/llm-seam').ExecutionReceipt & { actionId: string; attemptId: string }) | undefined
       try {
         try {
-          for await (const ev of candidate.prepared.stream({ generation: deps.sharedBudget?.control ?? deps.generationAction?.control(candidateState.recoveryId ? 'recovery' : 'main'), confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: activeCandidate.validateBeforeTransport, onTransportIssue: () => { physicalAttempts++; candidateState.hasStartedSend = true } })) {
+          for await (const ev of candidate.prepared.stream({ generation: deps.sharedBudget?.control ?? deps.generationAction?.control(candidateState.recoveryId ? 'recovery' : 'main'), confirmExecution: confirmation => { const receipt = activeCandidate.execution.confirm(confirmation); pendingReceipt = receipt; if (receipt) activeStep.confirm(receipt) }, validateBeforeTransport: activeCandidate.validateBeforeTransport, onTransportIssue: () => { issuedReceipt = pendingReceipt ? { ...pendingReceipt, ...activeStep.result().identity } : undefined; pendingReceipt = undefined; physicalAttempts++; candidateState.hasStartedSend = true } })) {
             if (ev.type !== "activity" && ev.type !== "retry") { observed = true; candidateState.hasObservedOutput = true }
             await streamStep.accept(ev)
           }
@@ -93,7 +98,7 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
           throw saving
         }
       }
-      if (!rebuild) break
+      if (!rebuild) { success = { step: streamStep.result(), accepted: undefined!, candidate: candidate.captured, issued: issuedReceipt }; break }
     }
     const { prepared } = candidate
     const step = streamStep.result()
@@ -104,22 +109,20 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
       await closeStep(deps, lifecycle, getSteps, step)
       throw Object.assign(new Error(step.refusedThisStep ? "Model refused the main response" : "Model output was truncated before completion"), { code: step.refusedThisStep ? "MODEL_REFUSED" : "MODEL_OUTPUT_TRUNCATED" })
     }
-    unstarted.capture(step.batch)
+    unstarted.capture(step.batch, candidate.captured.instructions ? deps.requestContext!.retain(candidate.captured.instructions) : undefined)
     acceptanceStarted = true
     const deferredFailure = (error: unknown) => acceptance.fail(async accepted => {
       lifecycle.providerCompleted = accepted
       await settleFailedTurn(owned, lifecycle, error, async () => { await owned.generationAction?.close(abort?.aborted ? 'stopped' : 'failed') }, false)
     })
     lifecycle.deferredFailure = deferredFailure
-    await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt), acceptance)
+    const accepted = await acceptCompletedModelStep(deps, context, lifecycle, step, prepared.measurement, abort, candidate.execution.attribution(step.receipt), acceptance)
     await acceptance.close()
     if (lifecycle.deferredFailure === deferredFailure) lifecycle.deferredFailure = undefined
     await deps.generationAction?.close('accepted')
-    const accepted = deps.session.events.findLast(event => event.type === 'model/exchange-accepted' && event.actionId === step.identity.actionId)
-    const acceptedSeq = accepted?.seq
     await recovery.resolve(prepared.measurement, abort)
     if (!step.batch.length) await unstarted.close()
-    return { step, acceptedSeq, handoffBatch: unstarted.handoff }
+    success = { ...success!, step, accepted }
     } catch (error) { responseFailure = error; responseFailed = true; throw error }
     finally {
       const savingErrors: unknown[] = []
@@ -131,6 +134,24 @@ export function createResponseRunner(deps: AgentDeps & AgentConfig, context: Age
         if (responseFailed) throw savingFailure(responseFailure, savingErrors, 'Original response settlement failed')
         throw savingErrors.length === 1 ? savingErrors[0] : new AggregateError(savingErrors, 'Original response settlement failed')
       }
+    }
+    abort?.throwIfAborted()
+    const { step, candidate, accepted, issued } = success!
+    const receipt = step.receipt
+    const matched = !!receipt && !!issued && receipt.actionId === step.identity.actionId && receipt.attemptId === step.identity.attemptId
+      && issued.actionId === step.identity.actionId && issued.attemptId === step.identity.attemptId && JSON.stringify(receipt.identity) === JSON.stringify(issued.identity)
+      && receipt.candidateId === issued.candidateId && receipt.sendId === issued.sendId && receipt.semanticId === issued.semanticId
+      && receipt.payloadId === issued.payloadId && receipt.payloadKind === issued.payloadKind
+    if (matched && candidate.instructions) deps.requestContext!.succeeded({ ...accepted, candidate, evidence: candidate.instructions, physicalExecutionReceipt: issued! })
+    return { step, acceptedSeq: accepted.acceptedSeq, handoffBatch: unstarted.handoff }
+    } catch (error) {
+      // A success can still fail in original finally/Stop/notification. Only
+      // this late path needs an additional original unstarted drain.
+      if (!responseFailed) {
+        try { await unstarted.close() }
+        catch (saving) { throw savingFailure(error, [saving], 'Post-completion original settlement failed') }
+      }
+      throw error
     }
   }
 }

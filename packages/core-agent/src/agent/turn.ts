@@ -41,6 +41,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
     }
     await ensureConversationSemantics(deps)
     const inputSeqs = committedFactSeqs(await promoteTurnInput(deps, { kind: 'input-start', ...(inputId ? { promoted: { type: 'agent/input/promoted', version: 1, inputId } } : {}), turn: { type: 'turn/start' }, message: input, ...(options?.preparation ? { preparation: options.preparation } : {}) }, lifecycle, () => { abort?.throwIfAborted(); (options?.generation ?? direct?.generation)?.assertOpen(); deps.sharedBudget?.signal.throwIfAborted() }))
+    if (input.input?.provenance?.kind === 'human' && input.input.provenance.authority === 'request' && input.input.intent === 'user') deps.requestContext?.promotedHumanRequest()
     let generationOrigin: import('@i-harness/core-session').GenerationOrigin = { kind: 'input', seq: inputSeqs.at(-1)! }
     lifecycle.turnOpen = true
     // M25: host telemetry beside the session-log append (independent stream —
@@ -68,8 +69,15 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
         await handoffBatch(takeOwnership => executeToolCalls(ctx, deps.session, deps.tools, batch, {
           maxParallel, signal: abort, sessionId: deps.sessionId,
           facts: agentFacts(deps).tools, registerFactSource: drain => {
-            const source = deps.registerFactSource!(drain)
-            takeOwnership()
+            let pin: import('./request-context.ts').RequestContextPin | undefined
+            const source = deps.registerFactSource!(async () => {
+              await drain()
+              if (pin) {
+                try { await pin.release(); pin = undefined }
+                catch (error) { source.holdRecovery(); throw error }
+              }
+            })
+            pin = takeOwnership()
             return source
           }, assertFactOpen: deps.assertFactOpen,
           modelGeneration: toolGenerationFactory(deps),

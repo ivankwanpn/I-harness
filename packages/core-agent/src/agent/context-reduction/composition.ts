@@ -12,11 +12,14 @@ import { randomUUID } from 'node:crypto'
 import { projectionFingerprint } from '@i-harness/token-meter'
 import { beginSoftSequence } from './sequence.ts'
 import { reductionPolicyFacts } from './summary-policy.ts'
+import { withInstructionRun } from './instruction-lease.ts'
+import { assertCurrentRepresentable } from '../current-representability.ts'
 
-export function createContextReduction(deps: AgentDeps & AgentConfig, config: CompactionConfig | undefined, capture: () => RequestEvidence, budget: ReturnType<typeof createOwnedBudget>, bindingCurrent: () => boolean, refresh = () => {}, scope: (attempts?: import('@i-harness/context-engine').ReductionAttempts) => import('@i-harness/llm-seam').LLMRequest['requestScope'] = () => undefined): CompactionEngine | undefined {
+export function createContextReduction(deps: AgentDeps & AgentConfig, config: CompactionConfig | undefined, captureCandidate: () => RequestEvidence, budget: ReturnType<typeof createOwnedBudget>, bindingCurrent: () => boolean, refresh = () => {}, scope: (attempts?: import('@i-harness/context-engine').ReductionAttempts) => import('@i-harness/llm-seam').LLMRequest['requestScope'] = () => undefined): CompactionEngine | undefined {
   if (!config) return undefined
   resolveCompactSpec(config)
-  const run = async (options?: ReductionRunOptions, instructions?: string) => {
+  const run = async (options?: ReductionRunOptions, instructions?: string) => withInstructionRun(deps, options?.signal ?? deps.signal, async retain => {
+    const capture = () => { const evidence = captureCandidate(); retain(evidence.instructions); return evidence }
     refresh()
     if (!deps.captureContextReduction) return { compacted: false, shadowedSeqs: [], outcome: 'blocked' as const, publication: 'none' as const, blockedReason: 'publication-unavailable' as const }
     let evidence: RequestEvidence
@@ -38,13 +41,22 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
     let sequence: Awaited<ReturnType<typeof beginSoftSequence>> | undefined
     if (options?.reason === 'auto') {
       const initial = await prepareModelRequest(evidence.model, buildContextRequest(evidence.snapshot, { sessionId: deps.sessionId, signal: options.signal ?? deps.signal, requestScope: scope(options.attempts) }))
-      const probe = budget.probe(initial, evidence, false, policy.reserveRatio, policy), pressure = probe.decision.pressure
+      let probe: ReturnType<typeof budget.probe>
+      try {
+        assertCurrentRepresentable(evidence, initial)
+        probe = budget.probe(initial, evidence, false, policy.reserveRatio, policy)
+        assertCurrentRepresentable(evidence, probe.prepared)
+      } catch (error) {
+        if ((error as { code?: string }).code === 'CONTEXT_CURRENT_UNREPRESENTABLE') return { compacted: false, shadowedSeqs: [], outcome: 'blocked' as const, publication: 'none' as const, blockedReason: 'source-unrepresentable' as const }
+        throw error
+      }
+      const pressure = probe.decision.pressure
       if (!(deps.autoCompactionEnabled?.() ?? resolved.auto) || pressure.kind !== 'known' || !pressure.softNeeded || !automatic.allowed(evidence.snapshot, policy) || !deps.captureSoftReduction || !deps.registerFactSource) {
         const outcome = pressure.kind === 'known' && pressure.targetReady ? 'ready' as const : 'unchanged' as const
         deps.telemetry?.emit({ type: 'compaction/attempt', ts: Date.now(), data: { reason: 'auto', outcome: 'skipped', outcomeState: outcome, publication: 'none', tokensBefore: probe.snapshot.admissionInputTokens, tokensAfter: probe.snapshot.admissionInputTokens, attempts: 0, durationMs: 0, shadowed: 0, pruned: 0 } })
         return { ...skipped, outcome }
       }
-      sequence = await beginSoftSequence(deps, automatic.start(evidence.snapshot, policy, randomUUID()), () => bindingCurrent() && sameRequestCandidate(evidence, capture()))
+      sequence = await beginSoftSequence(deps, automatic.start(evidence.snapshot, policy, randomUUID()), () => (!deps.requestContext || deps.requestContext.current(evidence.instructions)) && bindingCurrent() && sameRequestCandidate(evidence, capture()))
     }
     const ports = createReductionBridge(deps, capture, budget, bindingCurrent, policy, options?.signal ?? deps.signal, refresh, !resolved.summarizationModel || resolved.summarizationModel === evidence.model, scope(options?.attempts), sequence?.start, async () => { await sequence?.settle('canceled') })
     const sourceCapture = ports.capture
@@ -80,11 +92,11 @@ export function createContextReduction(deps: AgentDeps & AgentConfig, config: Co
       tokensBefore: before, tokensAfter: result.compacted ? after : before, attempts: attempts.count - firstCount, durationMs: Date.now() - started, shadowed: result.shadowedSeqs.length, pruned,
       outcomeState: result.outcome, publication: result.publication, ...(result.blockedReason ? { blockedReason: result.blockedReason } : {}) } })
     return result
-  }
+  })
   return {
     maybeCompact: (_session, options) => run({ ...options, reason: 'auto' }),
     compact: (_session, instructions, options) => run({ ...options, reason: options?.reason ?? 'manual' }, instructions),
     recover: (_session, options) => run({ ...options, reason: 'recovery' }),
-    resetWindow: (_session, retainLast) => resetContext(createReductionBridge(deps, capture, budget, bindingCurrent, {}, deps.signal, refresh), retainLast),
+    resetWindow: (_session, retainLast) => withInstructionRun(deps, deps.signal, async retain => resetContext(createReductionBridge(deps, () => { const evidence = captureCandidate(); retain(evidence.instructions); return evidence }, budget, bindingCurrent, {}, deps.signal, refresh), retainLast)),
   }
 }

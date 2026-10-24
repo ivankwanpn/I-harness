@@ -128,7 +128,7 @@ it('keeps an ordinary read-only tool available without process consent', async (
   try {
     await f.client.run({ sessionId: f.sessionId, prompt: 'ordinary read-only control' })
     const result = resultOf((await f.client.history(f.sessionId)).events)[0]
-    expect(result.envelope.retention.value).toEqual({ content: 'ordinary read-only literal 中文' })
+    expect(result.envelope.retention.value).toEqual({ content: 'ordinary read-only literal 中文', instruction_scope: { status: 'queued' } })
     expect(result.envelope.execution).toEqual({ outcome: 'succeeded', dispatch: 'dispatched' })
     expect(existsSync(f.effect)).toBe(false)
   } finally { await f.close() }

@@ -19,7 +19,8 @@ import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
-import { createDurableSessionLoader, createSessionService, type SessionServiceOptions } from "@i-harness/session-executor"
+import { createDurableSessionLoader, createSessionService, createInstructionEnvironment, type SessionServiceOptions } from "@i-harness/session-executor"
+import { createFsWatchService } from '@i-harness/fs-watch'
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
@@ -232,7 +233,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
+  const instructionWatch = createFsWatchService()
+  const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const service: SessionService = createSessionService({
+    instructionEnvironment,
     telemetry: { close() {}, emit(event) {
       if (event.type !== "compaction/attempt" && !(event.type === "provider/context" && event.data.operation === "summary")) return
       const compaction = safeCompactionDiagnostic({ ...event.data, operation: event.type === "compaction/attempt" ? "attempt" : "summary" })
@@ -475,7 +479,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const cleaned = new Set<string>()
   const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], async () => {
     if (!shutdownRequested) await mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
-  })
+  }, { service: instructionWatch })
   let policySync: Promise<void> | undefined
   const syncPolicy = () => {
     if (shutdownRequested || policySync) return
@@ -497,6 +501,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
       shutdownRequested = true
+      instructionEnvironment.dispose()
       const attempt = (async () => {
         const failures: Array<{ name: string; cause: unknown }> = []
         const once = async (name: string, dispose: () => void | Promise<void>) => {
@@ -526,6 +531,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         // A refresh may await creating session assemblies. Fence early, but
         // join only after their owners can settle shutdown dependencies.
         await once("trust watcher", () => trustWatcher.close())
+        if (cleaned.has('session service')) await once('instructions', () => instructionEnvironment.close())
+        if (cleaned.has('trust watcher') && cleaned.has('instructions')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
         if (cleaned.has("session service")) await once("coordinator", () => coordinator.close())

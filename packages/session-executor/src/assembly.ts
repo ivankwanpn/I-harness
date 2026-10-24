@@ -45,8 +45,9 @@ import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import { registerExec, type ExecService } from "@i-harness/exec"
 import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/interaction"
-import { installRuntimeContext } from "@i-harness/runtime-context"
-import { createInstructionsSection } from "@i-harness/instructions"
+import { createRuntimeContext } from "@i-harness/runtime-context"
+import { createInstructionEnvironment, createProjectInstructionEnvironment, type InstructionEnvironment } from './context/instructions/index.ts'
+import { createMainInstructionManager } from './context/instructions/manager.ts'
 import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mode"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
@@ -144,6 +145,8 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  instructionEnvironment?: InstructionEnvironment
+  instructionSettingsPath?: string
   prepareHumanInput?: (text: string) => Promise<string>
   modelActionTimeoutMs?: number
   modelActionMaxAttempts?: number
@@ -349,6 +352,7 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  settleRuntimeContextPublications(): Promise<void>
   reconcileExecutionAuthority(): Promise<void>
   /** An unavailable owner is reported without claiming backend probe results. */
   executionBackendStatus(): Promise<(BackendProbe | UnavailableExecutionAuthorityStatus) & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
@@ -872,6 +876,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
             : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason, decision.sufficientMode) }
         }
   const fsToolsDeps = {
+    observeInstructionTarget: async (target: import('@i-harness/instructions').InstructionTarget, exec: import('@i-harness/core-tools').ToolExec) => exec.session === session
+      ? instructionManager.observe(target) : { status: 'reference-only' as const, reason: 'outside-root' as const },
     readPolicy: { maxOutputBytes: 64000 },
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
@@ -1046,10 +1052,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // via the agent/pre-step hook. Instructions load as one section, the skills
   // catalogue as the next; W11 registers the subagents table below, once the
   // subagent mount has produced the table it reads.
-  const runtimeContext = installRuntimeContext(ctx, session, createRuntimeContextSource(factOwner))
+  const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner))
+  const instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
+  const instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+    available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
   runtimeContext.registerSection(
     "instructions",
-    createInstructionsSection({ workspace: opts.workspace }),
+    instructionManager.text,
   )
   // M6 batch C C1 (spec §3.2): the skills catalogue, registered HERE because
   // this is the first point holding both the runtime-context service and the
@@ -1551,6 +1560,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const compactForAgent = composeCompactConfig(opts.compact, opts.contextWindow, overheadEstimate, d)
 
     const agent = createAgent(ctx, {
+      requestContext: instructionManager,
       ...(managedDocument ? { inputPreparationFactory: createSteerPreparationFactory(session, inbox, opts.prepareHumanInput) } : {}),
       ...(managedDocument ? { generationFactory: (action, dependencies) => createGenerationLifecycle(session, opts.sessionId!, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient: () => currentModel }, dependencies) } : {}),
       modelActionTimeoutMs: opts.modelActionTimeoutMs,
@@ -1594,6 +1604,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
     return {
       reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
       executionBackendStatus: () => executionRuntime.status(),
       ctx,
       tools,
@@ -1784,10 +1795,17 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Join that producer before the owner performs its final store close.
     try { await flushSubagentPersistence?.() }
     catch (error) { processCleanupFailures.push(error); d.warn(`Subagent persistence drain failed: ${String(error)}`) }
+    const producersDrained = processCleanupFailures.length === 0
+    let instructionsClosed = false, runtimeClosed = false, documentClosed = false
+    for (const join of [async () => { await runtimeContext.close(); runtimeClosed = true }, async () => { await managedDocument?.close(); documentClosed = true }, async () => {
+      if (!runtimeClosed) throw Object.assign(new Error('Original runtime publication cleanup remains held'), { code: 'FACT_RECOVERY_REQUIRED' })
+      await instructionManager.close(); instructionsClosed = true
+    },
+      () => opts.instructionEnvironment || !instructionsClosed ? undefined : instructionEnvironment.close(),
+      () => producersDrained && runtimeClosed && instructionsClosed && documentClosed ? resultStore.release() : undefined]) {
+      try { await join() } catch (error) { processCleanupFailures.push(error) }
+    }
     if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
-    await runtimeContext.close()
-    await managedDocument?.close()
-    await resultStore.release()
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —
     // the owner (run.ts / createSessionService) owns their lifecycle.
   }

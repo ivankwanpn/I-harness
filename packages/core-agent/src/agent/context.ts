@@ -57,13 +57,13 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
     const selected = { model: deps.model, bindingIdentity: deps.modelBindingIdentity?.(), executionIdentity: inherited?.executionIdentity ?? deps.executionIdentity?.() ?? deps.model.executionIdentity }
     const binding = metadata()
     if (currentCompact) resolveCompactSpec(currentCompact, binding?.providerId, binding?.modelId)
-    return captureRequestCandidate(deps.session, requestSessionId, selected, {
+    return { ...captureRequestCandidate(deps.session, requestSessionId, selected, {
       systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
       tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(), reasoningEffort: reasoningEffort(),
       maxOutputTokens: deps.sharedBudget ? Math.min((inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens) ?? 2048, 2048) : inherited ? inherited.maxOutputTokens : updated ? outputCap : deps.maxOutputTokens,
       contextWindow: inherited ? inherited.contextWindow : binding ? binding.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow,
       binding, budgetBinding: budgetBinding(),
-    }, projectionRevision())
+    }, projectionRevision()), instructions: deps.requestContext?.capture() }
   }
   const ownedBudget = createOwnedBudget(deps.session, requestSessionId, captureCandidate, execution.observationLifetimeId, execution.peekExpected, () => agentFacts(deps), () => deps.sourceFacts)
   const contextMeter = { invalidate: () => ownedBudget.invalidateCalibration() }
@@ -97,7 +97,7 @@ export function createAgentContext(deps: AgentDeps & AgentConfig, requestSession
   return {
     execution, contextMeter, projectionRevision, ownedBudget, metadata, refreshBinding, bindingIsCurrent, requestSurfaceFingerprint, captureCandidate,
     bindReductionScope(attempts: import('@i-harness/context-engine').ReductionAttempts, scope: import('@i-harness/llm-seam').LLMRequest['requestScope']) { reductionScopes.set(attempts, scope) },
-    readBudget: () => ownedBudget.read(bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step"),
+    readBudget: () => ownedBudget.read(deps.requestContext && !deps.requestContext.current(deps.requestContext.capture()) ? 'Observed instructions unavailable' : bindingIsCurrent() ? undefined : "Inherited model binding changed before the next logical step"),
     get contextWindow() { return inherited ? inherited.contextWindow : metadata() ? metadata()!.contextWindow : budgetCfg?.contextWindow ?? currentCompact?.contextWindow },
     get reasoningEffort() { return reasoningEffort() },
     get compactor() { return compactor },

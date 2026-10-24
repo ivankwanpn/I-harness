@@ -1,4 +1,5 @@
 export { createAgent } from "./agent/create.ts"
+export type { SessionRequestContext, InstructionRequestEvidence, RequestContextPin, SuccessfulInstructionHandoff } from './agent/request-context.ts'
 export type { AgentGenerationAction, AgentGenerationLifecycle, AgentGenerationDependencies, DocumentGenerationFactory } from './agent/generation.ts'
 export { createAgentRegistry } from "./agent/registry.ts"
 export type { AgentBudgetConfig, AgentConfig, AgentDeps, AgentResult, Agent, AgentRegistry, ReasoningEffort, ModelContextBindingDescriptor, AgentInputOptions } from "./agent/types.ts"

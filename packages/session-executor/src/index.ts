@@ -27,6 +27,8 @@ export type { AgentTaskStatus, AgentTaskView } from "@i-harness/subagent"
 export type { ReasoningEffort } from "@i-harness/core-agent"
 
 export { openLiteralInputExecution } from './lifecycle/literal-input.ts'
+export { createInstructionEnvironment } from './context/instructions/index.ts'
+export type { InstructionEnvironment } from './context/instructions/index.ts'
 export { parseResultPageQuery } from '@i-harness/context-output'
 export type { ResultReadScope, ResultReadScopeResolver } from './lifecycle/result-store.ts'
 export type { ResultPageQuery, ResultPageResult } from '@i-harness/context-output'

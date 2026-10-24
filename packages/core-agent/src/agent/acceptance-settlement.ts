@@ -6,6 +6,7 @@ export function createAcceptanceSettlement(deps: Pick<AgentDeps, 'registerFactSo
   if (!deps.registerFactSource) throw Object.assign(new Error('Acceptance requires its original source'), { code: 'FACT_OWNER_UNSUPPORTED' })
   let capture: CapturedActionFact<ProducerFactOutcome> | undefined, latest: ProducerFactOutcome | undefined
   let finishFailure: ((accepted: boolean) => Promise<void>) | undefined, closureAttempted = false
+  const leases = new Set<import('./request-context.ts').RequestContextPin>()
   const source = deps.registerFactSource(drain)
   async function drain() {
     let accepted = false
@@ -30,9 +31,14 @@ export function createAcceptanceSettlement(deps: Pick<AgentDeps, 'registerFactSo
         await deps.flush?.()
       } catch (error) { source.holdRecovery(); throw error }
     }
+    for (const lease of leases) {
+      try { await lease.release(); leases.delete(lease) }
+      catch (error) { source.holdRecovery(); throw error }
+    }
     capture = undefined; latest = undefined; finishFailure = undefined
   }
   return {
+    retainContext(lease: import('./request-context.ts').RequestContextPin) { source.assertHeld(); leases.add(lease) },
     retain(original: CapturedActionFact<ProducerFactOutcome>) {
       source.assertHeld()
       if (capture) throw new Error('Original acceptance was already captured')

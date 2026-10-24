@@ -10,7 +10,7 @@ export async function ensureConversationSemantics(deps: Pick<AgentDeps, 'session
   committedFactSeqs(await agentFacts(deps).agent.lifecycle({ type: "conversation/semantics", version: 1, mode: "accepted-exchange-v1" }))
 }
 /** Assistant and acceptance share one receipt before any effect preparation. */
-export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flush" | 'facts' | 'generationAction' | 'captureModelExchange'>, input: { identity: ModelAttemptIdentity; step: ModelStep; request?: AcceptedRequestAttributionV1; onAccepted?: (event: ExchangeAcceptedEvent) => void; onOutcome?: (outcome: ProducerFactOutcome) => void; onCapture?: (capture: CapturedActionFact<ProducerFactOutcome>) => void; signal?: AbortSignal }): Promise<number> {
+export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flush" | 'facts' | 'generationAction' | 'captureModelExchange'>, input: { identity: ModelAttemptIdentity; step: ModelStep; request?: AcceptedRequestAttributionV1; onAccepted?: (event: ExchangeAcceptedEvent) => void; onOutcome?: (outcome: ProducerFactOutcome) => void; onCapture?: (capture: CapturedActionFact<ProducerFactOutcome>) => void; signal?: AbortSignal }): Promise<import('./request-context.ts').AcceptedExchange> {
   const { identity, step, signal } = input
   if (signal?.aborted) throw new Error("agent aborted")
   if (!step.providerEnded) throw Object.assign(new Error("Model response ended without an explicit completion"), { code: "MODEL_RESPONSE_INCOMPLETE" })
@@ -21,6 +21,7 @@ export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flu
     callSeqs: step.batch.map(call => ({ kind: 'prior', seq: call.eventSeq!, expectedType: 'tool/call' })),
   }
   let seqs: readonly number[]
+  let acceptedOutcome: import('./request-context.ts').AcceptedExchange['outcome']
   try {
     const assistant = { type: 'assistant/message' as const, text: step.stepText,
       ...(step.thinkingBlocks?.length ? { thinkingBlocks: step.thinkingBlocks } : {}), ...(step.providerContinuation ? { providerContinuation: step.providerContinuation } : {}),
@@ -30,6 +31,8 @@ export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flu
     const outcome = await (capture ? capture.admit() : agentFacts(deps).agent.accept(assistant, acceptance, generation))
     input.onOutcome?.(outcome)
     seqs = committedFactSeqs(outcome)
+    if (outcome.kind !== 'committed' && outcome.kind !== 'memory-committed') throw new Error('Acceptance outcome unavailable')
+    acceptedOutcome = outcome
   } catch (error) {
     // The explicit memory API retains its synchronous append-hook contract.
     // An observer may throw after insertion; this is no durable receipt.
@@ -44,5 +47,5 @@ export async function acceptModelExchange(deps: Pick<AgentDeps, "session" | "flu
   input.onAccepted?.(written)
   await deps.flush?.()
   signal?.throwIfAborted()
-  return acceptedSeq
+  return { acceptedSeq, outcome: acceptedOutcome }
 }
