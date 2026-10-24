@@ -2,17 +2,19 @@ import { CURRENT_FORMAT_VERSION, validateSubagentHeader, type SessionEvent } fro
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
+import type { BindingObservations } from './binding-observation.ts'
 import { ensureWritableFormatUnlocked } from "./writable-format.ts"
 import { preflightBatchShape } from "../format/validation.ts"
 import { createConversationIndexes } from "./conversation-index.ts"
 
 export function createMutations(
   backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta" | "read" | "id" | "upgradeSessionFormat">,
-  { lockEnabled, ownerOf, withSessionOperation, ensureOwnership, releaseOwnershipUnlocked }:
-    Pick<Ownership, "lockEnabled" | "ownerOf" | "withSessionOperation" | "ensureOwnership" | "releaseOwnershipUnlocked">,
+  { withSessionOperation, ensureOwnership, borrowOwnership, releaseOwnershipUnlocked }:
+    Pick<Ownership, "withSessionOperation" | "ensureOwnership" | "borrowOwnership" | "releaseOwnershipUnlocked">,
   maxDelayMs: number,
   report: (error: unknown) => void,
   assertManagedMutation: (id: string) => void = () => {},
+  observations?: BindingObservations,
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
@@ -51,8 +53,12 @@ export function createMutations(
     return wb
   }
 
+  async function metadataMutation<T>(id: string, run: () => Promise<T>): Promise<T> {
+    const admission = observations?.beginMutation([id], [])
+    try { await admission?.join(); return await run() } finally { admission?.finish() }
+  }
   return {
-    ensureWritableFormat(sessionId: string) { return withSessionOperation(sessionId, async () => { assertWritable(sessionId); await ensureOwnership(sessionId); await ensureWritableFormatUnlocked(backend, sessionId); conversation.invalidate(sessionId); return { formatVersion: CURRENT_FORMAT_VERSION } }) },
+    ensureWritableFormat(sessionId: string) { observations?.assertOutsideObservedSession(sessionId); return withSessionOperation(sessionId, async () => { assertWritable(sessionId); await ensureOwnership(sessionId); await ensureWritableFormatUnlocked(backend, sessionId); conversation.invalidate(sessionId); return { formatVersion: CURRENT_FORMAT_VERSION } }) },
     assertWritable, assertWritableBootstrap,
     invalidateConversation: (sessionId: string) => conversation.invalidate(sessionId),
     clearConversationIndexes: () => conversation.clear(),
@@ -65,13 +71,13 @@ export function createMutations(
       if (meta?.formatVersion !== undefined && meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("cannot create a downgraded session format")
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       assertWritable(id)
-      return withSessionOperation(id, async () => {
-        assertManagedMutation(id)
+      observations?.assertSessionAdmission(id)
+      return metadataMutation(id, () => withSessionOperation(id, async () => {
+        assertWritable(id)
         // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
         // conflicting writer can never clobber the session; the typed Conflict/
         // Unsupported error propagates fail-closed.
-        const acquired = lockEnabled && !ownerOf(id)
-        await ensureOwnership(id)
+        const acquired = await borrowOwnership(id)
         const fullMeta: SessionMeta = {
           sessionId: id,
           createdAt: new Date().toISOString(),
@@ -81,14 +87,14 @@ export function createMutations(
         try {
           validateSubagentHeader(fullMeta)
           await backend.create(id, fullMeta)
+          acquired.retainLive()
         } catch (err) {
-          if (acquired) {
-            try { await releaseOwnershipUnlocked(id) } catch { /* keep the original error */ }
-          }
+          try { await acquired.release() } catch { /* preserve original error and retained cleanup debt */ }
           throw err
         }
+        await acquired.release()
         return { id }
-      })
+      }))
     },
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
@@ -109,14 +115,14 @@ export function createMutations(
       if (Object.hasOwn(patch, "formatVersion") && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("cannot downgrade session format")
       // Mutating path (M23 discipline, same as append): the rewrite must be
       // serialized with appends/write-behind flushes on the same session.
-      return withSessionOperation(sessionId, async () => {
-        assertManagedMutation(sessionId)
+      return metadataMutation(sessionId, () => withSessionOperation(sessionId, async () => {
+        assertWritable(sessionId)
         await ensureOwnership(sessionId)
         const previous = await ensureWritableFormatUnlocked(backend, sessionId)
         if (Object.hasOwn(patch, "subagentProtocolVersion") && patch.subagentProtocolVersion !== previous.meta?.subagentProtocolVersion) throw new Error("Subagent protocol is immutable creation metadata")
         validateSubagentHeader({ ...previous.meta, ...patch })
         return backend.updateMeta(sessionId, patch)
-      })
+      }))
     },
     async flush(sessionId: string) {
       const wb = writeBehinds.get(sessionId)
@@ -124,16 +130,17 @@ export function createMutations(
     },
     async adoptOwnership(sessionId: string) {
       assertWritable(sessionId)
+      observations?.assertSessionAdmission(sessionId)
       // CLI resume path: after a successful load(), hold the lease until
       // close(). Conflict → SessionLockConflictError (fail-closed).
       const pending = writeBehinds.get(sessionId)
       if (pending) await pending.flush()
       await withSessionOperation(sessionId, async () => {
         assertManagedMutation(sessionId)
-        const acquired = lockEnabled && !ownerOf(sessionId)
-        await ensureOwnership(sessionId)
-        try { await ensureWritableFormatUnlocked(backend, sessionId) }
-        catch (error) { if (acquired) await releaseOwnershipUnlocked(sessionId).catch(() => {}); throw error }
+        observations?.assertSessionAdmission(sessionId)
+        const acquired = await borrowOwnership(sessionId)
+        try { await ensureWritableFormatUnlocked(backend, sessionId); acquired.retainLive() }
+        finally { await acquired.release() }
       })
     },
     async releaseOwnership(sessionId: string) {

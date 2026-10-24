@@ -9,8 +9,8 @@ import { SessionFormatUnsupportedError } from '../format/registry.ts'
 
 export function createLoads(
   backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
-  { withSessionOperation, borrowOwnership, releaseOwnershipUnlocked }:
-    Pick<Ownership, "withSessionOperation" | "borrowOwnership" | "releaseOwnershipUnlocked">,
+  { withSessionOperation, borrowOwnership }:
+    Pick<Ownership, "withSessionOperation" | "borrowOwnership">,
   { assertWritable, pendingWriteBehind, invalidateConversation }: Pick<Mutations, "assertWritable" | "pendingWriteBehind" | "invalidateConversation">,
 ) {
   const read = async (sessionId: string) => {
@@ -44,7 +44,7 @@ export function createLoads(
           await migrate(owned.version, guardIgnorable(owned.events, true), owned.meta)
           repaired = await backend.repair(sessionId)
         } finally {
-          if (borrowed) await releaseOwnershipUnlocked(sessionId)
+          await borrowed.release()
         }
         const { version, events, meta } = repaired
         preflightSessionFormat(version, events, meta)
@@ -131,11 +131,11 @@ export function createLoads(
             }
           }
           await ensureWritableFormatUnlocked(backend, sessionId)
+          acquired.retainLive()
+          await acquired.release()
           return { session: buildSession(repaired.meta, canonical) }
         } catch (error) {
-          if (acquired) {
-            try { await releaseOwnershipUnlocked(sessionId) } catch { /* preserve load error */ }
-          }
+          try { await acquired.release() } catch { /* preserve load error and retained cleanup debt */ }
           throw error
         }
       })

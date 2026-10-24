@@ -52,7 +52,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     if (kind === "document") {
       const digest = /^(?:desktop-navigation-|desktop-session-project-|approval-history-|desktop-goal-|desktop-input-tokens-)([a-f0-9]{64})$/.exec(id)?.[1]
       if (digest) {
-        try { await stat(artifactPath(`desktop-deleted-session-${digest}`, ".tombstone")); throw new Error("Session document is permanently deleted") }
+        try { await stat(artifactPath(`desktop-deleted-session-${digest}`, ".tombstone")); throw Object.assign(new Error("Session document is permanently deleted"), { code: 'SESSION_DELETED' }) }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
       } else {
         const owner = id.startsWith("session-title/") ? id.slice("session-title/".length) : id.startsWith("task-") ? id.slice("task-".length) : id
@@ -60,7 +60,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       }
     }
     try { await stat(tombPath(kind, id)) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw error }
-    throw new Error("Session or document is permanently deleted")
+    throw Object.assign(new Error("Session or document is permanently deleted"), { code: 'SESSION_DELETED' })
   }
   async function confined(path: string) {
     const file = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error })
@@ -316,6 +316,21 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const text = await readFile(docPath(key), "utf-8").catch(() => undefined)
       if (text === undefined) return undefined
       return JSON.parse(text) as unknown
+    },
+    async readDocumentObserved(key) {
+      // An absent child under an unavailable root is not an absent binding.
+      const available = async () => {
+        const directory = await stat(rootPath)
+        if (!directory.isDirectory()) throw new Error('Document storage root is unavailable')
+        await readdir(rootPath)
+        await assertNotDeleted('document', key)
+      }
+      await available()
+      let text: string | undefined
+      try { text = await readFile(docPath(key), 'utf8') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      await available()
+      return text === undefined ? { kind: 'absent' } : { kind: 'present', value: JSON.parse(text) as unknown }
     },
     async deleteOwnedSession(sessionId, manifest) {
       if (!sessionId || /[\\/]/.test(sessionId) || sessionId.includes("..")) throw new Error("Invalid owned session identity")

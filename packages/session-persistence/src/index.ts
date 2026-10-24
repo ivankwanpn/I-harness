@@ -17,8 +17,9 @@ export type { BootstrapTargetPreparationRequest, BootstrapTargetPreparationOutco
 
 export type {
   SessionMeta, SessionModelSelection, PersistenceBackend, SessionArtifactManifest,
-  CoordinatorOptions, SessionCoordinator,
+  CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation,
 } from "./coordinator/types.ts"
+export { SessionBindingObservationError } from './coordinator/types.ts'
 export { SessionFormatUnsupportedError, registerUpgrade, registerEventType } from "./format/registry.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
@@ -43,20 +44,26 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   const maxDelayMs = opts?.maxDelayMs ?? 200
   const ownership = createOwnership(backend, opts)
   let managed: ReturnType<typeof createManagedDocuments>
-  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id))
   const documents = createDocuments(backend, ownership, report)
+  const observations = documents.observations
+  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations)
   const loads = createLoads(backend, ownership, mutations)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
 
+  async function retire<T>(id: string, run: () => Promise<T>) {
+    const admission = observations.beginMutation([id], [])
+    try { await admission.join(); return await run() } finally { admission.finish() }
+  }
   return {
-    bootstrapSemanticTarget: managed.bootstrapSemanticTarget,
-    resumeSemanticTarget: managed.resumeSemanticTarget,
+    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation } : {}),
+    async bootstrapSemanticTarget(request, guards) { observations.assertBootstrapRequest(request); return managed.bootstrapSemanticTarget(request, guards) },
+    async resumeSemanticTarget(invocation, guards, originalPayload) { observations.assertBootstrap(invocation); return managed.resumeSemanticTarget(invocation, guards, originalPayload) },
     inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    openManagedDocument: managed.open,
+    openManagedDocument(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
-    closeManagedDocument: managed.closeOne,
+    closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
     ...(backend.deleteOwnedSession ? { deleteOwnedSession: lifecycle.deleteOwnedSession, onDocumentDeleted: lifecycle.onDocumentDeleted } : {}),
     ensureWritableFormat: mutations.ensureWritableFormat,
@@ -70,19 +77,30 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       mutations.enqueue(sessionId, events)
     },
     async snapshot(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.snapshot(sessionId) },
-    async load(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.load(sessionId) },
-    async loadOwned(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
+    async load(sessionId) { observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.load(sessionId) },
+    async loadOwned(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
     async list() { return backend.list() },
-    async profile(sessionId) { return backend.profile(sessionId) },
+    async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: mutations.updateMeta,
     flush: mutations.flush,
-    async close() { await managed.close(); await lifecycle.close() },
+    async close() {
+      const join = observations.closeAdmission()
+      const errors: unknown[] = []
+      try { await join() } catch (error) { errors.push(error) }
+      if (errors.length === 0) try { await managed.close() } catch (error) { errors.push(error) }
+      // Dependent original leases survive unresolved observation/managed work.
+      if (errors.length === 0) await lifecycle.close()
+      else {
+        try { await lifecycle.close(false) } catch (error) { errors.push(error) }
+        throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
+      }
+    },
     putDocument: documents.putDocument,
     putDocumentStrict: documents.putDocumentStrict,
     getDocument: documents.getDocument,
     ownerOf: ownership.ownerOf,
     adoptOwnership: mutations.adoptOwnership,
-    async releaseOwnership(sessionId) { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) },
+    releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
 }
 

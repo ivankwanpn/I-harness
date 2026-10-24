@@ -37,6 +37,7 @@ export interface SessionModelSelection {
 // concrete backend (e.g. JSONL now, SQLite later) implements it. Capabilities
 // declare what consumers may rely on (F01-5).
 export interface PersistenceBackend {
+  readDocumentObserved?(key: string): Promise<ObservedDocument>
   prepareBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['prepareBootstrapHeader']
   reconcileBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['reconcileBootstrapHeader']
   readBootstrapState?: import('./bootstrap-types.ts').BootstrapBackend['readBootstrapState']
@@ -106,6 +107,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  withSessionBindingObservation?<T>(request: SessionBindingObservationRequest, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T>
   bootstrapSemanticTarget(request: import('./bootstrap-types.ts').BootstrapRequest, guards: import('./bootstrap-types.ts').BootstrapGuards): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrap(invocation: import('./bootstrap-types.ts').BootstrapInvocation): Promise<import('./bootstrap-types.ts').BootstrapInspection>
@@ -160,4 +162,22 @@ export interface SessionCoordinator {
   /** Release one held ownership lease without closing the coordinator. Any
    * in-flight acquire for the same session settles before release. */
   releaseOwnership(sessionId: string): Promise<void>
+}
+
+export type ObservedDocument = { readonly kind: 'absent' } | { readonly kind: 'present'; readonly value: unknown }
+export interface SessionBindingObservationRequest {
+  existingSessionIds: readonly string[]
+  target: import('./bootstrap-types.ts').BootstrapInvocation
+  signal?: AbortSignal
+}
+export interface SessionBindingObservation {
+  assertCurrent(): void
+  metadata(sessionId: string): Readonly<SessionMeta>
+  binding(sessionId: string): ObservedDocument
+}
+export class SessionBindingObservationError extends Error {
+  constructor(readonly reason: 'unsupported'|'invalid'|'conflict'|'revoked'|'deleted'|'unavailable', options?: ErrorOptions) {
+    super(`Session binding observation ${reason}`, options)
+    this.name = 'SessionBindingObservationError'
+  }
 }
