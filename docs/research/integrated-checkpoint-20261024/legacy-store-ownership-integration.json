@@ -1,0 +1,57 @@
+{
+  "head": "2e5a8ae91c049dfde695923c2babdf4adca4d2b0",
+  "receipts": [
+    {
+      "head": "2e5a8ae91c049dfde695923c2babdf4adca4d2b0",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/legacy-store-ownership.test.ts",
+        "test/legacy-cleanup-ownership.test.ts",
+        "test/workspace-mutation.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "environment": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\structure",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\mixed"
+      },
+      "startedAt": "2026-10-24T15:08:48.304Z",
+      "endedAt": "2026-10-24T15:08:57.026Z",
+      "exitCode": 0,
+      "stable": true,
+      "outputSha256": "f82dbb7e12b60c30af04e6dfcd11de40aa6603bbdb64a52b3224a79ae5673bbc",
+      "sourceEntries": 2929
+    },
+    {
+      "head": "2e5a8ae91c049dfde695923c2babdf4adca4d2b0",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "executable": "C:\\Program Files\\nodejs\\node.exe",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/result-store-close.test.ts",
+        "test/result-reader-close.test.ts",
+        "test/mixed-retention-native.test.ts",
+        "test/mixed-retention-quota.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "environment": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\structure",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-legacy-store-ownership\\integrated-2e5a8ae9\\mixed"
+      },
+      "startedAt": "2026-10-24T15:08:57.027Z",
+      "endedAt": "2026-10-24T15:09:09.992Z",
+      "exitCode": 0,
+      "stable": true,
+      "outputSha256": "8a1f704883edd549296384d690679446ed8efe947b294d98d5848a904d7075ac",
+      "sourceEntries": 2929
+    }
+  ],
+  "stable": true
+}
