@@ -1,0 +1,32 @@
+{
+  "head": "1d392d441a0e742edb81df0aa4e53f4da0c64621",
+  "fullBase": "03356998dc337ebc3d53bf63af73dce48498080d",
+  "incrementalBase": "fb049821a0a2f02d8368a754532fab03d678f4ad",
+  "observedAt": "2026-10-24T10:46:06.480Z",
+  "incrementalPaths": 2,
+  "fullPaths": 9,
+  "evidenceFiles": 29,
+  "originalFiles": 99,
+  "phases": [
+    {
+      "name": "green-default-owner",
+      "exit": 0,
+      "files": 247
+    },
+    {
+      "name": "impacted-final",
+      "exit": 0,
+      "files": 247
+    },
+    {
+      "name": "executor-types",
+      "exit": 0,
+      "files": 247
+    }
+  ],
+  "failures": [],
+  "limits": [
+    "Source and raw receipts only; no new runtime/build/platform qualification.",
+    "Initial selected phase qualification remains in root-audit-qualified.json."
+  ]
+}

@@ -1,0 +1,9 @@
+# Mixed native retention qualification handoff
+
+Root changes exactly three rejection patterns in packages/session-executor/test/mixed-retention-native.test.ts, from generic unauthorized wording to the actual existing archived-source refusal. BASE58f550e7; HEAD is the immediate scoped test commit recorded in Git. No product/helper/dependency/version changes. Other project/legacy permission denials remain unchanged.
+
+The old control stopped before its later native lifecycle assertions. The original failure is retained in the result-store-close packet's sealed baseline-mixed-native evidence. This root packet preserves successive newly reached stale assertions at80 and84 in03/07 logs. After correcting all three archived-state expectations,11-native-complete.txt records exit0, the complete single native scenario passes. Four mixed quota controls passed in03 and are reused because only the native test's string predicates changed afterward. No typecheck claim is made for a string-only test correction.
+
+Source manifests before/after each run and explicit isolated environment paths are under evidence/.13-root-binding.json confirms final source stability and actual final lifecycle, missing-index and corrupt-index records. The native fixture verifies saved overrides, real SQLite/index recovery, TTL/pruning, archive/project denials, scope/global clear, selective document deletion, retained exact bytes and unchanged producer counts. Test success covers this controlled Windows scenario, not all platforms or whole release.
+
+No prior receipt was overwritten. Final native fixture files remain at the path recorded in09-context.json. A fresh independent review precedes ledger acceptance; the scenario will also be included in the combined integration gate when the separately reviewed result-close changes land.
