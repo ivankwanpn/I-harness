@@ -371,10 +371,26 @@ impl PreparedIo {
                             break;
                         };
                         let n = match file.read(&mut buf) {
-                            Ok(0) => break,
-                            Ok(n) => n,
-                            Err(e) if e.raw_os_error() == Some(ERROR_BROKEN_PIPE as i32) => break,
-                            Err(e) => return Err(Error::io("read workload output", e)),
+                            Ok(0) => {
+                                operation.returned(Some(0));
+                                break;
+                            }
+                            Ok(n) => {
+                                operation.returned(Some(0));
+                                n
+                            }
+                            Err(e) => {
+                                let native = e.raw_os_error().map(|code| code as u32);
+                                let owned_stop = operation.returned(native);
+                                if native == Some(ERROR_BROKEN_PIPE)
+                                    || (native == Some(ERROR_OPERATION_ABORTED)
+                                        && owned_stop
+                                        && discard.load(Ordering::Acquire))
+                                {
+                                    break;
+                                }
+                                return Err(Error::io("read workload output", e));
+                            }
                         };
                         drop(operation);
                         let frame = Frame {
