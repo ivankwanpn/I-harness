@@ -28,6 +28,8 @@
 - L0-04: retain the F0 release-debt rule locally. Failed release with raw `held=false` remains unresolved even if a later release is a no-op. A still-held original lease can be explicitly retried. Do not modify low-level fs-lock or call an uncertain release successful.
 - L0-05: capture/grant prepare callbacks outside the local serial and shared quota turn. Commit rechecks signal, store identity, lifetime, captured full ref equality/expiry and actual current quota. Generic async authorization remains its existing prepared decision, not a new perpetual permission; later F1 observed policy is a separate requirement.
 - L0-06: preserve original work error and cleanup error together. Join the same close attempt, skip only confirmed stages, attempt independent writer cleanup, and retain dependent shared-owner resources until their users settle. No new store around unresolved cleanup.
+- L0-07: `cold-lookup-integrity.test.ts` may move its actual deletion-listener call out of the injected rename callback's async context: hold rename, call the real listener from the outer test, then release/join both. Preserve staged/cold refusal and canonical pin/body assertions. Same-owner recursive mutation must still have an explicit rejection control. Attach failure handlers before releasing barriers; preserve the original failed run and warning. Tiny-budget read/search must continue to reject before any lock/root/index filesystem effect.
+- L0-08: the executor mixed-quota fixture must issue its original legacy capture while the real managed write is held, verify legacy admission has not begun, then release/join that same write and await the same capture. Its former `await legacy` before releasing the quota-owning write is incompatible with intentional serialization. Preserve the bounded noncompletion evidence, final physical bytes, retention/protected and producer-count assertions; do not replace the request after releasing the barrier. This authorizes only that integration test's scheduling correction, no executor product changes.
 
 ### Task 1: Own the existing legacy database and shared workspace mutations
 
@@ -37,6 +39,7 @@
 - Modify `packages/context-output/src/service.ts`, `store.ts`, `legacy/capture.ts` and `artifact/ownership.ts` for actual consumers.
 - Create `packages/context-output/test/legacy-store-ownership.test.ts` and controlled process helper if needed.
 - Modify only necessary assertions/awaits in `test/close-ownership.test.ts` and `test/legacy-workspace-timing.test.ts`; preserve their behavioral controls. Other test additions may reside in cohesive ownership/callback files.
+- `test/cold-lookup-integrity.test.ts` has the narrow outer-context barrier adjustment in L0-07; its original result/retention assertions remain binding.
 - Existing executor tests are integration consumers, not product rewrite targets. No assembly, fork, SDK, Desktop or native-process product changes.
 
 **Private interfaces:**
