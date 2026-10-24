@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
 import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/core-session'
 import { bootstrapFields, captureBootstrapInvocation, captureBootstrapRequest } from './bootstrap-header.ts'
-import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards } from './bootstrap-types.ts'
+import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards, BootstrapOutcome } from './bootstrap-types.ts'
 import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.ts'
 import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
@@ -15,7 +15,7 @@ const isAborted = (signal?: AbortSignal): boolean => signal === undefined ? fals
 
 /** Private Documents-owned scope admission. No project policy is interpreted here. */
 export function createBindingObservations(
-  backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'>>,
+  backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'|'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'confirmBootstrapFrames'|'appendOwnedBatch'|'reconcileOwnedBatch'>>,
   ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'>>,
 ) {
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
@@ -36,7 +36,10 @@ export function createBindingObservations(
   }
   function assertOutsideObservedSession(id: string) { refuseSelf([id], []) }
   function assertOutsideObservedDocument(key: string) { refuseSelf([], [key]) }
-  async function bootstrapMutation<T>(original: BootstrapInvocation, run: () => Promise<T>): Promise<T> {
+  // Preserve the original owner's unsupported-before-capture decision.
+  const bootstrapSupported = () => ownership.lockEnabled && !!backend.prepareBootstrapHeader && !!backend.reconcileBootstrapHeader
+    && !!backend.readBootstrapState && !!backend.confirmBootstrapFrames && !!backend.appendOwnedBatch && !!backend.reconcileOwnedBatch
+  async function bootstrapMutation(original: BootstrapInvocation, run: () => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
     if (deletedIds.has(original.targetSessionId)) throw new Failure('deleted')
     if (retiringIds.has(original.targetSessionId)) throw new Failure('conflict')
     const allowed: Scope[] = []
@@ -59,16 +62,18 @@ export function createBindingObservations(
     // absence, while Stop and the other guards retain their original receiver.
     return { get signal() { return guards.signal }, assertCurrent() { guards.assertCurrent() }, get dependencies() { return guards.dependencies }, targetPreparation }
   }
-  async function withBootstrapRequest<T>(request: BootstrapRequest, guards: BootstrapGuards, run: (captured: BootstrapRequest, capturedGuards: BootstrapGuards) => Promise<T>): Promise<T> {
+  async function withBootstrapRequest(request: BootstrapRequest, guards: BootstrapGuards, run: (captured: BootstrapRequest, capturedGuards: BootstrapGuards) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+    if (!bootstrapSupported()) return { kind: 'not-issued', reason: 'unsupported' }
     let captured: BootstrapRequest, capturedGuards: BootstrapGuards
     try { captured = captureBootstrapRequest(request); capturedGuards = captureBootstrapGuards(guards) }
-    catch { return run(request, guards) } // Original owner refuses malformed data without invoking getters.
+    catch { return { kind: 'refused', reason: 'manifest-invalid' } } // Never retry stateful caller inspection outside admission.
     return bootstrapMutation(captured.invocation, () => run(captured, capturedGuards))
   }
-  async function withBootstrapResume<T>(invocation: BootstrapInvocation, guards: BootstrapGuards, originalPayload: BootstrapRequest | undefined, run: (captured: BootstrapInvocation, capturedGuards: BootstrapGuards, payload?: BootstrapRequest) => Promise<T>): Promise<T> {
+  async function withBootstrapResume(invocation: BootstrapInvocation, guards: BootstrapGuards, originalPayload: BootstrapRequest | undefined, run: (captured: BootstrapInvocation, capturedGuards: BootstrapGuards, payload?: BootstrapRequest) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+    if (!bootstrapSupported()) return { kind: 'not-issued', reason: 'unsupported' }
     let captured: BootstrapInvocation, payload: BootstrapRequest | undefined, capturedGuards: BootstrapGuards
     try { captured = captureBootstrapInvocation(invocation); payload = originalPayload === undefined ? undefined : captureBootstrapRequest(originalPayload); capturedGuards = captureBootstrapGuards(guards) }
-    catch { return run(invocation, guards, originalPayload) }
+    catch { return { kind: 'refused', reason: 'manifest-invalid' } }
     return bootstrapMutation(captured, () => run(captured, capturedGuards, payload))
   }
   function beginMutation(ids: readonly string[], keys: readonly string[], deleted = false) {

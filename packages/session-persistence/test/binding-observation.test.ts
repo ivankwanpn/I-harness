@@ -573,3 +573,56 @@ it('fix I3 real active abort still revokes with shadowed listener methods and ab
   expect(reads).toBe(0); expect(c.ownerOf('target')).toBe(false)
   await c.updateMeta('source', { title: 'after abort' }); await c.close()
 })
+it.each([
+  ['bootstrap', 'descriptor'], ['resume', 'descriptor'], ['bootstrap', 'has'], ['resume', 'has'],
+] as const)('fix R2 %s capture refusal is terminal after one-shot guard %s failure', async (mode, trap) => {
+  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
+  const before = await readFile(join(f.root, 'ancestor.jsonl'))
+  const backendCalls: { mock: { calls: unknown[][] } }[] = [vi.spyOn(f.backend, 'readBootstrapState'), vi.spyOn(f.backend, 'prepareBootstrapHeader'), vi.spyOn(f.backend, 'reconcileBootstrapHeader'), vi.spyOn(f.backend, 'appendOwnedBatch'), vi.spyOn(f.backend, 'confirmBootstrapFrames')]
+  const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
+  const observing = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { entered.resolve(observed); await leave.promise }).then(() => 'completed', error => error)
+  const observed = await entered.promise
+  let inspections = 0
+  const guards = new Proxy(originalGuards, {
+    getOwnPropertyDescriptor(target, property) {
+      if (trap === 'descriptor' && property === 'targetPreparation' && inspections++ === 0) throw new Error('one-shot descriptor inspection')
+      return Reflect.getOwnPropertyDescriptor(target, property)
+    },
+    has(target, property) {
+      if (trap === 'has' && property === 'targetPreparation' && inspections++ === 0) throw new Error('one-shot has inspection')
+      return Reflect.has(target, property)
+    },
+  })
+  const pending = mode === 'bootstrap' ? c.bootstrapSemanticTarget(original, guards) : c.resumeSemanticTarget(original.invocation, guards, original)
+  try {
+    const result = await Promise.race([pending, new Promise(resolve => setTimeout(() => resolve('waited-on-observation'), 200))])
+    const after = await readFile(join(f.root, 'ancestor.jsonl'))
+    observed.assertCurrent()
+    console.info(JSON.stringify({ control: 'R2 terminal capture', mode, trap, inspections, backendCalls: backendCalls.map(call => call.mock.calls.length), headerUnchanged: after.equals(before) }))
+    expect(result).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+    expect(inspections).toBe(1)
+    for (const call of backendCalls) expect(call).not.toHaveBeenCalled()
+    expect(after).toEqual(before)
+    expect((await f.backend.profile('ancestor')).meta.parentSession).toBe('old-parent')
+  } finally { leave.resolve(); await observing; await pending }
+  expect(await observing).toBe('completed')
+  await c.updateMeta('ancestor', { title: 'mutation after terminal refusal' })
+})
+it.each(['bootstrap', 'resume'] as const)('fix R2 unsupported %s refuses before inspecting caller guards', async mode => {
+  const f = await fixture(), original = await existingAncestor(f)
+  const unsupported = createSessionCoordinator({ ...f.backend, prepareBootstrapHeader: undefined }, { lock: { enabled: true } }); coordinators.push(unsupported)
+  let inspections = 0
+  const guards = new Proxy(originalGuards, { getOwnPropertyDescriptor(target, property) { if (property === 'targetPreparation') { inspections++; throw new Error('unsupported must not inspect') }; return Reflect.getOwnPropertyDescriptor(target, property) } })
+  const outcome = mode === 'bootstrap' ? await unsupported.bootstrapSemanticTarget(original, guards) : await unsupported.resumeSemanticTarget(original.invocation, guards, original)
+  expect(outcome).toEqual({ kind: 'not-issued', reason: 'unsupported' }); expect(inspections).toBe(0)
+})
+it('fix R2 malformed request invocation and resume payload retain closed refusal without accessors', async () => {
+  const { coordinator: c } = await fixture()
+  let reads = 0
+  const invalidRequest = Object.defineProperty({}, 'invocation', { enumerable: true, get() { reads++; return invocation } })
+  const invalidInvocation = Object.defineProperty({ ...invocation }, 'createdAt', { enumerable: true, get() { reads++; return invocation.createdAt } })
+  expect(await c.bootstrapSemanticTarget(invalidRequest as BootstrapRequest, originalGuards)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+  expect(await c.resumeSemanticTarget(invalidInvocation, originalGuards)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+  expect(await c.resumeSemanticTarget(invocation, originalGuards, invalidRequest as BootstrapRequest)).toEqual({ kind: 'refused', reason: 'manifest-invalid' })
+  expect(reads).toBe(0)
+})
