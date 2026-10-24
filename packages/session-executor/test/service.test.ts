@@ -712,31 +712,72 @@ describe("createSessionService", () => {
     // turn/end — so the call sat in the scrollback with no answer ("it hung").
     // fs tools now RETURN the failure; the model reads it and carries on.
     const workspace = mkdtempSync(join(tmpdir(), "ih-fs-fail-"))
-    const service: SessionService = createSessionService({
-      workspace, approveAll: true,
-      modelPolicy: "test-mock",
-      mockScript: [
-        { role: "assistant", toolCalls: [{ name: "read", args: { path: "missing.txt" } }] },
-        { role: "assistant", text: "recovered" },
-      ],
+    const callId = "missing-file-read"
+    const requests: LLMRequest[] = []
+    const script = createMockClient([
+      { role: "assistant", toolCalls: [{ id: callId, name: "read", args: { path: "missing.txt" } }] },
+      { role: "assistant", text: "recovered" },
+    ])
+    const model = controlledModel(async function* (request) {
+      requests.push(request)
+      yield* script.stream(request)
     })
-    const assembly = await service.assemblyFor("s1")
-    await service.submit("s1", "read a missing file", new AbortController().signal)
+    const service: SessionService = createSessionService({
+      workspace, approveAll: true, model,
+    })
+    try {
+      const assembly = await service.assemblyFor("s1")
+      const read = vi.spyOn(assembly.tools.get("read")!, "execute")
+      await service.submit("s1", "read a missing file", new AbortController().signal)
 
-    const types = assembly.session.events.map((ev) => ev.type)
-    expect(types).toContain("tool/call")
-    expect(types).toContain("tool/result")
-    expect(types).toContain("turn/end") // the turn was NOT left dangling
-    const result = assembly.session.events.find((ev) => ev.type === "tool/result") as { output?: { error?: string; code?: string } }
-    expect(result.output?.error).toBeTypeOf("string")
-    expect(result.output?.code).toBe("ENOENT")
-    // model-visible: the failure text rides the tool result
-    const messages = deriveMessages(assembly.session)
-    const toolMsg = messages.find((m) => m.role === "tool")
-    expect(String(toolMsg?.content)).toContain("ENOENT")
-    // and the turn's assistant answer landed
-    expect(messages.some((m) => m.role === "assistant" && String(m.content).includes("recovered"))).toBe(true)
-    rmWorkspaceSync(workspace)
+      const calls = assembly.session.events.filter((ev) => ev.type === "tool/call")
+      const dispatches = assembly.session.events.filter((ev) => ev.type === "tool/dispatch")
+      const results = assembly.session.events.filter((ev) => ev.type === "tool/result")
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({ callId, name: "read", args: { path: "missing.txt" } })
+      expect(dispatches).toHaveLength(1)
+      expect(dispatches[0]).toMatchObject({ callId, eventSeq: calls[0]!.seq })
+      expect(read).toHaveBeenCalledTimes(1)
+      expect(results).toHaveLength(1)
+      const result = results[0]!
+      expect(result).toMatchObject({ callId, name: "read" })
+      const envelope = result.envelope!
+      expect(envelope.version).toBe(1)
+      // The body returned normally; its domain failure remains in retained
+      // data. ResultExecution records dispatch/return, not payload heuristics.
+      expect(envelope.execution).toEqual({ outcome: "succeeded", dispatch: "dispatched" })
+      expect(envelope.retention.kind).toBe("inline")
+      if (envelope.retention.kind !== "inline") throw new Error("Missing inline filesystem failure")
+      const failure = envelope.retention.value
+      expect(failure).toMatchObject({ error: expect.stringContaining("missing.txt"), code: "ENOENT" })
+
+      // Inspect the request actually issued after the failed read, before the
+      // recovery script answers; the archive alone cannot prove visibility.
+      expect(requests).toHaveLength(2)
+      const secondRequest = requests[1]!
+      const actualToolMessages = secondRequest.messages.filter((message) => message.role === "tool")
+      expect(actualToolMessages).toHaveLength(1)
+      expect(actualToolMessages[0]).toMatchObject({ toolCallId: callId })
+      expect(secondRequest.messages.some((message) => message.role === "tool" && JSON.stringify(message.content).includes("ENOENT"))).toBe(true)
+      const actualContent = actualToolMessages[0]!.content
+      const actualText = typeof actualContent === "string" ? actualContent : actualContent.map((part) => {
+        expect(part.type).toBe("text")
+        return part.type === "text" ? part.text : ""
+      }).join("")
+      expect(JSON.parse(actualText)).toEqual(failure)
+
+      const messages = deriveMessages(assembly.session)
+      const toolMessages = messages.filter((message) => message.role === "tool")
+      expect(toolMessages).toHaveLength(1)
+      expect(toolMessages[0]).toMatchObject({ toolCallId: callId, content: actualContent })
+      expect(JSON.stringify(toolMessages[0]!.content)).toContain("ENOENT")
+      expect(messages.filter((message) => message.role === "assistant").at(-1)).toMatchObject({ content: "recovered" })
+      expect(assembly.session.events.filter((ev) => ev.type === "turn/end")).toHaveLength(1)
+      expect(assembly.session.events.at(-1)?.type).toBe("turn/end")
+    } finally {
+      await service.close()
+      rmWorkspaceSync(workspace)
+    }
   }, 60_000)
 
   it("settles a queued successor after a failed predecessor without an unhandled rejection", async () => {
@@ -850,9 +891,10 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 
 /** Real SessionService whose injected model waits on `gate` before yielding
  * end — the running turn blocks until the test releases it. */
-function serviceWithBlockingModel(gate: { promise: Promise<void> }): SessionService {
+function serviceWithBlockingModel(gate: { promise: Promise<void> }, requests?: LLMRequest[]): SessionService {
   const model: ModelClient = { prepare: prepareTextFixture,
-    async *stream() {
+    async *stream(request) {
+      requests?.push(request)
       await gate.promise
       yield { type: "text/chunk", text: "ok" }
       yield { type: "end" }
@@ -1219,21 +1261,51 @@ describe("process cleanup acknowledgement", () => {
 describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {
   it("closeSession() with a submit in flight settles the binding promise, clears queue rows, and never crashes", async () => {
     const gate = deferred<void>()
-    const service = serviceWithBlockingModel(gate)
+    const requests: LLMRequest[] = []
+    const service = serviceWithBlockingModel(gate, requests)
     const unhandled: unknown[] = []
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
     process.on("unhandledRejection", onUnhandled)
     try {
-      const submit = service.submit("s1", "in flight", new AbortController().signal)
+      // Own the rejection immediately, including when close wins before the
+      // queue barrier has reached model execution.
+      const submit = service.submit("s1", "in flight", new AbortController().signal).then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      )
       await waitFor(() => service.queue("s1").length === 1)
+      const requestsAtClose = requests.length
+      const assemblyAtClose = service.liveAssembly("s1")
+      const eventsAtClose = assemblyAtClose ? [...assemblyAtClose.session.events] : []
       const closing = service.closeSession("s1")
       gate.resolve()
-      await closing
-      await expect(submit).rejects.toThrow('agent aborted')
+      await expect(closing).resolves.toBeUndefined()
+      const outcome = await submit
+      expect(outcome.status).toBe("rejected")
+      if (outcome.status !== "rejected") throw new Error("Closed submit did not cancel")
+      expect(outcome.error).toBeInstanceOf(DOMException)
+      expect(outcome.error).toMatchObject({ name: "AbortError", code: 20 })
+      for (const request of requests) {
+        expect(request.signal?.aborted).toBe(true)
+        expect(request.signal?.reason).toBe(outcome.error)
+      }
       expect(service.queue("s1")).toEqual([])
       expect(service.queueState("s1")).toEqual({ running: false, queued: 0 })
       expect(service.hasAssembly("s1")).toBe(false)
+      expect(service.liveAssembly("s1")).toBeUndefined()
       await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(requests).toHaveLength(requestsAtClose)
+      if (assemblyAtClose) {
+        // Cancellation still closes the open step/turn. It cannot admit any
+        // new model, assistant, or tool work beyond those terminal records.
+        expect(assemblyAtClose.session.events.slice(0, eventsAtClose.length)).toEqual(eventsAtClose)
+        const stepOpen = eventsAtClose.filter((event) => event.type === "step/start").length > eventsAtClose.filter((event) => event.type === "step/end").length
+        const turnOpen = eventsAtClose.filter((event) => event.type === "turn/start").length > eventsAtClose.filter((event) => event.type === "turn/end").length
+        expect(assemblyAtClose.session.events.slice(eventsAtClose.length).map((event) => event.type)).toEqual([
+          ...(stepOpen ? ["step/failed", "step/end"] : []),
+          ...(turnOpen ? ["turn/end"] : []),
+        ])
+      }
       expect(unhandled).toEqual([])
     } finally {
       gate.resolve()
