@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite'
 import { checkAbort, lexicalChunks } from './bytes.ts'
 import type { ContextCapture, ContextResultRef } from './types.ts'
 import { walkCandidates } from './search-index.ts'
+import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
+import { LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
 export function digest(value: string|Buffer): string { return createHash('sha256').update(value).digest('hex') }
@@ -36,15 +38,38 @@ export class ContextStore {
   private owners = new Map<string, Set<string>>()
   private pending = new Set<string>()
   readonly directory: string
+  private readonly root: string
+  private lifetime?: LeaseRetirement
+  private acquiring?: Promise<void>
+  private retiring = false
+  private dbClosed = false
+  private quotaDisposed = false
+  private closeFlight?: Promise<void>
 
-  constructor(root: string, readonly workspaceId: string) {
+  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner) {
+    this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
+  }
+  async acquireLifetime(signal?: AbortSignal): Promise<void> {
+    if (!this.owner || this.retiring) throw new Error('Legacy store ownership unavailable')
+    checkAbort(signal)
+    if (!this.acquiring) this.acquiring = (async () => {
+      const lease = await acquireSessionLock({ lockPath: lockPathFor(this.root, `context-output-legacy:${this.workspaceId}`) })
+      this.lifetime = new LeaseRetirement(lease)
+    })()
+    await this.acquiring
+    checkAbort(signal)
+  }
+  private assertTurn(turn: WorkspaceMutationTurn): void {
+    if (!this.owner || !this.lifetime?.lease.held || this.retiring) throw new Error('Legacy store lifetime unavailable')
+    this.owner.assertTurn(turn)
   }
   private path(kind: 'artifacts'|'owners'|'blobs', id: string): string {
     if (!REF_ID.test(id)) throw new Error('Unknown context reference')
     return resolve(this.directory, kind, id + (kind === 'blobs' ? '.txt' : '.json'))
   }
-  async open(maxDiskBytes: number, signal?: AbortSignal): Promise<void> {
+  async open(turn: WorkspaceMutationTurn, maxDiskBytes: number, signal?: AbortSignal): Promise<void> {
+    this.assertTurn(turn)
     checkAbort(signal)
     // Shared admission for capture/read/search. A tiny query budget must not
     // create even the empty SQLite schema, and retained storage must be checked
@@ -86,17 +111,17 @@ export class ContextStore {
           || referenceId(ref.workspaceId, ref.sessionId, ref.callId, ref.revision) !== id) throw new Error('Invalid context artifact identity')
         const owners = JSON.parse(await readFile(this.path('owners', id), 'utf8')) as unknown
         if (!Array.isArray(owners) || owners.some((owner) => typeof owner !== 'string' || !owner)) throw new Error('Invalid context owner ledger')
-        if (owners.length === 0) { await this.removeFiles(id); continue }
+        if (owners.length === 0) { await this.removeFiles(turn, id); continue }
         const bytes = await readFile(this.path('blobs', id))
         if (bytes.length !== ref.bytes || digest(bytes) !== ref.revision) throw new Error('Context blob integrity failure')
-        this.index(artifact, new Set(owners), bytes)
+        this.index(turn, artifact, new Set(owners), bytes)
       }
       this.db.exec('VACUUM')
       if (await this.diskBytes() > maxDiskBytes) throw new Error('Context disk quota exceeded while rebuilding index')
       checkAbort(signal)
     } catch (error) {
-      if (this.db.isOpen) this.db.close()
-      await rm(database, { force: true })
+      // The service retains this exact candidate and closes it through cleanup.
+      // A DB or lease disposal error must not replace the original open error.
       if (error instanceof Error && /database or disk is full/i.test(error.message)) throw new Error('Context disk quota exceeded while rebuilding index')
       throw error
     }
@@ -111,7 +136,8 @@ export class ContextStore {
       CREATE INDEX IF NOT EXISTS chunk_rows_ref ON chunk_rows(ref_id);
       CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(ref_id UNINDEXED, offset UNINDEXED, text, tokenize='trigram');`)
   }
-  private index(artifact: Artifact, owners: Set<string>, bytes: Buffer): void {
+  private index(turn: WorkspaceMutationTurn, artifact: Artifact, owners: Set<string>, bytes: Buffer): void {
+    this.assertTurn(turn)
     const id = artifact.ref.id
     this.db.exec('BEGIN IMMEDIATE')
     try {
@@ -159,7 +185,8 @@ export class ContextStore {
     }
     return bytes
   }
-  async configureDiskBudget(maxDiskBytes: number): Promise<void> {
+  async configureDiskBudget(turn: WorkspaceMutationTurn, maxDiskBytes: number): Promise<void> {
+    this.assertTurn(turn)
     const physicalBytes = await this.diskBytes()
     if (physicalBytes > maxDiskBytes) throw new Error('Context disk budget is smaller than retained storage; clear results first')
     const indexBytes = (await stat(resolve(this.directory, 'index.sqlite'))).size
@@ -170,14 +197,15 @@ export class ContextStore {
     const maxPages = Math.floor((maxDiskBytes - physicalBytes + indexBytes) / pageSize)
     this.db.exec(`PRAGMA max_page_count=${maxPages}`)
   }
-  async put(artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
+  async put(turn: WorkspaceMutationTurn, artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
+    this.assertTurn(turn)
     const id = artifact.ref.id
     const existing = this.get(id)
     if (existing) {
       const facts = (ref: ContextResultRef) => JSON.stringify([ref.label, ref.originalBytes, ref.complete,
         ref.source ? [ref.source.sourceId, ref.source.path, ref.source.revision, ref.source.readonly] : null])
       if (facts(existing) !== facts(artifact.ref)) throw new Error('Conflicting immutable context capture metadata')
-      if (!this.owns(id, artifact.ref.sessionId)) await this.addOwners([id], artifact.ref.sessionId, maxDiskBytes, signal)
+      if (!this.owns(id, artifact.ref.sessionId)) await this.addOwners(turn, [id], artifact.ref.sessionId, maxDiskBytes, signal)
       return existing
     }
     checkAbort(signal)
@@ -189,20 +217,21 @@ export class ContextStore {
       checkAbort(signal)
       await atomicJson(this.path('artifacts', id), artifact)
       published = true
-      this.index(artifact, new Set([artifact.ref.sessionId]), bytes)
+      this.index(turn, artifact, new Set([artifact.ref.sessionId]), bytes)
       if (await this.diskBytes() > maxDiskBytes || signal.aborted) {
-        await this.remove(id)
+        await this.remove(turn, id)
         checkAbort(signal)
         return undefined
       }
       return structuredClone(artifact.ref)
     } catch (error) {
-      if (published && this.artifacts.has(id)) await this.remove(id)
-      else await this.removeFiles(id)
+      if (published && this.artifacts.has(id)) await this.remove(turn, id)
+      else await this.removeFiles(turn, id)
       throw error
     } finally { this.pending.delete(id) }
   }
-  async addOwners(ids: string[], target: string, maxDiskBytes: number, signal: AbortSignal): Promise<void> {
+  async addOwners(turn: WorkspaceMutationTurn, ids: string[], target: string, maxDiskBytes: number, signal: AbortSignal): Promise<void> {
+    this.assertTurn(turn)
     // Validate quota before granting. The JSON ledger is durable authority;
     // SQLite's owner rows are a derived acceleration and can be regenerated.
     const extra = ids.reduce((sum, id) => sum + (this.owns(id, target) ? 0 : Buffer.byteLength(JSON.stringify(target)) + 1), 0)
@@ -249,13 +278,14 @@ export class ContextStore {
       throw failure
     }
   }
-  async clear(sessionId?: string): Promise<void> {
+  async clear(turn: WorkspaceMutationTurn, sessionId?: string): Promise<void> {
+    this.assertTurn(turn)
     for (const [id, artifact] of this.artifacts) {
-      if (sessionId === undefined || artifact.ref.expiresAt <= Date.now()) await this.remove(id)
+      if (sessionId === undefined || artifact.ref.expiresAt <= Date.now()) await this.remove(turn, id)
       else if (this.owns(id, sessionId)) {
         const owners = new Set(this.owners.get(id))
         owners.delete(sessionId)
-        if (owners.size === 0) await this.remove(id)
+        if (owners.size === 0) await this.remove(turn, id)
         else {
           await atomicJson(this.path('owners', id), [...owners])
           this.owners.set(id, owners)
@@ -265,21 +295,37 @@ export class ContextStore {
     }
     this.db.exec('VACUUM')
   }
-  async prune(): Promise<void> {
-    for (const [id, artifact] of this.artifacts) if (artifact.ref.expiresAt <= Date.now()) await this.remove(id)
+  async prune(turn: WorkspaceMutationTurn): Promise<void> {
+    this.assertTurn(turn)
+    for (const [id, artifact] of this.artifacts) if (artifact.ref.expiresAt <= Date.now()) await this.remove(turn, id)
   }
-  private async removeFiles(id: string): Promise<void> {
+  private async removeFiles(turn: WorkspaceMutationTurn, id: string): Promise<void> {
+    this.assertTurn(turn)
     for (const kind of ['artifacts', 'blobs', 'owners'] as const) await rm(this.path(kind, id), { force: true })
   }
-  private async remove(id: string): Promise<void> {
+  private async remove(turn: WorkspaceMutationTurn, id: string): Promise<void> {
+    this.assertTurn(turn)
     // Empty ledger is a tombstone: restart can never resurrect revoked owners.
     await atomicJson(this.path('owners', id), [])
     this.db.prepare('DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunk_rows WHERE ref_id=?)').run(id)
     this.db.prepare('DELETE FROM refs WHERE id=?').run(id)
     this.artifacts.delete(id)
     this.owners.delete(id)
-    await this.removeFiles(id)
+    await this.removeFiles(turn, id)
     this.db.exec('VACUUM')
   }
-  close(): void { this.db.close() }
+  close(): Promise<void> {
+    this.retiring = true
+    if (!this.closeFlight) this.closeFlight = (async () => {
+      await this.acquiring?.catch(() => {})
+      if ((this.db || this.lifetime) && !this.quotaDisposed) {
+        if (!this.owner) throw new Error('Legacy store ownership unavailable')
+        await this.owner.cleanup(async () => { if (this.db && !this.dbClosed) { this.db.close(); this.dbClosed = true } })
+        this.quotaDisposed = true
+      }
+      // cleanup resolves only after the quota turn has confirmed retirement.
+      await this.lifetime?.close()
+    })().catch(failure => { this.closeFlight = undefined; throw failure })
+    return this.closeFlight
+  }
 }

@@ -53,10 +53,10 @@ it('retains a later SQLite close failure without repeating completed artifact cl
   const nativeClose = ContextStore.prototype.close
   let nativeStore: ContextStore | undefined
   let failed = false
-  const storeClose = vi.spyOn(ContextStore.prototype, 'close').mockImplementation(function(this: ContextStore) {
+  const storeClose = vi.spyOn(ContextStore.prototype, 'close').mockImplementation(async function(this: ContextStore) {
     nativeStore = this
     if (!failed) { failed = true; throw fault }
-    nativeClose.call(this)
+    await nativeClose.call(this)
   })
   try {
     await expect(service.close()).rejects.toBe(fault)
@@ -64,7 +64,7 @@ it('retains a later SQLite close failure without repeating completed artifact cl
     await service.close()
     expect(storeClose).toHaveBeenCalledTimes(2); expect(bodyClose).toHaveBeenCalledTimes(1); expect(unsubscribe).toHaveBeenCalledTimes(1)
     await expect(service.read({ sessionId: 's' }, { refId: 'anything' })).rejects.toThrow(/closed/)
-  } finally { storeClose.mockRestore(); bodyClose.mockRestore(); await service.close(); if (nativeStore) { try { nativeClose.call(nativeStore) } catch {} }; await rm(root, { recursive: true, force: true }) }
+  } finally { storeClose.mockRestore(); bodyClose.mockRestore(); await service.close(); if (nativeStore) { try { await nativeClose.call(nativeStore) } catch {} }; await rm(root, { recursive: true, force: true }) }
 })
 
 it.each(['result-scope', 'dependency-scope', 'begin', 'read', 'exec-read', 'transfer-scope', 'transfer-confirm', 'grant'] as const)('fences new %s admission synchronously while a real earlier transition is held', async operation => {
@@ -114,9 +114,16 @@ it.each(['result-scope', 'dependency-scope', 'begin', 'read', 'exec-read', 'tran
     if (operation === 'grant') await expect(service.grant({ sessionId: 's' }, [saved.ref.id], 'new-reader')).rejects.toThrow(/closed/)
     // Original confirmation and passive reconciliation still use their own
     // owner checks, rather than being mistaken for fresh admission.
-    await service.confirmResultOwner(scope, saved.ref)
-    expect(await sink.reconcile()).toEqual(saved)
-    if (settleOriginal) expect(await settleOriginal()).toBe('ready')
-    if (transferred) expect(await service.reconcileSeedDependencies(transfer, request)).toEqual(transferred)
+    const confirming = service.confirmResultOwner(scope, saved.ref)
+    const reconciling = sink.reconcile()
+    const settling = settleOriginal?.()
+    const transferReconciliation = transferred ? service.reconcileSeedDependencies(transfer, request) : undefined
+    // Original operations share the real quota turn held by configure. Release
+    // that earlier transition before joining their already admitted work.
+    resume.resolve()
+    await confirming
+    expect(await reconciling).toEqual(saved)
+    if (settling) expect(await settling).toBe('ready')
+    if (transferReconciliation) expect(await transferReconciliation).toEqual(transferred)
   } finally { resume.resolve(); spy.mockRestore(); await configuring; await closing; await service.close(); await rm(root, { recursive: true, force: true }) }
 })

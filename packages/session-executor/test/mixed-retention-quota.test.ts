@@ -66,6 +66,7 @@ it('qualifies a fixed-budget mixed admission schedule at real asynchronous nativ
   let release!:()=>void, arrived!:()=>void, probe:Awaited<ReturnType<typeof mixedAdmissionProbe>>|undefined
   const held=new Promise<void>(done=>{release=done}),boundary=new Promise<void>(done=>{arrived=done})
   let writing:Promise<void>|undefined
+  let capturing:Promise<import('@i-harness/context-output').ContextResultRef|undefined>|undefined
   try {
     const legacy=(await f.legacy('a','calibrate','literal calibration zircon'))!
     assert(legacy.complete)
@@ -85,14 +86,29 @@ it('qualifies a fixed-budget mixed admission schedule at real asynchronous nativ
     finally { clearTimeout(timer) }
     assert(probe.events.some(row=>row.kind==='managed-native-lstat'))
     const beforeLegacy=total(await inventory(f.ownedRoot)), original='literal concurrent jasper '+ 'j'.repeat(200000)
-    const incoming=await f.legacy('a','concurrent',original)
+    const beforeLegacyEvents=probe.events.length
+    let legacySettled=false
+    capturing=f.legacy('a','concurrent',original)
+    const observedCapture=capturing.then(value=>{legacySettled=true;return value},failure=>{legacySettled=true;throw failure})
+    // Attach before releasing the native writer; the same admitted capture
+    // must wait behind that owner's physical quota decision.
+    const captureOutcome=observedCapture.then(value=>({value}),failure=>({failure}))
+    const admissionDeadline=Date.now()+2000
+    while(f.service.status().activeJobs===0&&Date.now()<admissionDeadline) await new Promise(done=>setTimeout(done,5))
+    assert.equal(f.service.status().activeJobs,1,'original legacy capture was admitted while managed native write remained held')
+    await new Promise(done=>setTimeout(done,50))
+    assert.equal(legacySettled,false)
+    assert(!probe.events.slice(beforeLegacyEvents).some(row=>row.kind.startsWith('legacy-')),'legacy accounting/blob admission waits for the original shared quota turn')
+    release();await writing
+    const afterWrite=total(await inventory(f.ownedRoot)), observed=await captureOutcome
+    if('failure' in observed) throw observed.failure
+    const incoming=observed.value
     const afterLegacy=total(await inventory(f.ownedRoot))
     assert(probe.events.some(row=>row.kind==='legacy-native-stat'))
     assert(probe.events.some(row=>row.kind==='legacy-before-native-blob'))
     assert(probe.events.some(row=>row.kind==='legacy-after-native-blob'))
     if(incoming){const actual=await fs.readFile(join(f.ownedRoot,'blobs',incoming.id+'.txt'));assert.deepEqual(actual,Buffer.from(original).subarray(0,incoming.bytes));assert.equal(incoming.complete,incoming.bytes===Buffer.byteLength(original))}
-    release();await writing
-    const afterWrite=total(await inventory(f.ownedRoot)), settlement=await sink.finish('complete'), finalFiles=await inventory(f.ownedRoot),finalBytes=total(finalFiles)
+    const settlement=await sink.finish('complete'), finalFiles=await inventory(f.ownedRoot),finalBytes=total(finalFiles)
     const sampledPeak=Math.max(initial,beforeLegacy,afterLegacy,afterWrite,finalBytes,...probe.events.map(row=>row.physicalBytes??0))
     const remainingTemporary=Object.keys(finalFiles).filter(path=>path.endsWith('.pending')||path.endsWith('.tmp')||path.endsWith('-journal'))
     const oldCurrent=await inventory(join(f.managed,older.ref.id));assert.deepEqual(oldCurrent,older.own)
@@ -101,7 +117,7 @@ it('qualifies a fixed-budget mixed admission schedule at real asynchronous nativ
     // A new legacy item may be refused/rolled back and a managed finish may
     // refuse honestly; neither disposition is by itself a shared-quota breach.
     assert(afterWrite<=quota,'managed native body growth must respect its admitted physical budget')
-  } finally {release();if(writing)await Promise.allSettled([writing]);probe?.restore();await f.close()}
+  } finally {release();await Promise.allSettled([writing,capturing]);probe?.restore();await f.close()}
 },60000)
 
 it('accepts live lowering below existing managed occupancy before legacy opens, preserving reads and refusing growth',async()=>{

@@ -1,4 +1,5 @@
 import { access as fileAccess } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { checkAbort, serializedBytes } from './bytes.ts'
 import { configureContext, DEFAULT_CONTEXT_OUTPUT_CONFIG, identity, integer } from './config.ts'
 import { ContextStore } from './store.ts'
@@ -6,12 +7,17 @@ import type { ContextAccess, ContextOutputOptions, ContextOutputService, Context
 import { createArtifactOwnership } from './artifact/ownership.ts'
 import { captureLegacy } from './legacy/capture.ts'
 import { readLegacy, searchLegacy } from './legacy/query.ts'
+import { createWorkspaceMutationOwner, failuresTogether } from './workspace-mutation.ts'
 
-export function createContextOutputService(options: ContextOutputOptions): ContextOutputService {
-  identity(options.workspaceId, 'workspaceId')
-  identity(options.root, 'root')
+export function createContextOutputService(inputOptions: ContextOutputOptions): ContextOutputService {
+  const workspaceId = inputOptions.workspaceId, root = inputOptions.root
+  identity(workspaceId, 'workspaceId')
+  identity(root, 'root')
+  const options: ContextOutputOptions = { root: resolve(root), workspaceId, config: inputOptions.config,
+    authorize: inputOptions.authorize, authorizeResult: inputOptions.authorizeResult, documentDeletions: inputOptions.documentDeletions }
   let config = configureContext({ ...DEFAULT_CONTEXT_OUTPUT_CONFIG }, options.config ?? {})
-  const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes)
+  const owner = createWorkspaceMutationOwner(options)
+  const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   const unsubscribeDeletions = options.documentDeletions?.(artifacts.releaseDocuments)
   let protectedResults = 0
   let state: ContextOutputStatus['state'] = config.enabled ? 'ready' : 'disabled'
@@ -23,6 +29,8 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   let controls = 0
   let error: string|undefined
   let store: ContextStore|undefined
+  let candidate: ContextStore|undefined
+  let failedOpeningCleanup: unknown
   let opening: Promise<ContextStore>|undefined
   let mutations: Promise<unknown> = Promise.resolve()
   let transitions: Promise<unknown> = Promise.resolve()
@@ -43,15 +51,30 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   async function getStore(signal?: AbortSignal): Promise<ContextStore> {
     checkAbort(signal)
     if (store) return store
+    if (failedOpeningCleanup) throw failedOpeningCleanup
     if (!opening) {
-      const next = new ContextStore(options.root, options.workspaceId)
-      opening = next.open(config.maxDiskBytes, signal).then(() => { store = next; return next }).catch((failure) => {
-        if (!(failure instanceof Error && failure.name === 'AbortError')) {
-          error = failure instanceof Error ? failure.message : String(failure)
-          state = 'error'
+      // Reject impossible startup budgets without creating even a lock path.
+      if (config.maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
+      const next = candidate = new ContextStore(options.root, workspaceId, owner)
+      opening = (async () => {
+        try {
+          await next.acquireLifetime(signal)
+          checkAbort(signal)
+          await owner.mutate(turn => next.open(turn, config.maxDiskBytes, signal))
+          checkAbort(signal)
+          if (closing || closed) throw new Error('Context output is closed')
+          store = next
+          return next
+        } catch (failure) {
+          try { await next.close(); candidate = undefined }
+          catch (cleanup) { failedOpeningCleanup = new AggregateError([failure, cleanup], 'Legacy store opening and original cleanup failed') }
+          if (!(failure instanceof Error && failure.name === 'AbortError')) {
+            error = failure instanceof Error ? failure.message : String(failure)
+            state = 'error'
+          }
+          throw failedOpeningCleanup ?? failure
         }
-        throw failure
-      }).finally(() => { opening = undefined })
+      })().finally(() => { opening = undefined })
     }
     const current = await opening
     checkAbort(signal)
@@ -123,7 +146,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       configureContext(config, patch)
       await transition(async () => {
         const next = configureContext(config, patch)
-        if (store && next.maxDiskBytes !== config.maxDiskBytes) await store.configureDiskBudget(next.maxDiskBytes)
+        if (store && next.maxDiskBytes !== config.maxDiskBytes) await owner.mutate(turn => store!.configureDiskBudget(turn, next.maxDiskBytes))
         config = next
       })
       return status()
@@ -136,7 +159,11 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       if (!config.enabled && !closed && !closing && controls === 0) return undefined
       // Snapshot caller objects before admitting asynchronous work.
       const captured = structuredClone(input)
-      return run(signal, owned => captureLegacy(() => options.workspaceId, captured, producer, () => config, getStore, owned), true)
+      return run(signal, owned => captureLegacy(workspaceId, captured, producer, () => config, getStore,
+        (current, work) => serial(() => owner.mutate(turn => {
+          if (current !== store) throw new Error('Legacy store identity changed')
+          return work(turn)
+        })), owned))
     },
     async read(access, query) {
       identity(access.sessionId, 'sessionId')
@@ -170,9 +197,15 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       const legacyIds = ids.filter(id => !managedIds.includes(id))
       if (!legacyIds.length) return
       return run(access.signal, async (owned) => {
-        for (const id of legacyIds) await readable(caller, id, owned)
-        if (legacyIds.length) await store!.addOwners(legacyIds, targetSessionId, config.maxDiskBytes, owned)
-      }, true, true)
+        const current = await getStore(owned)
+        const prepared: ContextResultRef[] = []
+        for (const id of legacyIds) prepared.push(await readable(caller, id, owned))
+        await serial(() => owner.mutate(async turn => {
+          checkAbort(owned)
+          if (current !== store || prepared.some(ref => JSON.stringify(current.get(ref.id)) !== JSON.stringify(ref))) throw new Error('Context reference expired or changed')
+          await current.addOwners(turn, legacyIds, targetSessionId, config.maxDiskBytes, owned)
+        }))
+      }, false, true)
     },
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
@@ -180,11 +213,11 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       await transition(async () => {
         protectedResults = await artifacts.protectedCount()
         if (!store) {
-          const candidate = new ContextStore(options.root, options.workspaceId)
-          try { await fileAccess(candidate.directory) } catch { return }
+          const inventory = new ContextStore(options.root, workspaceId)
+          try { await fileAccess(inventory.directory) } catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') return; throw failure }
           await getStore()
         }
-        await store!.clear(sessionId)
+        await owner.mutate(turn => store!.clear(turn, sessionId))
       })
       return status()
     },
@@ -194,9 +227,20 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       // callers must join the original outcome instead, retaining the permanent
       // admission fence while a later explicit call retries unfinished cleanup.
       if (!closeFlight) closeFlight = transition(async () => {
-        if (!deletionsUnsubscribed) { unsubscribeDeletions?.(); deletionsUnsubscribed = true }
-        if (!artifactsClosed) { await artifacts.close(); artifactsClosed = true }
-        store?.close()
+        const failures: unknown[] = []
+        if (!deletionsUnsubscribed) {
+          try { unsubscribeDeletions?.(); deletionsUnsubscribed = true } catch (failure) { failures.push(failure) }
+        }
+        if (!artifactsClosed) {
+          try { await artifacts.close(); artifactsClosed = true } catch (failure) { failures.push(failure) }
+        }
+        if (candidate) {
+          try { await candidate.close(); candidate = undefined; store = undefined } catch (failure) { failures.push(failure) }
+        }
+        if (artifactsClosed && !candidate) {
+          try { await owner.close() } catch (failure) { failures.push(failure) }
+        }
+        failuresTogether(failures, 'Original context output resources failed to close')
         closed = true
       }, true).catch(cause => { closeFlight = undefined; throw cause })
       await closeFlight

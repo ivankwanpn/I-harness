@@ -35,10 +35,21 @@ it('cold lookup preserves authentic capturing, staged, refused and committed pha
     expect(await refusedSink.finish('complete')).toEqual({ kind: 'refused', reason: 'capture-canceled', observedEncodedBytes: 16 })
     const stagedRefusalScope = refusal.registerResultScope({ operationId: 'staged-refused', sessionId: 'owner', documentId: 'stage-doc', callId: 'staged-refused' }, () => true)
     const stagedRefusalSink = await refusal.beginResult(stagedRefusalScope, 'text-utf8-v1'); await stagedRefusalSink.write(Buffer.from('staged-refusal'))
+    const renameEntered = Promise.withResolvers<void>(), releaseRename = Promise.withResolvers<void>()
+    io.beforeRename = async (_from, to) => { if (to.endsWith('manifest.json')) { renameEntered.resolve(); await releaseRename.promise } }
+    const finishing = stagedRefusalSink.finish('complete')
+    const refused = expect(finishing).resolves.toEqual({ kind: 'refused', reason: 'capture-canceled', observedEncodedBytes: 14 })
     let deletion: Promise<void> | undefined
-    io.beforeRename = async (_from, to) => { if (to.endsWith('manifest.json')) deletion ??= deleted(['stage-doc']) }
-    expect(await stagedRefusalSink.finish('complete')).toEqual({ kind: 'refused', reason: 'capture-canceled', observedEncodedBytes: 14 })
-    io.stop(); await deletion
+    try {
+      await renameEntered.promise
+      // A real host deletion arrives from outside the mutation callback. Its
+      // synchronous lifetime fence precedes the paused native publication.
+      deletion = deleted(['stage-doc'])
+      const deletedOriginal = expect(deletion).resolves.toBeUndefined()
+      releaseRename.resolve()
+      await refused; await deletedOriginal
+    } finally { releaseRename.resolve(); await Promise.allSettled([finishing, deletion]) }
+    io.stop()
     await refusal.close(); await f.reopen()
     const coldRefusal = createContextOutputService({ root: resolve(f.root, 'refusal'), workspaceId: 'integrity' })
     const refFor = (operationId: string) => ({ id: `ctxv1_${hash(JSON.stringify(['integrity', 'owner', operationId, operationId]))}` })

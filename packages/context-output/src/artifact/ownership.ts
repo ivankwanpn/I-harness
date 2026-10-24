@@ -1,6 +1,5 @@
 import { mkdir, readdir, rm, lstat } from 'node:fs/promises'
 import { resolve, sep } from 'node:path'
-import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { validManagedArtifactRef, type ManagedArtifactRef, type ResultCodec, type ResultDependency } from '@i-harness/core-session'
 import { identity } from '../config.ts'
 import type { ContextAccess, ContextOutputOptions } from '../types.ts'
@@ -17,26 +16,22 @@ import { confirmArtifactOwner, type OwnerConfirmation } from './owner-confirmati
 import { createDependencyMembership, dependencyEntries, sameArtifactRef, type DependencyRegistration } from './dependency-membership.ts'
 import { createSeedDependencyTransfer } from './bootstrap-transfer.ts'
 import { TransferBlocked } from './transfer-codec.ts'
+import { failuresTogether, type WorkspaceMutationOwner } from '../workspace-mutation.ts'
 
-export function createArtifactOwnership(options: ContextOutputOptions, quota: () => number) {
+export function createArtifactOwnership(options: ContextOutputOptions, quota: () => number, mutations: WorkspaceMutationOwner) {
   const root = resolve(options.root, 'context-output', sha(options.workspaceId)), managed = resolve(root, 'managed-v1')
   const scopes = new WeakMap<ResultArtifactScope, { owner: ArtifactOwner; current: () => boolean; codec?: ResultCodec; initialization?: { operation: ArtifactOperation; target: string }; confirmation?: OwnerConfirmation; dependencies?: DependencyRegistration }>()
   const deletedDocuments = new Set<string>()
   let closed = false
+  let closing = false
   const sinks = new WeakMap<ResultArtifactScope, ResultArtifactSink>()
   const writers = new Set<OwnedArtifactSink>()
-  let serial: Promise<unknown> = Promise.resolve()
   const directory = (id: string) => { if (!/^ctxv1_[a-f0-9]{64}$/.test(id)) throw new Error('Artifact reference unavailable'); return resolve(managed, id) }
   const membership = createDependencyMembership(root, options.workspaceId, directory, quota)
-  const mutate = <T>(work: () => Promise<T>): Promise<T> => {
-    const next = serial.then(async () => {
-      const lease = await acquireSessionLock({ lockPath: lockPathFor(options.root, `context-output:${options.workspaceId}`) })
-      try { return await work() } finally { await lease.release() }
-    })
-    serial = next.catch(() => {}); return next
-  }
+  const mutate = <T>(work: () => Promise<T>): Promise<T> => closing || closed
+    ? Promise.reject(new Error('Artifact owner closed')) : mutations.mutate(work)
   function registerResultScope(owner: ArtifactOwner, current: () => boolean): ResultArtifactScope {
-    if (closed || deletedDocuments.has(owner.sessionId) || deletedDocuments.has(owner.documentId ?? owner.sessionId)) throw new Error('Artifact source closed or deleted')
+    if (closing || closed || deletedDocuments.has(owner.sessionId) || deletedDocuments.has(owner.documentId ?? owner.sessionId)) throw new Error('Artifact source closed or deleted')
     identity(owner.operationId, 'operationId'); identity(owner.sessionId, 'sessionId'); identity(owner.callId, 'callId')
     if (owner.documentId !== undefined) identity(owner.documentId, 'documentId')
     if (Buffer.byteLength(owner.operationId) > 128 || typeof current !== 'function' || current() !== true) throw new Error('Artifact source unavailable')
@@ -57,7 +52,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
   }
   async function beginResult(scope: ResultArtifactScope, codec: ResultCodec): Promise<ResultArtifactSink> {
     const registered = scopes.get(scope)
-    if (!registered || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'].includes(codec)) throw new Error('Artifact source unavailable')
+    if (!registered || closing || closed || deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) || !registered.current() || !['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'].includes(codec)) throw new Error('Artifact source unavailable')
     if (registered.codec !== undefined && registered.codec !== codec) throw new Error('Artifact codec is immutable')
     registered.codec = codec
     const existing = sinks.get(scope)
@@ -188,6 +183,17 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       if (closed) throw new Error('Artifact owner closed')
       return reconcileArtifact(root, directory(id), options.workspaceId, operationId, id)
     }),
-    close: async () => { closed = true; await serial; for (const writer of writers) await writer.suspend(); writers.clear() },
+    close: async () => {
+      // Fence new turns immediately, while already issued callbacks retain
+      // their original lifecycle until the shared queue drains.
+      closing = true
+      await mutations.join()
+      closed = true
+      const failures: unknown[] = []
+      for (const writer of [...writers]) {
+        try { await writer.suspend(); writers.delete(writer) } catch (failure) { failures.push(failure) }
+      }
+      failuresTogether(failures, 'Original artifact writers failed to close')
+    },
   }
 }
