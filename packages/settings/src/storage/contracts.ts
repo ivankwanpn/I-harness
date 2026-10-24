@@ -13,7 +13,7 @@ export interface SettingsStoreOptions {
 
 export interface ObservedSettingsLoadOptions {
   /** Runs once on an isolated recursively frozen copy of the saved document. */
-  validate?: (document: Readonly<Record<string, unknown>>) => void
+  validate?: (document: Readonly<Record<string, unknown>>) => void | Promise<void>
 }
 
 export type ObservedSettingsLoad =

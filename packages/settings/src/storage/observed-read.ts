@@ -34,7 +34,7 @@ export async function readObservedDocument(filename: string, validate: ObservedS
   if (validate !== undefined) {
     const isolated = structuredClone(raw)
     freezeJson(isolated)
-    try { validate(isolated) }
+    try { await validate(isolated) }
     catch { throw new Error("invalid settings: document validation failed") }
   }
   // stampBytes always returns the present variant for an already captured buffer.

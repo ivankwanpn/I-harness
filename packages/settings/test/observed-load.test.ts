@@ -183,4 +183,74 @@ describe("observed saved settings load", () => {
     expect(f.store.getSectionRevision("instructions")).toBe(4)
     expect(f.store.get().compaction.auto).toBe(true)
   })
+
+  it("awaits asynchronous validation inside the queue before publishing captured bytes or running a queued set", async () => {
+    const f = await fixture()
+    const bytes = Buffer.from(`// async captured source\n${JSON.stringify({ instructions: policy, _revision: { instructions: 6 } })}`)
+    await fs.writeFile(f.path, bytes)
+    const entered = barrier()
+    const held = barrier()
+    let completed = false
+    const observed = f.store.loadObserved({ validate: async document => {
+      expect(Object.isFrozen(document.instructions)).toBe(true)
+      entered.release()
+      await held.promise
+      expect(document.instructions).toEqual(policy)
+    } })
+    const completion = observed.then(() => { completed = true })
+    await entered.promise
+    const written = f.store.set({ compaction: { auto: false } })
+    try {
+      // One event-loop turn lets an incorrectly detached callback publish; this
+      // is a scheduler checkpoint, not a timer or simulated validator result.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(completed).toBe(false)
+      expect(f.store.isLoaded()).toBe(false)
+      expect(f.store.getSectionRevision("instructions")).toBe(0)
+      expect(await realFs.readFile(f.path)).toEqual(bytes)
+      const replacement = join(f.root, "async-replacement.json")
+      await fs.writeFile(replacement, JSON.stringify({ instructions: { enabled: true, maxBytes: 999 } }))
+      await fs.rename(replacement, f.path)
+    } finally {
+      held.release()
+      await completion
+      await written
+    }
+    expect(await observed).toMatchObject({ kind: "loaded", settings: { instructions: policy }, stamp: { kind: "present", sha256: digest(bytes) } })
+    expect(await written).toMatchObject({ instructions: policy, compaction: { auto: false } })
+    expect(f.store.getSectionRevision("instructions")).toBe(6)
+  })
+
+  it("joins asynchronous validator rejection without publishing or losing last-good revisions, including on a fresh store", async () => {
+    const f = await fixture()
+    await fs.writeFile(f.path, JSON.stringify({ instructions: policy, _revision: { instructions: 9 } }))
+    await f.store.loadObserved()
+    const saved = f.store.get()
+    await fs.writeFile(f.path, JSON.stringify({ instructions: { enabled: true, maxBytes: 999 }, _revision: { instructions: 100 } }))
+    for (const store of [f.store, new SettingsStore({ path: f.path })]) {
+      const wasLoaded = store.isLoaded()
+      const previous = store.get()
+      const previousRevision = store.getSectionRevision("instructions")
+      const entered = barrier()
+      const held = barrier()
+      const validation = held.promise.then(() => { throw new Error("private-observed-credential") })
+      // Keep the pre-fix orphan rejection handled by the fixture so RED can
+      // specifically assert the owner wrongly resolved rather than crash Vitest.
+      void validation.catch(() => {})
+      const observed = store.loadObserved({ validate() { entered.release(); return validation } })
+      const outcome = observed.then(() => ({ rejected: false, error: undefined }), error => ({ rejected: true, error }))
+      await entered.promise
+      held.release()
+      const result = await outcome
+      expect(result.rejected).toBe(true)
+      expect(String(result.error)).not.toContain("private-observed-credential")
+      expect(store.isLoaded()).toBe(wasLoaded)
+      expect(store.get()).toEqual(previous)
+      expect(store.getSectionRevision("instructions")).toBe(previousRevision)
+    }
+    expect(f.store.get()).toEqual(saved)
+    // A rejected async observation does not poison the original write queue.
+    expect((await f.store.set({ compaction: { auto: false } })).instructions).toEqual(policy)
+    expect(f.store.getSectionRevision("instructions")).toBe(9)
+  })
 })
