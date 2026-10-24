@@ -456,6 +456,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   const settingsPath = opts.instructionSettingsPath ?? resolveSettingsPath()
   let ownedInstructions: InstructionEnvironment | undefined
   let initialInput: Awaited<ReturnType<typeof openCliInput>> | undefined
+  const cleanup = async (inputClose?: Promise<void>) => {
+    ownedInstructions?.dispose()
+    const outcomes = await Promise.allSettled([inputClose ?? initialInput?.close(), assembly?.dispose()])
+    const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    // The assembly owns the instruction borrowers. An input-close failure
+    // alone must not skip safe environment cleanup after those borrowers close.
+    if (outcomes[1]!.status === 'fulfilled') try { await ownedInstructions?.close() } catch (error) { failures.push(error) }
+    if (failures.length) throw new AggregateError(failures, 'Headless instruction owner prerequisites incomplete')
+  }
   // M72 Ⅱ / M73: the session model's resolved pair, read where the binding
   // resolves (the mount try below) and consumed TWICE — the assembly build,
   // which fans them out to the agent, the compaction engine and every spawn
@@ -780,14 +789,24 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       }
     }
   } catch (err) {
+    ownedInstructions?.dispose()
     emitSessionEnd(1)
     // Site ①: the exit taken when the run died BEFORE the assembly was built
     // (the model resolution above is the shipped trigger). `mount` — no turn
     // ever ran. The append must precede the close below: a closed coordinator
     // drains what it holds, it does not accept new events.
-    try { await initialInput?.close() } finally { process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal) }
-    await appendRunEnd(1, "mount", err)
+    const inputClose = Promise.resolve().then(() => initialInput?.close())
+    let inputFailed = false, saving: { error: unknown } | undefined
+    try { await inputClose } catch { inputFailed = true }
+    finally { process.off("SIGINT", onSignal); process.off("SIGTERM", onSignal) }
+    if (!inputFailed) try { await appendRunEnd(1, "mount", err) } catch (error) { saving = { error } }
     telemetry?.close()
+    const primary = saving ? new AggregateError([err, saving.error], 'Headless mount and run-end saving failed', { cause: err }) : err
+    try { await cleanup(inputClose) }
+    catch (cause) {
+      throw new HeadlessCleanupError(cause, async () => { await cleanup(); await opts.coordinator?.close() }, primary)
+    }
+    if (saving) throw primary
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   }
@@ -1036,13 +1055,6 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     // A process cleanup failure rejects shutdown and retains the coordinator;
     // success is acknowledged only after the assembly's native owners drain.
-    const cleanup = async () => {
-      ownedInstructions?.dispose()
-      const outcomes = await Promise.allSettled([initialInput?.close(), assembly?.dispose()])
-      const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-      if (failures.length) throw new AggregateError(failures, 'Headless instruction owner prerequisites incomplete')
-      await ownedInstructions?.close()
-    }
     try { await cleanup() }
     catch (cause) {
       throw new HeadlessCleanupError(cause, async () => { await cleanup(); await opts.coordinator?.close() }, primaryRunFailure)

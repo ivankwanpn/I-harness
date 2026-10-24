@@ -877,7 +877,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         }
   const fsToolsDeps = {
     observeInstructionTarget: async (target: import('@i-harness/instructions').InstructionTarget, exec: import('@i-harness/core-tools').ToolExec) => exec.session === session
-      ? instructionManager.observe(target) : { status: 'reference-only' as const, reason: 'outside-root' as const },
+      ? instructionManager!.observe(target) : { status: 'reference-only' as const, reason: 'outside-root' as const },
     readPolicy: { maxOutputBytes: 64000 },
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
@@ -1048,17 +1048,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     })
   }
 
-  // R-A4/R-A5: dynamic system context — sections render at every step boundary
-  // via the agent/pre-step hook. Instructions load as one section, the skills
-  // catalogue as the next; W11 registers the subagents table below, once the
-  // subagent mount has produced the table it reads.
+  // Main logical admission reconciles instructions and publishes this full
+  // component after its step hooks/claims. Register sections in their stable
+  // instructions → skills → subagents order; construction does not publish.
   const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner))
-  const instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
-  const instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
-    available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
+  let instructionEnvironment: InstructionEnvironment | undefined
+  let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
   runtimeContext.registerSection(
     "instructions",
-    instructionManager.text,
+    () => instructionManager?.text() ?? "",
   )
   // M6 batch C C1 (spec §3.2): the skills catalogue, registered HERE because
   // this is the first point holding both the runtime-context service and the
@@ -1193,6 +1191,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   ].filter(Boolean).join('\n\n')
 
   try {
+    // The original mount guard must own the asynchronous policy/watch lifetime
+    // before any dependent setup can reject. Earlier config getters acquire none.
+    instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
+    instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+      available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
     for (const cfg of opts.mcp ?? []) {
       mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), opts.telemetry ? { onStatus: mcpStatusHook } : undefined))
     }
@@ -1746,7 +1749,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
   } catch (err) {
     // A failed mount must not leak a half-built assembly.
-    await dispose().catch(() => {})
+    try { await dispose() }
+    catch (cleanup) { throw new AggregateError([err, cleanup], "Assembly construction and cleanup failed", { cause: err }) }
     throw err
   }
 
@@ -1799,9 +1803,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     let instructionsClosed = false, runtimeClosed = false, documentClosed = false
     for (const join of [async () => { await runtimeContext.close(); runtimeClosed = true }, async () => { await managedDocument?.close(); documentClosed = true }, async () => {
       if (!runtimeClosed) throw Object.assign(new Error('Original runtime publication cleanup remains held'), { code: 'FACT_RECOVERY_REQUIRED' })
-      await instructionManager.close(); instructionsClosed = true
+      await instructionManager?.close(); instructionsClosed = true
     },
-      () => opts.instructionEnvironment || !instructionsClosed ? undefined : instructionEnvironment.close(),
+      () => opts.instructionEnvironment || !instructionsClosed ? undefined : instructionEnvironment?.close(),
       () => producersDrained && runtimeClosed && instructionsClosed && documentClosed ? resultStore.release() : undefined]) {
       try { await join() } catch (error) { processCleanupFailures.push(error) }
     }
