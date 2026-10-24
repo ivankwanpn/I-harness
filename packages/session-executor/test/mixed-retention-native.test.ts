@@ -55,7 +55,7 @@ it('qualifies genuine native mixed storage, saved override, TTL/clear/index and 
     assert.deepEqual((await f.service.search({sessionId:'a'},{query:'opal'})).hits,[])
     assert.equal((await fs.readFile(expiredBlob)).toString(),'literal expired opal')
     await f.service.configure({retentionDays:7})
-    await f.coordinator.updateMeta('a',{archived:true}); await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/unauthorized/)
+    await f.coordinator.updateMeta('a',{archived:true}); await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/Result source session archived/)
     assert(await f.legacy('b','prune','literal active amethyst'))
     await assert.rejects(fs.stat(expiredBlob),{code:'ENOENT'})
     // Current archive/project denial composes with actual successful legacy cleanup.
@@ -77,11 +77,11 @@ it('qualifies genuine native mixed storage, saved override, TTL/clear/index and 
       const authoritative=await inventory(f.managed)
       await f.mount(true)
       await f.coordinator.updateMeta('a',{archived:true})
-      await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/unauthorized/)
+      await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/Result source session archived/)
       assert.equal((await f.service.search({sessionId:'b'},{query:'sapphire'})).hits[0]!.ref.id,legacyB.id)
       assert.equal((await f.service.read({sessionId:'b'},{refId:legacyB.id})).text,'literal sapphire search result B')
       assert.deepEqual(await inventory(f.managed),authoritative)
-      await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/unauthorized/)
+      await assert.rejects(readManaged(f.service,'a',complete.ref,complete.expected),/Result source session archived/)
       await f.coordinator.updateMeta('a',{archived:false});await readManaged(f.service,'a',complete.ref,complete.expected)
       await save(f.root,'index-'+mode,{legacyB,recovered:true,files:await inventory(f.ownedRoot),managedUnchanged:true,actualArchiveDenialThroughoutRebuild:true,actualRestorationRead:true})
     }
