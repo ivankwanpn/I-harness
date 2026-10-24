@@ -19,6 +19,15 @@ struct ih_sigaction { void (*handler)(int); ih_sigset_t mask; int flags; };
 #define IH_SIG_SETMASK 0
 #define IH_WNOHANG 1
 #define IH_API __declspec(dllimport)
+#ifdef IH_MSYS_CONTROLLED_RAW_CHILD
+/* Pinned sys/termios.h: four uint32 flags, c_line, NCCS=18, two uint32
+ * speeds; TCSANOW=2 (not the unrelated Linux value). */
+struct ih_termios { uint32_t input, output, control, local; char line; unsigned char cc[18]; uint32_t input_speed, output_speed; };
+typedef char ih_termios_layout[(sizeof(struct ih_termios)==44 && offsetof(struct ih_termios,cc)==17 && offsetof(struct ih_termios,input_speed)==36)?1:-1];
+IH_API int tcgetattr(int, struct ih_termios *);
+IH_API int tcsetattr(int, int, const struct ih_termios *);
+IH_API void cfmakeraw(struct ih_termios *);
+#endif
 IH_API int forkpty(int *, char *, void *, const struct ih_winsize *);
 IH_API int execv(const char *, const char *const *);
 IH_API int ioctl(int, uint64_t, ...);

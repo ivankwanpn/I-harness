@@ -7,6 +7,9 @@
 #if defined(IH_MSYS_CONTROLLED_SEED_CHILD_POLICY) && !defined(IH_MSYS_CONTROLLED_TRACE)
 #error Nondefault child policy is confined to controlled trace builds.
 #endif
+#if defined(IH_MSYS_CONTROLLED_RAW_CHILD) && !defined(IH_MSYS_CONTROLLED_TRACE)
+#error Raw slave mode is confined to controlled trace builds.
+#endif
 
 /* One private parent owns this controller pipe. The child receives only the
  * slave tty; it never inherits the controller or its acknowledgements. */
@@ -324,6 +327,16 @@ int main(int argc, char **argv) {
         HANDLE workload_job = (HANDLE)(uintptr_t)strtoull(argv[4], &end, 10);
         if (*end || !workload_job || !AssignProcessToJobObject(workload_job, GetCurrentProcess())) fail("assign-child-job");
         if (!CloseHandle(workload_job)) fail("close-child-job");
+#ifdef IH_MSYS_CONTROLLED_RAW_CHILD
+        struct ih_termios raw_policy;
+        if (tcgetattr(0, &raw_policy)) fail("controlled-get-raw");
+        cfmakeraw(&raw_policy);
+        if (tcsetattr(0, 2, &raw_policy) || tcgetattr(0, &raw_policy)) fail("controlled-set-raw");
+        if ((raw_policy.local & (0x0001 | 0x0002 | 0x0004)) || (raw_policy.output & 1) || raw_policy.cc[9] != 1 || raw_policy.cc[16] != 0) fail("controlled-verify-raw");
+        char raw_line[160];
+        int raw_size = snprintf(raw_line, sizeof(raw_line), "TRACE raw-child %u %u %u %u %u\n", raw_policy.local, raw_policy.output, (unsigned int)raw_policy.cc[9], (unsigned int)raw_policy.cc[16], (unsigned int)sizeof(raw_policy));
+        write_all(status_fd, raw_line, (size_t)raw_size);
+#endif
 #ifndef IH_MSYS_CONTROLLED_TRACE
         for (int i = 0; i < 3; i++) close(raw[i]);
 #endif
