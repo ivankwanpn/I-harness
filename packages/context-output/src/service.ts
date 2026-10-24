@@ -17,6 +17,9 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   let state: ContextOutputStatus['state'] = config.enabled ? 'ready' : 'disabled'
   let closed = false
   let closing = false
+  let closeFlight: Promise<void> | undefined
+  let deletionsUnsubscribed = false
+  let artifactsClosed = false
   let controls = 0
   let error: string|undefined
   let store: ContextStore|undefined
@@ -24,6 +27,8 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   let mutations: Promise<unknown> = Promise.resolve()
   let transitions: Promise<unknown> = Promise.resolve()
   const jobs = new Map<AbortController, Promise<unknown>>()
+
+  function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
 
   function status(): ContextOutputStatus {
     return { enabled: config.enabled && !closing && !closed, state, config: { ...config },
@@ -98,16 +103,19 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
   }
 
   return {
-    registerSeedDependencyTransfer: artifacts.registerSeedDependencyTransfer,
-    confirmSeedDependencies: artifacts.confirmSeedDependencies,
+    registerSeedDependencyTransfer(access) { assertOpen(); return artifacts.registerSeedDependencyTransfer(access) },
+    async confirmSeedDependencies(scope, request, current) {
+      if (closed || closing) return { kind: 'blocked', reason: 'unavailable' }
+      return artifacts.confirmSeedDependencies(scope, request, current)
+    },
     reconcileSeedDependencies: artifacts.reconcileSeedDependencies,
-    registerResultScope: artifacts.registerResultScope,
-    registerResultDependencyScope: artifacts.registerResultDependencyScope,
+    registerResultScope(owner, current) { assertOpen(); return artifacts.registerResultScope(owner, current) },
+    registerResultDependencyScope(owner, current, entries) { assertOpen(); return artifacts.registerResultDependencyScope(owner, current, entries) },
     settleResultDependencyMembership: artifacts.settleResultDependencyMembership,
-    beginResult: artifacts.beginResult,
+    async beginResult(scope, codec) { assertOpen(); return artifacts.beginResult(scope, codec) },
     confirmResultOwner: artifacts.confirmResultOwner,
-    readResult: artifacts.readResult,
-    readExecResult: artifacts.readExecResult,
+    async readResult(access, query) { assertOpen(); return artifacts.readResult(access, query) },
+    async readExecResult(access, query) { assertOpen(); return artifacts.readExecResult(access, query) },
     reconcileResult: artifacts.reconcileResult,
     status,
     async configure(patch) {
@@ -151,6 +159,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       return run(access.signal, owned => searchLegacy({ terms, limit, maxBytes, filter }, getStore, (ref, signal) => allowed(caller, ref, signal), owned))
     },
     async grant(access, refIds, targetSessionId) {
+      assertOpen()
       identity(access.sessionId, 'sessionId')
       identity(targetSessionId, 'targetSessionId')
       const ids = [...new Set(refIds)]
@@ -181,8 +190,16 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
     },
     async close() {
       if (closed) return
-      if (closing) { await transitions; return }
-      await transition(async () => { unsubscribeDeletions?.(); await artifacts.close(); store?.close(); closed = true }, true)
+      // The transition tail swallows failures to preserve queue ordering. Close
+      // callers must join the original outcome instead, retaining the permanent
+      // admission fence while a later explicit call retries unfinished cleanup.
+      if (!closeFlight) closeFlight = transition(async () => {
+        if (!deletionsUnsubscribed) { unsubscribeDeletions?.(); deletionsUnsubscribed = true }
+        if (!artifactsClosed) { await artifacts.close(); artifactsClosed = true }
+        store?.close()
+        closed = true
+      }, true).catch(cause => { closeFlight = undefined; throw cause })
+      await closeFlight
     },
   }
 }

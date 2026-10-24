@@ -1007,7 +1007,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
       revokeSession(id); stopNotifications(id)
     }
-    await Promise.allSettled([
+    const [readerJoined] = await Promise.allSettled([
       resultReader.join(),
       ...active,
       ...creating.values(),
@@ -1022,7 +1022,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     executionSubscriptions.clear()
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
-    const failures: unknown[] = []
+    const failures: unknown[] = readerJoined!.status === 'rejected' ? [readerJoined!.reason] : []
     for (const [id, handle] of ownedAssemblies()) {
       try {
         await handle.dispose()
@@ -1034,8 +1034,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       try { await opts.coordinator?.closeManagedDocument(id); writableSessions.delete(id); inputInboxes.delete(id); failedClose.delete(id) }
       catch (error) { failedClose.add(id); failures.push(error) }
     }
-    if (failures.length) throw new AggregateError(failures, "Session service process cleanup incomplete")
-    if (defaultInstructions) { await defaultInstructions.close(); defaultInstructions = undefined }
+    if (defaultInstructions) {
+      try { await defaultInstructions.close(); defaultInstructions = undefined }
+      catch (error) { failures.push(error) }
+    }
+    if (failures.length) {
+      if (failure !== undefined) failures.push(failure)
+      throw new AggregateError(failures, "Session service process cleanup incomplete")
+    }
     if (failure !== undefined) throw failure
   }
 
@@ -1046,7 +1052,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (existing !== undefined) return existing
     let pending!: Promise<void>
     pending = (async () => {
-      await resultReader.join(sessionId)
+      let readerFailure: unknown
+      try { await resultReader.join(sessionId) } catch (error) { readerFailure = error }
       const turn = chains.get(sessionId)
       if (turn !== undefined) await Promise.allSettled([turn])
       const build = creating.get(sessionId)
@@ -1058,7 +1065,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
       try { if (handle) await handle.dispose(); else await opts.coordinator?.closeManagedDocument(sessionId) }
-      catch (error) { failedClose.add(sessionId); throw error }
+      catch (error) {
+        failedClose.add(sessionId)
+        if (readerFailure !== undefined) throw new AggregateError([readerFailure, error], 'Session process cleanup incomplete')
+        throw error
+      }
+      if (readerFailure !== undefined) { failedClose.add(sessionId); throw readerFailure }
       failedClose.delete(sessionId)
       assemblies.delete(sessionId)
       mountingAssemblies.delete(sessionId)

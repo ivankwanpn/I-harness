@@ -13,7 +13,11 @@ interface Registration {
   mode: 'producer' | 'reader'
   lastScopeId?: string
 }
-interface StoreEntry { service: ContextOutputService; registrations: Set<Registration>; users: number; sourceFor(sessionId: string): Promise<ContextCapture['source']>; observeDeletion(coordinator: SessionCoordinator): void; stopObserving(): void }
+interface StoreEntry {
+  service: ContextOutputService; registrations: Set<Registration>; users: number
+  retirement?: { complete: boolean; flight?: Promise<void>; failure?: unknown }
+  sourceFor(sessionId: string): Promise<ContextCapture['source']>; observeDeletion(coordinator: SessionCoordinator): void; stopObserving(): void
+}
 const stores = new Map<string, Promise<StoreEntry>>()
 
 export interface ResultStoreOptions {
@@ -115,6 +119,13 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   const entry = await pending
   // A last owner can retire the instance while creation is awaited.
   if (stores.get(key) !== pending) continue
+  if (entry.retirement) {
+    // Admission may join work already owned by the retiring lease. It must not
+    // retry failed idle cleanup or register against that permanently fenced owner.
+    if (!entry.retirement.flight) throw new Error('Result store retirement cleanup requires original owner retry', { cause: entry.retirement.failure })
+    await entry.retirement.flight
+    continue
+  }
   const registration: Registration = { mode, sessionId: options.sessionId, coordinator: options.coordinator,
     ...(mode === 'producer' ? { projectContext: options.projectContext } : { readScope }), available: options.executionCallerAvailable }
   entry.registrations.add(registration); entry.users++
@@ -122,10 +133,22 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   // actual registrations rather than capturing the first assembly's scope.
   const sourceFor = entry.sourceFor
   let released = false
+  let ownsRetirement = false
   async function release() {
-    if (released) return
-    released = true; entry.registrations.delete(registration); entry.users--
-    if (!entry.users && stores.get(key) === pending) { stores.delete(key); entry.stopObserving(); await entry.service.close() }
+    if (!released) {
+      released = true; entry.registrations.delete(registration); entry.users--
+      if (!entry.users && stores.get(key) === pending) { entry.retirement = { complete: false }; ownsRetirement = true }
+    }
+    if (!ownsRetirement) return
+    const retirement = entry.retirement!
+    if (retirement.complete) return
+    if (!retirement.flight) retirement.flight = Promise.resolve().then(async () => {
+      await entry.service.close()
+      entry.stopObserving()
+      retirement.complete = true
+      if (stores.get(key) === pending) stores.delete(key)
+    }).catch(cause => { retirement.failure = cause; throw cause }).finally(() => { retirement.flight = undefined })
+    await retirement.flight
   }
   try {
     // Reserve before configure or any other subsequent await. Readers never
@@ -133,6 +156,13 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
     entry.observeDeletion(options.coordinator)
     if (mode === 'producer' && JSON.stringify(entry.service.status().config) !== JSON.stringify(config)) await entry.service.configure(config!)
     return { service: entry.service, sourceFor, release }
-  } catch (cause) { await release(); throw cause }
+  } catch (cause) {
+    try { await release() }
+    catch (cleanupCause) {
+      // Internal recovery authority stays with this exact lease and service.
+      throw Object.assign(new AggregateError([cause, cleanupCause], 'Result store configuration and cleanup failed', { cause }), { retryCleanup: release })
+    }
+    throw cause
+  }
   }
 }
