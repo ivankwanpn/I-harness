@@ -1,9 +1,11 @@
-param([switch]$Test, [string]$MsysSdkDirectory, [switch]$BridgeOnly, [string]$ControlledOutputDirectory, [switch]$ControlledTrace)
+param([switch]$Test, [string]$MsysSdkDirectory, [switch]$BridgeOnly, [string]$ControlledOutputDirectory, [switch]$ControlledTrace, [switch]$ControlledSkipChildRestore, [switch]$ControlledSeedChildPolicy)
 $ErrorActionPreference = 'Stop'
 $packageRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $manifestPath = Join-Path $packageRoot 'native/Cargo.toml'
 if ($BridgeOnly -ne [bool]$ControlledOutputDirectory -or ($BridgeOnly -and $Test)) { throw 'Controlled bridge build requires both -BridgeOnly and a fresh -ControlledOutputDirectory, without -Test.' }
 if ($ControlledTrace -and !$BridgeOnly) { throw 'Controlled call tracing is available only for isolated bridge builds.' }
+if ($ControlledSkipChildRestore -and (!$BridgeOnly -or !$ControlledTrace)) { throw 'Child-restore counterfactual requires an isolated controlled trace build.' }
+if ($ControlledSeedChildPolicy -and (!$BridgeOnly -or !$ControlledTrace)) { throw 'Nondefault child-policy fixture requires an isolated controlled trace build.' }
 if ($BridgeOnly) {
   $ControlledOutputDirectory = [IO.Path]::GetFullPath($ControlledOutputDirectory)
   $controlledRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot '../../.tmp')).TrimEnd('\') + '\'
@@ -34,6 +36,8 @@ if (!$Test) {
   $loaderObject = if ($BridgeOnly) { Join-Path $ControlledOutputDirectory 'msys-loader.obj' } else { Join-Path $packageRoot 'native/target/msys-loader.obj' }
   New-Item -ItemType Directory -Force -Path (Join-Path $packageRoot 'native/target') | Out-Null
   $traceDefine = if ($ControlledTrace) { ' /DIH_MSYS_CONTROLLED_TRACE' } else { '' }
+  if ($ControlledSkipChildRestore) { $traceDefine += ' /DIH_MSYS_CONTROLLED_SKIP_CHILD_RESTORE' }
+  if ($ControlledSeedChildPolicy) { $traceDefine += ' /DIH_MSYS_CONTROLLED_SEED_CHILD_POLICY' }
   $compileBridge = '"' + $vcvars + '" >nul && cl /nologo /W4 /WX /c /O2 /GS- /Zl' + $traceDefine + ' /Fo"' + $bridgeObject + '" "' + $bridgeSource + '" && cl /nologo /W4 /WX /c /O2 /GS- /Zl /Fo"' + $loaderObject + '" "' + $loaderSource + '"'
   & $env:ComSpec /d /s /c $compileBridge
   if ($LASTEXITCODE -ne 0) { throw "MSYS adapter compilation failed: $LASTEXITCODE" }

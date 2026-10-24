@@ -1,6 +1,12 @@
 #include "api.h"
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#if defined(IH_MSYS_CONTROLLED_SKIP_CHILD_RESTORE) && !defined(IH_MSYS_CONTROLLED_TRACE)
+#error Child-restore counterfactual is confined to controlled trace builds.
+#endif
+#if defined(IH_MSYS_CONTROLLED_SEED_CHILD_POLICY) && !defined(IH_MSYS_CONTROLLED_TRACE)
+#error Nondefault child policy is confined to controlled trace builds.
+#endif
 
 /* One private parent owns this controller pipe. The child receives only the
  * slave tty; it never inherits the controller or its acknowledgements. */
@@ -101,6 +107,10 @@ static void stop_delivery(struct input_state *input) {
     }
 }
 static void caught_child(int signal_number) { (void)signal_number; }
+#ifdef IH_MSYS_CONTROLLED_SEED_CHILD_POLICY
+static volatile LONG controlled_original_signal;
+static void controlled_original_child(int signal_number) { InterlockedExchange(&controlled_original_signal, signal_number); }
+#endif
 #ifdef IH_MSYS_CONTROLLED_TRACE
 static void trace_owner(const char *operation, int result, uint64_t value) {
     char line[192]; int length = snprintf(line, sizeof(line), "TRACE %s %d %llu\n", operation, result, (unsigned long long)value);
@@ -272,12 +282,38 @@ int main(int argc, char **argv) {
     status_fd = raw[2];
     struct ih_winsize size = {(uint16_t)rows, (uint16_t)cols, 0, 0};
     ih_sigset_t wait_set, original_mask;
+#ifdef IH_MSYS_CONTROLLED_SEED_CHILD_POLICY
+    /* Pinned Cygwin signal.h: SIGTERM=15, SIGPIPE=13. Seed unrelated blocked
+     * policy and a distinct disposition before capturing the original values. */
+    ih_sigset_t seeded_mask;
+    struct ih_sigaction seeded_action = {0};
+    seeded_action.handler = controlled_original_child;
+    if (sigemptyset(&seeded_mask) || sigaddset(&seeded_mask, 15) || pthread_sigmask(IH_SIG_BLOCK, &seeded_mask, NULL)
+        || sigemptyset(&seeded_action.mask) || sigaddset(&seeded_action.mask, 13)
+        || sigaction(IH_SIGCHLD, &seeded_action, NULL)) fail("controlled-original-policy");
+#endif
+#ifdef IH_MSYS_CONTROLLED_TRACE
+    struct ih_sigaction original_child_action = {0}, child_action;
+#else
     struct ih_sigaction original_child_action, child_action;
+#endif
     if (sigemptyset(&wait_set) || sigaddset(&wait_set, IH_SIGCHLD) || sigaddset(&wait_set, IH_SIGUSR1)) fail("make-signal-set");
     int mask_error = pthread_sigmask(IH_SIG_BLOCK, &wait_set, &original_mask);
     if (mask_error) { *__errno() = mask_error; fail("block-owner-signals"); }
     child_action.handler = caught_child; child_action.flags = 0;
     if (sigemptyset(&child_action.mask) || sigaction(IH_SIGCHLD, &child_action, &original_child_action)) fail("catch-child-signal");
+#ifdef IH_MSYS_CONTROLLED_TRACE
+    /* Independent same-runtime no-fork round trip: observe any native
+     * sigaction normalization rather than assuming its returned mask encoding. */
+    struct ih_sigaction parent_roundtrip = {0};
+    if (sigaction(IH_SIGCHLD, &original_child_action, NULL) || sigaction(IH_SIGCHLD, NULL, &parent_roundtrip)
+        || sigaction(IH_SIGCHLD, &child_action, NULL)) fail("controlled-action-roundtrip");
+    char roundtrip_line[192];
+    int roundtrip_size = snprintf(roundtrip_line, sizeof(roundtrip_line), "TRACE parent-roundtrip %llu %d %llu\n",
+        (unsigned long long)(uintptr_t)parent_roundtrip.handler, parent_roundtrip.flags, (unsigned long long)parent_roundtrip.mask);
+    if (roundtrip_size <= 0 || roundtrip_size >= sizeof(roundtrip_line)) _exit(91);
+    write_all(status_fd, roundtrip_line, (size_t)roundtrip_size);
+#endif
     int master;
     int child = forkpty(&master, NULL, NULL, &size);
     if (child < 0) fail("forkpty");
@@ -288,8 +324,31 @@ int main(int argc, char **argv) {
         HANDLE workload_job = (HANDLE)(uintptr_t)strtoull(argv[4], &end, 10);
         if (*end || !workload_job || !AssignProcessToJobObject(workload_job, GetCurrentProcess())) fail("assign-child-job");
         if (!CloseHandle(workload_job)) fail("close-child-job");
+#ifndef IH_MSYS_CONTROLLED_TRACE
         for (int i = 0; i < 3; i++) close(raw[i]);
+#endif
+#ifndef IH_MSYS_CONTROLLED_SKIP_CHILD_RESTORE
         if (sigaction(IH_SIGCHLD, &original_child_action, NULL) || pthread_sigmask(IH_SIG_SETMASK, &original_mask, NULL)) _exit(91);
+#endif
+#ifdef IH_MSYS_CONTROLLED_TRACE
+        /* Trusted pre-exec observation through the still-owned private fd.
+         * Neither this branch nor the counterfactual exists in a normal build.
+         * The same three descriptors are closed before any untrusted exec. */
+        ih_sigset_t observed_mask = 0;
+        struct ih_sigaction observed_action;
+        int queried_mask = pthread_sigmask(IH_SIG_SETMASK, NULL, &observed_mask);
+        int queried_action = sigaction(IH_SIGCHLD, NULL, &observed_action);
+        if (queried_mask || queried_action) _exit(91);
+        char policy_line[256];
+        int policy_size = snprintf(policy_line, sizeof(policy_line), "TRACE child-preexec %llu %llu %llu %llu %d %d %llu %llu\n",
+            (unsigned long long)original_mask, (unsigned long long)observed_mask,
+            (unsigned long long)(uintptr_t)original_child_action.handler, (unsigned long long)(uintptr_t)observed_action.handler,
+            original_child_action.flags, observed_action.flags,
+            (unsigned long long)original_child_action.mask, (unsigned long long)observed_action.mask);
+        if (policy_size <= 0 || policy_size >= sizeof(policy_line)) _exit(91);
+        write_all(status_fd, policy_line, (size_t)policy_size);
+        for (int i = 0; i < 3; i++) close(raw[i]);
+#endif
         execv(argv[6], (const char *const *)(argv + 6));
         _exit(127);
     }
