@@ -1,0 +1,34 @@
+{
+  "observedAt": "2026-10-24T04:14:50.3379659+00:00",
+  "fixHead": "3e5c8c413b8d10280cac6eded3663ec3b80eb3c9",
+  "rows": [
+    {
+      "path": "apps/cli/src/run.ts",
+      "physicalSha256": "88db1248cc8a58df98a239a0a8eacd27ac47a5d35bf4241ad9418be025692166",
+      "physicalMatch": true,
+      "workingBlob": "6315593876117897a928fe10fc16d43710238f94",
+      "headBlob": "6315593876117897a928fe10fc16d43710238f94",
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/src/assembly.ts",
+      "physicalSha256": "648c9f267abce9c41feb69c1acdd057affc9cbca1cc261b44406adfebd189398",
+      "physicalMatch": true,
+      "workingBlob": "990c05d4a1558f3281aadf85480bcb8584ae845f",
+      "headBlob": "990c05d4a1558f3281aadf85480bcb8584ae845f",
+      "gitMatch": true
+    },
+    {
+      "path": "packages/session-executor/test/main-instruction-construction.test.ts",
+      "physicalSha256": "6263a259f89323863e28a41a7a63c92872f36bf8db08d21e34cd71efdecbcf85",
+      "physicalMatch": true,
+      "workingBlob": "e6f4f3b36ce384888a5e7421e786fe3a85ab90f8",
+      "headBlob": "e6f4f3b36ce384888a5e7421e786fe3a85ab90f8",
+      "gitMatch": true
+    }
+  ],
+  "status": [
+    "?? packages/desktop-gateway/test/repeated-growth-diagnosis.test.ts"
+  ],
+  "protectedSha256": "9fb750a75ec847dc97dd95d16e7ec7668b65d919bcb8208805f9a34fb93cec68"
+}

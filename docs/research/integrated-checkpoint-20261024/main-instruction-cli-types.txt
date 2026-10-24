@@ -1,0 +1,5 @@
+UTC=2026-10-24T04:20:04.2794029+00:00
+CWD=D:\I-harness-main\apps\cli
+SOURCE=4c0ccf41
+COMMAND=pnpm exec tsc --noEmit
+EXIT_CODE=0
