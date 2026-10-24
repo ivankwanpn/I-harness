@@ -36,7 +36,7 @@ import { createDesktopSchedules } from "./schedules.ts"
 import { createDesktopWorkState } from "./work-state.ts"
 import { createAgentSettings } from "./agent-settings.ts"
 import { createWslSettings, type WslSettingsOptions } from "./wsl-settings.ts"
-import { validateExecutionSettings } from "./settings-file.ts"
+import { validateDesktopSettingsDocument } from "./settings-file.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
 import { createDesktopMcp } from "./mcp-settings.ts"
@@ -92,49 +92,16 @@ export interface DesktopHost {
   close(): Promise<void>
 }
 
-const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"])
-const APPROVAL_MODES = new Set(["dangerous", "ask-all", "delegate", "full-access"])
 const DESKTOP_GUARDIAN_POLICY = "Review every Agent tool call. Approve only clearly safe, in-scope actions. Return allow when a person should decide because the action is risky or uncertain. Deny clearly malicious or out-of-scope actions. Never execute a tool yourself."
-
-/** SettingsStore intentionally falls back on corrupt JSON; a host claiming a
- * configured sandbox must distinguish a first run from a damaged document. */
-async function validateSettingsDocument(path: string): Promise<void> {
-  let raw: string
-  try {
-    raw = await readFile(path, "utf8")
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return
-    throw new Error(`invalid settings: ${error instanceof Error ? error.message : String(error)}`)
-  }
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    throw new Error("invalid settings: JSON parse failed")
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("invalid settings: expected an object")
-  }
-  const mode = (parsed as { sandboxMode?: unknown }).sandboxMode
-  validateExecutionSettings(parsed as Record<string, unknown>)
-  if (mode !== undefined && (typeof mode !== "string" || !SANDBOX_MODES.has(mode))) {
-    throw new Error("invalid settings: unknown sandboxMode")
-  }
-  const approval = (parsed as { approvalMode?: unknown }).approvalMode
-  if (approval !== undefined && (typeof approval !== "string" || !APPROVAL_MODES.has(approval))) throw new Error("invalid settings: unknown approvalMode")
-  if (approval === "full-access" && mode !== "danger-full-access") {
-    throw new Error("invalid settings: full access requires the full-access sandbox")
-  }
-}
 
 export async function createDesktopHost(options: DesktopHostOptions): Promise<DesktopHost> {
   if (!isAbsolute(options.workspace) || !isAbsolute(options.sessionDir)) {
     throw new Error("workspace and sessionDir must be absolute paths")
   }
   const settingsPath = resolveSettingsPath(options.settingsPath === undefined ? {} : { path: options.settingsPath })
-  await validateSettingsDocument(settingsPath)
   const settings = new SettingsStore({ path: settingsPath })
-  await settings.load()
+  // A fresh missing profile selects this store's native first-run defaults.
+  await settings.loadObserved({ validate: validateDesktopSettingsDocument })
   const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
   const usageCapture = createUsageCapture({ workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
     onRequestFacts: facts => options.onWrite(makeNotification("desktop/context/diagnostic", facts)),

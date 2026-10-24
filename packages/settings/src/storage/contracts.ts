@@ -11,6 +11,15 @@ export interface SettingsStoreOptions {
   configDir?: string
 }
 
+export interface ObservedSettingsLoadOptions {
+  /** Runs once on an isolated recursively frozen copy of the saved document. */
+  validate?: (document: Readonly<Record<string, unknown>>) => void
+}
+
+export type ObservedSettingsLoad =
+  | { kind: "loaded"; settings: Settings; stamp: { kind: "present"; sha256: string } }
+  | { kind: "missing"; stamp: { kind: "missing" } }
+
 /** A section draft's saved revision, checked inside the serialized write. */
 export interface SettingsRevisionGuard { section: string; expectedRevision: number }
 

@@ -8,11 +8,12 @@ import { normalizeLlm } from "../normalize/providers.ts"
 import { isRecord } from "../normalize/primitives.ts"
 import { assertInstructionData, validateInstructions } from "../instructions.ts"
 import { loadRevisionMeta } from "./revision.ts"
-import type { SettingsStoreOptions, SettingsRevisionGuard } from "./contracts.ts"
+import type { SettingsStoreOptions, SettingsRevisionGuard, ObservedSettingsLoadOptions, ObservedSettingsLoad } from "./contracts.ts"
 import { SettingsConflictError } from "../sections.ts"
 import { parseDocumentTolerant, patchJsonDocumentKeepingComments } from "./json-patch.ts"
 import { captureLegacyInstructionImport, instructionMigrationMeta, nativeInstructionMeta, stageInstructionImport, type LegacyInstructionImport } from "./instruction-migration.ts"
 import { SettingsWriteQueue, writeSettingsDocument } from "./transaction.ts"
+import { readObservedDocument } from "./observed-read.ts"
 
 /** Global settings path; an explicit document path wins. */
 export function resolveSettingsPath(options: SettingsStoreOptions = {}): string {
@@ -38,6 +39,20 @@ export class SettingsStore {
   }
   isLoaded(): boolean { return this.loaded }
   load(): Promise<Settings> { return this.queue.run(() => this.read()) }
+
+  /** Strict saved read; a rejected observation never replaces last-good state. */
+  loadObserved(options: ObservedSettingsLoadOptions = {}): Promise<ObservedSettingsLoad> {
+    const validate = options.validate
+    return this.queue.run(async () => {
+      const observed = await readObservedDocument(this.filename, validate)
+      if (observed === undefined) {
+        if (!this.loaded) this.publish(undefined)
+        return { kind: "missing", stamp: { kind: "missing" } }
+      }
+      this.publish(observed.raw)
+      return { kind: "loaded", settings: this.get(), stamp: observed.stamp }
+    })
+  }
 
   private async read(): Promise<Settings> {
     let parsed: Record<string, unknown> | undefined
