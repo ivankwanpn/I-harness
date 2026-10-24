@@ -24,7 +24,7 @@
 ```ts
 expect(resultEnvelope.retention.kind).toBe('inline')
 expect(resultEnvelope.retention.value).toMatchObject({code:'ENOENT',error:expect.any(String)})
-expect(actualSecondRequest.messages.some(message => message.role === 'tool' && containsEnoentInActualContent(message.content))).toBe(true)
+expect(actualSecondRequest.messages.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('ENOENT'))).toBe(true)
 expect(originalToolCallCount).toBe(1)
 expect(actualFinalAssistantText).toContain('recovered')
 ```
