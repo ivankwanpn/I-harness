@@ -21,20 +21,11 @@ use std::{
 use windows_sys::Win32::{
     Foundation::*,
     Security::SECURITY_ATTRIBUTES,
-    System::{
-        Console::*, IO::CancelSynchronousIo, Pipes::CreatePipe, Threading::GetCurrentProcess,
-    },
+    System::{Console::*, Pipes::CreatePipe, Threading::GetCurrentProcess},
 };
 pub const CHUNK: usize = 16384;
 pub(crate) fn cancel_worker(worker: &JoinHandle<()>, gate: &Gate) {
-    if gate.pending() {
-        let ok = unsafe { CancelSynchronousIo(worker.as_raw_handle()) };
-        gate.record_cancel(if ok == 0 {
-            unsafe { GetLastError() }
-        } else {
-            0
-        });
-    }
+    gate.cancel(worker.as_raw_handle());
 }
 pub enum Event {
     RetainedHandle(Handle),
