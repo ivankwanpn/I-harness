@@ -1,4 +1,3 @@
-import type { PluginContext } from '@i-harness/core-plugin'
 import type { SessionView as Session, RuntimeContextFactSource, RuntimeContextRecordV1, CapturedActionFact, ProducerFactOutcome } from '@i-harness/core-session'
 import { committedFactSeqs, createNondurableFactOwner, isNondurableSession, projectCurrentContext, runtimeContextDigest, renderRuntimeContext, validRuntimeContextRecord } from '@i-harness/core-session'
 
@@ -138,14 +137,4 @@ export function createRuntimeContext(session: Session, source?: RuntimeContextFa
       closed = true
     },
   }
-}
-
-export function installRuntimeContext(ctx: PluginContext, session: Session, source?: RuntimeContextFactSource): RuntimeContextService {
-  const service = createRuntimeContext(session, source)
-  ctx.on('agent/pre-step', async input => {
-    const event = input as { session?: Session; signal?: AbortSignal }
-    if (event.session !== session) return
-    await service.render(event.signal)
-  })
-  return service
 }

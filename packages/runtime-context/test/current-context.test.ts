@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { createContext } from '@i-harness/core-plugin'
 import { append, createSession, projectConversation, renderConversation } from '@i-harness/core-session'
-import { createRuntimeContext, installRuntimeContext } from '../src/index.ts'
+import { createRuntimeContext } from '../src/index.ts'
 
 describe('current context ownership', () => {
   it('deduplicates adjacent identical observations on the same pending memory source', async () => {
@@ -10,16 +9,6 @@ describe('current context ownership', () => {
     await Promise.all([service.render(), service.render()])
     expect(session.events.filter(event => event.type === 'runtime/context')).toHaveLength(1)
   })
-  it('ignores a bubbled child pre-step before reading parent getters', async () => {
-    const ctx = createContext(), parent = createSession(), child = createSession()
-    let reads = 0
-    const service = installRuntimeContext(ctx, parent)
-    service.registerSection('instructions', () => { reads++; return 'parent rule' })
-    await ctx.emit('agent/pre-step', { session: child })
-    expect(reads).toBe(0)
-    expect(parent.events).toHaveLength(0)
-  })
-
   it('reconciles actual host sections after a rewind restores an older floor', async () => {
     const session = createSession(), service = createRuntimeContext(session)
     let text = 'old rule'

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { createContext } from "@i-harness/core-plugin"
 import { createSession, createNondurableFactOwner, deriveMessages, renderRuntimeContext, type SessionEvent } from "@i-harness/core-session"
-import { createRuntimeContext, installRuntimeContext } from "../src/index.ts"
+import { createRuntimeContext } from "../src/index.ts"
 
 function snapshotTexts(s: ReturnType<typeof createSession>): string[] {
   return s.events.filter(
@@ -135,14 +134,4 @@ describe("runtime context", async () => {
     expect(msgs.some((m) => m.role === "user" && m.content === "## state\n\non branch feature")).toBe(true)
   })
 
-  it("installRuntimeContext renders on the agent/pre-step emit (loop integration seam)", async () => {
-    const ctx = createContext()
-    const s = createSession()
-    const rc = installRuntimeContext(ctx, s)
-    rc.registerSection("cwd", () => "/w")
-    await ctx.emit("agent/pre-step", { task: "t", session: s })
-    expect(snapshotTexts(s)).toHaveLength(1)
-    await ctx.emit("agent/pre-step", { task: "t", session: s })
-    expect(snapshotTexts(s)).toHaveLength(1) // unchanged → no second snapshot
-  })
 })

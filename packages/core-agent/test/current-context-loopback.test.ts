@@ -9,13 +9,13 @@ import { captureContextSnapshot } from '@i-harness/context-engine'
 import { reductionGroups } from '../../context-engine/src/reduction/selection.ts'
 import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
-import { installRuntimeContext } from '../../runtime-context/src/index.ts'
+import { createRuntimeContext } from '../../runtime-context/src/index.ts'
 import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/generation-actions.ts'
 import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
 import { createAgent } from '../src/index.ts'
 import { createLoopbackProvider, writeSplitSse } from './helpers/provider-loopback.ts'
 
-it('actual managed main Agent sends the owned current prefix once across tools, skills-only and clear', async () => {
+it('explicit source-boundary publisher sends the owned current prefix once through the managed Agent across tools, skills-only and clear', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c12-main-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
@@ -36,11 +36,14 @@ it('actual managed main Agent sends the owned current prefix once across tools, 
   const ctx = createContext(), tools = createToolRegistry(ctx)
   let effects = 0, instructions = 'EXACT_CURRENT_RULE', skills = 'EXACT_SKILLS'
   tools.register({ name: 'read', description: 'Controlled read', inputSchema: { type: 'object' }, isReadOnly: true, execute: async () => { effects++; return 'completed tool data' } })
-  const service = installRuntimeContext(ctx, document.view, signal => document.beginAction(signal))
+  const service = createRuntimeContext(document.view, signal => document.beginAction(signal))
   service.registerSection('instructions', () => instructions); service.registerSection('skills', () => skills)
   const model = createAnthropicClient({ apiKey: 'controlled-loopback', baseUrl: server.baseUrl, model: 'controlled', executionIdentity: { version: 1, runtimeId: 'controlled-runtime', bindingLifetimeId: 'controlled-binding', authEpoch: 'controlled-auth', scope: 'binding-credential', coldCompatible: false } })
   const agent = createAgent(ctx, { session: document.view, factOwner: document, sessionId: id, tools, model, systemPrompt: 'static baseline', generationFactory: action => createGenerationLifecycle(document.view, id, action) })
   try {
+    // This low-level publisher is explicit at source updates; shipping logical
+    // admission is covered by session-executor's actual assembly controls.
+    await service.render()
     expect((await agent.run('human request')).finalText).toBe('done')
     expect(effects).toBe(1)
     expect(document.view.events.filter(event => event.type === 'runtime/context')).toHaveLength(1)
@@ -58,11 +61,13 @@ it('actual managed main Agent sends the owned current prefix once across tools, 
     expect(reductionGroups(snapshot.snapshot).filter(group => group.items.some(item => item.kind === 'exchange')).every(group => !group.protected)).toBe(true)
     expect(snapshot.snapshot.protection.sourceIds).toContain(snapshot.snapshot.conversation.current!.source.id)
     instructions = ''
+    await service.render()
     await agent.followup('skills only')
     expect(JSON.stringify(server.requests[2]!.body)).not.toContain('EXACT_CURRENT_RULE')
     expect(JSON.stringify(server.requests[2]!.body)).not.toContain('CONTROLLED_NATIVE_SIGNATURE')
     expect(JSON.stringify(server.requests[2]!.body).split('EXACT_SKILLS')).toHaveLength(2)
     skills = ''
+    await service.render()
     const feedback = document.beginAction()
     await feedback.facts.agent.feedback({ type: 'user/message', text: 'ordinary plugin feedback', source: { kind: 'plugin', plugin: 'other-plugin' }, internal: true }); feedback.finish()
     await agent.followup('cleared')
@@ -77,7 +82,7 @@ it('actual managed main Agent sends the owned current prefix once across tools, 
 it('retains the exact issued current capture after lost response and joins reconciliation before close', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-c12-unknown-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
-  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id), ctx = createContext()
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const actual = backend.appendOwnedBatch!, actualReconcile = backend.reconcileOwnedBatch!
   let issued = 0, captures = 0, blocked = true, originalKey: unknown
   backend.appendOwnedBatch = async (...args) => {
@@ -86,7 +91,7 @@ it('retains the exact issued current capture after lost response and joins recon
     return result
   }
   backend.reconcileOwnedBatch = async (...args) => { expect(args[3].key).toEqual(originalKey); return blocked ? { kind: 'unknown', key: args[3].key } : actualReconcile(...args) }
-  const service = installRuntimeContext(ctx, document.view, signal => {
+  const service = createRuntimeContext(document.view, signal => {
     const action = document.beginAction(signal)
     return { finish: action.finish, captureRuntimeContext(record, check) { captures++; return action.captureRuntimeContext(record, check) } }
   })

@@ -1139,9 +1139,6 @@ importers:
 
   packages/runtime-context:
     dependencies:
-      '@i-harness/core-plugin':
-        specifier: workspace:*
-        version: link:../core-plugin
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session

@@ -1,9 +1,10 @@
-import { expect, it, vi } from 'vitest'
-import { mkdtemp } from 'node:fs/promises'
+import { expect, it } from 'vitest'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
-import { renderRuntimeContext, type BatchKey } from '@i-harness/core-session'
+import { decodeFactBatch, renderRuntimeContext, type BatchKey } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createTodoTool } from '@i-harness/todo'
 import { enterPlanMode } from '@i-harness/plan-mode'
@@ -12,12 +13,8 @@ import { createScheduleTools } from '@i-harness/schedule/tools'
 import { applyTitle } from '../../session-title/src/index.ts'
 import { createRuntimeContextSource } from '../src/lifecycle/action-facts.ts'
 import { createSessionAssembly } from '../src/assembly.ts'
-
-// This host wiring control must not discover instructions from the real home
-// or drive ancestors. The real Agent/HTTP test supplies all sections directly.
-vi.mock('@i-harness/instructions', async original => ({
-  ...await original<typeof import('@i-harness/instructions')>(), createInstructionsSection: () => () => 'controlled assembly instruction',
-}))
+import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
+import { rmWorkspaceSync } from './helpers.ts'
 
 it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s through its actual producer only after the managed receipt', async producer => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-producer-'))
@@ -45,28 +42,65 @@ it.each(['todo', 'plan', 'runtime', 'schedule', 'title'] as const)('publishes %s
   } finally { release.resolve(); await coordinator.close() }
 })
 
-it('shares adjacent runtime snapshots through the actual assembly feedback factory while its receipt is held', async () => {
+// A held real runtime receipt cannot become current or reach the model through
+// the actual Agent admission; later admissions share the confirmed snapshot.
+it('gates actual assembly Agent visibility on the runtime receipt and deduplicates later admissions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-runtime-assembly-'))
-  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  await writeFile(join(root, 'AGENTS.md'), 'CONTROLLED_ASSEMBLY_INSTRUCTION')
+  const backend = createJsonlBackend(join(root, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create()
-  let sends = 0
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, codeMode: { mode: 'off' }, sandbox: 'read-only', model: { async *stream() { sends++; yield { type: 'end' } } } })
+  const bodies: { messages: { role: string; content: unknown }[] }[] = []
+  const server = createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk
+    bodies.push(JSON.parse(body))
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.end('data: ' + JSON.stringify({ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] }) + '\n\ndata: [DONE]\n\n')
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address(); if (!address || typeof address === 'string') throw Error('Missing loopback address')
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, codeMode: { mode: 'off' }, sandbox: 'read-only',
+    model: createOpenAICompatibleClient({ model: 'fixture', apiKey: 'owned-loopback', baseUrl: 'http://127.0.0.1:' + address.port }),
+  })
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), append = backend.appendOwnedBatch!
-  let writes = 0, settled = 0
-  backend.appendOwnedBatch = async (...args) => { writes++; entered.resolve(); await release.promise; return append(...args) }
-  const signal = new AbortController().signal
-  const payload = { task: 'runtime snapshot', session: assembly.session, signal }
-  const first = assembly.ctx.emit('agent/pre-step', payload).then(() => { settled++ })
-  await Promise.race([entered.promise, first.then(() => { throw new Error('No runtime receipt hold') })])
-  const second = assembly.ctx.emit('agent/pre-step', payload).then(() => { settled++ })
+  let runtimeWrites = 0, otherWrites = 0, settled = false
+  backend.appendOwnedBatch = async (...args) => {
+    const runtime = decodeFactBatch(args[3].bytes).events.filter(event => event.type === 'runtime/context')
+    if (runtime.length) { runtimeWrites += runtime.length; entered.resolve(); await release.promise }
+    else otherWrites++
+    return append(...args)
+  }
+  const run = assembly.agent.run('runtime snapshot', AbortSignal.timeout(10000)).then(result => { settled = true; return result })
+  void run.catch(() => {})
   try {
-    expect(settled).toBe(0)
-    expect(assembly.session.events.filter(event => event.type === 'user/message')).toEqual([])
+    await Promise.race([entered.promise, run.then(() => { throw Error('No runtime receipt hold') })])
+    expect(settled).toBe(false)
+    expect(runtimeWrites).toBe(1)
+    // Human input and step lifecycle facts legitimately precede publication.
+    expect(otherWrites).toBeGreaterThan(0)
+    expect(assembly.session.events.some(event => event.type === 'user/message')).toBe(true)
+    expect(assembly.session.events.filter(event => event.type === 'runtime/context')).toEqual([])
+    expect((await backend.read(id)).events.filter(event => event.type === 'runtime/context')).toEqual([])
+    expect(bodies).toEqual([])
     release.resolve()
-    await Promise.all([first, second])
-    expect([writes, sends, settled]).toEqual([1, 0, 2])
-    expect(assembly.session.events.filter(event => event.type === 'runtime/context')).toHaveLength(1)
-  } finally { release.resolve(); await Promise.allSettled([first, second]); await assembly.dispose(); await coordinator.close() }
+    expect((await run).finalText).toBe('done')
+    await assembly.agent.followup('same scoped instructions')
+    expect([runtimeWrites, bodies.length]).toEqual([1, 2])
+    const expected = '### ' + join(root, 'AGENTS.md') + ' [scope: ' + root + ']\n\nCONTROLLED_ASSEMBLY_INSTRUCTION'
+    const current = assembly.session.events.filter(event => event.type === 'runtime/context')
+    expect(current).toHaveLength(1)
+    expect(current[0]).toMatchObject({ sections: expect.arrayContaining([{ name: 'instructions', text: expected }]) })
+    expect((await backend.read(id)).events.filter(event => event.type === 'runtime/context')).toEqual(current)
+    for (const body of bodies) {
+      const visible = body.messages.filter(message => typeof message.content === 'string' && message.content.includes('CONTROLLED_ASSEMBLY_INSTRUCTION'))
+      expect(visible).toHaveLength(1)
+      expect(visible[0]!.content).toContain('## instructions\n\n' + expected)
+      expect(visible[0]!.content).toBe(renderRuntimeContext(current[0]!.sections))
+      expect(JSON.stringify(body).split('CONTROLLED_ASSEMBLY_INSTRUCTION')).toHaveLength(2)
+    }
+  } finally {
+    release.resolve(); await run.catch(() => {}); await assembly.dispose(); await coordinator.close()
+    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); rmWorkspaceSync(root)
+  }
 })
 
 it('invalidates runtime dedupe knowledge after unknown so a reconciled newer snapshot cannot hide a return to old text', async () => {

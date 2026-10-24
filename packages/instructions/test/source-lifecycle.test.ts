@@ -30,12 +30,23 @@ it('unions concurrent target activation before either prepare returns', async ()
   const b = service.prepare([{ path: f.path('b'), kind: 'directory' }]); hold.release.resolve()
   const [sa, sb] = await Promise.all([a, b]); expect(sa.applicable).toHaveLength(2); expect(sb.text).toContain('alpha'); expect(sb.text).toContain('bravo')
 })
-it.each([false, true])('close joins held reads and closes once even if lease rejects (%s)', async reject => {
-  const file = await f.write('AGENTS.md', 'body'); const hold = await holdRead(file); const service = f.service(); if (reject) f.observation.closeError = new Error('lease close failed')
+it.each([false, true])('close joins held reads, shares its pending flight and retries the same failed lease (%s)', async reject => {
+  const file = await f.write('AGENTS.md', 'body'); const hold = await holdRead(file); const service = f.service(); const leaseError = new Error('lease close failed'); if (reject) f.observation.closeError = leaseError
   const preparing = service.prepare([]); const prepareAssertion = expect(preparing).rejects.toMatchObject({ code: 'INSTRUCTIONS_CLOSED' }); await hold.entered.promise
-  let closed = false; const closing = service.close(); const closeAssertion = reject ? expect(closing).rejects.toThrow('lease close failed') : expect(closing).resolves.toBeUndefined(); void closing.then(() => { closed = true }, () => { closed = true })
+  let closed = false; const closing = service.close(); const closeAssertion = reject ? expect(closing).rejects.toBe(leaseError) : expect(closing).resolves.toBeUndefined(); void closing.then(() => { closed = true }, () => { closed = true })
+  expect(service.close()).toBe(closing)
   await Promise.resolve(); expect(closed).toBe(false); expect(service.snapshot().text).toBe(''); hold.release.resolve(); await prepareAssertion; await closeAssertion
-  expect(hold.closes()).toBe(1); expect(f.observation.closes).toBe(1); expect(service.close()).toBe(closing)
+  expect(hold.closes()).toBe(1); expect(f.observation.closes).toBe(1)
+  const opens = vi.mocked(fs.open).mock.calls.length, subscriptions = f.observation.subscriptions, updates = f.observation.updates
+  if (reject) {
+    f.observation.closeError = undefined
+    const retry = service.close(), retried = expect(retry).resolves.toBeUndefined()
+    expect(retry).not.toBe(closing); expect(service.close()).toBe(retry)
+    await retried
+    expect(f.observation.closes).toBe(2); expect(service.close()).toBe(retry)
+  } else expect(service.close()).toBe(closing)
+  expect(vi.mocked(fs.open).mock.calls).toHaveLength(opens); expect(hold.closes()).toBe(1)
+  expect([f.observation.subscriptions, f.observation.updates]).toEqual([subscriptions, updates])
   f.observation.emit([file]); expect(service.snapshot().text).toBe(''); await expect(service.prepare([])).rejects.toMatchObject({ code: 'INSTRUCTIONS_CLOSED' })
 })
 it('isolates subscribers, duplicate unsubscribe, and mutable observation capability state', async () => {
@@ -128,10 +139,26 @@ it.each([
   const prepared = expect(preparing).rejects.toMatchObject({ code: 'INSTRUCTIONS_CLOSED' })
   await entered.promise; let closed = false
   const closing = service.close(); const outcome = closing.then(() => ({ error: undefined }), error => ({ error }))
+  expect(service.close()).toBe(closing)
   void outcome.then(() => { closed = true }); await Promise.resolve(); expect(closed).toBe(false)
   release.resolve(); await prepared; const { error } = await outcome
   const flatten = (value: unknown): unknown[] => value instanceof AggregateError ? value.errors.flatMap(flatten) : [value]
   if (!failures.closeFailure) expect(error).toBeUndefined()
   else expect(flatten(error)).toEqual([...(failures.readFailure ? [readError] : []), closeError, ...(failures.leaseFailure ? [leaseError] : [])])
-  expect(markerCloses).toBe(1); expect(f.observation.closes).toBe(1); expect(service.close()).toBe(closing)
+  expect(markerCloses).toBe(1); expect(f.observation.closes).toBe(1)
+  const opens = vi.mocked(fs.open).mock.calls.length, subscriptions = f.observation.subscriptions, updates = f.observation.updates
+  if (failures.closeFailure) {
+    // A transient observation close can recover; the original native read/
+    // cleanup faults stay owned and must not cause another native handle.
+    f.observation.closeError = undefined
+    const retry = service.close(), retried = retry.then(() => undefined, error => error)
+    expect(retry).not.toBe(closing); expect(service.close()).toBe(retry)
+    const retryError = await retried
+    expect(flatten(retryError)).toEqual([...(failures.readFailure ? [readError] : []), closeError])
+    for (const original of [...(failures.readFailure ? [readError] : []), closeError]) expect(flatten(retryError)).toContain(original)
+    expect(f.observation.closes).toBe(2)
+  } else expect(service.close()).toBe(closing)
+  expect(markerCloses).toBe(1); expect(vi.mocked(fs.open).mock.calls).toHaveLength(opens)
+  expect([f.observation.subscriptions, f.observation.updates]).toEqual([subscriptions, updates])
+  await expect(service.prepare([])).rejects.toMatchObject({ code: 'INSTRUCTIONS_CLOSED' })
 })
