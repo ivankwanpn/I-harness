@@ -1,13 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { exportConversationSeed, deriveMessages } from '@i-harness/core-session'
+import { exportConversationSeed, deriveMessages, legacyPrefixDigest } from '@i-harness/core-session'
 import { createOwnership } from '../src/coordinator/ownership.ts'
-import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend } from '../src/index.ts'
+import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
 vi.mock('@i-harness/fs-lock', async importOriginal => {
   const actual = await importOriginal<typeof import('@i-harness/fs-lock')>()
@@ -404,4 +404,172 @@ it('bootstrap carries a genuine nonempty semantic source prefix under the origin
   await c.close()
   const cold = await backend.read('target')
   expect(deriveMessages({ formatVersion: cold.version, events: cold.events, header: cold.meta }).map(message => message.content)).toContain('original question')
+})
+
+const noDependencies = async (): Promise<never> => { throw new Error('empty closure must not call dependency transfer') }
+const originalGuards = { assertCurrent() {}, dependencies: { confirm: noDependencies, reconcile: noDependencies } }
+async function existingAncestor(f: Awaited<ReturnType<typeof fixture>>): Promise<BootstrapRequest> {
+  await f.coordinator.create({ sessionId: 'ancestor', createdAt: invocation.createdAt, parentSession: 'old-parent', origin: 'fork', title: 'header-only profile '.repeat(100) })
+  const raw = await readFile(join(f.root, 'ancestor.jsonl'))
+  return { invocation: { ...invocation, targetSessionId: 'ancestor', operationId: 'ancestor-bootstrap' },
+    target: { kind: 'existing-empty', expectedHeaderDigest: createHash('sha256').update(raw).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0, new Uint8Array()) } },
+    metadata: { title: 'header-only profile '.repeat(100) }, lineage: { origin: 'fork', parentSession: 'rewritten-parent' }, seed: compileSemanticSeed({ kind: 'none' }) }
+}
+it('fix I1 external existing-empty ancestor bootstrap synchronously revokes and joins metadata observation', async () => {
+  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
+  const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
+  const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['source', 'ancestor'] }, async observed => { entered.resolve(observed); await leave.promise })
+  const outcome = running.then(() => 'success', error => error), observed = await entered.promise
+  const bootstrap = c.bootstrapSemanticTarget(original, originalGuards)
+  try {
+    expect(() => observed.assertCurrent()).toThrow()
+    expect((await f.backend.profile('ancestor')).meta.parentSession).toBe('old-parent')
+    await expect(c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async () => 0)).rejects.toMatchObject({ reason: 'conflict' })
+  } finally { leave.resolve(); await outcome; await bootstrap }
+  expect(await outcome).toMatchObject({ reason: 'revoked' })
+  expect(await bootstrap).toMatchObject({ kind: 'ready', receipt: { invocation: original.invocation } })
+  expect((await f.backend.profile('ancestor')).meta.parentSession).toBe('rewritten-parent')
+})
+it('fix I1 bootstrap-first pending header work blocks intersecting observation admission', async () => {
+  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator
+  const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>(), prepare = f.backend.prepareBootstrapHeader!
+  f.backend.prepareBootstrapHeader = async (...args) => { entered.resolve(); await leave.promise; return prepare(...args) }
+  const bootstrap = c.bootstrapSemanticTarget(original, originalGuards)
+  await entered.promise
+  const observing = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async () => 0).then(value => value, error => error)
+  try { expect(await Promise.race([observing, new Promise(resolve => setTimeout(() => resolve('waited-on-bootstrap-lane'), 40))])).toMatchObject({ reason: 'conflict' }) }
+  finally { leave.resolve(); await bootstrap; await observing }
+  expect((await bootstrap).kind).toBe('ready')
+})
+it('fix I1 external original resume after unknown header response revokes before original owner recovery', async () => {
+  const f = await fixture(), original = await existingAncestor(f), c = f.coordinator, prepare = f.backend.prepareBootstrapHeader!
+  f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+  expect(await c.bootstrapSemanticTarget(original, originalGuards)).toMatchObject({ kind: 'blocked' })
+  f.backend.prepareBootstrapHeader = prepare
+  expect((await f.backend.profile('ancestor')).meta.sessionId).toBe('ancestor')
+  const entered = Promise.withResolvers<SessionBindingObservation>(), leave = Promise.withResolvers<void>()
+  const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { entered.resolve(observed); await leave.promise })
+  const outcome = running.then(() => 'success', error => error), observed = await entered.promise
+  const resumed = c.resumeSemanticTarget(original.invocation, originalGuards, original)
+  try { expect(() => observed.assertCurrent()).toThrow() } finally { leave.resolve(); await outcome; await resumed }
+  expect(await outcome).toMatchObject({ reason: 'revoked' })
+  expect(await resumed).toMatchObject({ kind: 'ready', receipt: { invocation: original.invocation } })
+  expect(c.ownerOf('ancestor')).toBe(true)
+})
+it('fix I1 captured original existing-empty target can recover unknown and share original bootstrap flight inside callback', async () => {
+  const f = await fixture(), c = f.coordinator
+  await c.create({ sessionId: 'target', createdAt: invocation.createdAt })
+  const raw = await readFile(join(f.root, 'target.jsonl'))
+  const original: BootstrapRequest = { invocation, target: { kind: 'existing-empty', expectedHeaderDigest: createHash('sha256').update(raw).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0, new Uint8Array()) } }, metadata: {}, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSemanticSeed({ kind: 'none' }) }
+  const prepare = f.backend.prepareBootstrapHeader!, profile = vi.spyOn(f.backend, 'profile')
+  f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+  await c.withSessionBindingObservation!(request, async observed => {
+    const guards = { ...originalGuards, assertCurrent: observed.assertCurrent }
+    const [a, b] = await Promise.all([c.bootstrapSemanticTarget(original, guards), c.bootstrapSemanticTarget(original, guards)])
+    expect(a).toBe(b); expect(a.kind).toBe('blocked'); observed.assertCurrent()
+    f.backend.prepareBootstrapHeader = prepare
+    const recovered = await c.resumeSemanticTarget(invocation, guards, original)
+    expect(recovered).toMatchObject({ kind: 'ready', receipt: { invocation } }); observed.assertCurrent()
+  })
+  expect(profile.mock.calls.map(call => call[0])).not.toContain('target')
+  expect(c.ownerOf('target')).toBe(true)
+})
+it.each(['bootstrap', 'resume'] as const)('fix R1-04 %s captures invocation metadata lineage seed and optional payload before held admission', async mode => {
+  const f = await fixture(), c = f.coordinator, original = await existingAncestor(f)
+  await c.append('source', [{ type: 'turn/start', seq: 0 }, { type: 'user/message', text: 'captured source', seq: 1 }, { type: 'assistant/message', text: 'captured answer', seq: 2 }, { type: 'turn/end', seq: 3 }])
+  const source = await c.openManagedDocument('source'), events = source.view.events, length = events.length
+  const exported = exportConversationSeed(source.view, { kind: 'session', sessionId: 'source' }, { kind: 'all' })
+  if (exported.kind !== 'seed') throw new Error('expected genuine semantic seed')
+  original.seed = compileSemanticSeed(exported); original.lineage.parentSession = 'source'
+  const intended = structuredClone(original), resumeInvocation = { ...original.invocation }, prepare = f.backend.prepareBootstrapHeader!
+  const guards = { ...originalGuards, assertCurrent() { source.assertReady(); expect(source.view.events).toBe(events); expect(events.length).toBe(length) } }
+  if (mode === 'resume') {
+    f.backend.prepareBootstrapHeader = async (...args) => { await prepare(...args); return { kind: 'unknown' } }
+    expect((await c.bootstrapSemanticTarget(original, guards)).kind).toBe('blocked')
+    f.backend.prepareBootstrapHeader = prepare
+  }
+  await c.create({ sessionId: 'other-ancestor', createdAt: invocation.createdAt, origin: 'fork', parentSession: 'untouched' })
+  const otherBefore = await readFile(join(f.root, 'other-ancestor.jsonl'))
+  const enteredA = Promise.withResolvers<SessionBindingObservation>(), enteredB = Promise.withResolvers<SessionBindingObservation>(), leaveA = Promise.withResolvers<void>(), leaveB = Promise.withResolvers<void>()
+  const a = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['ancestor'] }, async observed => { enteredA.resolve(observed); await leaveA.promise }).then(() => 'success', error => error)
+  const b = c.withSessionBindingObservation!({ existingSessionIds: ['other-ancestor'], target: { ...invocation, targetSessionId: 'other-observation-target' } }, async observed => { enteredB.resolve(observed); await leaveB.promise }).then(() => 'success', error => error)
+  const observedA = await enteredA.promise, observedB = await enteredB.promise
+  const pending = mode === 'bootstrap' ? c.bootstrapSemanticTarget(original, guards) : c.resumeSemanticTarget(resumeInvocation, guards, original)
+  try {
+    expect(() => observedA.assertCurrent()).toThrow()
+    original.invocation.targetSessionId = 'other-ancestor'; original.invocation.operationId = 'mutated-operation'
+    resumeInvocation.targetSessionId = 'other-ancestor'; resumeInvocation.operationId = 'mutated-operation'
+    original.metadata.title = 'mutated title'; original.lineage.parentSession = 'mutated source'
+    original.seed = compileSemanticSeed({ kind: 'none' })
+    original.target = { kind: 'existing-empty', expectedHeaderDigest: createHash('sha256').update(otherBefore).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0, new Uint8Array()) } }
+    observedB.assertCurrent(); leaveA.resolve()
+    const result = await pending
+    expect(result).toMatchObject({ kind: 'ready', receipt: { invocation: intended.invocation } })
+    expect((await f.backend.profile('ancestor')).meta).toMatchObject({ title: intended.metadata.title, parentSession: 'source', semanticSeed: { seedDigest: intended.seed.digest } })
+    observedB.assertCurrent(); expect(await readFile(join(f.root, 'other-ancestor.jsonl'))).toEqual(otherBefore)
+    const cold = await f.backend.read('ancestor')
+    expect(deriveMessages({ formatVersion: cold.version, events: cold.events, header: cold.meta }).map(message => message.content)).toContain('captured source')
+  } finally {
+    leaveA.resolve(); leaveB.resolve(); await a; await b; await pending
+    if (mode === 'resume') await c.resumeSemanticTarget(intended.invocation, guards, intended)
+  }
+})
+it.each(['subclass', 'prototype', 'proxy', 'index-accessor'] as const)('fix I2 rejects %s IDs without executing caller iteration or acquiring any native lease', async kind => {
+  const { coordinator: c } = await fixture()
+  let calls = 0
+  class Expanded extends Array<string> { override *[Symbol.iterator]() { calls++; for (let i = 0; i < 65; i++) yield `extra-${i}`; return undefined } }
+  let ids: string[]
+  if (kind === 'subclass') ids = new Expanded()
+  else if (kind === 'prototype') ids = Object.setPrototypeOf([], { *[Symbol.iterator]() { calls++; yield 'source' } })
+  else if (kind === 'proxy') ids = new Proxy(['source'], { getPrototypeOf(target) { calls++; return Reflect.getPrototypeOf(target) }, get(target, name, receiver) { calls++; return Reflect.get(target, name, receiver) } })
+  else { ids = ['source']; Object.defineProperty(ids, 0, { enumerable: true, get() { calls++; return 'source' } }) }
+  vi.mocked(acquireSessionLock).mockClear()
+  await expect(c.withSessionBindingObservation!({ ...request, existingSessionIds: ids }, async () => 0)).rejects.toMatchObject({ reason: 'invalid' })
+  expect(calls).toBe(0); expect(acquireSessionLock).not.toHaveBeenCalled()
+})
+it.each(['add-method', 'add-accessor', 'remove-method', 'remove-accessor', 'aborted-accessor'] as const)('fix I3 genuine signal %s overrides cannot strand scope or native leases', async kind => {
+  const raws: Awaited<ReturnType<typeof nativeAcquire>>[] = []
+  let live = 0, overrides = 0, callbacks = 0
+  vi.mocked(acquireSessionLock).mockImplementation(async options => {
+    const raw = await nativeAcquire(options); raws.push(raw); live++
+    return { get held() { return raw.held }, async release() { if (raw.held) { await raw.release(); live-- } } }
+  })
+  const { coordinator: c } = await fixture(), signal = new AbortController().signal
+  const property = kind.startsWith('add') ? 'addEventListener' : kind.startsWith('remove') ? 'removeEventListener' : 'aborted'
+  const throwOverride = () => { overrides++; throw new Error(`caller ${property} override`) }
+  Object.defineProperty(signal, property, kind.endsWith('accessor') ? { get: throwOverride } : { value: throwOverride })
+  try {
+    const outcome = await c.withSessionBindingObservation!({ ...request, signal }, async observed => { callbacks++; observed.assertCurrent(); return 'observed' }).then(value => value, error => error)
+    const closing = c.close().then(() => 'closed', error => error)
+    const closed = await Promise.race([closing, new Promise(resolve => setTimeout(() => resolve('stranded'), 200))])
+    expect(closed).toBe('closed')
+    expect(outcome).toBe('observed')
+    expect([overrides, callbacks, live]).toEqual([0, 1, 0])
+    await c.updateMeta('source', { title: 'ordinary work still progresses' })
+    await c.close(); expect(live).toBe(0)
+    console.info(JSON.stringify({ control: 'I3 override lifetime', kind, overrides, callbacks, live, close: closed }))
+  } finally {
+    // A RED on the old listener-install path has an unjoinable scope. Release
+    // fixture-native handles explicitly so that regression itself cannot leak.
+    coordinators.splice(coordinators.indexOf(c), 1)
+    for (const raw of raws) await raw.release()
+  }
+})
+it('fix I3 branded pre-aborted state ignores a shadowed false property before acquisition', async () => {
+  const { coordinator: c } = await fixture(), controller = new AbortController()
+  controller.abort(); let reads = 0, callbacks = 0
+  Object.defineProperty(controller.signal, 'aborted', { get() { reads++; return false } })
+  vi.mocked(acquireSessionLock).mockClear()
+  await expect(c.withSessionBindingObservation!({ ...request, signal: controller.signal }, async () => { callbacks++ })).rejects.toMatchObject({ reason: 'revoked' })
+  expect([reads, callbacks]).toEqual([0, 0]); expect(acquireSessionLock).not.toHaveBeenCalled()
+})
+it('fix I3 real active abort still revokes with shadowed listener methods and aborted getter', async () => {
+  const { coordinator: c } = await fixture(), controller = new AbortController()
+  let reads = 0
+  for (const property of ['addEventListener', 'removeEventListener', 'aborted']) Object.defineProperty(controller.signal, property, { get() { reads++; throw new Error('shadowed signal field') } })
+  await expect(c.withSessionBindingObservation!({ ...request, signal: controller.signal }, async observed => {
+    observed.assertCurrent(); controller.abort(); expect(() => observed.assertCurrent()).toThrow(); return 'must reject'
+  })).rejects.toMatchObject({ reason: 'revoked' })
+  expect(reads).toBe(0); expect(c.ownerOf('target')).toBe(false)
+  await c.updateMeta('source', { title: 'after abort' }); await c.close()
 })

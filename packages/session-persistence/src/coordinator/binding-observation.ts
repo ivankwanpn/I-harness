@@ -1,9 +1,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
+import { types as utilTypes } from 'node:util'
 import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/core-session'
-import { bootstrapFields, captureBootstrapInvocation } from './bootstrap-header.ts'
+import { bootstrapFields, captureBootstrapInvocation, captureBootstrapRequest } from './bootstrap-header.ts'
+import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards } from './bootstrap-types.ts'
+import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.ts'
 import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
+
+const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
+const signalAddListener = EventTarget.prototype.addEventListener
+const signalRemoveListener = EventTarget.prototype.removeEventListener
+const isAborted = (signal?: AbortSignal): boolean => signal === undefined ? false : Reflect.apply(signalAborted, signal, [])
 
 /** Private Documents-owned scope admission. No project policy is interpreted here. */
 export function createBindingObservations(
@@ -15,6 +23,7 @@ export function createBindingObservations(
   type Scope = { ids: Set<string>; keys: Set<string>; target: SessionBindingObservationRequest['target']; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean }
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
   const pendingIds = new Map<string, number>(), pendingKeys = new Map<string, number>(), deletedIds = new Set<string>(), deletedKeys = new Set<string>()
+  const retiringIds = new Map<string, number>()
   let closed = false
   const bindingKey = (id: string) => `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
   const intersects = (scope: Scope, ids: readonly string[], keys: readonly string[]) => ids.some(id => scope.ids.has(id)) || keys.some(key => scope.keys.has(key))
@@ -27,30 +36,55 @@ export function createBindingObservations(
   }
   function assertOutsideObservedSession(id: string) { refuseSelf([id], []) }
   function assertOutsideObservedDocument(key: string) { refuseSelf([], [key]) }
-  function assertBootstrap(invocation: SessionBindingObservationRequest['target']) {
-    const inherited = context.getStore()
-    let original: SessionBindingObservationRequest['target']
-    try { original = captureBootstrapInvocation(invocation) }
-    catch (cause) { if (inherited) throw new Failure('invalid', { cause }); return }
-    assertSessionAdmission(original.targetSessionId)
-    if (!inherited) return
-    for (const scope of inherited) {
+  async function bootstrapMutation<T>(original: BootstrapInvocation, run: () => Promise<T>): Promise<T> {
+    if (deletedIds.has(original.targetSessionId)) throw new Failure('deleted')
+    if (retiringIds.has(original.targetSessionId)) throw new Failure('conflict')
+    const allowed: Scope[] = []
+    for (const scope of context.getStore() ?? []) {
       if (!scope.ids.has(original.targetSessionId)) continue
-      if (scope.state !== 'active' || scope.signal?.aborted || closed) throw new Failure('revoked')
+      if (scope.state !== 'active' || isAborted(scope.signal) || closed) throw new Failure('revoked')
       if (canonicalJsonData(original) !== canonicalJsonData(scope.target)) throw new Failure('conflict')
+      allowed.push(scope)
     }
+    // Only this callback's captured original target is exempt. All other
+    // observations of this identity revoke/join before the original owner runs.
+    const admission = admitMutation([original.targetSessionId], [], false, allowed)
+    try { await admission.join(); return await run() } finally { admission.finish() }
   }
-  function assertBootstrapRequest(request: unknown) {
-    // Leave malformed request refusal to the original bootstrap owner without
-    // executing caller accessors merely to inspect its invocation.
-    if (!isStrictFactData(request) || request === null || typeof request !== 'object') return
-    assertBootstrap(Object.getOwnPropertyDescriptor(request, 'invocation')?.value)
+  function captureBootstrapGuards(guards: BootstrapGuards): BootstrapGuards {
+    const port = Object.getOwnPropertyDescriptor(guards, 'targetPreparation')
+    if (port ? !('value' in port) || !port.enumerable : 'targetPreparation' in guards) throw new TypeError('Invalid target preparation')
+    const targetPreparation = port?.value === undefined ? undefined : captureBootstrapTargetPreparationPort(port.value)
+    // Preserve the original owner's capture-before-await contract, including
+    // absence, while Stop and the other guards retain their original receiver.
+    return { get signal() { return guards.signal }, assertCurrent() { guards.assertCurrent() }, get dependencies() { return guards.dependencies }, targetPreparation }
+  }
+  async function withBootstrapRequest<T>(request: BootstrapRequest, guards: BootstrapGuards, run: (captured: BootstrapRequest, capturedGuards: BootstrapGuards) => Promise<T>): Promise<T> {
+    let captured: BootstrapRequest, capturedGuards: BootstrapGuards
+    try { captured = captureBootstrapRequest(request); capturedGuards = captureBootstrapGuards(guards) }
+    catch { return run(request, guards) } // Original owner refuses malformed data without invoking getters.
+    return bootstrapMutation(captured.invocation, () => run(captured, capturedGuards))
+  }
+  async function withBootstrapResume<T>(invocation: BootstrapInvocation, guards: BootstrapGuards, originalPayload: BootstrapRequest | undefined, run: (captured: BootstrapInvocation, capturedGuards: BootstrapGuards, payload?: BootstrapRequest) => Promise<T>): Promise<T> {
+    let captured: BootstrapInvocation, payload: BootstrapRequest | undefined, capturedGuards: BootstrapGuards
+    try { captured = captureBootstrapInvocation(invocation); payload = originalPayload === undefined ? undefined : captureBootstrapRequest(originalPayload); capturedGuards = captureBootstrapGuards(guards) }
+    catch { return run(invocation, guards, originalPayload) }
+    return bootstrapMutation(captured, () => run(captured, capturedGuards, payload))
   }
   function beginMutation(ids: readonly string[], keys: readonly string[], deleted = false) {
-    refuseSelf(ids, keys)
+    return admitMutation(ids, keys, deleted, [])
+  }
+  function beginRetirement(id: string) {
+    const admission = beginMutation([id], [])
+    retiringIds.set(id, (retiringIds.get(id) ?? 0) + 1)
+    let finished = false
+    return { join: admission.join, finish() { if (finished) return; finished = true; const count = retiringIds.get(id)! - 1; if (count) retiringIds.set(id, count); else retiringIds.delete(id); admission.finish() } }
+  }
+  function admitMutation(ids: readonly string[], keys: readonly string[], deleted: boolean, allowed: readonly Scope[]) {
+    if (context.getStore()?.some(current => current.state !== 'done' && !allowed.includes(current) && intersects(current, ids, keys))) throw new Failure('conflict')
     for (const id of ids) { pendingIds.set(id, (pendingIds.get(id) ?? 0) + 1); if (deleted) deletedIds.add(id) }
     for (const key of keys) { pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1); if (deleted) deletedKeys.add(key) }
-    const affected = [...scopes].filter(scope => intersects(scope, ids, keys))
+    const affected = [...scopes].filter(scope => !allowed.includes(scope) && intersects(scope, ids, keys))
     for (const scope of affected) scope.state = 'revoked'
     let finished = false
     return {
@@ -88,23 +122,30 @@ export function createBindingObservations(
     try {
       // AbortSignal is host capability, so capture request descriptors without
       // recursively treating it as JSON or invoking caller getters.
-      if (!request || Object.getPrototypeOf(request) !== Object.prototype) throw new Error('request')
+      if (!request || utilTypes.isProxy(request) || Object.getPrototypeOf(request) !== Object.prototype) throw new Error('request')
       const fields = Object.getOwnPropertyDescriptors(request)
       if (Reflect.ownKeys(request).some(key => typeof key !== 'string' || !['existingSessionIds','target','signal'].includes(key)) || !fields.existingSessionIds || !fields.target || Object.values(fields).some(field => !field.enumerable || !('value' in field))) throw new Error('fields')
       const supplied = fields.existingSessionIds.value
-      if (!Array.isArray(supplied) || supplied.length > 64 || Reflect.ownKeys(supplied).length !== supplied.length + 1 || Object.values(Object.getOwnPropertyDescriptors(supplied)).some(field => !('value' in field))) throw new Error('ids')
-      existing = [...supplied]
+      if (!Array.isArray(supplied) || utilTypes.isProxy(supplied) || Object.getPrototypeOf(supplied) !== Array.prototype) throw new Error('ids')
+      const indexed = Object.getOwnPropertyDescriptors(supplied as object), length = indexed.length?.value
+      if (!Number.isSafeInteger(length) || length < 0 || length > 64 || Reflect.ownKeys(supplied).length !== length + 1) throw new Error('ids')
+      existing = []
+      for (let index = 0; index < length; index++) {
+        const field = indexed[String(index)]
+        if (!field || !('value' in field) || !field.enumerable) throw new Error('ids')
+        existing.push(field.value)
+      }
       target = captureBootstrapInvocation(fields.target!.value as SessionBindingObservationRequest['target'])
       signal = fields.signal?.value
-      if (signal !== undefined) { Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!.call(signal) }
+      isAborted(signal) // Intrinsic getter validates the genuine signal brand.
       const safe = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\\/\u0000-\u001f\u007f]/.test(id) && !id.includes('..')
-      if (typeof run !== 'function' || !safe(target.targetSessionId) || existing.some(id => !safe(id)) || new Set(existing).size !== existing.length || existing.includes(target.targetSessionId)) throw new Error('identity')
+      if (typeof run !== 'function' || !safe(target.targetSessionId) || existing.length > 64 || existing.some(id => !safe(id)) || new Set(existing).size !== existing.length || existing.includes(target.targetSessionId)) throw new Error('identity')
       ids = [...existing, target.targetSessionId].sort()
     } catch (cause) { throw new Failure('invalid', { cause }) }
     if (!ownership.lockEnabled || !ownership.pinOwnership || !ownership.withSessionOperation || !backend.profile || !backend.readDocumentObserved) throw new Failure('unsupported')
     const keys = ids.map(bindingKey).sort()
     refuseSelf(ids, keys)
-    if (closed || signal?.aborted) throw new Failure('revoked')
+    if (closed || isAborted(signal)) throw new Failure('revoked')
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
     if (ids.some(id => pendingIds.has(id)) || keys.some(key => pendingKeys.has(key))) throw new Failure('conflict')
     const completion = Promise.withResolvers<void>()
@@ -112,16 +153,20 @@ export function createBindingObservations(
     scope.done.catch(() => {})
     scopes.add(scope)
     function guard(active = false) {
-      if (closed || signal?.aborted || scope.state === 'revoked' || scope.state === 'releasing' || scope.state === 'done' || active && scope.state !== 'active') throw new Failure('revoked')
+      if (closed || isAborted(signal) || scope.state === 'revoked' || scope.state === 'releasing' || scope.state === 'done' || active && scope.state !== 'active') throw new Failure('revoked')
       for (const pin of scope.pins) try { pin.assertHeld() } catch (cause) { throw new Failure('revoked', { cause }) }
       if (scope.locks.some(lock => !lock.held)) throw new Failure('revoked')
     }
     const aborted = () => { scope.state = 'revoked' }
-    signal?.addEventListener('abort', aborted, { once: true })
+    let listenerAttached = false
     let cleanupFlight: Promise<void> | undefined
     const dispose = async () => {
       scope.state = 'releasing'
       const failures: unknown[] = []
+      if (signal && listenerAttached) {
+        try { Reflect.apply(signalRemoveListener, signal, ['abort', aborted]); listenerAttached = false }
+        catch (error) { failures.push(error) }
+      }
       for (const lock of [...scope.locks].reverse()) {
         try { await lock.release(); scope.locks.splice(scope.locks.indexOf(lock), 1) } catch (error) { failures.push(error) }
       }
@@ -140,6 +185,12 @@ export function createBindingObservations(
     }
     let result: T | undefined, callbackError: unknown, failed = false
     try {
+      if (signal) {
+        // Even an intrinsic installation failure is within the settled lifetime.
+        // Treat a throw after possible registration as requiring removal.
+        listenerAttached = true
+        Reflect.apply(signalAddListener, signal, ['abort', aborted, { once: true }])
+      }
       for (const id of ids) { scope.pins.push(await ownership.pinOwnership(id)); guard() }
       for (const key of keys) { scope.locks.push(await ownership.acquireLease(`doc:${key}`)); guard() }
       const metadata = new Map<string, SessionMeta>(), bindings = new Map<string, ObservedDocument>()
@@ -161,7 +212,6 @@ export function createBindingObservations(
     } catch (error) { failed = true; callbackError = scope.state === 'active' ? error : normalize(error) }
     // Retirement is synchronous and occurs before the first disposal await.
     scope.state = 'releasing'; scope.callbackFinished = true
-    signal?.removeEventListener('abort', aborted)
     try { await scope.cleanup(); completion.resolve() }
     catch (cleanupError) {
       completion.reject(cleanupError)
@@ -170,6 +220,6 @@ export function createBindingObservations(
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, beginMutation, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, assertBootstrap, assertBootstrapRequest }
+  return { withSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

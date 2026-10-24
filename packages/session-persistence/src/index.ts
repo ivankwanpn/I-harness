@@ -52,16 +52,16 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
 
   async function retire<T>(id: string, run: () => Promise<T>) {
-    const admission = observations.beginMutation([id], [])
+    const admission = observations.beginRetirement(id)
     try { await admission.join(); return await run() } finally { admission.finish() }
   }
   return {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation } : {}),
-    async bootstrapSemanticTarget(request, guards) { observations.assertBootstrapRequest(request); return managed.bootstrapSemanticTarget(request, guards) },
-    async resumeSemanticTarget(invocation, guards, originalPayload) { observations.assertBootstrap(invocation); return managed.resumeSemanticTarget(invocation, guards, originalPayload) },
+    bootstrapSemanticTarget(request, guards) { return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
+    resumeSemanticTarget(invocation, guards, originalPayload) { return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
     inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    openManagedDocument(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
+    async openManagedDocument(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
