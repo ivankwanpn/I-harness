@@ -232,11 +232,20 @@ impl Running {
     }
     pub(super) fn observe_bridge_done(&mut self, result: Result<()>) {
         self.msys_done = true;
+        self.advance_cancelled_msys_observer();
         if let Err(e) = result {
             if !self.cancelled {
                 self.remember(e);
                 self.stop(true);
             }
+        }
+    }
+    fn advance_cancelled_msys_observer(&mut self) {
+        // Observer completion is a causal transition, not cancellation/tree
+        // completion. Preserve the old stop invariant without a polling tick.
+        if self.cancelled && self.owner.workload_job.is_some() {
+            self.terminate_owned(true);
+            self.stop_workload_input();
         }
     }
     fn observing_msys_exit(&self) -> bool {
@@ -362,6 +371,7 @@ impl Running {
         if signaled && !self.native_root_exited {
             self.native_root_exited = true;
             self.tree.request();
+            self.advance_cancelled_msys_observer();
         }
         if !self.io.cancellation_pending() {
             self.cancel_retry = None;
