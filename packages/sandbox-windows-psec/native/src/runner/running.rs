@@ -10,7 +10,7 @@ use crate::{
     ffi::{Handle, Psec},
     job::Job,
     policy::Effective,
-    transport::{Input, RunningIo},
+    transport::{Event, Input, RunningIo},
 };
 use std::{
     mem::ManuallyDrop,
@@ -137,7 +137,7 @@ impl Running {
     pub(super) fn errors(&self) -> &[Error] {
         &self.errors
     }
-    pub(super) fn send_input(&mut self, input: Input) -> Result<()> {
+    pub(super) fn send_input(&mut self, input: Input) -> Result<Option<Event>> {
         self.io.send(input)
     }
     pub(super) fn resize(&mut self, id: String, cols: i16, rows: i16) -> Result<bool> {
@@ -271,7 +271,7 @@ impl Running {
             if self.msys_root.is_none() {
                 if !self.msys_stop_sent {
                     match self.io.send(Input::Stop("_owned-stop".into())) {
-                        Ok(()) => self.msys_stop_sent = true,
+                        Ok(_) => self.msys_stop_sent = true,
                         Err(error) if error.code == "input-backpressure" => {}
                         Err(error) => self.remember(error),
                     }
@@ -333,12 +333,22 @@ impl Running {
         }
     }
     pub(super) fn deadline(&self) -> Option<Instant> {
+        // Resource-close retries retain their original owner and historical
+        // cancellation epoch, but settled work has no remaining timer duty.
+        if self.tree_reported && self.io_reported {
+            return None;
+        }
         [
             self.stop_at.map(|at| at + Duration::from_secs(10)),
             self.msys_stop_at
-                .filter(|_| !self.msys_done && !self.native_root_exited)
+                .filter(|_| !self.tree_reported && !self.msys_done && !self.native_root_exited)
                 .map(|at| at + Duration::from_secs(2)),
-            self.cancel_retry,
+            self.cancel_retry.filter(|_| {
+                self.io.cancellation_pending()
+                    && self
+                        .stop_at
+                        .is_some_and(|at| at.elapsed() < Duration::from_secs(10))
+            }),
         ]
         .into_iter()
         .flatten()
@@ -517,5 +527,110 @@ impl Drop for Running {
             ManuallyDrop::drop(&mut self.process);
             ManuallyDrop::drop(&mut self.owner);
         }
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    fn settled_cancelled_owner() -> (Running, std::sync::Arc<super::super::notifications::Inbox>) {
+        let (mut running, inbox) = super::super::tests::event_fixture("never-read", "unused");
+        running.resume().unwrap();
+        running.stop(true);
+        let original = running.stop_at.unwrap();
+        assert!(
+            running
+                .deadline()
+                .is_some_and(|at| at <= original + Duration::from_secs(10))
+        );
+        let watchdog = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < watchdog {
+            super::super::event_drain::drain_quiet(&inbox, &mut running);
+            running.advance(false).unwrap();
+            if running.waiting_for_io() {
+                running.join_io();
+                super::super::event_drain::drain_quiet(&inbox, &mut running);
+                running.mark_quiet_io();
+            }
+            if running.root_reported && running.tree_reported && running.io_reported {
+                assert_eq!(
+                    running.stop_at,
+                    Some(original),
+                    "causal wakes must not restart the absolute cancellation bound"
+                );
+                return (running, inbox);
+            }
+            inbox.wait(Some(running.deadline().unwrap_or(watchdog).min(watchdog)));
+        }
+        panic!("controlled owner did not obtain actual root/tree/I/O ACKs");
+    }
+    #[test]
+    fn settled_cancel_with_failed_release_has_no_expired_wake_deadline() {
+        let (mut running, _) = settled_cancelled_owner();
+        let process = running.process.0;
+        let job = running.owner.job.0.0;
+        crate::ffi::FAIL_NEXT_CLOSE.with(|flag| flag.set(true));
+        assert!(!running.release());
+        assert_eq!(running.process.0, process);
+        assert_eq!(running.owner.job.0.0, job);
+        assert!(
+            running
+                .errors
+                .iter()
+                .any(|error| error.api == "CloseHandle" && error.native_code == Some(5))
+        );
+        // Controlled elapsed-time state: keep the actual settled native owner
+        // and original retained handles, move only its cancellation epoch back.
+        let expired_epoch = Instant::now() - Duration::from_secs(11);
+        running.stop_at = Some(expired_epoch);
+        running.retry_close();
+        let deadline = running.deadline();
+        let timeout = running.timeout_error();
+        running.begin_close();
+        assert_eq!(
+            running.stop_at,
+            Some(expired_epoch),
+            "retry may not extend the old settlement deadline"
+        );
+        assert!(
+            running.release(),
+            "same retained owner must retry its actual native cleanup"
+        );
+        assert!(
+            running
+                .errors
+                .iter()
+                .any(|error| error.api == "CloseHandle" && error.native_code == Some(5))
+        );
+        eprintln!(
+            "controlled settled cancellation: realRootTreeIoAck=true, injectedCloseFailure=5, originalHandlesRetained=true, releaseRetry=true, deadlinePending={}",
+            deadline.is_some()
+        );
+        assert!(timeout.is_none());
+        assert!(
+            deadline.is_none(),
+            "settled cancellation retained an expired deadline while the same native resources awaited explicit release retry"
+        );
+    }
+    #[test]
+    fn acknowledged_work_retires_stale_observer_and_operation_deadlines() {
+        let (mut running, _) = settled_cancelled_owner();
+        // Predicate counterfactual, not a claim of an MSYS OS failure: all work
+        // has real ACKs, while cached deadline fields have not been cleared yet.
+        running.stop_at = None;
+        running.msys_stop_at = Some(Instant::now() - Duration::from_secs(3));
+        running.cancel_retry = Some(Instant::now() - Duration::from_millis(1));
+        // Factual tree-zero has arrived while cached root/IO notification
+        // consumption lags. The real operation/thread joins above already ACK.
+        running.io_reported = false;
+        running.native_root_exited = false;
+        let deadline = running.deadline();
+        running.io_reported = true;
+        running.native_root_exited = true;
+        assert!(running.release());
+        assert!(
+            deadline.is_none(),
+            "cached observer/backoff timestamps outlived their acknowledged work"
+        );
     }
 }

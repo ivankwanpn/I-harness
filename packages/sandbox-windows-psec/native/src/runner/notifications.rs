@@ -182,6 +182,21 @@ impl Inbox {
         self.changed.notify_one();
         Ok(())
     }
+    /// The sole consumer must never wait for its own reply capacity. Preserve
+    /// FIFO by exchanging a full queue's oldest reply for its current work item,
+    /// with the new response appended at the tail under the same mutex.
+    pub(crate) fn publish_from_consumer(&self, event: Event) -> Option<Event> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let current = if state.replies.len() == 32 {
+            state.replies.pop_front()
+        } else {
+            None
+        };
+        state.replies.push_back(event);
+        drop(state);
+        self.changed.notify_one();
+        current
+    }
     pub(crate) fn try_recv(&self) -> Result<Event, ()> {
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         for terminal in &state.terminals {

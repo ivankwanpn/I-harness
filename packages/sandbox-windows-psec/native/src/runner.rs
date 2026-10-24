@@ -131,7 +131,141 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn event_fixture(
+    #[test]
+    fn dispatch_services_eof_cancel_and_release_with_a_saturated_controller_backlog() {
+        // STATUS belongs to one helper process. Isolate this real status-writer
+        // cut so existing tests still detect unmatched output via uninitialized
+        // status, and the parent suite never inherits this fixture's OnceLock.
+        if std::env::var_os("IH_NATIVE_DISPATCH_STATUS_CHILD").is_none() {
+            use std::{
+                os::windows::{io::AsRawHandle, process::CommandExt},
+                process::Command,
+            };
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "runner::tests::dispatch_services_eof_cancel_and_release_with_a_saturated_controller_backlog", "--nocapture"])
+                .env("IH_NATIVE_DISPATCH_STATUS_CHILD", "1").creation_flags(CREATE_NO_WINDOW).spawn().unwrap();
+            let exited =
+                unsafe { WaitForSingleObject(child.as_raw_handle(), 10000) } == WAIT_OBJECT_0;
+            if !exited {
+                child.kill().unwrap();
+            }
+            let result = child.wait().unwrap();
+            assert!(
+                exited,
+                "isolated Dispatch fixture exceeded its owned process watchdog"
+            );
+            assert!(
+                result.success(),
+                "isolated Dispatch fixture failed: {result}"
+            );
+            return;
+        }
+        use std::sync::mpsc;
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (continue_tx, continue_rx) = mpsc::channel();
+        let (done_tx, done_rx) = mpsc::channel();
+        let actor = thread::spawn(move || {
+            let (mut r, inbox) = event_fixture("never-read", "unused");
+            r.resume().unwrap();
+            r.stop(true);
+            let watchdog = Instant::now() + Duration::from_secs(5);
+            while Instant::now() < watchdog {
+                event_drain::drain_quiet(&inbox, &mut r);
+                r.advance(false).unwrap();
+                if r.waiting_for_io() {
+                    r.join_io();
+                    event_drain::drain_quiet(&inbox, &mut r);
+                    r.mark_quiet_io();
+                }
+                if r.root_reported && r.tree_reported && r.io_reported {
+                    break;
+                }
+                inbox.wait(Some(r.deadline().unwrap_or(watchdog).min(watchdog)));
+            }
+            assert!(r.root_reported && r.tree_reported && r.io_reported);
+            let status_path =
+                std::path::Path::new(&r.owner._effective.spec.cwd).join("actor-status.jsonl");
+            status::initialize(std::fs::File::create(&status_path).unwrap()).unwrap();
+            ready_tx.send(inbox.clone()).unwrap();
+            continue_rx.recv().unwrap();
+            let mut running = Some(r);
+            let mut dispatch = Dispatch::new();
+            let mut output = None;
+            let events = inbox.sender();
+            for body in [
+                br#"{"version":1,"id":"automatic-eof","type":"end-input"}"#.as_slice(),
+                br#"{"version":1,"id":"cancel-after-eof","type":"cancel","reason":"cancelled"}"#
+                    .as_slice(),
+                br#"{"version":1,"id":"release-after-eof","type":"release"}"#.as_slice(),
+            ] {
+                dispatch
+                    .handle(
+                        control::Control::Command(protocol::parse(body)),
+                        &mut running,
+                        &events,
+                        &mut output,
+                    )
+                    .unwrap();
+                drain_events(&inbox, &mut running).unwrap();
+            }
+            assert!(dispatch.release_running(&mut running).unwrap());
+            assert!(running.is_none());
+            let statuses = std::fs::read_to_string(&status_path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>();
+            done_tx.send(statuses).unwrap();
+        });
+        let inbox = ready_rx.recv_timeout(Duration::from_secs(6)).unwrap();
+        // A private controller producer runs after the previous reactor drain
+        // and before the already admitted EOF action reaches Dispatch.
+        for n in 0..32 {
+            inbox
+                .send(Event::Bridge(crate::msys::Observation::Ack(
+                    format!("earlier-{n}"),
+                    Ok(()),
+                )))
+                .unwrap();
+        }
+        continue_tx.send(()).unwrap();
+        let timely = done_rx.recv_timeout(Duration::from_millis(500));
+        let progressed = timely.is_ok();
+        let statuses = timely.unwrap_or_else(|_| {
+            while let Ok(event) = inbox.try_recv() {
+                if matches!(event, Event::Bridge(crate::msys::Observation::Ack(..))) {
+                    break;
+                }
+            }
+            done_rx.recv_timeout(Duration::from_secs(3)).unwrap()
+        });
+        actor.join().unwrap();
+        assert!(
+            progressed,
+            "actual Dispatch blocked on its own full reply Inbox before EOF/cancel/release could complete"
+        );
+        let ids = statuses
+            .iter()
+            .map(|value| value["id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        let expected = (0..32)
+            .map(|n| format!("earlier-{n}"))
+            .chain([
+                "automatic-eof".into(),
+                "cancel-after-eof".into(),
+                "release-after-eof".into(),
+            ])
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+        assert!(statuses[..34].iter().all(|value| value["type"] == "ack"));
+        assert_eq!(statuses[34]["type"], "released");
+        assert_eq!(statuses[34]["resourcesReleased"], true);
+        eprintln!(
+            "connected Dispatch: queuedControllerReplies=32, EOF/cancel ACKs=1/1, release=true, exactOrderedResponses={}",
+            statuses.len()
+        );
+    }
+    pub(super) fn event_fixture(
         mode: &str,
         argument: &str,
     ) -> (Running, std::sync::Arc<notifications::Inbox>) {

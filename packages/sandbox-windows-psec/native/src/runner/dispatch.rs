@@ -74,10 +74,8 @@ impl Dispatch {
                         } => {
                             self.commit(&id, effective_policy_digest, running, events_tx, output)?;
                         }
-                        Action::Input { data } => {
-                            active(running)?.send_input(Input::Bytes(id.clone(), data))?
-                        }
-                        Action::EndInput => active(running)?.send_input(Input::End(id.clone()))?,
+                        Action::Input { data } => input(running, Input::Bytes(id.clone(), data))?,
+                        Action::EndInput => input(running, Input::End(id.clone()))?,
                         Action::Resize { cols, rows } => {
                             if !active(running)?.resize(id.clone(), cols, rows)? {
                                 status(&id, "ack", serde_json::json!({}))?;
@@ -293,4 +291,10 @@ fn active(running: &mut Option<Running>) -> Result<&mut Running> {
     running
         .as_mut()
         .ok_or_else(|| Error::state("workload not active"))
+}
+fn input(running: &mut Option<Running>, input: Input) -> Result<()> {
+    if let Some(current) = active(running)?.send_input(input)? {
+        super::event_drain::apply_event(current, running)?;
+    }
+    Ok(())
 }

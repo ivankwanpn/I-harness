@@ -554,17 +554,17 @@ impl RunningIo {
         self.pending_handles.retain(|h| !h.0.is_null());
         errors
     }
-    pub fn send(&mut self, input: Input) -> Result<()> {
+    pub fn send(&mut self, input: Input) -> Result<Option<Event>> {
         if self.input_ended && !matches!(input, Input::Resize(..) | Input::Stop(..)) {
             if let Input::End(id) = input
                 && self.stop_input.load(Ordering::Acquire)
             {
                 // Natural root/tree completion may close stdin before its owner
                 // sends EOF. EOF is an idempotent close, never another delivery.
-                self.events
-                    .send(Event::Input(id, Ok(())))
-                    .map_err(|_| Error::state("input observer disconnected"))?;
-                return Ok(());
+                return Ok(self
+                    .events
+                    .inbox
+                    .publish_from_consumer(Event::Input(id, Ok(()))));
             }
             return Err(Error::state("input already ended"));
         }
@@ -575,6 +575,7 @@ impl RunningIo {
                 .as_ref()
                 .ok_or_else(|| Error::state("input closed"))?
                 .priority(input)
+                .map(|()| None)
                 .map_err(|_| Error::state("private stop already pending or input closed"));
         }
         match self
@@ -587,7 +588,7 @@ impl RunningIo {
                 if end {
                     self.input_ended = true;
                 }
-                Ok(())
+                Ok(None)
             }
             Err(TrySendError::Full(_)) => Err(Error {
                 code: "input-backpressure",
@@ -766,6 +767,105 @@ fn join_workers(workers: impl IntoIterator<Item = JoinHandle<()>>) -> Vec<Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reactor_automatic_eof_cannot_wait_for_its_own_full_reply_queue() {
+        use std::{
+            sync::mpsc,
+            time::{Duration, Instant},
+        };
+        let inbox = crate::runner::notifications::Inbox::new();
+        let (input_read, input_write) = pipe(false).unwrap();
+        let prepared = PreparedIo {
+            child: vec![],
+            input: Some(input_write),
+            outputs: vec![],
+            console: None,
+            msys: false,
+        };
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../.tmp")
+            .join(format!(
+                "native-eof-reply-capacity-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut io = prepared.start(
+            inbox.sender(),
+            std::fs::File::create(root.join("output.bin")).unwrap(),
+        );
+        io.stop_input();
+        // Model the reactor's completed drain, then the private controller
+        // publisher filling capacity before the queued EndInput is handled.
+        while inbox.try_recv().is_ok() {}
+        for n in 0..32 {
+            inbox
+                .send(Event::Input(format!("earlier-{n}"), Ok(())))
+                .unwrap();
+        }
+        let reactor_inbox = inbox.clone();
+        let (done_tx, done_rx) = mpsc::channel();
+        let reactor = thread::spawn(move || {
+            let sent = io.send(Input::End("automatic-eof".into()));
+            let mut replies = vec![];
+            let mut record = |event| {
+                if let Event::Input(id, result) = event {
+                    result.unwrap();
+                    replies.push(id);
+                }
+            };
+            let send_ok = sent.is_ok();
+            if let Some(current) = sent.unwrap() {
+                record(current);
+            }
+            while let Ok(event) = reactor_inbox.try_recv() {
+                record(event);
+            }
+            io.stop_input(); // Cancellation remains serviceable on the same consumer.
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while !io.settled() && Instant::now() < deadline {
+                reactor_inbox.wait(Some(deadline));
+                while let Ok(event) = reactor_inbox.try_recv() {
+                    record(event);
+                }
+            }
+            io.join().unwrap();
+            while let Ok(event) = reactor_inbox.try_recv() {
+                record(event);
+            }
+            done_tx.send((send_ok, replies, io.fully_joined())).unwrap();
+        });
+        let timely = done_rx.recv_timeout(Duration::from_millis(500));
+        let progressed_without_another_consumer = timely.is_ok();
+        let result = timely.unwrap_or_else(|_| {
+            // RED containment only: the real reactor was blocked. Free one
+            // capacity entry so its owned threads can still exit and join.
+            while let Ok(event) = inbox.try_recv() {
+                if matches!(event, Event::Input(..)) {
+                    break;
+                }
+            }
+            done_rx.recv_timeout(Duration::from_secs(3)).unwrap()
+        });
+        reactor.join().unwrap();
+        drop(input_read);
+        assert!(
+            progressed_without_another_consumer,
+            "sole reactor blocked publishing automatic EOF into its own full 32-reply Inbox"
+        );
+        assert!(result.0 && result.2);
+        let expected = (0..32)
+            .map(|n| format!("earlier-{n}"))
+            .chain(std::iter::once("automatic-eof".into()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            result.1, expected,
+            "every prior response and EOF must be delivered exactly once in queue order"
+        );
+    }
     #[test]
     fn one_failed_join_cannot_skip_later_started_workers() {
         let workers = [
