@@ -16,6 +16,7 @@ These are independently reviewed scoped changes integrated into `codex/v0.1.13-d
 | P2/P3 integration fixture | bbca3c79..bd052a4d | bd052a4d | Scoped reviewer approved; actual combined core-agent495/495 and typecheck pass |
 | S2 same-service original settlement | 9de94630..72e19b01 | 3aeda4f2 | Fresh Sol review approved against S2-01..11; combined MAIN S1/S2 gate48/48 and typecheck pass |
 | IC-B0 observed saved settings | 6d911a89..e982939b | 27931083,c6d377a9 | Fresh Sol full-range review approved; settings230/230, Desktop29/29 and two typechecks pass |
+| P5 service test contracts | 521e9c53..48222ffe | 8f6a8ab0 | Fresh Sol review approved; unchanged collected42 cases pass and owner typecheck passes |
 
 The preserved [reports and reviews](integrated-checkpoint-20261024/) contain full hashes, actual test counts, failure identities, compatibility costs and scope limits. Original raw request/event/evidence material remains in the named local SDD/worktree locations; this tracked checkpoint is not a claim that every raw file was embedded into Git.
 
@@ -78,5 +79,13 @@ The first shipping gate introduced a genuine input regression, caught by the unc
 Frozen S2 evidence: executor114passed/2historical P1failures across9files; context-recovery24/24, original managed-lifecycle7/7; persistence195passed/1known semantic-fork failure; both typechecks exit0. The historical comparison uses preserved P1 logs and hashes, not a new exact-BASE rerun. Fresh Sol review approved the complete six-file range with no Critical/Important findings. Root independently matched all six physical source/copy/Git bindings and30 structured execution receipts. Seven silent typechecks have no plaintext output.log; their actual command/time/exit/source receipts support the result, and the [evidence qualification](integrated-checkpoint-20261024/service-settlement-evidence-qualification.md) explicitly preserves that distinction.
 
 After integrating S2 with S1 on MAIN3aeda4f2, the actual combined schedule/recovery/lifecycle/cancellation/ticket suite passed **48/48 across5files**, and executor typecheck exited0. Root matched all reviewed/integrated source blobs. Existing service output-envelope/abort-message tests, semantic fork/importSeed, remaining context/instruction/event/native work and full release gates remain obligations; this focused integration does not claim whole-version readiness.
+
+## Service test-contract closure after S2
+
+P5 subsequently closes the two service test-contract failures without product changes. M61 now asserts the actual small inline ResultEnvelope ENOENT value, one true read execute/call/dispatch/result identity, the actual second model request's matching tool content, recovered answer and turn/end. Its service is joined before removing the temporary workspace. Successful execution of the nonthrowing fs softFail body is distinct from success of the requested file read; the domain failure remains visible data.
+
+The close test retains its original queue barrier, requires native AbortError classification and matching original request-signal reason when a request exists, keeps queue/lane/assembly cleanup and no unhandled rejection, and permits only original terminal cleanup after close. The observed run had one started request and no later request; the zero-start branch remains strongly asserted but was not separately forced as a different phase. Both original failures and the two added overstrict-oracle failures are retained with source evidence.
+
+Fresh review approved the single-file full range with no Critical/Important findings. All42collected service cases (same39declarations) and owner typecheck pass on frozen source; root matched physical/Git bindings. Existing intentional negative-case stderr is recorded. The concurrent IC-B product changes are not included in this verdict and require combined qualification when integrated. Semantic fork/importSeed, other steering obligations and larger version gates remain open.
 
 Latest user quota policy: all subsequent implementation/review/correction subagents use GPT-6.1Sol until changed. The two active Astra workers handed off preserved partial work and existing receipts; Sol resumed those same checkouts without restarting completed steps.
