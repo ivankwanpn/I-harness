@@ -2,6 +2,16 @@
 
 The release objective remains one usable0.1.13 containing context redesign, internal event-driven execution and AGENTS.md/CLAUDE.md support. Product version stays0.1.13-rc.1 and Session format12. Pure decomposition remains deferred to the next version. No release, tag or push is recorded in this checkpoint.
 
+## Latest checkpoint after L1 integration
+
+[F1-L1 owner acceptance](2026-10-25-legacy-fork-retention-acceptance.md) is now recorded through MAIN bc83c399. Initial review findings and fix review are closed; split fixed-source MAIN coverage is preserved honestly. Public F1-C and the measured scale/expiry performance debts remain open.
+
+The native source/reproducibility candidate is now82ef4e93 with actual helperc8e8f335… and template334994ee…, independently reviewed, still outside MAIN. The bounded original003 forensic task used both permitted samples: one setup-limited by the discovered checkout/hash mismatch, then one authentic passing sample with zero failure trace entries. This did not capture003's initial cause; no diagnostic instrumentation will be integrated as a repair.
+
+Root promoted [same-invocation retained batch continuation](../superpowers/plans/2026-10-25-retained-batch-continuation.md). It addresses a proven downstream control-flow gap with an actual same-handle reconciliation fixture and strict failure precedence. The writer owns CURRENT from e8fc3d1d; public child/fork and native source are not being silently merged into that task.
+
+The following entries preserve earlier phase history and are superseded by this latest checkpoint where their status differs.
+
 ## Accepted in MAIN
 
 F0 binding observation and the preceding instruction/result-close work remain accepted within their recorded scopes. [F1-L0 legacy store ownership](2026-10-24-legacy-store-ownership-acceptance.md) was independently accepted and integrated at2e5a8ae9, with acceptance documentation atcea01193. Donor context-output199/199, executor13/13 and three typechecks passed; actual MAIN ownership19/19 and executor13/13 also passed on unchanged source. These overlapping totals are not added together.
