@@ -427,3 +427,10 @@ it('refuses an open DTO through the close-only port without issuing or revoking 
  expect(new AsyncInbox(f.document.view,()=>f.action.facts.inputs).isPending(f.inputId)).toBe(true)
  await expect(f.received.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
 }finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})
+it('retains strict owned terminal envelope validation when semantic-source payload checks are deferred',async()=>{const f=await ownedDeliveryHistory();try{
+ const {readFile}=await import('node:fs/promises'),path=join(f.root,'parent.jsonl'),before=await readFile(path),source=f.action.registerSettlementSource(async()=>{})
+ const invalid=source.delivery.capture({type:'subagent/end',version:1,taskId:'invalid-original',outcome:'completed',resultRevision:'invalid-original',envelope:{version:1,execution:{outcome:'succeeded',dispatch:'dispatched'},preview:'',media:[],retention:{kind:'inline',value:'opaque',encodedBytes:99}}})
+ expect(await invalid.admit()).toMatchObject({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+ expect(await readFile(path)).toEqual(before);expect(f.document.view.events.some(event=>event.type==='subagent/end'&&event.taskId==='invalid-original')).toBe(false)
+ await expect(source.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+}finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})

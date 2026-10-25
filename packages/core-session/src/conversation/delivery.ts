@@ -1,9 +1,10 @@
-import { validateResultFact } from '../results/validate.ts';
+import { validateResultFact, validateResultSourceMetadata } from '../results/validate.ts';
 import { conversationFormatError as fail } from '../events/conversation.ts';
 import { deliveryInputId, isDeliveryEventType, validDeliveryEvent, type DeliveryAdmissionReceipt, type DeliveryReceivedEvent, type SubagentDeliveryKey, type SubagentDeliverySourceEvent } from '../events/delivery.ts';
 import type { GenerationActionEvent } from '../events/generation.ts';
 import type { SessionEventView, SessionView } from '../managed/types.ts';
 import type { GenerationHistoryScope } from './generation.ts';
+import { semanticSourceStructure } from './bootstrap-validation.ts';
 export type MainActionOpen = Extract<GenerationActionEvent, {
   op: 'open';
 }>;
@@ -90,7 +91,10 @@ export function validateDeliveryFrame(events: readonly SessionEventView[], forma
   }
 }
 /** Scalar structural fold. Payload/result bodies remain in the original journal. */
-export function createDeliveryIndex(scope: GenerationHistoryScope = {}) {
+export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?: typeof semanticSourceStructure) {
+  // Source selection owns excluded payload opacity; journal/writer replay keeps
+  // the strict validator. The fold still reads the same terminal scalar proof.
+  const validateTerminal = profile === semanticSourceStructure ? validateResultSourceMetadata : validateResultFact;
   let refs = new Map<number, Ref>(), sources = new Map<string, SubagentDeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>();
   let active: ReturnType<DeliveryState['activeGeneration']>, fence: number | undefined, owner = scope.sessionId, opens = new Set<string>(), fences = new Set<string>(), turn: number | undefined, turnAction: string | undefined;
   const state = (): DeliveryState => ({
@@ -158,7 +162,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}) {
       return {
         lookupActionOrigin, advance(event: SessionEventView) {
           if (event.type === 'subagent/end')
-            validateResultFact(event, 13);
+            validateTerminal(event, 13);
           if (awaiting) {
             if (!admittedPair(awaiting, event))
               fail('unpaired delivery admission');

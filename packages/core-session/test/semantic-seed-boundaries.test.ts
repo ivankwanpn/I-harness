@@ -3,7 +3,7 @@ import { append, createSession, createNondurableFactOwner, exportConversationSee
 import { bootstrapMemorySession } from '../src/managed/bootstrap.ts'
 import { conversationIndexes } from '../src/events/state.ts'
 import { validateSemanticSeedPrefix } from '../src/conversation/seed-codec.ts'
-import { validateResultFact } from '../src/results/validate.ts'
+import { validateResultFact, validateResultSourceMetadata } from '../src/results/validate.ts'
 import { literalReady } from './fixtures/format11-seed.ts'
 import { observationHash } from './fixtures/semantic-observation.ts'
 
@@ -117,4 +117,50 @@ it('rejects independently rehashed catalog contradictions in full and present-pr
   seed.origins = [{ kind: 'anonymous', contentDigest: observationHash('ih.semantic-seed.source.v1', { version: 1, source: { kind: 'anonymous' }, inheritedOrigins: [], selection: seed.selection, turns: seed.turns, omissions: seed.omissions, artifacts: seed.artifacts, groups: seed.groups }) }]
   expect(() => validateSemanticSeed(seed)).toThrow(/semantic seed/)
   expect(() => validateSemanticSeedPrefix(seed)).toThrow(/semantic seed/)
+})
+
+function childResultSource() {
+  const source = inputSource()
+  // A child completion is source metadata, not a selected conversation result.
+  append(source, { type: 'subagent/start', version: 1, taskId: 'child', agentPath: 'child', role: 'worker', description: 'excluded child', parentSessionId: 'parent' })
+  append(source, { type: 'subagent/end', version: 1, taskId: 'child', outcome: 'completed', resultRevision: 'original', envelope: {
+    version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [{ mediaType: 'image/png', dataBase64: 'AA==' }],
+    retention: { kind: 'inline', value: 'opaque', encodedBytes: 8 },
+  } })
+  append(source, { type: 'turn/start' }); append(source, { type: 'user/message', text: 'later safe' }); append(source, { type: 'turn/end' })
+  const terminal = source.events.find(event => event.type === 'subagent/end')!
+  if (terminal.type !== 'subagent/end' || !terminal.envelope) throw Error('child result fixture')
+  return { source, terminal, envelope: terminal.envelope }
+}
+function opaqueResultPayload(envelope: ResultEnvelope, field: 'inline value' | 'preview' | 'media', read: () => void) {
+  const target = field === 'inline value' ? envelope.retention : field === 'preview' ? envelope : envelope.media[0]!
+  const key = field === 'inline value' ? 'value' : field === 'preview' ? 'preview' : 'dataBase64'
+  Object.defineProperty(target, key, { enumerable: true, configurable: true, get() { read(); return field === 'inline value' ? 'opaque' : field === 'preview' ? '' : 'AA==' } })
+}
+it.each(['inline value', 'preview', 'media'] as const)('preserves excluded child %s opacity across semantic seed selection boundaries', field => {
+  const { source, terminal, envelope } = childResultSource()
+  const selections = [{ kind: 'all' }, { kind: 'completed' }, { kind: 'last-turns', count: 1 }] as const
+  const baseline = selections.map(selection => exportConversationSeed(source, { kind: 'anonymous' }, selection))
+  for (const exported of baseline) expect(exported.kind).toBe('seed')
+  if (baseline[0]!.kind !== 'seed') throw Error('plain source must export')
+  expect(baseline[0]!.seed.groups.flatMap(group => group.items.flatMap(item => item.messages))).toEqual([{ role: 'user', content: 'safe' }, { role: 'user', content: 'later safe' }])
+  let reads = 0
+  opaqueResultPayload(envelope, field, () => { reads++ })
+  expect(() => validateResultSourceMetadata(terminal, source.formatVersion)).not.toThrow()
+  const actual = selections.map(selection => exportConversationSeed(source, { kind: 'anonymous' }, selection))
+  expect(exportConversationSeed(source, { kind: 'anonymous' }, { kind: 'none' })).toEqual({ kind: 'none' })
+  expect(reads).toBe(0)
+  expect(actual).toEqual(baseline)
+})
+it.each(['inline value', 'preview', 'media'] as const)('still refuses selected result %s accessors without invoking them', field => {
+  const source = inputSource(), envelope: ResultEnvelope = { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [{ mediaType: 'image/png', dataBase64: 'AA==' }], retention: { kind: 'inline', value: 'opaque', encodedBytes: 8 } }
+  append(source, { type: 'turn/start' }); append(source, { type: 'step/start' })
+  append(source, { type: 'tool/call', callId: 'selected', name: 'read', args: {} }); append(source, { type: 'assistant/message', text: '' })
+  append(source, { type: 'tool/result', callId: 'selected', name: 'read', envelope })
+  append(source, { type: 'step/end' }); append(source, { type: 'turn/end' })
+  expect(all(source).kind).toBe('seed')
+  let reads = 0
+  opaqueResultPayload(envelope, field, () => { reads++ })
+  expect(all(source)).toEqual({ kind: 'refused', reason: 'invalid-seed' })
+  expect(reads).toBe(0)
 })

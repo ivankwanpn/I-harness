@@ -58,7 +58,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
   const history = createHistoryIndex(formatVersion, validateShape, header.parentSession !== undefined || header.semanticSeed !== undefined ? header.seedLength ?? 0 : 0)
   const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength,
     ...(header.semanticSeed ? { semanticSeed: Object.freeze({ ...header.semanticSeed }) } : {}) })
-  const delivery = createDeliveryIndex(scope)
+  const delivery = createDeliveryIndex(scope, capability === semanticSourceStructure ? semanticSourceStructure : undefined)
   let deliveryOrigins: import("./delivery.ts").DeliveryOriginLookup | undefined
   const generation = createGenerationIndex(scope, { lookupActionOrigin: open => deliveryOrigins?.lookupActionOrigin(open) })
   const preparations = createInputPreparationIndex(scope, capability === semanticSourceStructure ? semanticSourceStructure : undefined)
