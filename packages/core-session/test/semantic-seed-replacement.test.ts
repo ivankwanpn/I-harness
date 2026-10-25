@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import { append, createSession, projectConversation, readConversationState, validateSemanticSeed, fromJSONL, toJSONL, createNondurableFactOwner, createManagedSessionState, exportConversationSeed, legacyPrefixDigest, readGenerationActions, readInbox } from '../src/index.ts'
+import { append, createSession, projectConversation, readConversationState, validateSemanticSeed, fromJSONL, toJSONL, createNondurableFactOwner, createManagedSessionState, exportConversationSeed, legacyPrefixDigest, readGenerationActions, readInbox, CURRENT_FORMAT_VERSION } from '../src/index.ts'
 import { literalReady, literalSeed } from './fixtures/format11-seed.ts'
 import { bootstrapMemorySession, createBootstrapManagedSessionState } from '../src/managed/bootstrap.ts'
 import { observationHash } from './fixtures/semantic-observation.ts'
@@ -12,7 +12,7 @@ it('reads literal inherited observations without creating pending work or effect
   expect(projected.items.every(item => item.provenance.kind === 'inherited' && item.provenance.authority === 'observation')).toBe(true)
   expect(projected.items[0]!.sources.map(ref => ref.part)).toEqual(['item:0', 'group'])
   expect(readConversationState(literalReady, projected)).toMatchObject({ kind: 'available', state: { pendingInputIds: [], unsettledDelegationIds: [], effects: [] } })
-  expect(fromJSONL(toJSONL(literalReady))).toMatchObject({ ...literalReady, formatVersion: 12 })
+  expect(fromJSONL(toJSONL(literalReady))).toMatchObject({ ...literalReady, formatVersion: CURRENT_FORMAT_VERSION })
   expect(createManagedSessionState(literalReady).view).toEqual(literalReady)
 })
 
