@@ -3,7 +3,7 @@ import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
 import { generationError, type AuxiliaryGenerationAction, type ApprovalGenerationAction, type MediaGenerationAction, type ToolModelGeneration } from '@i-harness/llm-seam'
 import type { SessionView } from '@i-harness/core-session'
 
-const reviewerBindings = new WeakMap<object, { view: object; action: AuxiliaryGenerationAction; consumed: boolean }>()
+const reviewerBindings = new WeakMap<object, { view: object; action: AuxiliaryGenerationAction; consumed: boolean; check: () => void }>()
 /** Read-only validator. Only actual accepted-tool composition below can mint. */
 export function borrowApprovalGeneration(binding: object | undefined, view: SessionView): AuxiliaryGenerationAction | undefined {
   if (!binding) return undefined
@@ -11,6 +11,13 @@ export function borrowApprovalGeneration(binding: object | undefined, view: Sess
   if (!owned || owned.view !== view || owned.consumed || view.header?.origin !== 'approval-review') throw generationError('GENERATION_STALE')
   owned.action.signal.throwIfAborted(); owned.consumed = true
   return owned.action
+}
+
+/** Read-only validation of the allowance already borrowed at construction. */
+export function assertBorrowedApprovalGeneration(binding: object, view: SessionView, action: AuxiliaryGenerationAction): void {
+  const owned = reviewerBindings.get(binding)
+  if (!owned || owned.view !== view || owned.action !== action || !owned.consumed) throw generationError('GENERATION_STALE')
+  action.signal.throwIfAborted(); owned.check()
 }
 
 /** These purpose-bound closures capture the exact accepted call and live turn.
@@ -30,7 +37,7 @@ export function toolGenerationFactory(deps: AgentDeps): ExecuteToolCallsOptions[
         if (this !== capability || attached || child.header?.origin !== 'approval-review' || child.header.parentSession !== sessionId || child.header.seedLength !== 0) throw generationError('GENERATION_STALE')
         attached = true
         const binding = Object.freeze({})
-        reviewerBindings.set(binding, { view, action: capability, consumed: false })
+        reviewerBindings.set(binding, { view, action: capability, consumed: false, check: () => { check(); generation.assertOpen() } })
         return binding
       } }
       return Object.freeze(capability)

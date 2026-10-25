@@ -6,6 +6,7 @@ import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import { createBatchCancellation, finishCancelledBatch, finishCheckpointFailure } from "./cancel.ts"
 import { createBatchRecords } from "./record.ts"
 import { createStartCall } from "./dispatch.ts"
+import { prepareLiveBatch, bindLiveBatchSource, markLiveBatchClosed } from './live-continuation.ts'
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
 //   - start order = model order (groups walk the batch left-to-right);
@@ -39,6 +40,7 @@ import { createStartCall } from "./dispatch.ts"
 // its REAL result instead of being orphaned behind the failed slot.
 
 export async function executeToolCalls(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions): Promise<void> {
+  const liveToken = prepareLiveBatch(opts, session, batch)
   opts = resolveBatchFacts(session, opts)
   // Allocate model-order slots before reading the owner's signal, matching the
   // original initialization. The commit capability is resolved only on use.
@@ -48,11 +50,14 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) })
   const finished = Promise.withResolvers<void>()
   const source = opts.registerFactSource!(async () => { await finished.promise; await records.drainSettled() })
+  const closeSource = source.close.bind(source)
+  bindLiveBatchSource(liveToken, source)
   opts.sourceFacts = source.tools
   opts.settlementSource = source
   opts.requireFactRecovery = () => source.requireRecovery()
   opts.holdFactRecovery = () => source.holdRecovery()
   let executionFailure: unknown
+  let executionFailed = false
   try {
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
   // Partition into groups (batch-index runs): maximal runs of parallel-safe
@@ -113,10 +118,11 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
     throw cancellation.firstRefusal
   }
   if (cancellation.hasFlushError) return await finishCheckpointFailure(session, batch, records, cancellation)
-  } catch (error) { executionFailure = error; throw error }
+  } catch (error) { executionFailed = true; executionFailure = error; throw error }
   finally {
     finished.resolve()
-    try { await source.close() }
-    catch (cause) { throw Object.assign(new AggregateError([...(executionFailure === undefined ? [] : [executionFailure]), cause], `${executionFailure instanceof Error ? executionFailure.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
+    try { await closeSource() }
+    catch (cause) { throw Object.assign(new AggregateError([...(executionFailed ? [executionFailure] : []), cause], `${executionFailure instanceof Error ? executionFailure.message : 'Tool execution failed'}; real tool settlement requires recovery`), { code: 'FACT_RECOVERY_REQUIRED' }) }
+    if (executionFailed && cancellation.hasFlushError && executionFailure === cancellation.firstFlushError && cancellation.liveEligible && records.liveComplete) markLiveBatchClosed(liveToken, source, executionFailure)
   }
 }

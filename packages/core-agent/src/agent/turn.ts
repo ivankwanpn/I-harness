@@ -5,7 +5,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import { isNondurableSession, type ImageInput } from "@i-harness/core-session"
 import { randomUUID } from "node:crypto"
 import { executeToolCalls } from "../execute-tool-calls.ts"
-import type { AgentConfig, AgentDeps, AgentResult, TurnLifecycle, AgentInputOptions } from "./types.ts"
+import type { AgentResult, TurnLifecycle, AgentInputOptions } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { startStep, drainHookContext, feedbackText, hookRuntime } from "./step-input.ts"
 import { createModelLoop } from "./model-loop.ts"
@@ -16,8 +16,11 @@ import { savingFailure } from './saving-failure.ts'
 import { toolGenerationFactory } from './tool-generation.ts'
 import { promoteTurnInput } from './input-promotion.ts'
 import { openDirectInput } from './direct-input.ts'
+import type { ExecutionDependencies } from './dependencies.ts'
+import type { ExecuteToolCallsOptions } from '../tool-batch/types.ts'
+import { issueLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../tool-batch/live-continuation.ts'
 
-export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
+export function createTurnRunner(ctx: PluginContext, deps: ExecutionDependencies, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
   let steps = 0
   const getSteps = () => steps
@@ -66,24 +69,48 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       if (acceptedSeq !== undefined) generationOrigin = { kind: 'predecessor', seq: acceptedSeq }
       const { batch, stepText, toolCallsThisStep, refusedThisStep, truncatedThisStep } = step
       if (batch.length > 0) {
-        await handoffBatch(takeOwnership => executeToolCalls(ctx, deps.session, deps.tools, batch, {
-          maxParallel, signal: abort, sessionId: deps.sessionId,
-          facts: agentFacts(deps).tools, registerFactSource: drain => {
-            let pin: import('./request-context.ts').RequestContextPin | undefined
-            const source = deps.registerFactSource!(async () => {
-              await drain()
-              if (pin) {
-                try { await pin.release(); pin = undefined }
-                catch (error) { source.holdRecovery(); throw error }
-              }
-            })
-            pin = takeOwnership()
-            return source
-          }, assertFactOpen: deps.assertFactOpen,
-          modelGeneration: toolGenerationFactory(deps),
-          ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
-          ...(deps.flush ? { flush: deps.flush } : {}),
-        }))
+        const invocation = deps.liveInvocation
+        let token: object | undefined
+        try {
+          await handoffBatch(takeOwnership => {
+            const batchOptions: ExecuteToolCallsOptions = {
+              maxParallel, signal: abort, sessionId: deps.sessionId,
+              facts: agentFacts(deps).tools, registerFactSource: drain => {
+                let pin: import('./request-context.ts').RequestContextPin | undefined
+                const source = (invocation ? invocation.registerBatchSource.bind(invocation) : deps.registerFactSource!)(async () => {
+                  await drain()
+                  if (pin) {
+                    try { await pin.release(); pin = undefined }
+                    catch (error) { source.holdRecovery(); throw error }
+                  }
+                })
+                pin = takeOwnership()
+                return source
+              }, assertFactOpen: deps.assertFactOpen,
+              modelGeneration: toolGenerationFactory(deps),
+              ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
+              ...(deps.flush ? { flush: deps.flush } : {}),
+            }
+            if (invocation) token = issueLiveBatch(invocation, requestScope, batch, batchOptions)
+            return executeToolCalls(ctx, deps.session, deps.tools, batch, batchOptions)
+          })
+        } catch (error) {
+          // This catch is outside the ownership handoff. A cleanup aggregate
+          // has a different identity and cannot borrow its cause's mark.
+          if (!reserveLiveContinuation(token, error, invocation, requestScope, batch)) throw error
+          try {
+            const check = () => {
+              if (!invocation || invocation.view !== deps.session || !deps.ensureWritableContext || !deps.assertLiveOwnerReady) throw new Error('Live continuation requires exact owned readiness')
+              invocation.assertInvocationOpen(); abort?.throwIfAborted(); deps.signal?.throwIfAborted()
+              deps.assertBorrowedGeneration?.()
+              deps.assertLiveOwnerReady()
+            }
+            check()
+            await ensureWritableContext(deps)
+            check()
+            consumeLiveContinuation(token!)
+          } catch (guard) { throw savingFailure(error, [guard], 'Live batch continuation requires recovery') }
+        } finally { if (token) releaseLiveBatch(token) }
       }
       const emptyThisStep = await closeStep(deps, lifecycle, getSteps, step)
       // Continuation: after a step with tool calls, run another step so the

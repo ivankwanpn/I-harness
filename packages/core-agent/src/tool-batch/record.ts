@@ -1,13 +1,13 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { committedFactSeqs, FactRecoveryRequiredError, type SessionView as Session } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from '@i-harness/core-tools'
+import { isOriginalResultFinalization, isOriginalSyntheticResultFinalization, resultExecution } from '@i-harness/core-tools'
 import type { BatchCall, BatchSlot, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchCancellation } from "./cancel.ts"
 
-export function createBatchRecords(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted">) {
+export function createBatchRecords(ctx: PluginContext, session: Session, tools: ToolRegistry, batch: BatchCall[], opts: ExecuteToolCallsOptions, cancellation: () => Pick<BatchCancellation, "observeAbort" | "aborted" | "disqualify">) {
   const slots: (BatchSlot | undefined)[] = batch.map(() => undefined)
-  let committed = 0, startedUpTo = 0, serial = Promise.resolve()
+  let committed = 0, startedUpTo = 0, serial = Promise.resolve(), unknownEffects = false
   const holdOriginal = (slot: BatchSlot) => {
     if ('synthetic' in slot) {
       if (isOriginalSyntheticResultFinalization({ view: session, source: opts.settlementSource!, callId: slot.callId, name: slot.name }, slot.finalization)) opts.holdFactRecovery?.()
@@ -64,7 +64,7 @@ export function createBatchRecords(ctx: PluginContext, session: Session, tools: 
     opts.telemetry?.emit({ type: 'tool/end', ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
     if (!control.aborted) await ctx.emit('agent/post-tool', { name: call.name, args: call.args, ...(slot.finalized!.program?.kind === 'unavailable' ? { program: slot.finalized!.program } : { output: slot.finalized!.output }), session, signal: opts.signal })
   }
-  const schedule = (work: () => Promise<void>) => { const next = serial.then(work); serial = next.catch(() => {}); return next }
+  const schedule = (work: () => Promise<void>) => { const next = serial.then(work).catch(error => { cancellation().disqualify(); throw error }); serial = next.catch(() => {}); return next }
   return {
     commitReady() { return schedule(async () => { while (slots[committed]) await commitSlot(committed) }) },
     drainSettled() { return schedule(async () => {
@@ -72,15 +72,23 @@ export function createBatchRecords(ctx: PluginContext, session: Session, tools: 
       for (let index = 0; index < slots.length; index++) {
         const slot = slots[index]
         if (!slot) continue
-        if (!slot.recorded) try { await commitSlot(index,true) } catch (error) { if (!slot.recorded) errors.push(error) }
-        if ('retained' in slot) try { await slot.retained.drainReferences() } catch (error) { errors.push(error) }
+        if (!slot.recorded) try { await commitSlot(index,true) } catch (error) { cancellation().disqualify(); if (!slot.recorded) errors.push(error) }
+        if ('retained' in slot) try { await slot.retained.drainReferences() } catch (error) { cancellation().disqualify(); errors.push(error) }
       }
       if (errors.length) throw Object.assign(new AggregateError(errors, 'Real tool settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
     }) },
     get committed() { return committed }, get startedUpTo() { return startedUpTo },
+    get liveComplete() { return !unknownEffects && committed === batch.length && slots.length === batch.length && slots.every(slot => !!slot && slot.recorded === true && ('synthetic' in slot ? slot.execution?.outcome !== 'unknown' && slot.execution?.dispatch !== 'unknown' : !!slot.finalized && (!('retained' in slot) || !!slot.resolved))) },
     markStarted(index: number) { startedUpTo = index + 1 },
     getSlot(index: number) { return slots[index] },
-    setSlot(index: number, slot: BatchSlot) { if (!slots[index]) slots[index] = slot },
+    setSlot(index: number, slot: BatchSlot) {
+      if (slots[index]) return
+      slots[index] = slot
+      if (!('synthetic' in slot)) {
+        try { const execution = resultExecution(slot.prepared); if (execution.outcome === 'unknown' || execution.dispatch === 'unknown') unknownEffects = true }
+        catch { unknownEffects = true }
+      }
+    },
   }
 }
 export type BatchRecords = ReturnType<typeof createBatchRecords>

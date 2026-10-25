@@ -2,6 +2,7 @@ import { type SessionView as Session } from "@i-harness/core-session"
 import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_MID_FLIGHT, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
+import type { CheckpointEvidence } from './live-continuation.ts'
 
 export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
   const failures = new Map<number, unknown>()
@@ -36,6 +37,8 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
   // names. The flag carries "it happened"; the value carries what it was.
   let firstFlushError: unknown
   let hasFlushError = false
+  const checkpoints: CheckpointEvidence[] = []
+  let disqualified = false
   // Policy/infrastructure stops cancel dispatched work. Ordinary failures do
   // not touch this channel; the owner's signal remains composed into it.
   const batchAbort = new AbortController()
@@ -44,6 +47,7 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
     : batchAbort.signal
 
   const stopForRefusal = (error: unknown): void => {
+    disqualified = true
     if (!hasRefusal) firstRefusal = error
     hasRefusal = true
     stopped = true
@@ -60,6 +64,9 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
     get hasRefusal() { return hasRefusal },
     get firstFlushError() { return firstFlushError },
     get hasFlushError() { return hasFlushError },
+    get liveEligible() { return !disqualified && !aborted && !opts.signal?.aborted && checkpoints.length > 0 && checkpoints.every(item => item.site === 'retained-dispatch' && item.prepared && item.retained) && checkpoints[0]!.error === firstFlushError },
+    disqualify() { disqualified = true },
+    recordCheckpoint(evidence: CheckpointEvidence) { checkpoints.push(evidence); if (evidence.site === 'raw-checkpoint') disqualified = true },
     stopForRefusal,
     observeAbort() { if (opts.signal?.aborted) aborted = true },
     recordFailure(index: number, error: unknown) {

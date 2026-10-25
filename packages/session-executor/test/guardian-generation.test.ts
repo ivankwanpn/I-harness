@@ -75,6 +75,56 @@ it.each([['isolated', undefined, 'off'], ['isolated', 130_000, 'off'], ['subagen
   } finally { releaseGate.resolve(); released.resolve(); await run.catch(() => {}); await service.close().catch(() => {}); unsubscribe(); await coordinator.close().catch(() => {}) }
 })
 
+it.each(['expires', 'revokes'] as const)('rechecks an actual already borrowed reviewer allowance when it %s across readiness', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-reviewer-live-guard-')), backend = createJsonlBackend(root)
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
+  const { controlledModel } = await import('./controlled-model.ts')
+  const { borrowApprovalGeneration, assertBorrowedApprovalGeneration } = await import('../../core-agent/src/agent/tool-generation.ts')
+  let requests = 0, checks = 0
+  const model = controlledModel(async function* () {
+    if (++requests === 1) yield { type: 'tool_call', call: { id: 'original-approval', name: 'allowance_probe', args: {} } }
+    else yield { type: 'text/chunk', text: 'finished' }
+    yield { type: 'end' }
+  })
+  const controller = new AbortController()
+  const service = createSessionService({ workspace: root, coordinator, model, modelPolicy: 'test-mock', approveAll: true, codeMode: { mode: 'off' } })
+  const assembly = await service.assemblyFor(id)
+  assembly.tools.register({ name: 'allowance_probe', description: '', inputSchema: {}, isReadOnly: true, execute: async (_args, exec) => {
+    const generation = await exec.modelGeneration!.approval({ timeoutMs: 150, selectedClient: () => model })
+    const childId = (await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 })).id
+    const child = await coordinator.openManagedDocument(childId), binding = generation.forChild(child.view)
+    expect(borrowApprovalGeneration(binding, child.view)).toBe(generation)
+    const check = () => assertBorrowedApprovalGeneration(binding, child.view, generation)
+    check()
+    const before = assembly.session.events.filter(event => event.type === 'context/action' || event.type === 'context/attempt').length
+    await (async () => {
+      if (mode === 'revokes') { await Promise.resolve(); controller.abort(new Error('original allowance revoked')) }
+      else await new Promise<void>(resolve => { if (generation.signal.aborted) resolve(); else generation.signal.addEventListener('abort', () => resolve(), { once: true }) })
+    })()
+    if (mode === 'expires') expect(check).toThrow(expect.objectContaining({ code: 'GENERATION_EXPIRED' }))
+    else {
+      expect(generation.signal.aborted).toBe(true)
+      let refusal: unknown
+      try { check() } catch (error) { refusal = error }
+      expect(refusal).toBe(generation.signal.reason)
+    }
+    expect(assembly.session.events.filter(event => event.type === 'context/action' || event.type === 'context/attempt')).toHaveLength(before)
+    expect(() => borrowApprovalGeneration(binding, child.view)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
+    expect(child.view.events).toEqual([])
+    checks++
+    await generation.close(mode === 'expires' ? 'failed' : 'stopped')
+    return 'checked original allowance'
+  } })
+  try {
+    const run = service.submit(id, 'check original allowance', controller.signal)
+    if (mode === 'revokes') await expect(run).rejects.toBeInstanceOf(Error)
+    else await run
+    expect(checks).toBe(1); expect(requests).toBe(mode === 'expires' ? 2 : 1)
+    expect(assembly.session.events.filter(event => event.type === 'context/action' && event.op === 'open' && event.purpose === 'approval')).toHaveLength(1)
+    expect(assembly.session.events.filter(event => event.type === 'context/attempt' && event.op === 'reserve' && event.lane === 'auxiliary')).toHaveLength(0)
+  } finally { await service.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
 it('an actual approval grant binds once to its exact owned child; copied, foreign and reused bindings refuse before child execution', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-guardian-binding-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), { id } = await coordinator.create()
   let sends = 0, checks = 0
@@ -85,7 +135,7 @@ it('an actual approval grant binds once to its exact owned child; copied, foreig
   })
   const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'fixture', baseUrl: 'https://guardian-binding.fixture.invalid' })
   const service = createSessionService({ workspace: root, coordinator, model, codeMode: { mode: 'off' } }), assembly = await service.assemblyFor(id)
-  const { borrowApprovalGeneration } = await import('../../core-agent/src/agent/tool-generation.ts')
+  const { borrowApprovalGeneration, assertBorrowedApprovalGeneration } = await import('../../core-agent/src/agent/tool-generation.ts')
   assembly.tools.register({ name: 'binding_probe', description: 'Controlled binding probe.', inputSchema: { type: 'object', properties: {} }, isReadOnly: true, execute: async (_args, exec) => {
     const generation = await exec.modelGeneration!.approval({ timeoutMs: 1000, selectedClient: () => model })
     const first = await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 }), second = await coordinator.create({ parentSession: id, origin: 'approval-review', seedLength: 0 })
@@ -97,9 +147,17 @@ it('an actual approval grant binds once to its exact owned child; copied, foreig
       expect(() => borrowApprovalGeneration({ ...binding }, child.view)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
       expect(() => borrowApprovalGeneration(binding, foreign.view)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
       expect(borrowApprovalGeneration(binding, child.view)).toBe(generation)
+      expect(() => assertBorrowedApprovalGeneration(binding, child.view, generation)).not.toThrow()
+      expect(() => assertBorrowedApprovalGeneration(binding, foreign.view, generation)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
+      expect(() => assertBorrowedApprovalGeneration({ ...binding }, child.view, generation)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
+      expect(() => assertBorrowedApprovalGeneration(binding, child.view, { ...generation })).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
+      await Promise.resolve()
+      expect(() => assertBorrowedApprovalGeneration(binding, child.view, generation)).not.toThrow()
       expect(() => borrowApprovalGeneration(binding, child.view)).toThrow(expect.objectContaining({ code: 'GENERATION_STALE' }))
       checks++
       expect(child.view.events).toEqual([]); expect(foreign.view.events).toEqual([])
+      await generation.close('completed')
+      expect(() => assertBorrowedApprovalGeneration(binding, child.view, generation)).toThrow(expect.objectContaining({ code: 'GENERATION_CLOSED' }))
       return 'checked exact binding'
     } finally { await generation.close('completed') }
   } })

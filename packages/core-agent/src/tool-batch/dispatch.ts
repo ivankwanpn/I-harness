@@ -1,5 +1,5 @@
 import { type SessionView as Session } from "@i-harness/core-session"
-import { isPolicyRefusal, retainedToolOutcome, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall } from "@i-harness/core-tools"
+import { isPolicyRefusal, retainedToolOutcome, resultExecution, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, type ToolRegistry, type PreparedCall } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import type { BatchRecords } from "./record.ts"
 import type { BatchCancellation } from "./cancel.ts"
@@ -14,12 +14,12 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
     // Approval may await. A cancelled prepared call has no dispatch marker.
     if (cancellation.batchSignal.aborted) return
     try { await markDispatch(session, index, call, records, opts) }
-    catch (error) { recordCheckpointFailure(index, call, error, records, cancellation); return }
+    catch (error) { cancellation.recordCheckpoint({ site: 'raw-checkpoint', index, error }); recordCheckpointFailure(index, call, error, records, cancellation); return }
     // The marker and checkpoint precede the actual body. Keep this direct
     // await and method receiver so a live host seam is read at dispatch time.
     if (opts.flush !== undefined) {
       try { await opts.flush() }
-      catch (error) { recordCheckpointFailure(index, call, error, records, cancellation); return }
+      catch (error) { cancellation.recordCheckpoint({ site: 'raw-checkpoint', index, error }); recordCheckpointFailure(index, call, error, records, cancellation); return }
     }
     if (cancellation.batchSignal.aborted) {
       records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true,
@@ -35,8 +35,13 @@ export function createStartCall(session: Session, tools: ToolRegistry, batch: Ba
         records.setSlot(index, { name: call.name, callId: call.callId, prepared, output })
       })
       .catch((err: unknown) => {
+        // A canceled real dispatch may subsequently receive an ordinary
+        // synthetic failure fill. The fill cannot prove its effects known.
+        try { const execution = resultExecution(prepared); if (execution.outcome === 'unknown' || execution.dispatch === 'unknown') cancellation.disqualify() }
+        catch { cancellation.disqualify() }
         const retained = retainedToolOutcome(err, prepared)
         if (retained) {
+          cancellation.recordCheckpoint({ site: 'retained-dispatch', index, error: err, prepared, retained })
           records.setSlot(index, { name: call.name, callId: call.callId, prepared, retained, recoveryCause: err })
           cancellation.recordFailure(index, err); cancellation.stopForCheckpoint(err)
           return

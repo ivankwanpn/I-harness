@@ -7,15 +7,26 @@ import { createTurnRunner } from "./turn.ts"
 import { createNondurableFactOwner, isNondurableSession, isManagedFactOwner } from '@i-harness/core-session'
 import { trackSettlementSource } from './settlement-source.ts'
 import { savingFailure } from './saving-failure.ts'
-import { borrowApprovalGeneration } from './tool-generation.ts'
+import { borrowApprovalGeneration, assertBorrowedApprovalGeneration } from './tool-generation.ts'
 import { createExecutionDependencies } from './dependencies.ts'
+import { createLiveInvocation } from '../tool-batch/live-continuation.ts'
 
-export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
-  deps = createExecutionDependencies(deps)
+export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): Agent {
+  const deps = createExecutionDependencies(host)
   const factOwner = deps.factOwner ?? (isNondurableSession(deps.session) ? createNondurableFactOwner(deps.session) : undefined)
   if (!factOwner || factOwner.view !== deps.session) throw Object.assign(new Error('Managed Agent requires matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
   if (!isNondurableSession(deps.session) && !isManagedFactOwner(deps.session, factOwner)) throw Object.assign(new Error('Managed Agent requires actual document ownership'), { code: 'FACT_OWNER_UNSUPPORTED' })
-  deps.sharedBudget = borrowApprovalGeneration(deps.sharedGeneration, factOwner.view)
+  // LC09: capture this read-only capability from the already validated real
+  // owner. A host readiness callback cannot substitute for its recovery fence.
+  const assertReady = (factOwner as typeof factOwner & { assertReady?: () => void }).assertReady
+  if (!isNondurableSession(deps.session) && typeof assertReady === 'function') deps.assertLiveOwnerReady = () => {
+    if (factOwner.view !== deps.session) throw Object.assign(new Error('Live owner view no longer matches'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    assertReady.call(factOwner)
+  }
+  const borrowedBinding = deps.sharedGeneration
+  deps.sharedBudget = borrowApprovalGeneration(borrowedBinding, factOwner.view)
+  const borrowedAction = deps.sharedBudget
+  if (borrowedBinding && borrowedAction) deps.assertBorrowedGeneration = () => assertBorrowedApprovalGeneration(borrowedBinding, factOwner.view, borrowedAction)
   if (deps.sharedBudget && deps.generationFactory) throw Object.assign(new Error('Conflicting generation ownership'), { code: 'GENERATION_CONFLICT' })
   if (!isNondurableSession(factOwner.view) && !deps.generationFactory && !deps.sharedBudget) throw Object.assign(new Error('Managed Agent requires generation lifecycle composition'), { code: 'GENERATION_UNSUPPORTED' })
   // Standalone agents without persisted IDs still own separate conversations.
@@ -86,9 +97,17 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         sourceDrains.add(source)
         return source
       }
+      if (!isNondurableSession(factOwner.view)) deps.liveInvocation = createLiveInvocation(factOwner.view, action, drain => {
+        const source = action.registerSettlementSource(drain), close = source.close.bind(source)
+        source.close = async () => { await close(); sourceDrains.delete(source) }
+        sourceDrains.add(source)
+        return source
+      })
       running = operation(action.signal)
       value = await running
     } catch (error) { failure = error; failed = true }
+    deps.liveInvocation?.invalidate()
+    deps.liveInvocation = undefined
     // Settle every resource actually created, even when later setup or close
     // throws. These locals always belong to this invocation.
     try { await preparation?.close() }

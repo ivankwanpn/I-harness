@@ -1,6 +1,8 @@
 import type { AgentConfig, AgentDeps } from './types.ts'
+import type { LiveInvocation } from '../tool-batch/live-continuation.ts'
 
-type Dependencies = AgentDeps & AgentConfig
+export type ExecutionDependencies = AgentDeps & AgentConfig & { liveInvocation?: LiveInvocation; assertBorrowedGeneration?: () => void; assertLiveOwnerReady?: () => void }
+type Dependencies = ExecutionDependencies
 
 /** Host preferences stay live on their original receiver. Only execution ports
  * and fixed construction identities belong to this private Agent facade. */
@@ -34,5 +36,6 @@ export function createExecutionDependencies(host: Dependencies): Dependencies {
   ] as const satisfies readonly (keyof Dependencies)[]) {
     Object.defineProperty(deps, key, { value: undefined, writable: true, enumerable: true })
   }
+  for (const key of ['liveInvocation', 'assertBorrowedGeneration', 'assertLiveOwnerReady'] as const) Object.defineProperty(deps, key, { value: undefined, writable: true })
   return deps
 }
