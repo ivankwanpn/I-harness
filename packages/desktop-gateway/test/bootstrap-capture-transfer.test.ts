@@ -22,10 +22,12 @@ it('P17 actual reserved managed-source capture transfers real native text/catalo
   const broker=createProjectScopeBroker(coordinator,workspace);cleanup.push(()=>broker.close());await broker.configure(project);await broker.bind('source',project.id)
   let sourceAlive=true,sourceReads=0,targetProfiles=0
   const openRuntime=async(c:SessionCoordinator,b:ReturnType<typeof createProjectScopeBroker>,passive=false)=>{
+    if(!c.snapshot)throw new Error('actual coordinator snapshot capability is required')
+    const snapshot=c.snapshot.bind(c)
     const runtime=await createNativeContextRuntime({workspace,storageRoot,coordinator:{...c,async profile(id){if(id==='source'){sourceReads++;if(passive)throw new Error('cold source profile forbidden')}else targetProfiles++;return c.profile(id)}},
       projectFor:b.nativeScopeFor,resultReadScopeFor:b.resultReadScopeFor,prepareBootstrapInheritance:b.prepareBootstrapInheritance,
       visibleRefsFor:async id=>{if(id==='source'){sourceReads++;if(passive)throw new Error('cold source visibility forbidden')}
-        const session=(await c.snapshot(id)).session;return [...semanticSeedResultRefs(session),...session.events.flatMap(managedResultRefs)]}})
+        const session=(await snapshot(id)).session;return [...semanticSeedResultRefs(session),...session.events.flatMap(managedResultRefs)]}})
     cleanup.push(()=>runtime.close());return runtime
   }
   const runtime=await openRuntime(coordinator,broker),owner=runtime.contextOutput,source=await runtime.sourceFor('source')
