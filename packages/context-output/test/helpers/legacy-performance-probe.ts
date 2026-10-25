@@ -57,13 +57,16 @@ export const probe = {
     return Object.entries(this.counts).reduce((sum, [key, values]) => sum + (!scope || key.startsWith(scope + '/') ? values[name] ?? 0 : 0), 0)
   },
   snapshot() { return { counts: this.counts, spans: this.spans, segments: this.segments, ceilings: this.ceilings, activeIO: this.activeIO, peakIO: this.peakIO, activeHandles: this.activeHandles, peakHandles: this.peakHandles, counterMs: this.counterMs } },
+  current() { return context.getStore() },
 }
 
 function observe<T>(pending: Promise<T>, name: string, completed?: (result: T) => void): Promise<T> {
   const captured = context.getStore()
   if (!probe.enabled || !captured) return pending
+  const started = performance.now()
   probe.add(name, 1, captured); probe.activeIO++; probe.peakIO = Math.max(probe.peakIO, probe.activeIO)
-  void pending.then(result => { probe.activeIO--; completed?.(result) }, failure => {
+  void pending.then(result => { probe.add(`${name}.nativeElapsedMs`, performance.now() - started, captured); probe.activeIO--; completed?.(result) }, failure => {
+    probe.add(`${name}.nativeElapsedMs`, performance.now() - started, captured)
     probe.activeIO--; probe.add('failures', 1, captured)
     probe.add(`failure.${(failure as NodeJS.ErrnoException)?.code ?? 'unknown'}`, 1, captured)
   })
