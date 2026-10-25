@@ -1,0 +1,94 @@
+{
+  "head": "18e4e89ac68d4a9c8d3083bea2445631016371ec",
+  "donor": "6689aa951669779e37599b6d819429a6a7ad1e3f",
+  "changed": [
+    ".gitattributes",
+    "packages/context-output/package.json",
+    "packages/context-output/scripts/qualify-index-native.mjs",
+    "packages/context-output/src/legacy/use-gate.ts",
+    "packages/context-output/test/helpers/derived-index-native-probe.mjs",
+    "packages/context-output/test/legacy-use-gate.test.ts",
+    "packages/context-output/test/qualification/fixtures/SHASUMS256-v22.18.0.txt",
+    "packages/context-output/test/qualification/fixtures/SHASUMS256-v24.15.0.txt",
+    "packages/context-output/test/qualification/fixtures/delete-main-journal-source-argument.md",
+    "packages/context-output/test/qualification/fixtures/delete-subjournal-source-argument.md",
+    "packages/context-output/test/qualification/fixtures/manifest.json",
+    "packages/context-output/test/qualification/fixtures/reviewed-plans-v22.18.0.json",
+    "packages/context-output/test/qualification/fixtures/reviewed-plans-v24.15.0.json",
+    "packages/context-output/test/qualification/fixtures/reviewed-policy.md",
+    "packages/context-output/test/qualification/fixtures/source-argument-v22.18.0.md",
+    "packages/context-output/test/qualification/fixtures/source-argument-v24.15.0.md",
+    "packages/context-output/test/qualification/fixtures/usage.md",
+    "packages/context-output/test/qualification/legacy-index-native.qualification.ts",
+    "packages/context-output/test/qualification/vitest.config.mts"
+  ],
+  "receipts": [
+    {
+      "head": "18e4e89ac68d4a9c8d3083bea2445631016371ec",
+      "donor": "6689aa951669779e37599b6d819429a6a7ad1e3f",
+      "name": "fixture-bytes",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "args": [
+        "--input-type=module",
+        "-e",
+        "import fs from 'node:fs';import {spawnSync} from 'node:child_process';const r=spawnSync('git',['-C','../..','ls-files','-z','--full-name','--','packages/context-output/test/qualification/fixtures'],{encoding:'utf8'});if(r.status!==0)throw Error(r.stderr);const files=r.stdout.split(String.fromCharCode(0)).filter(Boolean);if(files.length!==11)throw Error('Unexpected fixture count '+files.length);for(const file of files){const b=spawnSync('git',['cat-file','blob','HEAD:'+file]);if(b.status!==0)throw Error(b.stderr.toString());const current=fs.readFileSync('../../'+file);if(!current.equals(b.stdout))throw Error('Raw fixture mismatch '+file)}console.log(JSON.stringify({rawGitEqual:files.length}));"
+      ],
+      "started": "2026-10-25T16:41:17.627Z",
+      "ended": "2026-10-25T16:41:18.185Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2913,
+      "sha256": "9c05e3c252d1b154da637b9ac11f1e542919fe7961850ad318dc79eba069537f",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\close"
+      }
+    },
+    {
+      "head": "18e4e89ac68d4a9c8d3083bea2445631016371ec",
+      "donor": "6689aa951669779e37599b6d819429a6a7ad1e3f",
+      "name": "gate",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/legacy-use-gate.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T16:41:18.191Z",
+      "ended": "2026-10-25T16:41:19.115Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2913,
+      "sha256": "d40c245baefaf9251ce361f55e86e8db808dde56813c8941daca7b9f4beec76a",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\close"
+      }
+    },
+    {
+      "head": "18e4e89ac68d4a9c8d3083bea2445631016371ec",
+      "donor": "6689aa951669779e37599b6d819429a6a7ad1e3f",
+      "name": "types",
+      "cwd": "D:\\I-harness-main\\packages\\context-output",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T16:41:19.116Z",
+      "ended": "2026-10-25T16:41:26.144Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2913,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-derived-index-foundations\\integrated-18e4e89a-setup-followup2\\close"
+      }
+    }
+  ]
+}
