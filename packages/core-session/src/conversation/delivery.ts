@@ -45,6 +45,8 @@ type Ref = {
   resultRevision?: string;
   qualified?: boolean;
 };
+type Dispatch = { callId: string; seq: number };
+type InputClass = Readonly<{ admissionSeq: number; kind: 'ordinary' | 'legacy-task' | 'delivery' }>;
 const identity = (key: Readonly<SubagentDeliveryKey>) => JSON.stringify([key.recipientSessionId, key.sourceNamespace, key.sourceId, key.resultRevision, key.kind]);
 const sourceKey = (namespace: string, id: string) => JSON.stringify([namespace, id]);
 export interface DeliveryState {
@@ -64,6 +66,15 @@ export interface DeliveryState {
     inputId: string;
     receiptSeq: number;
   }>[];
+}
+/** Private owner observation; never a producer/binding port. */
+export interface DeliveryReadIndex extends DeliveryState {
+  input(inputId: string): InputClass | undefined;
+  isBound(inputId: string): boolean;
+  inputIdAt(seq: number): string | undefined;
+}
+function disposition(receipt: Receipt, active: ReturnType<DeliveryState['activeGeneration']>): DeliveryAdmissionReceipt['disposition'] {
+  return receipt.disposition === 'pending' && receipt.generationId !== active?.generationId ? 'suppressed' : receipt.disposition;
 }
 function admittedPair(receipt: Readonly<DeliveryReceivedEvent>, admitted: SessionEventView | undefined): boolean {
   return admitted?.type === 'agent/input/admitted' && admitted.seq === receipt.seq! + 1 && admitted.inputId === receipt.inputId
@@ -95,15 +106,16 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
   // Source selection owns excluded payload opacity; journal/writer replay keeps
   // the strict validator. The fold still reads the same terminal scalar proof.
   const validateTerminal = profile === semanticSourceStructure ? validateResultSourceMetadata : validateResultFact;
-  let refs = new Map<number, Ref>(), sources = new Map<string, SubagentDeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>();
-  let active: ReturnType<DeliveryState['activeGeneration']>, fence: number | undefined, owner = scope.sessionId, opens = new Set<string>(), fences = new Set<string>(), turn: number | undefined, turnAction: string | undefined;
+  const refs = new Map<number, Ref>(), sources = new Map<string, SubagentDeliverySourceEvent>(), receipts = new Map<string, Receipt>(), inputs = new Map<string, string>();
+  const dispatches = new Map<number, Dispatch>(), admissions = new Map<string, InputClass>(), opens = new Set<string>(), fences = new Set<string>();
+  let active: ReturnType<DeliveryState['activeGeneration']>, fence: number | undefined, owner = scope.sessionId, turn: number | undefined, turnAction: string | undefined;
   const state = (): DeliveryState => ({
     activeGeneration: () => active, lastFenceSeq: () => fence, source: (ns, id) => {
       const value = sources.get(sourceKey(ns, id));
       return value && Object.freeze({ ...value });
     }, receipt: key => {
       const value = receipts.get(identity(key));
-      return value && Object.freeze({ event: Object.freeze({ ...value.event, key: Object.freeze({ ...value.event.key }) }), disposition: value.disposition });
+      return value && Object.freeze({ event: Object.freeze({ ...value.event, key: Object.freeze({ ...value.event.key }) }), disposition: disposition(value, active) });
     },
     isEligible: id => {
       const r = receipts.get(inputs.get(id) ?? '');
@@ -112,21 +124,27 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
     pending: () => [...receipts.values()].filter(r => r.disposition === 'pending' && r.generationId === active?.generationId).map(r => ({ inputId: r.event.inputId, receiptSeq: r.event.seq! }))
   });
   return {
-    read: state, stage() {
-      const stagedRefs = new Map(refs), stagedSources = new Map(sources), stagedInputs = new Map(inputs), stagedReceipts = new Map([...receipts].map(([k, r]) => [k, { ...r }]));
-      const stagedGenerations = new Set(opens), stagedFences = new Set(fences);
+    read: state,
+    readIndex: (): DeliveryReadIndex => Object.freeze({ ...state(), input: (id: string) => admissions.get(id), isBound: (id: string) => inputs.has(id), inputIdAt: (seq: number) => refs.get(seq)?.inputId }),
+    stage() {
+      const stagedRefs = new Map<number, Ref>(), stagedSources = new Map<string, SubagentDeliverySourceEvent>(), stagedInputs = new Map<string, string>(), stagedReceipts = new Map<string, Receipt>();
+      const stagedDispatches = new Map<number, Dispatch>(), stagedAdmissions = new Map<string, InputClass>(), stagedGenerations = new Set<string>(), stagedFences = new Set<string>();
       let stagedActive = active, stagedFence = fence, stagedOwner = owner, stagedTurn = turn, stagedTurnAction = turnAction, previous: SessionEventView | undefined, awaiting: DeliveryReceivedEvent | undefined;
+      const reference = (seq: number) => stagedRefs.get(seq) ?? refs.get(seq);
+      const source = (key: string) => stagedSources.get(key) ?? sources.get(key);
+      const receipt = (key: string) => stagedReceipts.get(key) ?? receipts.get(key);
+      const dispatch = (seq: number) => stagedDispatches.get(seq) ?? dispatches.get(seq);
       const recipient = (id: string) => {
         if (stagedOwner !== undefined && stagedOwner !== id)
           fail('foreign delivery recipient');
         stagedOwner = id;
       };
-      const receiptFor = (id: string) => stagedReceipts.get(stagedInputs.get(id) ?? '');
-      const suppress = () => {
-        stagedActive = undefined;
-        for (const r of stagedReceipts.values())
-          if (r.disposition === 'pending')
-            r.disposition = 'suppressed';
+      const receiptFor = (id: string) => receipt(stagedInputs.get(id) ?? inputs.get(id) ?? '');
+      const writableReceipt = (value: Receipt): Receipt => {
+        const key = identity(value.event.key);
+        let changed = stagedReceipts.get(key);
+        if (!changed) { changed = { ...value }; stagedReceipts.set(key, changed); }
+        return changed;
       };
       const lookupActionOrigin = (open: Readonly<MainActionOpen>): Readonly<DeliveryActionOrigin> | undefined => {
         if (open.purpose !== 'main')
@@ -138,7 +156,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             return;
         }
         else if (open.origin.kind === 'input') {
-          const inputId = stagedRefs.get(open.origin.seq)?.inputId;
+          const inputId = reference(open.origin.seq)?.inputId;
           r = inputId ? receiptFor(inputId) : undefined;
           if (r && r.inputStart?.rawMessageSeq !== open.origin.seq)
             fail('delivery steer or nonraw input cannot open an action');
@@ -156,8 +174,9 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           fail('fenced delivery action origin');
         if (open.origin.kind === 'observation-input' ? r.disposition !== 'pending' : !r.inputStart || r.disposition !== 'claimed' || r.inputStart.turnStartSeq !== stagedTurn)
           fail('consumed delivery cannot open a new action');
-        r.origin = Object.freeze({ receiptSeq: r.event.seq!, admissionSeq: r.admissionSeq, inputId: r.event.inputId, actionId: open.actionId, openedSeq: open.seq!, ...(r.inputStart ? { inputStart: r.inputStart } : {}) });
-        return r.origin;
+        const changed = writableReceipt(r);
+        changed.origin = Object.freeze({ receiptSeq: r.event.seq!, admissionSeq: r.admissionSeq, inputId: r.event.inputId, actionId: open.actionId, openedSeq: open.seq!, ...(r.inputStart ? { inputStart: r.inputStart } : {}) });
+        return changed.origin;
       };
       return {
         lookupActionOrigin, advance(event: SessionEventView) {
@@ -174,15 +193,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             if (event.type === 'agent/delivery-generation') {
               recipient(event.recipientSessionId);
               if (event.op === 'close') {
-                if (stagedFences.has(event.fenceId))
+                if (stagedFences.has(event.fenceId) || fences.has(event.fenceId))
                   fail('duplicate delivery fence');
                 stagedFences.add(event.fenceId);
                 stagedFence = event.seq;
-                suppress();
+                stagedActive = undefined;
               }
               else {
-                const origin = stagedRefs.get(event.originInputSeq);
-                if (stagedActive || stagedGenerations.has(event.generationId) || !origin?.human || origin.originSessionId !== undefined && origin.originSessionId !== event.recipientSessionId || event.originInputSeq >= event.seq! || event.originInputSeq < (scope.seedLength ?? 0) || stagedFence !== undefined && event.originInputSeq <= stagedFence)
+                const origin = reference(event.originInputSeq);
+                if (stagedActive || stagedGenerations.has(event.generationId) || opens.has(event.generationId) || !origin?.human || origin.originSessionId !== undefined && origin.originSessionId !== event.recipientSessionId || event.originInputSeq >= event.seq! || event.originInputSeq < (scope.seedLength ?? 0) || stagedFence !== undefined && event.originInputSeq <= stagedFence)
                   fail('ineligible own human delivery origin');
                 stagedGenerations.add(event.generationId);
                 stagedActive = Object.freeze({ generationId: event.generationId, openedSeq: event.seq!, originInputSeq: event.originInputSeq });
@@ -190,15 +209,15 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
             }
             if (event.type === 'agent/delivery-source') {
               recipient(event.recipientSessionId);
-              const start = stagedRefs.get(event.startSeq), call = stagedRefs.get(event.callSeq), dispatched = [...stagedRefs.entries()].some(([seq, r]) => seq > event.callSeq && seq < event.startSeq && r.type === 'tool/dispatch' && r.eventSeq === event.callSeq && r.callId === call?.callId);
-              if (stagedActive?.generationId !== event.generationId || stagedSources.has(sourceKey(event.sourceNamespace, event.sourceId)) || event.startSeq !== event.seq! - 1 || start?.type !== 'subagent/start' || start.taskId !== event.sourceId || start.parentSessionId !== event.recipientSessionId || call?.type !== 'tool/call' || call.name !== 'spawn_agent' || event.callSeq < (scope.seedLength ?? 0) || !dispatched)
+              const start = reference(event.startSeq), call = reference(event.callSeq), dispatched = dispatch(event.callSeq);
+              if (stagedActive?.generationId !== event.generationId || source(sourceKey(event.sourceNamespace, event.sourceId)) || event.startSeq !== event.seq! - 1 || start?.type !== 'subagent/start' || start.taskId !== event.sourceId || start.parentSessionId !== event.recipientSessionId || call?.type !== 'tool/call' || call.name !== 'spawn_agent' || event.callSeq < (scope.seedLength ?? 0) || !dispatched || dispatched.callId !== call.callId || dispatched.seq <= event.callSeq || dispatched.seq >= event.startSeq)
                 fail('uncertified delivery source');
               stagedSources.set(sourceKey(event.sourceNamespace, event.sourceId), event);
             }
             if (event.type === 'agent/delivery-received') {
               recipient(event.key.recipientSessionId);
-              const binding = stagedSources.get(sourceKey(event.key.sourceNamespace, event.key.sourceId)), terminal = stagedRefs.get(event.terminalSeq);
-              if (!binding || binding.seq !== event.sourceSeq || binding.recipientSessionId !== event.key.recipientSessionId || binding.generationId !== stagedActive?.generationId || event.terminalSeq <= event.sourceSeq || event.terminalSeq >= event.seq! || terminal?.type !== 'subagent/end' || terminal.taskId !== event.key.sourceId || terminal.resultRevision !== event.key.resultRevision || !terminal.qualified || stagedReceipts.has(identity(event.key)) || stagedInputs.has(event.inputId) || event.inputId !== deliveryInputId(event.key))
+              const binding = source(sourceKey(event.key.sourceNamespace, event.key.sourceId)), terminal = reference(event.terminalSeq);
+              if (!binding || binding.seq !== event.sourceSeq || binding.recipientSessionId !== event.key.recipientSessionId || binding.generationId !== stagedActive?.generationId || event.terminalSeq <= event.sourceSeq || event.terminalSeq >= event.seq! || terminal?.type !== 'subagent/end' || terminal.taskId !== event.key.sourceId || terminal.resultRevision !== event.key.resultRevision || !terminal.qualified || receipt(identity(event.key)) || stagedInputs.has(event.inputId) || inputs.has(event.inputId) || event.inputId !== deliveryInputId(event.key))
                 fail('unqualified or duplicate delivery receipt');
               stagedReceipts.set(identity(event.key), { event, disposition: 'pending', admissionSeq: event.seq! + 1, generationId: binding.generationId });
               stagedInputs.set(event.inputId, identity(event.key));
@@ -208,7 +227,7 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           if (event.type === 'agent/input/admitted' && receiptFor(event.inputId) && receiptFor(event.inputId)!.admissionSeq !== event.seq) fail('delivery input identity cannot be reused');
           if (event.type === 'rewind/point') {
             stagedFence = event.seq;
-            suppress();
+            stagedActive = undefined;
             stagedTurn = undefined;
           }
           if (event.type === 'turn/start') {
@@ -222,24 +241,36 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
           if (event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') {
             const r = receiptFor(event.inputId);
             if (r) {
-              if (r.disposition !== 'pending' && !(event.type === 'agent/input/cancelled' && r.disposition === 'suppressed'))
+              const current = disposition(r, stagedActive);
+              if (current !== 'pending' && !(event.type === 'agent/input/cancelled' && current === 'suppressed'))
                 fail('ineligible delivery consumption');
-              r.disposition = event.type === 'agent/input/promoted' ? 'claimed' : 'cancelled';
+              const changed = writableReceipt(r);
+              changed.disposition = event.type === 'agent/input/promoted' ? 'claimed' : 'cancelled';
               if (event.type === 'agent/input/promoted')
-                r.promotionSeq = event.seq;
+                changed.promotionSeq = event.seq;
             }
           }
           if (event.type === 'user/message' && event.input) {
             const r = receiptFor(event.input.inputId);
             if (r && r.promotionSeq !== undefined && previous?.type === 'turn/start' && previous.seq === r.promotionSeq + 1 && event.seq === previous.seq! + 1)
-              r.inputStart = Object.freeze({ promotionSeq: r.promotionSeq, turnStartSeq: previous.seq!, rawMessageSeq: event.seq! });
+              writableReceipt(r).inputStart = Object.freeze({ promotionSeq: r.promotionSeq, turnStartSeq: previous.seq!, rawMessageSeq: event.seq! });
           }
           if (event.type === 'context/action' && event.op === 'open') {
             lookupActionOrigin(event);
             if (event.purpose === 'main' && stagedTurn !== undefined)
               stagedTurnAction = event.actionId;
           }
-          if (event.seq !== undefined) {
+          if (event.seq !== undefined && event.type === 'tool/dispatch' && event.eventSeq !== undefined) {
+            const call = reference(event.eventSeq);
+            // Keep the earliest actual matching dispatch, never a permission bit
+            // or a later mismatched dispatch overwriting the original proof.
+            const prior = dispatch(event.eventSeq);
+            if (call?.type === 'tool/call' && call.callId === event.callId && event.eventSeq < event.seq && (!prior || event.seq < prior.seq))
+              stagedDispatches.set(event.eventSeq, { callId: event.callId, seq: event.seq });
+          }
+          if (event.type === 'agent/input/admitted' && event.seq !== undefined)
+            stagedAdmissions.set(event.inputId, Object.freeze({ admissionSeq: event.seq, kind: event.provenance?.producer === 'session.delivery.subagent' ? 'delivery' : event.provenance?.producer === 'session.notification' && event.synthetic?.display?.kind === 'task' ? 'legacy-task' : 'ordinary' }));
+          if (event.seq !== undefined && (['agent/input/admitted', 'tool/call', 'subagent/start', 'subagent/end'].includes(event.type) || event.type === 'user/message' && event.input)) {
             const ref: Ref = { type: event.type };
             if (event.type === 'agent/input/admitted')
               Object.assign(ref, { inputId: event.inputId, human: event.intent === 'user' && !event.synthetic && event.provenance?.kind === 'human' && event.provenance.authority === 'request', originSessionId: event.provenance?.originSessionId });
@@ -247,8 +278,6 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
               ref.inputId = event.input?.inputId;
             if (event.type === 'tool/call')
               Object.assign(ref, { name: event.name, callId: event.callId });
-            if (event.type === 'tool/dispatch')
-              Object.assign(ref, { eventSeq: event.eventSeq, callId: event.callId });
             if (event.type === 'subagent/start')
               Object.assign(ref, { taskId: event.taskId, parentSessionId: event.parentSessionId });
             if (event.type === 'subagent/end')
@@ -262,15 +291,17 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
         }, commit() {
           if (awaiting)
             fail('unpaired delivery receipt');
-          refs = stagedRefs;
-          sources = stagedSources;
-          receipts = stagedReceipts;
-          inputs = stagedInputs;
+          for (const [key, value] of stagedRefs) refs.set(key, value);
+          for (const [key, value] of stagedSources) sources.set(key, value);
+          for (const [key, value] of stagedReceipts) receipts.set(key, value);
+          for (const [key, value] of stagedInputs) inputs.set(key, value);
+          for (const [key, value] of stagedDispatches) dispatches.set(key, value);
+          for (const [key, value] of stagedAdmissions) admissions.set(key, value);
           active = stagedActive;
           fence = stagedFence;
           owner = stagedOwner;
-          opens = stagedGenerations;
-          fences = stagedFences;
+          for (const id of stagedGenerations) opens.add(id);
+          for (const id of stagedFences) fences.add(id);
           turn = stagedTurn;
           turnAction = stagedTurnAction;
         }
@@ -278,11 +309,14 @@ export function createDeliveryIndex(scope: GenerationHistoryScope = {}, profile?
     }
   };
 }
-export function readDeliveries(view: SessionView): DeliveryState {
+function replayDeliveryIndex(view: SessionView) {
   validateDeliveryFrame(view.events, view.formatVersion);
   const index = createDeliveryIndex(view.header ?? {}), staged = index.stage();
   for (const event of view.events)
     staged.advance(event);
   staged.commit();
-  return index.read();
+  return index;
 }
+export function readDeliveries(view: SessionView): DeliveryState { return replayDeliveryIndex(view).read(); }
+/** Unbound/mutable observations replay once; no independently cached authority. */
+export function readDeliveryIndex(view: SessionView): DeliveryReadIndex { return replayDeliveryIndex(view).readIndex(); }

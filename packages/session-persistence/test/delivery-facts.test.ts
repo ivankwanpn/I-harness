@@ -1,5 +1,15 @@
 import { expect, it, vi } from 'vitest';
 const installCut = vi.hoisted(() => ({ enabled: false }));
+const deliveryReads = vi.hoisted(() => ({ enabled: false, replays: 0, prefixEvents: 0 }));
+vi.mock('../../core-session/src/conversation/delivery.ts', async load => {
+  const api = await load<typeof import('../../core-session/src/conversation/delivery.ts')>();
+  const observe = (view: import('@i-harness/core-session').SessionView) => { if (deliveryReads.enabled) { deliveryReads.replays++; deliveryReads.prefixEvents += view.events.length; } };
+  return { ...api,
+    readDeliveries: (...args: Parameters<typeof api.readDeliveries>) => { observe(args[0]); return api.readDeliveries(...args); },
+    ...(api.readDeliveryIndex ? { readDeliveryIndex: (...args: Parameters<typeof api.readDeliveryIndex>) => { observe(args[0]); return api.readDeliveryIndex(...args); } } : {}),
+  };
+});
+
 vi.mock('@i-harness/core-session', async (load) => {
   const api = await load<typeof import('@i-harness/core-session')>(); return {
     ...api, createManagedSessionState: (...args: Parameters<typeof api.createManagedSessionState>) => {
@@ -284,18 +294,24 @@ it.each(['absent', 'conflict'] as const)('never retires a receipt with original 
 it('keeps physically committed installation debt and reconciles the exact original receipt after Stop', async () => {
   const f = await ownedDeliveryHistory(false);
   try {
+    const {readOwnedDeliveryState}=await import('../../core-session/src/managed/view.ts'),observed=readOwnedDeliveryState(f.document.view)!;
+    expect(observed.input(f.inputId)).toBeUndefined();
     installCut.enabled = true;
     const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), outcome = await captured.admit();
     expect(outcome.kind).toBe('recovery-required');
+    expect(observed.input(f.inputId)).toBeUndefined();expect(observed.receipt(f.key)).toBeUndefined();
     expect(f.document.view.events.some(e => e.type === 'agent/delivery-received')).toBe(false);
     expect((await f.backend.read('parent')).events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1);
     const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'install-stop', reason: 'user-stop' });
     const recovered = await captured.reconcile();
     expect(recovered.kind).toBe('committed');
+    expect(observed.input(f.inputId)?.kind).toBe('delivery');expect(observed.receipt(f.key)?.disposition).toBe('pending');
+    expect(new AsyncInbox(f.document.view,()=>f.action.facts.inputs).isPending(f.inputId)).toBe(false);
     if (outcome.kind === 'recovery-required' && recovered.kind === 'committed')
       expect(recovered.receipt.key).toEqual(outcome.receipt.key);
     committedFactSeqs(await close.admit());
     expect(readDeliveries(f.document.view).receipt(f.key)?.disposition).toBe('suppressed');
+    expect(observed.receipt(f.key)?.disposition).toBe('suppressed');
   }
   finally {
     installCut.enabled = false;
@@ -434,3 +450,83 @@ it('retains strict owned terminal envelope validation when semantic-source paylo
  expect(await readFile(path)).toEqual(before);expect(f.document.view.events.some(event=>event.type==='subagent/end'&&event.taskId==='invalid-original')).toBe(false)
  await expect(source.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
 }finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})
+it('discards receipt disposition, promotion, raw-start and origin writes from a rejected delivery stage',async()=>{const f=await ownedDeliveryHistory();try{
+ const {createDeliveryIndex}=await import('../../core-session/src/conversation/delivery.ts'),index=createDeliveryIndex({sessionId:'parent'}),prefix=index.stage()
+ for(const event of f.document.view.events)prefix.advance(event)
+ prefix.validate();prefix.commit()
+ const count=f.document.view.events.length,admission=f.document.view.events.find(e=>e.type==='agent/input/admitted'&&e.inputId===f.inputId)!,before=index.read().receipt(f.key),abandoned=index.stage()
+ abandoned.advance({type:'agent/input/promoted',version:1,inputId:f.inputId,seq:count})
+ abandoned.advance({type:'turn/start',seq:count+1})
+ abandoned.advance({type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system',synthetic:f.admitted.synthetic},provenance:f.admitted.provenance,seq:count+2})
+ abandoned.advance(open(count+3,'abandoned',{kind:'input',seq:count+2}))
+ expect(()=>abandoned.advance({...f.receipt,seq:count+4})).toThrow(/duplicate delivery receipt/)
+ expect(index.read().receipt(f.key)).toEqual(before);expect(index.read().isEligible(f.inputId)).toBe(true)
+ const kept=index.stage(),original=open(count,'kept',{kind:'observation-input',seq:admission.seq!,inputId:f.inputId})
+ expect(kept.lookupActionOrigin(original)).toEqual({receiptSeq:f.document.view.events.find(e=>e.type==='agent/delivery-received')!.seq!,admissionSeq:admission.seq!,inputId:f.inputId,actionId:'kept',openedSeq:count})
+ kept.advance(original)
+ kept.advance({type:'agent/input/promoted',version:1,inputId:f.inputId,seq:count+1});kept.advance({type:'turn/start',seq:count+2})
+ kept.advance({type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system',synthetic:f.admitted.synthetic},provenance:f.admitted.provenance,seq:count+3})
+ kept.validate();kept.commit();expect(index.read().receipt(f.key)?.disposition).toBe('claimed')
+}finally{await f.close()}})
+it.each([32,64])('ordinary actual managed appends do not replay delivery history (%s frames)',async count=>{
+ const root=await mkdtemp(join(tmpdir(),'delivery-append-count-')),backend=createJsonlBackend(root),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
+ try{
+  await coordinator.create({sessionId:'ordinary'});const document=await coordinator.openManagedDocument('ordinary'),action=document.beginAction()
+  deliveryReads.replays=0;deliveryReads.prefixEvents=0;deliveryReads.enabled=true
+  try{for(let seq=0;seq<count;seq++)committedFactSeqs(await action.facts.metadata.admit({type:'plan/mode',mode:'off'}))}finally{deliveryReads.enabled=false}
+  const measured={frames:count,replays:deliveryReads.replays,prefixEvents:deliveryReads.prefixEvents};console.log(JSON.stringify({control:'actual managed delivery replay counts',...measured}))
+  expect(document.view.events).toHaveLength(count);expect(measured.replays).toBe(0);expect(measured.prefixEvents).toBe(0);action.finish()
+ }finally{deliveryReads.enabled=false;await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
+it('observes managed Inbox delivery eligibility once using the original index and scalar input lookups',async()=>{const f=await ownedDeliveryHistory();try{
+ for(let n=0;n<32;n++)committedFactSeqs(await f.received.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'ordinary-'+n,text:'ordinary',intent:'user',delivery:'queue'}).admit())
+ const some=Object.getOwnPropertyDescriptor(Array.prototype,'some')!,findLast=Object.getOwnPropertyDescriptor(Array.prototype,'findLast')!;let historySome=0,historyFindLast=0,pending:ReturnType<AsyncInbox['pending']>
+ deliveryReads.replays=0;deliveryReads.prefixEvents=0;deliveryReads.enabled=true
+ try{
+  Object.defineProperty(Array.prototype,'some',{...some,value:function(this:unknown[],...args:unknown[]){if(this===f.document.view.events)historySome++;return some.value.apply(this,args)}})
+  Object.defineProperty(Array.prototype,'findLast',{...findLast,value:function(this:unknown[],...args:unknown[]){if(this===f.document.view.events)historyFindLast++;return findLast.value.apply(this,args)}})
+  pending=new AsyncInbox(f.document.view,()=>f.action.facts.inputs).pending()
+ }finally{deliveryReads.enabled=false;Object.defineProperty(Array.prototype,'some',some);Object.defineProperty(Array.prototype,'findLast',findLast)}
+ expect(pending!).toHaveLength(34);expect(pending!.some(input=>input.inputId===f.inputId)).toBe(true)
+ console.log(JSON.stringify({control:'managed Inbox delivery observation',pending:pending!.length,historySome,historyFindLast,replays:deliveryReads.replays,prefixEvents:deliveryReads.prefixEvents}))
+ expect(historySome).toBe(1);expect(historyFindLast).toBe(0);expect(deliveryReads.replays).toBe(0)
+}finally{await f.close()}})
+it('publishes the original delivery read facade only with the validated synchronous install',async()=>{const f=await ownedDeliveryHistory();try{
+ const {readOwnedDeliveryState}=await import('../../core-session/src/managed/view.ts')
+ expect(readOwnedDeliveryState(Object.freeze({...f.document.view}))).toBeUndefined()
+ const local=createManagedSessionState({formatVersion:13,events:JSON.parse(JSON.stringify(f.document.view.events))},{sessionId:'parent'}),observed=readOwnedDeliveryState(local.view)!,count=local.view.events.length
+ expect(observed.receipt(f.key)?.disposition).toBe('pending')
+ const group=(seq:number):SessionEvent[]=>[{type:'agent/input/promoted',version:1,inputId:f.inputId,seq},{type:'turn/start',seq:seq+1},{type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system',synthetic:f.admitted.synthetic},provenance:f.admitted.provenance,seq:seq+2}]
+ const staged=local.stage(group(count))
+ expect(observed.receipt(f.key)?.disposition).toBe('pending');expect(local.view.events).toHaveLength(count)
+ local.stage([{type:'plan/mode',mode:'off',seq:count}]).install()
+ expect(()=>staged.install()).toThrow(/stale staged suffix/)
+ expect(observed.receipt(f.key)?.disposition).toBe('pending');expect(observed.isEligible(f.inputId)).toBe(true)
+ local.stage(group(count+1)).install()
+ expect(observed.receipt(f.key)?.disposition).toBe('claimed');expect(observed.isEligible(f.inputId)).toBe(false)
+}finally{await f.close()}})
+it('refuses same-length mutable memory terminal tampering instead of trusting its warmed original cache',async()=>{const f=await ownedDeliveryHistory();try{
+ const {createNondurableFactOwner}=await import('@i-harness/core-session'),{readOwnedDeliveryState}=await import('../../core-session/src/managed/view.ts')
+ const memory={formatVersion:13,events:JSON.parse(JSON.stringify(f.document.view.events)) as SessionEvent[]},owner=createNondurableFactOwner(memory),action=owner.beginAction()
+ committedFactSeqs(await action.facts.metadata.admit({type:'plan/mode',mode:'off'}))
+ const inbox=new AsyncInbox(memory,()=>action.facts.inputs),terminal=memory.events[f.terminalSeq]!
+ expect(readOwnedDeliveryState(memory)).toBeUndefined();expect(inbox.isPending(f.inputId)).toBe(true)
+ if(terminal.type!=='subagent/end')throw Error('fixture')
+ const before=memory.events.length,revision=terminal.resultRevision;terminal.resultRevision='tampered-same-length'
+ expect(()=>inbox.pending()).toThrow(/unqualified/)
+ await expect(action.facts.inputs.claim({type:'agent/input/promoted',version:1,inputId:f.inputId},{type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system'}})).rejects.toThrow(/unqualified/)
+ expect(memory.events).toHaveLength(before)
+ terminal.resultRevision=revision;expect(inbox.isPending(f.inputId)).toBe(true)
+ const received=owner.registerReceivedInputSource(async()=>{}),close=received.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:'parent',fenceId:'memory-stop',reason:'user-stop'})
+ expect(inbox.isPending(f.inputId)).toBe(false);committedFactSeqs(await close.admit());await received.close();action.finish()
+}finally{await f.close()}})
+it('indexes current admission class without changing legacy task suppression, team/schedule or raw cancellation reuse',async()=>{const f=await ownedDeliveryHistory();try{
+ const input=(inputId:string,kind:'task'|'team-result'|'schedule')=>({type:'agent/input/admitted',version:1,inputId,text:'report',delivery:'steer',intent:'system',provenance:{kind:kind==='schedule'?'plugin':'child-report',authority:'observation',scope:'turn',producer:kind==='schedule'?'session.schedule':'session.notification'},synthetic:{description:'report',scope:'turn',display:{kind,title:'report',body:'report'}}} as const)
+ for(const [id,kind]of [['legacy','task'],['team','team-result'],['schedule','schedule']] as const)committedFactSeqs(await f.received.captureAdmitted(input(id,kind)).admit())
+ const inbox=new AsyncInbox(f.document.view,()=>f.action.facts.inputs)
+ expect(inbox.isPending('legacy')).toBe(false);expect(readInbox(f.document.view).isPending('legacy')).toBe(true)
+ expect(inbox.isPending('team')).toBe(true);expect(inbox.isPending('schedule')).toBe(true)
+ expect(await inbox.cancel('legacy')).toBe(true)
+ committedFactSeqs(await f.received.captureAdmitted({type:'agent/input/admitted',version:1,inputId:'legacy',text:'new human input',intent:'user',delivery:'queue'}).admit())
+ expect(inbox.isPending('legacy')).toBe(true)
+}finally{await f.close()}})

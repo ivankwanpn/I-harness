@@ -4,7 +4,7 @@ import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { validateRuntimeContextDiscriminant } from '../events/runtime-context.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape, validateSemanticSourceEventShape } from "../events/conversation.ts"
 import type { projectHistory } from './history/replacements.ts'
-import { createDeliveryIndex } from './delivery.ts'
+import { createDeliveryIndex, type DeliveryReadIndex } from './delivery.ts'
 import { createHistoryIndex } from './history/index.ts'
 import { createGenerationIndex, type GenerationHistoryScope } from './generation.ts'
 import { createInputPreparationIndex } from './input-preparation.ts'
@@ -27,6 +27,9 @@ export interface ConversationValidationIndex {
   replacementDependencies(): ReadonlyMap<number, ReadonlySet<number>>
   softReduction(ownerSessionId: string): import('./soft-reduction.ts').SoftReductionState
 }
+const deliveryObservations = new WeakMap<ConversationValidationIndex, DeliveryReadIndex>()
+/** Private read link, installed only by this index's actual construction. */
+export function readConversationDeliveries(index: ConversationValidationIndex): DeliveryReadIndex | undefined { return deliveryObservations.get(index) }
 
 /** Derived structural facts only: no prompt, args, native sidecars or outputs. */
 export function createConversationValidationIndex(events: readonly SessionEvent[] = [], options: { formatVersion: number; header?: GenerationHistoryScope } = { formatVersion: CURRENT_FORMAT_VERSION }): ConversationValidationIndex {
@@ -243,6 +246,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
     },
   }
   index.stage(events).commit()
+  if (capability !== semanticSourceStructure) deliveryObservations.set(index, delivery.readIndex())
   return index
 }
 

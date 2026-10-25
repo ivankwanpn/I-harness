@@ -1,4 +1,4 @@
-import { isDeliveryExecutable } from './delivery-control.ts'
+import { deliveryPredicate } from './delivery-control.ts'
 import type { AdmittedInput, PendingInput } from '../inbox.ts'
 import { SYSTEM_INPUT_PLUGIN } from '../inbox.ts'
 import { readInbox } from '../inbox-view.ts'
@@ -12,8 +12,13 @@ import { committedFactSeqs } from './outcome.ts'
 export class AsyncInbox {
   constructor(private readonly session: SessionView,
     private readonly inputFacts: (signal?: AbortSignal) => InputFacts<ProducerFactOutcome>, private readonly fromSeq = 0) {}
-  pending(): PendingInput[] { return copyConversationData(readInbox(this.session, this.fromSeq).pending().filter(input => isDeliveryExecutable(this.session,input.inputId))) }
-  isPending(inputId: string): boolean { return readInbox(this.session, this.fromSeq).isPending(inputId) && isDeliveryExecutable(this.session,inputId) }
+  pending(): PendingInput[] {
+    const pending = readInbox(this.session, this.fromSeq).pending()
+    if (!pending.length) return []
+    const eligible = deliveryPredicate(this.session)
+    return copyConversationData(pending.filter(input => eligible(input.inputId)))
+  }
+  isPending(inputId: string): boolean { return readInbox(this.session, this.fromSeq).isPending(inputId) && deliveryPredicate(this.session)(inputId) }
   async admit(input: AdmittedInput, signal?: AbortSignal): Promise<number> {
     const [seq] = committedFactSeqs(await this.inputFacts(signal).admit({ type: 'agent/input/admitted', version: 1, ...input }))
     return seq!

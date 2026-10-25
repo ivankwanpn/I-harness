@@ -1,5 +1,6 @@
 import type { SessionView, SessionEventView } from './types.ts';
-import { readDeliveries } from '../conversation/delivery.ts';
+import { readDeliveryIndex, type DeliveryReadIndex } from '../conversation/delivery.ts';
+import { readOwnedDeliveryState } from './view.ts';
 const controls = new WeakMap<object, {
   through: number;
   retired: boolean;
@@ -12,6 +13,20 @@ export function assertDeliveryIssue(view: SessionView, events: readonly SessionE
 const stale = (): never => {
   throw Object.assign(new Error('Delivery precondition is stale'), { code: 'FACT_PRECONDITION_STALE' });
 };
+const observation = (view: SessionView): DeliveryReadIndex => readOwnedDeliveryState(view) ?? readDeliveryIndex(view);
+function executable(state: DeliveryReadIndex, inputId: string, control: { through: number; retired: boolean; debt: Set<object> } | undefined) {
+  const input = state.input(inputId);
+  if (!input || input.kind === 'legacy-task') return false;
+  if (!state.isBound(inputId)) return input.kind !== 'delivery';
+  const active = state.activeGeneration();
+  return state.isEligible(inputId) && !!active && !control?.retired && !control?.debt.size && active.openedSeq > (control?.through ?? -1);
+}
+/** One original committed observation (or one explicit mutable/unbound replay)
+ * for the whole synchronous pending selection, with live revocation still read. */
+export function deliveryPredicate(view: SessionView): (inputId: string) => boolean {
+  const state = observation(view), control = controls.get(view);
+  return inputId => executable(state, inputId, control);
+}
 /** Construction is private to actual owner composition. No caller DTO binds it. */
 export function createDeliveryControl(view: SessionView) {
   if (controls.has(view))
@@ -29,8 +44,12 @@ export function createDeliveryControl(view: SessionView) {
     }, retire() {
       control.retired = true;
     }, assert(events: readonly SessionEventView[]) {
-      const durable = readDeliveries(view), active = durable.activeGeneration();
+      // Unrelated groups never need a delivery read. Relevant groups use the
+      // original committed index afresh at this actual issuance boundary.
+      let durable: DeliveryReadIndex | undefined;
+      const read = () => durable ??= observation(view);
       const current = () => {
+        const active = read().activeGeneration();
         if (control.retired || control.debt.size > 0 || active === undefined || active.openedSeq <= control.through)
           stale();
       };
@@ -39,13 +58,12 @@ export function createDeliveryControl(view: SessionView) {
           stale();
         if (event.type === 'agent/delivery-source' || event.type === 'agent/delivery-received')
           current();
-        if (event.type === 'agent/input/promoted' && isBoundDeliveryInput(view, event.inputId) && !isDeliveryExecutable(view, event.inputId))
+        if (event.type === 'agent/input/promoted' && read().isBound(event.inputId) && !executable(read(), event.inputId, control))
           stale();
         if (event.type === 'context/action' && event.op === 'open' && event.purpose === 'main') {
           const origin = event.origin;
-          const raw = origin.kind === 'input' ? view.events[origin.seq] : undefined;
-          const id = origin.kind === 'observation-input' ? origin.inputId : raw?.type === 'user/message' ? raw.input?.inputId : undefined;
-          if (id && isBoundDeliveryInput(view, id))
+          const id = origin.kind === 'observation-input' ? origin.inputId : origin.kind === 'input' ? read().inputIdAt(origin.seq) : undefined;
+          if (id && read().isBound(id))
             current();
         }
       }
@@ -55,16 +73,8 @@ export function createDeliveryControl(view: SessionView) {
   return port;
 }
 export function isBoundDeliveryInput(view: SessionView, inputId: string): boolean {
-  return view.events.some(e => e.type === 'agent/delivery-received' && e.inputId === inputId);
+  return observation(view).isBound(inputId);
 }
 export function isDeliveryExecutable(view: SessionView, inputId: string): boolean {
-  const admission = view.events.findLast(e => e.type === 'agent/input/admitted' && e.inputId === inputId);
-  if (admission?.type !== 'agent/input/admitted')
-    return false;
-  if (admission.provenance?.producer === 'session.notification' && admission.synthetic?.display?.kind === 'task')
-    return false;
-  if (!isBoundDeliveryInput(view, inputId))
-    return admission.provenance?.producer !== 'session.delivery.subagent';
-  const state = readDeliveries(view), control = controls.get(view), active = state.activeGeneration();
-  return state.isEligible(inputId) && !!active && !control?.retired && !control?.debt.size && active.openedSeq > (control?.through ?? -1);
+  return deliveryPredicate(view)(inputId);
 }

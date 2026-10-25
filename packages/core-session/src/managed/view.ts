@@ -1,10 +1,17 @@
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import type { Session, SessionEvent } from '../events/types.ts'
-import { createConversationIndex, createBootstrapConversationIndex } from '../conversation/validation.ts'
+import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, type ConversationValidationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
+const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
+/** Only immutable views constructed here have an original committed read link.
+ * Mutable memory sessions deliberately use a strict observation replay instead. */
+export function readOwnedDeliveryState(view: SessionView) {
+  const index = originalIndexes.get(view)
+  return index && readConversationDeliveries(index)
+}
 
 /** Composition capability, never attached to the public readonly Session. The
  * private array and structural index are installed together without yielding. */
@@ -33,6 +40,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
     ...(captured.value.header ? { header: captured.value.header } : {}),
   })
   managedSessions.add(view)
+  originalIndexes.set(view, index)
   return {
     view,
     bindOwner(owner: object) {
