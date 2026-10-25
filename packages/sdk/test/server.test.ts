@@ -101,6 +101,7 @@ function makeStubService(): SessionService {
     cancelQueued: vi.fn(async () => ({ cancelled: false })),
     tasks: vi.fn(() => []),
     cancelTask: vi.fn(() => "already-finished" as const),
+    awaitDeliveryStop: vi.fn(async () => { throw new Error('unused delivery-stop capability in sdk ownership test') }),
     onAssembly: () => () => {},
     updateSandboxMode: vi.fn(),
     reconcileExecutionAuthority: vi.fn(async () => {}),
