@@ -2,6 +2,11 @@
 
 The release objective remains one usable0.1.13 containing context redesign, internal event-driven execution and AGENTS.md/CLAUDE.md support. Product version stays0.1.13-rc.1 and Session format12. Pure decomposition remains deferred to the next version. No release, tag or push is recorded in this checkpoint.
 
+## Latest accepted integration and current work
+
+Main now contains scoped L1, retention-performance Task1, same-invocation retained continuation with reviewed close qualification, existing-session binding observation, and Windows N2 event-owner/asset integration. Acceptances are recorded in the 2026-10-25 research files and current integrated progress map. N2's actual MAIN120-package/10-consumer/type gates pass; fullTask6 and release are still open.
+
+Performance Task2 is frozen WIP abbc30c4, not accepted/integrated: traversal work is bounded as designed, but exact-physical cleanup still exposes original FTS allocation failure. Root selected FB01 authority-cleanup/index-readiness separation within the same owner; the new lifecycle/resource-policy foundations remain under design. Public F1-C and child/instruction/event integrations remain required. Original historical003 trigger is still unknown; accepted deterministic continuation does not fabricate that diagnosis. The following dated phases remain historical evidence where superseded.
 ## Latest checkpoint after L1 integration
 
 [F1-L1 owner acceptance](2026-10-25-legacy-fork-retention-acceptance.md) is now recorded through MAIN bc83c399. Initial review findings and fix review are closed; split fixed-source MAIN coverage is preserved honestly. Public F1-C and the measured scale/expiry performance debts remain open.

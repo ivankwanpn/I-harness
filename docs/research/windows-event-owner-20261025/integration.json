@@ -1,0 +1,153 @@
+{
+  "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+  "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+  "changed": [
+    "packages/sandbox-windows-psec/.gitattributes",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-msys-pty.exe",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe",
+    "packages/sandbox-windows-psec/artifacts/win32-x64/manifest.json",
+    "packages/sandbox-windows-psec/native/msys/api.h",
+    "packages/sandbox-windows-psec/native/msys/bridge.c",
+    "packages/sandbox-windows-psec/native/msys/bridge.sha256",
+    "packages/sandbox-windows-psec/native/src/job.rs",
+    "packages/sandbox-windows-psec/native/src/runner.rs",
+    "packages/sandbox-windows-psec/native/src/runner/control.rs",
+    "packages/sandbox-windows-psec/native/src/runner/dispatch.rs",
+    "packages/sandbox-windows-psec/native/src/runner/event_drain.rs",
+    "packages/sandbox-windows-psec/native/src/runner/notifications.rs",
+    "packages/sandbox-windows-psec/native/src/runner/prepared.rs",
+    "packages/sandbox-windows-psec/native/src/runner/running.rs",
+    "packages/sandbox-windows-psec/native/src/runner/tree.rs",
+    "packages/sandbox-windows-psec/native/src/runner/waits.rs",
+    "packages/sandbox-windows-psec/native/src/transport.rs",
+    "packages/sandbox-windows-psec/native/src/transport/operations.rs",
+    "packages/sandbox-windows-psec/native/src/transport/queues.rs",
+    "packages/sandbox-windows-psec/protocol.md",
+    "packages/sandbox-windows-psec/qualification-history/2026-10-24-before-native-events.json",
+    "packages/sandbox-windows-psec/qualification-history/2026-10-25-before-canonical-inputs.json",
+    "packages/sandbox-windows-psec/qualification.json",
+    "packages/sandbox-windows-psec/scripts/build-native.ps1",
+    "packages/sandbox-windows-psec/scripts/record-qualification.mjs",
+    "packages/sandbox-windows-psec/test/build-native-inputs.test.ts",
+    "packages/sandbox-windows-psec/test/checkout-integrity.test.ts",
+    "packages/sandbox-windows-psec/test/msys-pty.test.ts",
+    "packages/sandbox-windows-psec/test/record-qualification.test.ts",
+    "packages/session-executor/test/execution-authority.test.ts"
+  ],
+  "receipts": [
+    {
+      "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+      "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+      "name": "assets",
+      "cwd": "D:\\I-harness-main",
+      "args": [
+        "--input-type=module",
+        "-e",
+        "import {verifyNativeAssets} from './scripts/runtime-native-assets.mjs'; const m=verifyNativeAssets('packages/sandbox-windows-psec',{sources:true}); console.log(JSON.stringify({helper:m.helperSha256,protocol:m.protocolSha256,sources:Object.keys(m.sources).length}));"
+      ],
+      "started": "2026-10-25T12:18:50.261Z",
+      "ended": "2026-10-25T12:18:50.453Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2896,
+      "sha256": "73418b7806ea126a756950ad5bad61493be7fcade608ec99bc3b2bde78f1197a",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\close"
+      }
+    },
+    {
+      "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+      "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+      "name": "psec-package",
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-windows-psec",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T12:18:50.453Z",
+      "ended": "2026-10-25T12:19:03.781Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2896,
+      "sha256": "881a876934c5212405bb20427404c19f8e88d03e54d53ecc9d80c5004cded6af",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\close"
+      }
+    },
+    {
+      "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+      "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+      "name": "authenticated-executor",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/execution-authority.test.ts",
+        "test/retained-batch-continuation.test.ts",
+        "test/code-mode-children-close-boundary.test.ts",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "started": "2026-10-25T12:19:03.782Z",
+      "ended": "2026-10-25T12:19:30.602Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2896,
+      "sha256": "8baa8db7411bdbabd9d148bfd9855a04e4694c6fed8c98ed6a0101a072a1ce73",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\close"
+      }
+    },
+    {
+      "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+      "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+      "name": "psec-types",
+      "cwd": "D:\\I-harness-main\\packages\\sandbox-windows-psec",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T12:19:30.602Z",
+      "ended": "2026-10-25T12:19:33.854Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2896,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\close"
+      }
+    },
+    {
+      "head": "cf753bc9a9a6e24bbc457a5bf4e753fc9a73037d",
+      "donor": "82ef4e93d52360e9d1d5a842e911404064999c02",
+      "name": "executor-types",
+      "cwd": "D:\\I-harness-main\\packages\\session-executor",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "started": "2026-10-25T12:19:33.854Z",
+      "ended": "2026-10-25T12:19:44.768Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2896,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\config",
+        "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\live-batch",
+        "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-24-windows-native-event-owner\\integrated-cf753bc9\\close"
+      }
+    }
+  ]
+}

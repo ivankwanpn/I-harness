@@ -1,6 +1,8 @@
 # Native source and packaging review checkpoint
 
-Native sources, final record validation and the checkout reproducibility repair are reviewed through HOST `82ef4e93d52360e9d1d5a842e911404064999c02`. They remain isolated from MAIN. The authenticated Code Mode recovery issue003 remains open; this checkpoint grants no whole N2/Task6, integration or release completion.
+Latest update: [scoped N2 source and MAIN integration is now accepted](2026-10-25-windows-event-owner-acceptance.md) through cf753bc9, with original limitations preserved. The following paragraphs record the earlier source/packaging phase and its then-open integration holds.
+
+Native sources, final record validation and the checkout reproducibility repair were reviewed through HOST `82ef4e93d52360e9d1d5a842e911404064999c02`. They remain isolated from MAIN. The authenticated Code Mode recovery issue003 remains open; this checkpoint grants no whole N2/Task6, integration or release completion.
 
 The [connected review](integrated-checkpoint-20261024/native-events-connected-review.md) found no additional native unsafe/lifetime issue after the causal cancellation fixes, but found the qualification generator accepted same-count case substitution. Its exact43-case name/outcome repair is [independently approved](integrated-checkpoint-20261024/native-events-record-fix-review.md) at e68b4fc3. Original qualification39/0/4 stays incomplete and experimental.
 
