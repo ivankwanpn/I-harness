@@ -74,6 +74,19 @@ export function validateHistoricalReplacement(archive: HistoryArchive, replaceme
     else if (event.type === 'agent/input/cancelled') pending.delete(event.inputId!)
     else if (event.type === 'user/message') { const id = event.inputId ?? event.imageInputId; if (id) consumedInputs.add(id) }
   }
+  // Delivery authority is interpreted from raw records, independently of rendered shadows.
+  const selectedSeqs=new Set(selected.flatMap(item=>historyItemCoverage(item).map(at=>at.seq)))
+  const pendingDeliverySources=new Set<number>(),deliveryInputs=new Map<string,number>()
+  for(const [,fact] of historyEntries(archive)) {
+    if(fact.deliveryOperation==='close'||fact.type==='rewind/point'){pendingDeliverySources.clear();deliveryInputs.clear()}
+    if(fact.type==='agent/delivery-source'&&fact.seq!==undefined)pendingDeliverySources.add(fact.seq)
+    if(fact.deliverySourceSeq!==undefined)deliveryInputs.set(fact.inputId!,fact.deliverySourceSeq)
+    if((fact.type==='agent/input/promoted'||fact.type==='agent/input/cancelled')&&deliveryInputs.has(fact.inputId!)){pendingDeliverySources.delete(deliveryInputs.get(fact.inputId!)!);deliveryInputs.delete(fact.inputId!)}
+  }
+  for(const [,fact] of historyEntries(archive)) {
+    if(fact.type.startsWith('agent/delivery-')&&fact.seq!==undefined&&selectedSeqs.has(fact.seq))fail('protected-source',seq)
+    if((fact.type==='agent/delivery-source'&&pendingDeliverySources.has(fact.seq!)||fact.deliverySourceSeq!==undefined&&deliveryInputs.has(fact.inputId!))&&fact.deliveryDependencies?.some(ref=>selectedSeqs.has(ref)))fail('protected-source',seq)
+  }
   if (ambiguousTurn) fail('protected-source', seq)
   for (const id of consumedInputs) pending.delete(id)
   if ([...pending.values()].some(seq => seq !== undefined && selectedSources.has(addressKey({ seq, part: 'admission' })))) fail('protected-source', seq)

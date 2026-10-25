@@ -1,3 +1,5 @@
+import { types as utilTypes } from 'node:util'
+import { isDeliveryEventType, validDeliveryEvent } from '../events/delivery.ts'
 import { validRuntimeContextRecord } from '../events/runtime-context.ts'
 import type { SessionEvent } from '../events/types.ts'
 import type { DeepReadonly, SeqRef, SessionView } from './types.ts'
@@ -29,6 +31,9 @@ export type LifecycleFact = Event<'turn/start' | 'turn/end' | 'step/start' | 'st
 export type TeamFact = Event<'team/member' | 'team/task' | 'team/message/queued' | 'team/message/delivered'>
 export type ContextReductionDraft = { kind: 'context-reduction'; events: readonly (DistributiveOmit<Event<'compaction/replacement' | 'compaction/prune' | 'compaction/reset'>, 'seq'> & { seq?: never })[]; softTerminal?: SoftReductionTerminalDraft }
 export type FactGroupDraft =
+  | { kind: 'delivery-generation'; event: import("../events/delivery.ts").DeliveryGenerationEvent }
+  | { kind: 'subagent-delivery-start'; start: Event<'subagent/start'>; binding: import("../events/delivery.ts").SubagentDeliveryLaunchDraft }
+  | { kind: 'delivery-admission'; receipt: Omit<import("../events/delivery.ts").DeliveryReceivedEvent,'seq'>; admitted: Event<'agent/input/admitted'> }
   | { kind: 'runtime-context'; event: import('../events/runtime-context.ts').RuntimeContextRecordV1 }
   | ContextReductionDraft
   | { kind: 'soft-reduction'; event: SoftReductionStart | SoftReductionTerminalDraft }
@@ -84,6 +89,9 @@ const family: Record<string, readonly SessionEvent['type'][]> = {
 }
 function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
   switch (group.kind) {
+    case 'delivery-generation': return [group.event]
+    case 'subagent-delivery-start': return [group.start, {type:'agent/delivery-source',version:1,kind:'subagent',...group.binding,startSeq:{kind:'group',position:0,expectedType:'subagent/start'}}]
+    case 'delivery-admission': return [group.receipt, group.admitted]
     case 'input-admission': return [group.admitted]
     case 'input-cancellation': return [group.cancelled]
     case 'input-start':
@@ -115,16 +123,30 @@ function groupEvents(group: DeepReadonly<FactGroupDraft>): readonly unknown[] {
     default: return [group.event]
   }
 }
+/** New delivery groups are closed own JSON all the way to their capture boundary. */
+function closedDeliveryData(value:unknown):boolean {
+  const pending=[value]
+  while(pending.length){const item=pending.pop();if(item===undefined)return false;if(item===null||typeof item!=='object')continue
+    for(const key of Reflect.ownKeys(item)){if(Array.isArray(item)&&key==='length')continue;const field=Object.getOwnPropertyDescriptor(item,key)!;if(typeof key!=='string'||!field.enumerable||!('value'in field)||field.value===undefined)return false;pending.push(field.value)}
+  }
+  return true
+}
 export function captureFactGroup(draft: FactGroupDraft):
   | { kind: 'captured'; group: CapturedFactGroup }
   | { kind: 'not-issued'; code: 'FACT_CAPTURE_FAILED' | 'FACT_INVALID_GROUP' } {
   // Producer wrappers and the DTO structural slots are data. Legacy conversion
   // is limited to ordinary args/output; native/context proof stays strict.
   try {
+    if (utilTypes.isProxy(draft)) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     const descriptors = Object.getOwnPropertyDescriptors(draft)
     if (Object.values(descriptors).some(field => !('value' in field))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     // groupEvents supplies generation's intra-group reference by spreading
     // that DTO. Reject executable acceptance slots before that construction.
+    if (['delivery-generation','subagent-delivery-start','delivery-admission'].includes(draft.kind) && (!isStrictFactData(draft) || !closedDeliveryData(draft))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (['delivery-generation','subagent-delivery-start','delivery-admission'].includes(draft.kind) && !Object.keys(draft).every(key=>(draft.kind==='delivery-generation'?['kind','event']:draft.kind==='subagent-delivery-start'?['kind','start','binding']:['kind','receipt','admitted']).includes(key))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'subagent-delivery-start' && (!Object.keys(draft.binding).every(key=>['recipientSessionId','generationId','sourceNamespace','sourceId','callSeq'].includes(key)) || !validDeliveryEvent({type:'agent/delivery-source',version:1,kind:'subagent',...draft.binding,startSeq:0}))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'delivery-admission' && (Object.hasOwn(draft.receipt,'seq') || !validDeliveryEvent(draft.receipt))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'delivery-generation' && (Object.hasOwn(draft.event,'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'exchange-acceptance' && !isStrictFactData(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'runtime-context' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2 || Object.getOwnPropertyNames(draft).length !== 2 || !validRuntimeContextRecord(draft.event) || Object.hasOwn(draft.event, 'seq'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
@@ -144,7 +166,7 @@ export function captureFactGroup(draft: FactGroupDraft):
   if (result.kind !== 'captured') return result
   const group = result.value, events = groupEvents(group)
   const types = events.map(event => (event as SessionEvent)?.type)
-  const expected = group.kind === 'input-admission' ? ['agent/input/admitted'] : group.kind === 'input-cancellation' ? ['agent/input/cancelled']
+  const expected = group.kind === 'delivery-generation' ? ['agent/delivery-generation'] : group.kind === 'subagent-delivery-start' ? ['subagent/start','agent/delivery-source'] : group.kind === 'delivery-admission' ? ['agent/delivery-received','agent/input/admitted'] : group.kind === 'input-admission' ? ['agent/input/admitted'] : group.kind === 'input-cancellation' ? ['agent/input/cancelled']
       : group.kind === 'input-start' || group.kind === 'steer-claim' ? [...(group.promoted ? ['agent/input/promoted'] : []), ...(group.kind === 'input-start' ? ['turn/start'] : []), 'user/message', ...(group.preparation ? [...group.preparation.observations.map(() => 'user/message'), 'agent/input/preparation'] : [])]
       : group.kind === 'exchange-acceptance' ? ['assistant/message', 'model/exchange-accepted', ...(group.generation ? ['context/action'] : [])] : group.kind === 'assistant-audit' ? ['assistant/message'] : group.kind === 'plugin-feedback' ? ['user/message'] : group.kind === 'plan-proposal' ? ['plan/mode', 'user/message'] : undefined
   const valid = group.kind === 'scheduled-input' ? group.dispatches.length > 0 && group.dispatches.every(event => event.type === 'schedule/change' && event.operation === 'dispatch') && group.admitted.type === 'agent/input/admitted' && group.admitted.intent === 'system'
@@ -163,6 +185,7 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
   if (group.kind === 'seed-import') {
     if (firstSeq !== 0 || view.events.length) throw new TypeError('Seed requires an empty owned document')
     for (const event of group.events) {
+      if (isDeliveryEventType(event.type)) throw new TypeError('Seed cannot import delivery authority')
       if (event.type === 'runtime/context' || isContextEventType(event.type) || event.type === 'agent/input/preparation' || event.type === 'model/exchange-accepted' && event.version !== 1) throw new TypeError('Seed cannot import operational authority')
       if (event.type === 'user/message' && event.inputPreparation || event.type === 'agent/input/admitted' && event.preparationPolicy) throw new TypeError('Seed cannot import input preparation authority')
       if ((event.type === 'user/message' || event.type === 'agent/input/admitted' || event.type === 'subagent/inbox') && event.provenance?.kind !== 'inherited') throw new TypeError('Seed input must carry inherited provenance')
@@ -185,6 +208,7 @@ export function resolveFactGroup(group: CapturedFactGroup, view: SessionView, fi
       if (resolved.type === 'user/message' && resolved.inputPreparation && 'rawMessageSeq' in resolved.inputPreparation) resolved = { ...resolved, inputPreparation: { ...resolved.inputPreparation, rawMessageSeq } }
       if (resolved.type === 'agent/input/preparation' && resolved.op === 'promoted') resolved = { ...resolved, rawMessageSeq, derivedMessageSeqs: group.preparation.observations.map((_, index) => rawMessageSeq + index + 1) }
     }
+    if (resolved.type === 'agent/delivery-source' && group.kind === 'subagent-delivery-start') resolved = {...resolved,startSeq:reference((event as unknown as {startSeq:SeqRef<'subagent/start'>}).startSeq,'subagent/start',position)}
     if (resolved.type === 'model/exchange-accepted' && group.kind !== 'seed-import') {
       const draft = event as unknown as AcceptedDraft
       if (draft.stepStartSeq.kind !== 'prior') throw new TypeError('Step reference must be committed')

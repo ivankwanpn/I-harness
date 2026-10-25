@@ -24,10 +24,16 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
   } finally { await source.close() }
   if (old.formatVersion === CURRENT_FORMAT_VERSION) return old
   if (old.formatVersion !== expected || !Number.isSafeInteger(expected) || expected < 1 || expected >= CURRENT_FORMAT_VERSION) throw new TypeError('Unexpected journal upgrade')
-  if (old.formatVersion === 11 && old.semanticSeed) {
-    const raw = await readFile(path), decoded = readFactJournal(raw.subarray(bodyStart), old.journal!, 11, old)
+  // The old physical profile must accept its own body before a header can
+  // make newly required records readable under the current profile.
+  if ([6,7,8,9,10,11,12].includes(old.formatVersion)) {
+    const raw=await readFile(path)
+    readFactJournal(raw.subarray(bodyStart),old.journal!,old.formatVersion,old)
+  }
+  if ([11,12].includes(old.formatVersion) && old.semanticSeed) {
+    const raw = await readFile(path), decoded = readFactJournal(raw.subarray(bodyStart), old.journal!, old.formatVersion, old)
     if (decoded.torn) throw new TypeError('Cannot upgrade an incomplete bootstrap journal')
-    validateSemanticBootstrapHistory(decoded.events, 11, old)
+    validateSemanticBootstrapHistory(decoded.events, old.formatVersion, old)
     await preserveBootstrapBirth(path, raw, old, decoded.events)
     // The existing writable lane confirms the immutable birth before replacing
     // its current header. No initial input or bootstrap frame is issued again.
@@ -36,7 +42,7 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
   }
   // Framed format6 already owns its exact legacy boundary and frame chain.
   // Only the header changes; never count frames as legacy event records.
-  if ([6, 7, 8, 9, 10, 11].includes(old.formatVersion)) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
+  if ([6, 7, 8, 9, 10, 11, 12].includes(old.formatVersion)) return copyWithHeader(path, bodyStart, { ...rawHeader, formatVersion: CURRENT_FORMAT_VERSION } as SessionMeta)
   let legacyBodyBytes = 0, legacyEventCount = 0, last = 0x0a, line = ''
   const decoder = new StringDecoder('utf8')
   const consume = (text: string) => {

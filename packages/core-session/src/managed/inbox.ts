@@ -1,3 +1,4 @@
+import { isDeliveryExecutable } from './delivery-control.ts'
 import type { AdmittedInput, PendingInput } from '../inbox.ts'
 import { SYSTEM_INPUT_PLUGIN } from '../inbox.ts'
 import { readInbox } from '../inbox-view.ts'
@@ -11,16 +12,16 @@ import { committedFactSeqs } from './outcome.ts'
 export class AsyncInbox {
   constructor(private readonly session: SessionView,
     private readonly inputFacts: (signal?: AbortSignal) => InputFacts<ProducerFactOutcome>, private readonly fromSeq = 0) {}
-  pending(): PendingInput[] { return copyConversationData(readInbox(this.session, this.fromSeq).pending()) }
-  isPending(inputId: string): boolean { return readInbox(this.session, this.fromSeq).isPending(inputId) }
+  pending(): PendingInput[] { return copyConversationData(readInbox(this.session, this.fromSeq).pending().filter(input => isDeliveryExecutable(this.session,input.inputId))) }
+  isPending(inputId: string): boolean { return readInbox(this.session, this.fromSeq).isPending(inputId) && isDeliveryExecutable(this.session,inputId) }
   async admit(input: AdmittedInput, signal?: AbortSignal): Promise<number> {
     const [seq] = committedFactSeqs(await this.inputFacts(signal).admit({ type: 'agent/input/admitted', version: 1, ...input }))
     return seq!
   }
   async cancel(inputId: string, reason?: string): Promise<boolean> {
-    if (!this.isPending(inputId)) return false
+    if (!readInbox(this.session,this.fromSeq).isPending(inputId)) return false
     const outcome = await this.inputFacts().cancel({ type: 'agent/input/cancelled', version: 1, inputId, ...(reason !== undefined ? { reason } : {}) })
-    if (outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && !this.isPending(inputId)) return false
+    if (outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && !readInbox(this.session,this.fromSeq).isPending(inputId)) return false
     committedFactSeqs(outcome)
     return true
   }

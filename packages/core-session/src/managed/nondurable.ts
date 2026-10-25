@@ -1,3 +1,5 @@
+import { validDeliveryEvent } from '../events/delivery.ts'
+import { createDeliveryControl } from './delivery-control.ts'
 import type { Session } from '../events/types.ts'
 import { append } from '../events/append.ts'
 import { managedSessions } from '../events/state.ts'
@@ -14,8 +16,10 @@ import { validGenerationEvent } from '../events/generation.ts'
 import { validInputPreparationEvent } from '../events/input-preparation.ts'
 import { captureMemorySoftStart } from './memory-soft-reduction.ts'
 import { validContextEvent } from '../events/context.ts'
+import { committedFactSeqs } from './outcome.ts'
 import { installMemoryGroup } from './memory-group.ts'
 import { validateBootstrapReadiness } from '../conversation/bootstrap-validation.ts'
+const memoryDeliveryControls = new WeakMap<Session,ReturnType<typeof createDeliveryControl>>()
 const memoryRecoveryHolds = new WeakMap<Session, Set<object>>()
 /** Package-private observation of the existing standalone owner registration. */
 export function hasNondurableFactOwner(session: Session): boolean { return memoryRecoveryHolds.has(session) }
@@ -29,6 +33,9 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
   if (!isNondurableSession(session)) throw new TypeError('Managed Session requires its owned fact capability')
   let holds = memoryRecoveryHolds.get(session)
   if (!holds) memoryRecoveryHolds.set(session, holds = new Set())
+  let deliveryControl=memoryDeliveryControls.get(session)
+  if(!deliveryControl){deliveryControl=createDeliveryControl(session);memoryDeliveryControls.set(session,deliveryControl)}
+  const delivery=deliveryControl
   const recoveryHolds = holds
   const assertNewWork = () => { validateBootstrapReadiness(session.events, session.formatVersion, session.header ?? {}); if (recoveryHolds.size) throw Object.assign(new Error('Managed facts require reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' }) }
   return {
@@ -37,8 +44,15 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
       assertNewWork()
       let active = true, accepting = true
       const assertHeld = () => { if (!active) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' }) }
+      const guard = (check:()=>boolean) => () => {assertHeld();if(!check())throw Object.assign(new Error("FACT_PRECONDITION_STALE"),{code:"FACT_PRECONDITION_STALE"})}
+      const pending=new Set<ReturnType<typeof captureMemoryFact>>()
+      const retain=(fact:ReturnType<typeof captureMemoryFact>)=>{const run=(method:keyof typeof fact)=>async()=>{const outcome=await fact[method]();if(outcome.kind==='memory-committed')pending.delete(owned);return outcome};const owned={admit:run('admit'),observe:run('observe'),reconcile:run('reconcile'),retryAbsent:run('retryAbsent')};pending.add(owned);return owned}
+      const assertAccepting=()=>{assertHeld();if(!accepting)throw Object.assign(new Error('FACT_CLOSED'),{code:'FACT_CLOSED'})}
       return {
-        async close() { accepting = false; await drain(); active = false },
+        captureDeliveryOpen(event,checkCurrent) { assertAccepting();if(!validDeliveryEvent(event)||event.op!=="open")return rejectedMemoryCapture();return retain(captureMemoryFact(session,{kind:"delivery-generation",event},guard(checkCurrent))) },
+        captureDeliveryAdmission(receipt,admitted,checkCurrent) { assertAccepting();return retain(captureMemoryFact(session,{kind:"delivery-admission",receipt,admitted},guard(checkCurrent))) },
+        captureDeliveryClose(event) { assertHeld();if(!validDeliveryEvent(event)||event.op!=="close")return rejectedMemoryCapture();const fact=captureMemoryFact(session,{kind:"delivery-generation",event},assertHeld);const confirmed=delivery.revoke();const run=(method:keyof typeof fact)=>async()=>{const outcome=await fact[method]();if(outcome.kind==="memory-committed")confirmed();return outcome};return retain({admit:run("admit"),observe:run("observe"),reconcile:run("reconcile"),retryAbsent:run("retryAbsent")}) },
+        async close() { accepting = false; for(const fact of [...pending])committedFactSeqs(await fact.reconcile());await drain();for(const fact of [...pending])committedFactSeqs(await fact.reconcile());active = false },
         captureAdmitted(event) {
           assertHeld()
           assertNewWork()
@@ -62,6 +76,7 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
         let events
         try { events = resolveFactGroup(capture.group, session, session.events.length) }
         catch { return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' } }
+        delivery.assert(events)
         const seqs = installMemoryGroup(session, events).map(event => event.seq!)
         return { kind: 'memory-committed', durability: 'nondurable', seqs }
       }
@@ -132,13 +147,13 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
           const retained = captureMemoryFact(session, { kind: 'team-transaction', events }, assertOpen)
           return { admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe }
         },
-        captureSubagentStart(event) {
+        captureSubagentStart(event,binding) {
           let strict = false
           try { strict = isStrictFactData(event) && event.type === 'subagent/start' } catch { /* Actual start DTO only. */ }
           if (!strict) {
             return rejectedMemoryCapture()
           }
-          const retained = captureMemoryFact(session, { kind: 'delivery', event }, assertOpen)
+          const retained = captureMemoryFact(session, binding !== undefined ? {kind:'subagent-delivery-start',start:event,binding} : { kind: 'delivery', event }, assertOpen)
           return { admit: retained.admit, reconcile: retained.reconcile, observe: retained.observe }
         },
         registerSettlementSource(drain, reconcilePending) {

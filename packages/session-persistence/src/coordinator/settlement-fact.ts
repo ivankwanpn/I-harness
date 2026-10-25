@@ -11,15 +11,16 @@ export function captureSettlementFact(draft: FactGroupDraft, operations: {
   reconcile(key: BatchKey): Promise<FactOutcome>
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
-}, synchronousAdmission = false, retirement?: CaptureRetirement): CapturedSettlementFact {
-  return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission, retirement)
+}, synchronousAdmission = false, retirement?: CaptureRetirement, neverIssuedStale?:()=>void): CapturedSettlementFact {
+  return retainSettlementCapture(captureFactGroup(draft), operations, synchronousAdmission, retirement, neverIssuedStale)
 }
-export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1], synchronousAdmission = false, retirement?: CaptureRetirement): CapturedSettlementFact {
+export function retainSettlementCapture(capture: ReturnType<typeof captureFactGroup>, operations: Parameters<typeof captureSettlementFact>[1], synchronousAdmission = false, retirement?: CaptureRetirement, neverIssuedStale?:()=>void): CapturedSettlementFact {
   if (capture.kind !== 'captured') operations.quarantineCapture()
   let latest: FactOutcome | undefined, serial: Promise<void> | undefined = synchronousAdmission ? undefined : Promise.resolve()
-  let retired: InvalidNotIssued | undefined
+  let retired: FactOutcome | undefined, everIssued=false
+  const observeIssued=(outcome:FactOutcome)=>{if(outcome.kind!=="not-issued")everIssued=true}
   const track = (work: () => Promise<FactOutcome>): Promise<FactOutcome> => {
-    if (!retirement) {
+    if (!retirement && !neverIssuedStale) {
       const result = serial ? serial.then(work) : work()
       serial = result.then(() => {}, () => {})
       return result
@@ -30,7 +31,11 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
       const outcome = await work()
       // latest is populated only by native status/admit/reconcile. A fresh
       // retryAbsent fallback is not an observed disposition to retire.
-      if (outcome === latest && capture.kind === 'captured' && capture.group.kind === 'input-cancellation' && outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && retirement.accepts(outcome as InvalidNotIssued)) {
+      observeIssued(outcome)
+      if (neverIssuedStale && !everIssued && outcome === latest && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE' && capture.kind === 'captured' && (capture.group.kind === 'delivery-admission' || capture.group.kind === 'delivery-generation' && capture.group.event.op === 'open')) {
+        retired=Object.freeze(outcome);neverIssuedStale()
+      }
+      if (retirement && outcome === latest && capture.kind === 'captured' && capture.group.kind === 'input-cancellation' && outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' && retirement.accepts(outcome as InvalidNotIssued)) {
         retired = Object.freeze(outcome as InvalidNotIssued)
         retirement.retired()
       }
@@ -43,36 +48,36 @@ export function retainSettlementCapture(capture: ReturnType<typeof captureFactGr
   const admit = async () => {
     operations.assertHeld()
     if (capture.kind !== 'captured') return capture
-    latest = operations.status(capture.group) ?? latest
+    latest = operations.status(capture.group) ?? latest; if(latest)observeIssued(latest)
     if (latest && (latest.kind !== 'not-issued' || latest.code === 'FACT_PRECONDITION_STALE')) return latest
-    latest = await operations.admit(capture.group)
+    latest = await operations.admit(capture.group); observeIssued(latest)
     return latest
   }
   return {
     observe: () => track(async () => {
       operations.assertHeld()
       if (capture.kind !== 'captured') return capture
-      latest = operations.status(capture.group) ?? latest
+      latest = operations.status(capture.group) ?? latest; if(latest)observeIssued(latest)
       return latest ?? { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' }
     }),
     admit: () => track(admit),
     reconcile: () => track(async () => {
       operations.assertHeld()
-      if (capture.kind === 'captured') latest = operations.status(capture.group) ?? latest
+      if (capture.kind === 'captured') latest = operations.status(capture.group) ?? latest; if(latest)observeIssued(latest)
       if (!latest || latest.kind === 'not-issued') return admit()
       if (latest.kind === 'committed' || latest.kind === 'absent') return latest
       const key = latest.kind === 'recovery-required' ? latest.receipt.key : latest.key
       const disposition = await operations.reconcile(key)
       // Reconciliation installs the whole shared physical frame. This source
       // owns only its captured group's slice, even when another group was first.
-      latest = capture.kind === 'captured' ? operations.status(capture.group) ?? disposition : disposition
+      latest = capture.kind === 'captured' ? operations.status(capture.group) ?? disposition : disposition; observeIssued(latest)
       return latest
     }),
     retryAbsent: () => track(async () => {
       operations.assertHeld()
       if (capture.kind !== 'captured') return capture
       if (latest?.kind !== 'absent') return latest ?? { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
-      latest = await operations.admit(capture.group)
+      latest = await operations.admit(capture.group); observeIssued(latest)
       return latest
     }),
   }

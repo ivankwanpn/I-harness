@@ -57,9 +57,9 @@ export function createActionCaptures(operations: Parameters<typeof captureSettle
       operations.assertHeld()
       return actionHandle(captureSettlementFact({ kind: 'team-transaction', events }, operations))
     },
-    captureSubagentStart(event) {
+    captureSubagentStart(event, binding) {
       operations.assertHeld()
-      return strictType(event, 'subagent/start') ? actionHandle(captureSettlementFact({ kind: 'delivery', event }, operations)) : invalid()
+      return strictType(event, 'subagent/start') ? actionHandle(captureSettlementFact(binding !== undefined ? {kind:'subagent-delivery-start',start:event,binding} : { kind: 'delivery', event }, operations)) : invalid()
     },
   }
 }

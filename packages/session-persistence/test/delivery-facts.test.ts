@@ -1,0 +1,429 @@
+import { expect, it, vi } from 'vitest';
+const installCut = vi.hoisted(() => ({ enabled: false }));
+vi.mock('@i-harness/core-session', async (load) => {
+  const api = await load<typeof import('@i-harness/core-session')>(); return {
+    ...api, createManagedSessionState: (...args: Parameters<typeof api.createManagedSessionState>) => {
+      const state = api.createManagedSessionState(...args), stage = state.stage; state.stage = events => {
+        const prepared = stage(events); return {
+          ...prepared, install() {
+            if (installCut.enabled && events.some(e => e.type === 'agent/delivery-received')) {
+              installCut.enabled = false;
+              throw Error('controlled original install failure');
+            } prepared.install();
+          }
+        };
+      }; return state;
+    }
+  };
+});
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { committedFactSeqs, deliveryInputId, readDeliveries, validateDeliveryFrame, createManagedSessionState, readGenerationActions, AsyncInbox, readInbox, type SessionEvent } from '@i-harness/core-session';
+import { createSessionCoordinator } from '../src/index.ts';
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts';
+async function ownedDeliveryHistory(admitReceipt = true) {
+  const root = await mkdtemp(join(tmpdir(), 'delivery-owned-')), backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } });
+  await coordinator.create({ sessionId: 'parent' });
+  const document = await coordinator.openManagedDocument('parent'), received = document.registerReceivedInputSource(async () => { }), action = document.beginAction();
+  committedFactSeqs(await received.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: 'human', text: 'launch', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }).admit());
+  const originInputSeq = 0;
+  committedFactSeqs(await received.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: 'parent', generationId: 'g', originInputSeq }, () => true).admit());
+  const [callSeq] = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId: 'spawn', name: 'spawn_agent', args: {} }));
+  committedFactSeqs(await action.facts.tools.dispatch('spawn', { kind: 'prior', seq: callSeq!, expectedType: 'tool/call' }));
+  const start = action.captureSubagentStart({ type: 'subagent/start', version: 1, taskId: 'task-1', parentSessionId: 'parent', agentPath: 'a', role: 'worker', description: 'work' }, { recipientSessionId: 'parent', generationId: 'g', sourceNamespace: 'registry', sourceId: 'task-1', callSeq: callSeq! });
+  const startSeqs = committedFactSeqs(await start.admit()), sourceSeq = startSeqs[1]!;
+  const terminal = action.registerSettlementSource(async () => { });
+  const [terminalSeq] = committedFactSeqs(await terminal.delivery.capture({ type: 'subagent/end', version: 1, taskId: 'task-1', outcome: 'completed', resultRevision: 'original-revision', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'inline', value: 'original result', encodedBytes: 17 } } }).admit());
+  const key = { recipientSessionId: 'parent', sourceNamespace: 'registry', sourceId: 'task-1', resultRevision: 'original-revision', kind: 'subagent' } as const, inputId = deliveryInputId(key);
+  const admitted = { type: 'agent/input/admitted', version: 1, inputId, text: 'original result', intent: 'system', delivery: 'steer', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'session.delivery.subagent' }, synthetic: { description: 'work', scope: 'turn', display: { kind: 'task', title: 'work', body: 'original result' } } } as const;
+  const receipt = { type: 'agent/delivery-received', version: 1, key, sourceSeq, terminalSeq: terminalSeq!, inputId } as const;
+  if (admitReceipt)
+    committedFactSeqs(await received.captureDeliveryAdmission(receipt, admitted, () => true).admit());
+  return { coordinator, backend, document, root, sourceSeq, terminalSeq: terminalSeq!, inputId, received, action, admitted, receipt, key, async close() { await terminal.close(); action.finish(); await received.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }); } };
+}
+it('commits real original start/end and receipt pairs with frozen source owner identity', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    expect(readDeliveries(f.document.view).receipt(f.key)).toMatchObject({ disposition: 'pending' });
+    expect(f.received.owner).toMatchObject({ sessionId: 'parent' });
+    expect(Object.isFrozen(f.received.owner)).toBe(true);
+    const physical = await f.backend.read('parent');
+    expect(physical.events).toEqual(f.document.view.events);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('rejects a receipt split from its admission across complete frames', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const paired = f.document.view.events.filter(e => e.type === 'agent/delivery-received' || e.type === 'agent/input/admitted' && e.inputId === f.inputId);
+    expect(paired).toHaveLength(2);
+    expect(() => validateDeliveryFrame([paired[0]!], 13)).toThrow();
+    expect(() => validateDeliveryFrame([paired[1]!], 13)).toThrow();
+    expect(() => validateDeliveryFrame(paired, 13)).not.toThrow();
+    expect(() => validateDeliveryFrame(paired, 12)).toThrow();
+  }
+  finally {
+    await f.close();
+  }
+});
+it.each(['sourceSeq', 'terminalSeq', 'recipient', 'revision', 'callSeq', 'startSeq', 'provenance'] as const)('rejects one mutated real owned reference: %s', async (field) => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const events = JSON.parse(JSON.stringify(f.document.view.events)) as SessionEvent[], receipt = events.find(e => e.type === 'agent/delivery-received')!, source = events.find(e => e.type === 'agent/delivery-source')!;
+    if (receipt.type !== 'agent/delivery-received' || source.type !== 'agent/delivery-source')
+      throw Error('fixture');
+    if (field === 'sourceSeq' || field === 'terminalSeq')
+      receipt[field] = 0;
+    if (field === 'recipient')
+      receipt.key.recipientSessionId = 'foreign';
+    if (field === 'revision')
+      receipt.key.resultRevision = 'forged';
+    if (field === 'callSeq' || field === 'startSeq')
+      source[field] = 0;
+    if (field === 'provenance') {
+      const admitted = events.at(-1)!;
+      if (admitted.type === 'agent/input/admitted')
+        admitted.provenance!.producer = 'forged';
+    }
+    expect(() => createManagedSessionState({ formatVersion: 13, events }, { sessionId: 'parent' })).toThrow();
+  }
+  finally {
+    await f.close();
+  }
+});
+const open = (seq: number, actionId: string, origin: import('@i-harness/core-session').GenerationOrigin) => ({ type: 'context/action', version: 1, op: 'open', ownerSessionId: 'parent', actionId, purpose: 'main', origin, startedAt: 1, expiresAt: 100, trustedAt: 1, seq } as const);
+it.each(['before', 'after'] as const)('preserves exact original finite action through consumed historical replay (%s promotion)', async (order) => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const admission = f.document.view.events.find(e => e.type === 'agent/input/admitted' && e.inputId === f.inputId)!;
+    if (order === 'before')
+      committedFactSeqs(await f.action.captureGeneration([open(0, 'finite', { kind: 'observation-input', seq: admission.seq!, inputId: f.inputId })], () => true).admit());
+    committedFactSeqs(await f.action.facts.inputs.start({ type: 'agent/input/promoted', version: 1, inputId: f.inputId }, { type: 'user/message', text: f.admitted.text, provenance: f.admitted.provenance, input: { inputId: f.inputId, intent: 'system', synthetic: f.admitted.synthetic, provenance: f.admitted.provenance } }));
+    const raw = f.document.view.events.findLast(e => e.type === 'user/message')!;
+    if (order === 'after')
+      committedFactSeqs(await f.action.captureGeneration([open(0, 'finite', { kind: 'input', seq: raw.seq! })], () => true).admit());
+    const first = readGenerationActions(f.document.view.events, { sessionId: 'parent' }, 13).find(a => a.opened.actionId === 'finite')!;
+    expect(first).toBeDefined();
+    expect(readDeliveries(f.document.view).receipt(f.key)?.disposition).toBe('claimed');
+    const second = await f.action.captureGeneration([open(0, 'second', order === 'before' ? { kind: 'input', seq: raw.seq! } : { kind: 'observation-input', seq: admission.seq!, inputId: f.inputId })], () => true).admit();
+    expect(second).toMatchObject({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' });
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'stop', reason: 'user-stop' });
+    expect(readGenerationActions(f.document.view.events, { sessionId: 'parent' }, 13).find(a => a.opened.actionId === 'finite')?.opened).toEqual(first.opened);
+    committedFactSeqs(await close.admit());
+    expect(readGenerationActions(f.document.view.events, { sessionId: 'parent' }, 13).find(a => a.opened.actionId === 'finite')?.opened).toEqual(first.opened);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('revokes executable pending synchronously and guards original promotion at backend beforeIssue', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const inbox = new AsyncInbox(f.document.view, () => f.action.facts.inputs);
+    expect(inbox.isPending(f.inputId)).toBe(true);
+    const append = f.backend.appendOwnedBatch!.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.backend.appendOwnedBatch = async (...args) => {
+      if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
+        type: string;
+      }) => e.type === 'agent/input/promoted')) {
+        entered.resolve();
+        await release.promise;
+      } return append(...args);
+    };
+    const claim = f.action.facts.inputs.claim({ type: 'agent/input/promoted', version: 1, inputId: f.inputId }, { type: 'user/message', text: f.admitted.text, input: { inputId: f.inputId, intent: 'system' } });
+    await entered.promise;
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'stop', reason: 'user-stop' });
+    expect(inbox.isPending(f.inputId)).toBe(false);
+    expect(readInbox(f.document.view).isPending(f.inputId)).toBe(true);
+    release.resolve();
+    expect(await claim).toMatchObject({ kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' });
+    committedFactSeqs(await close.admit());
+    expect(await inbox.cancel(f.inputId)).toBe(true);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('confirms Stop debt before a later own human can open a new generation without reviving old bindings', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'stop-one', reason: 'user-stop' });
+    committedFactSeqs(await close.admit());
+    const second = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'stop-two', reason: 'user-stop' });
+    const [human] = committedFactSeqs(await f.received.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: 'later-human', text: 'new work', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }).admit());
+    const open = f.received.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: 'parent', generationId: 'later', originInputSeq: human! }, () => true);
+    expect(await open.admit()).toMatchObject({ kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' });
+    committedFactSeqs(await second.admit());
+    const [freshHuman] = committedFactSeqs(await f.received.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: 'fresh-human', text: 'after confirmed stop', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }).admit());
+    committedFactSeqs(await f.received.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: 'parent', generationId: 'fresh', originInputSeq: freshHuman! }, () => true).admit());
+    expect(readDeliveries(f.document.view).activeGeneration()?.generationId).toBe('fresh');
+    expect(readDeliveries(f.document.view).isEligible(f.inputId)).toBe(false);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('keeps a claimed steer inside the current finite action and grants no raw alias action', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    committedFactSeqs(await f.action.captureGeneration([open(0, 'human-action', { kind: 'input', seq: 0 })], () => true).admit());
+    committedFactSeqs(await f.action.facts.inputs.claim({ type: 'agent/input/promoted', version: 1, inputId: f.inputId }, { type: 'user/message', text: f.admitted.text, input: { inputId: f.inputId, intent: 'system', synthetic: f.admitted.synthetic }, provenance: f.admitted.provenance }));
+    const raw = f.document.view.events.at(-1)!;
+    expect(await f.action.captureGeneration([open(0, 'forged-extra', { kind: 'input', seq: raw.seq! })], () => true).admit()).toMatchObject({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' });
+    expect(readGenerationActions(f.document.view.events, { sessionId: 'parent' }, 13).map(a => a.opened.actionId)).toEqual(['human-action']);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('retires only a native never-issued stale receipt while preserving its immutable failure and later closed checks', async () => {
+  const f = await ownedDeliveryHistory(false);
+  try {
+    const append = f.backend.appendOwnedBatch!.bind(f.backend), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    f.backend.appendOwnedBatch = async (...args) => {
+      if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
+        type: string;
+      }) => e.type === 'agent/delivery-received')) {
+        entered.resolve();
+        await release.promise;
+      } return append(...args);
+    };
+    const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), pending = captured.admit();
+    await entered.promise;
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'crossed-stop', reason: 'user-stop' });
+    release.resolve();
+    const stale = await pending;
+    expect(stale).toMatchObject({ kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' });
+    expect(Object.isFrozen(stale)).toBe(true);
+    committedFactSeqs(await close.admit());
+    await f.received.close();
+    expect(f.document.view.events.some(e => e.type === 'agent/delivery-received')).toBe(false);
+    for (const operation of [captured.admit, captured.observe, captured.reconcile, captured.retryAbsent])
+      await expect(operation()).rejects.toMatchObject({ code: 'FACT_CLOSED' });
+  }
+  finally {
+    await f.close();
+  }
+});
+it('retains original issued-unknown receipt debt through Stop and settles only its original key', async () => {
+  const f = await ownedDeliveryHistory(false);
+  try {
+    const append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend);
+    let receiptWrites = 0, unknown = true;
+    f.backend.appendOwnedBatch = async (...args) => {
+      const result = await append(...args); if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
+        type: string;
+      }) => e.type === 'agent/delivery-received')) {
+        receiptWrites++;
+        throw Error('lost receipt after sync');
+      } return result;
+    };
+    f.backend.reconcileOwnedBatch = async (...args) => unknown ? { kind: 'unknown', key: args[3].key } : reconcile(...args);
+    const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), first = await captured.admit();
+    expect(first.kind).toBe('unknown');
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'unknown-stop', reason: 'user-stop' });
+    await expect(f.received.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
+    expect(await captured.observe()).toEqual(first);
+    expect(receiptWrites).toBe(1);
+    unknown = false;
+    const committed = await captured.reconcile();
+    expect(committed.kind).toBe('committed');
+    if (first.kind === 'unknown' && committed.kind === 'committed')
+      expect(committed.receipt.key).toEqual(first.key);
+    committedFactSeqs(await close.admit());
+    expect(readDeliveries(f.document.view).receipt(f.key)?.disposition).toBe('suppressed');
+    expect(receiptWrites).toBe(1);
+  }
+  finally {
+    await f.close();
+  }
+});
+it.each(['absent', 'conflict'] as const)('never retires a receipt with original %s history as a later stale no-issue result', async (disposition) => {
+  const f = await ownedDeliveryHistory(false);
+  let recovered = false;
+  try {
+    const append = f.backend.appendOwnedBatch!.bind(f.backend), reconcile = f.backend.reconcileOwnedBatch!.bind(f.backend);
+    f.backend.appendOwnedBatch = async (...args) => {
+      if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
+        type: string;
+      }) => e.type === 'agent/delivery-received')) {
+        args[1].beforeIssue();
+        return { kind: disposition, key: args[3].key };
+      } return append(...args);
+    };
+    const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), first = await captured.admit();
+    expect(first.kind).toBe(disposition);
+    if (disposition === 'conflict') {
+      f.backend.reconcileOwnedBatch = async (...args) => ({ kind: 'conflict', key: args[3].key });
+      await expect(f.received.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
+      expect(await captured.observe()).toEqual(first);
+      // Real backend proves the original frame absent; only explicit same-capture retry may write.
+      f.backend.reconcileOwnedBatch = reconcile;
+      expect((await captured.reconcile()).kind).toBe('absent');
+    }
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'after-absence', reason: 'user-stop' });
+    const stale = await captured.retryAbsent();
+    expect(stale).toMatchObject({ kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' });
+    committedFactSeqs(await close.admit());
+    await expect(f.received.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' });
+    expect(await captured.observe()).toBe(stale);
+    recovered = true;
+  }
+  finally {
+    if (recovered) {
+      await f.coordinator.close().catch(() => { });
+      await rm(f.root, { recursive: true, force: true });
+    }
+    else
+      await f.close();
+  }
+});
+it('keeps physically committed installation debt and reconciles the exact original receipt after Stop', async () => {
+  const f = await ownedDeliveryHistory(false);
+  try {
+    installCut.enabled = true;
+    const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true), outcome = await captured.admit();
+    expect(outcome.kind).toBe('recovery-required');
+    expect(f.document.view.events.some(e => e.type === 'agent/delivery-received')).toBe(false);
+    expect((await f.backend.read('parent')).events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1);
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'install-stop', reason: 'user-stop' });
+    const recovered = await captured.reconcile();
+    expect(recovered.kind).toBe('committed');
+    if (outcome.kind === 'recovery-required' && recovered.kind === 'committed')
+      expect(recovered.receipt.key).toEqual(outcome.receipt.key);
+    committedFactSeqs(await close.admit());
+    expect(readDeliveries(f.document.view).receipt(f.key)?.disposition).toBe('suppressed');
+  }
+  finally {
+    installCut.enabled = false;
+    await f.close();
+  }
+});
+it('does not retire a synthetic handle fallback before the original native admission is observed', async () => {
+  const f = await ownedDeliveryHistory(false);
+  try {
+    const captured = f.received.captureDeliveryAdmission(f.receipt, f.admitted, () => true);
+    expect(await captured.observe()).toEqual({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
+    expect(await captured.retryAbsent()).toEqual({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' });
+    expect(f.document.view.events.some(e => e.type === 'agent/delivery-received')).toBe(false);
+    await f.received.close();
+    expect(f.document.view.events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('retains an original close with unknown acknowledgment and admits new generation only after its exact reconciliation', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const append = f.backend.appendOwnedBatch!.bind(f.backend);
+    let closeWrites = 0;
+    f.backend.appendOwnedBatch = async (...args) => {
+      const result = await append(...args); if (JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e: {
+        type: string;
+        op?: string;
+      }) => e.type === 'agent/delivery-generation' && e.op === 'close')) {
+        closeWrites++;
+        throw Error('close ack lost');
+      } return result;
+    };
+    const close = f.received.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: 'parent', fenceId: 'physical-stop', reason: 'user-stop' }), outcome = await close.admit();
+    expect(outcome.kind).toBe('unknown');
+    expect(new AsyncInbox(f.document.view, () => f.action.facts.inputs).isPending(f.inputId)).toBe(false);
+    const settled = await close.reconcile();
+    expect(settled.kind).toBe('committed');
+    if (outcome.kind === 'unknown' && settled.kind === 'committed')
+      expect(settled.receipt.key).toEqual(outcome.key);
+    expect(closeWrites).toBe(1);
+    const [human] = committedFactSeqs(await f.received.captureAdmitted({ type: 'agent/input/admitted', version: 1, inputId: 'human-after', text: 'new', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } }).admit());
+    committedFactSeqs(await f.received.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: 'parent', generationId: 'after-physical', originInputSeq: human! }, () => true).admit());
+    expect(readDeliveries(f.document.view).isEligible(f.inputId)).toBe(false);
+  }
+  finally {
+    await f.close();
+  }
+});
+it('refuses a postpromotion delivery action after an intervening other main action in that same turn', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    committedFactSeqs(await f.action.facts.inputs.start({ type: 'agent/input/promoted', version: 1, inputId: f.inputId }, { type: 'user/message', text: f.admitted.text, input: { inputId: f.inputId, intent: 'system', synthetic: f.admitted.synthetic }, provenance: f.admitted.provenance }));
+    const raw = f.document.view.events.at(-1)!;
+    committedFactSeqs(await f.action.captureGeneration([open(0, 'intervening', { kind: 'input', seq: 0 })], () => true).admit());
+    expect(await f.action.captureGeneration([open(0, 'late-delivery', { kind: 'input', seq: raw.seq! })], () => true).admit()).toMatchObject({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' });
+  }
+  finally {
+    await f.close();
+  }
+});
+it('replays internally consistent explicit own human origin without a header session id and rejects foreign provenance', async () => {
+  const f = await ownedDeliveryHistory();
+  try {
+    const events = JSON.parse(JSON.stringify(f.document.view.events)) as SessionEvent[], human = events[0]!;
+    if (human.type !== 'agent/input/admitted')
+      throw Error('fixture');
+    human.provenance!.originSessionId = 'parent';
+    expect(() => readDeliveries({ formatVersion: 13, events })).not.toThrow();
+    human.provenance!.originSessionId = 'foreign';
+    expect(() => readDeliveries({ formatVersion: 13, events })).toThrow();
+  }
+  finally {
+    await f.close();
+  }
+});
+it('protects required delivery scalar records and pending original source dependencies in conversation state', async () => {
+  const f = await ownedDeliveryHistory(); try {
+    const { projectConversation, readConversationState } = await import('@i-harness/core-session'); const state = readConversationState(f.document.view, projectConversation(f.document.view))
+    expect(state.kind).toBe('available'); if (state.kind !== 'available') throw Error('fixture')
+    const protectedSeqs = state.state.sourceIds.map(id => JSON.parse(id)[1]); expect(protectedSeqs).toContain(f.sourceSeq); expect(protectedSeqs).toContain(f.terminalSeq)
+  } finally { await f.close() }
+})
+it('keeps receipt disposition monotone when presentation is shadowed and rewind fences raw pending', async () => {
+const f = await ownedDeliveryHistory(); try {
+    const admitted = f.document.view.events.find(e => e.type === 'agent/input/admitted' && e.inputId === f.inputId)!
+    committedFactSeqs(await f.action.facts.compaction.commit([{ type: 'compaction/reset', removedSeqs: [f.sourceSeq, f.terminalSeq, admitted.seq!] }]))
+    expect(readDeliveries(f.document.view).isEligible(f.inputId)).toBe(true)
+    committedFactSeqs(await f.action.facts.compaction.commit([{ type: 'rewind/point', version: 1, targetTurn: 0, anchorSeq: 0, mode: 'conversation', fileOps: [] }]))
+    expect(readDeliveries(f.document.view).receipt(f.key)?.disposition).toBe('suppressed'); expect(readInbox(f.document.view).isPending(f.inputId)).toBe(true)
+    expect(new AsyncInbox(f.document.view, () => f.action.facts.inputs).isPending(f.inputId)).toBe(false)
+  } finally { await f.close() }
+})
+it.each(['before','after'] as const)('checks a new finite delivery action at the actual backend issue boundary (%s promotion)',async order=>{const f=await ownedDeliveryHistory();try{
+ const admission=f.document.view.events.find(e=>e.type==='agent/input/admitted'&&e.inputId===f.inputId)!
+ if(order==='after')committedFactSeqs(await f.action.facts.inputs.start({type:'agent/input/promoted',version:1,inputId:f.inputId},{type:'user/message',text:f.admitted.text,input:{inputId:f.inputId,intent:'system',synthetic:f.admitted.synthetic},provenance:f.admitted.provenance}))
+ const raw=f.document.view.events.at(-1)!,append=f.backend.appendOwnedBatch!.bind(f.backend),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+ f.backend.appendOwnedBatch=async(...args)=>{if(JSON.parse(Buffer.from(args[3].bytes).toString()).events.some((e:{type:string;op?:string})=>e.type==='context/action'&&e.op==='open')){entered.resolve();await release.promise}return append(...args)}
+ const fact=f.action.captureGeneration([open(0,'crossed-action',order==='before'?{kind:'observation-input',seq:admission.seq!,inputId:f.inputId}:{kind:'input',seq:raw.seq!})],()=>true),pending=fact.admit()
+ await entered.promise
+ const close=f.received.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:'parent',fenceId:'action-stop',reason:'user-stop'})
+ release.resolve();expect(await pending).toMatchObject({kind:'not-issued',code:'FACT_PRECONDITION_STALE'});committedFactSeqs(await close.admit());expect(readGenerationActions(f.document.view.events,{sessionId:'parent'},13)).toEqual([])
+}finally{await f.close()}})
+it.each(['synthetic-human','inherited-human','wrong-spawn','undispatched','cancelled-terminal','unavailable-result','wrong-generation'] as const)('rejects a real owned history with %s authority mutation',async mode=>{const f=await ownedDeliveryHistory();try{
+ const events=JSON.parse(JSON.stringify(f.document.view.events)) as SessionEvent[],human=events[0]!,source=events[f.sourceSeq]!,terminal=events[f.terminalSeq]!
+ if(human.type!=='agent/input/admitted'||source.type!=='agent/delivery-source'||terminal.type!=='subagent/end')throw Error('fixture')
+ if(mode==='synthetic-human')human.synthetic={scope:'turn',description:'not human'}
+ if(mode==='inherited-human')human.provenance={kind:'inherited',authority:'observation',scope:'turn',producer:'subagent.initial',originSessionId:'other'}
+ if(mode==='wrong-spawn'){const call=events[source.callSeq]!;if(call.type==='tool/call')call.name='other'}
+ if(mode==='undispatched'){const dispatch=events.find(e=>e.type==='tool/dispatch')!;if(dispatch.type==='tool/dispatch')dispatch.eventSeq=0}
+ if(mode==='cancelled-terminal')terminal.outcome='cancelled'
+ if(mode==='unavailable-result')terminal.envelope!.retention={kind:'unavailable',reason:'storage-refused'}
+ if(mode==='wrong-generation')source.generationId='foreign'
+ expect(()=>createManagedSessionState({formatVersion:13,events},{sessionId:'parent'})).toThrow()
+}finally{await f.close()}})
+it.each([null,false,0,''] as const)('rejects supplied malformed binding %s rather than silently lowering an unbound start',async binding=>{const f=await ownedDeliveryHistory();try{
+ expect(await f.action.captureSubagentStart({type:'subagent/start',version:1,taskId:'second',parentSessionId:'parent',agentPath:'a',role:'worker',description:'invalid binding'},binding as never).admit()).toMatchObject({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+ await expect(f.document.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+}finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})
+it('refuses a close DTO through the open-only required source capture',async()=>{const f=await ownedDeliveryHistory();try{
+ const wrong=f.received.captureDeliveryOpen({type:'agent/delivery-generation',version:1,op:'close',recipientSessionId:'parent',fenceId:'misrouted',reason:'user-stop'} as never,()=>true)
+ expect(await wrong.admit()).toMatchObject({kind:'not-issued',code:'FACT_INVALID_GROUP'})
+ await expect(f.received.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+}finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})
+it('refuses an open DTO through the close-only port without issuing or revoking a valid original input',async()=>{const f=await ownedDeliveryHistory();try{
+ const before=f.document.view.events.length,wrong=f.received.captureDeliveryClose({type:'agent/delivery-generation',version:1,op:'open',recipientSessionId:'parent',generationId:'misrouted',originInputSeq:0} as never)
+ expect(await wrong.admit()).toMatchObject({kind:'not-issued',code:'FACT_INVALID_GROUP'});expect(f.document.view.events).toHaveLength(before)
+ expect(new AsyncInbox(f.document.view,()=>f.action.facts.inputs).isPending(f.inputId)).toBe(true)
+ await expect(f.received.close()).rejects.toMatchObject({code:'FACT_RECOVERY_REQUIRED'})
+}finally{await f.coordinator.close().catch(()=>{});await rm(f.root,{recursive:true,force:true})}})

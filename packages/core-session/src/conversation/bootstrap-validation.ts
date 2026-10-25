@@ -61,7 +61,7 @@ export function validateBootstrapReadiness(events: readonly SessionEventView[], 
     return
   }
   validateSeedHeader(header)
-  if (![11, 12].includes(formatVersion) || scope.seedLength !== header.seedLength) seedInvalid()
+  if (![11, 12, 13].includes(formatVersion) || scope.seedLength !== header.seedLength) seedInvalid()
   for (const [position, event] of events.entries()) {
     if (capability === semanticSourceStructure) validateSeedSourceEventShape(event, formatVersion)
     else validateSeedEventShape(event, formatVersion)

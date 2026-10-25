@@ -31,7 +31,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     }
   }, dependencies?.beforeDrain)
   const scope = { ...view.header, sessionId: ownerSessionId }
-  const state = (id: string) => readGenerationActions(view.events, scope).find(value => value.opened.actionId === id)
+  const state = (id: string) => readGenerationActions(view.events, scope, view.formatVersion).find(value => value.opened.actionId === id)
   const own = <T>(operation: Promise<T>): Promise<T> => {
     running.add(operation)
     void operation.then(() => running.delete(operation), () => running.delete(operation))
@@ -53,7 +53,7 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
     action.assertOpen()
     if (options.timeoutMs !== undefined && (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)) throw generationError('GENERATION_CLOCK_INVALID')
     if (options.maxAttempts !== undefined && (!Number.isSafeInteger(options.maxAttempts) || options.maxAttempts <= 0)) throw new TypeError('Invalid generation attempt limit')
-    let persisted = readGenerationActions(view.events, scope).find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
+    let persisted = readGenerationActions(view.events, scope, view.formatVersion).find(value => value.opened.purpose === purpose && sameOrigin(value.opened.origin, origin))
     if (!persisted) {
       const startedAt = options.start?.wall ?? Date.now(), timeout = options.timeoutMs ?? (purpose === 'main' || purpose === 'manual' ? 3_600_000 : purpose === 'title' ? 30_000 : 90_000)
       if (!Number.isSafeInteger(timeout) || timeout <= 0 || !Number.isSafeInteger(startedAt + timeout)) throw generationError('GENERATION_CLOCK_INVALID')

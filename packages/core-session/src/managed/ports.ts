@@ -81,6 +81,10 @@ export interface CapturedSettlementFact<Outcome = FactOutcome> extends CapturedA
 /** Composition-only trusted input owner. Saving received text and cancelling
  * its pending inputs confer no authority to promote or start new work. */
 export interface ReceivedInputSource<Outcome = ProducerFactOutcome> {
+  readonly owner?: Readonly<import("./types.ts").OwnerToken>
+  captureDeliveryOpen(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"open"}>,checkCurrent:()=>boolean):CapturedSettlementFact<Outcome>
+  captureDeliveryAdmission(receipt:Omit<import("../events/delivery.ts").DeliveryReceivedEvent,"seq">,admitted:Event<"agent/input/admitted">,checkCurrent:()=>boolean):CapturedSettlementFact<Outcome>
+  captureDeliveryClose(event:Extract<import("../events/delivery.ts").DeliveryGenerationEvent,{op:"close"}>):CapturedSettlementFact<Outcome>
   close(): Promise<void>
   captureAdmitted(event: Event<'agent/input/admitted'>): CapturedSettlementFact<Outcome>
   captureCancellation(event: Event<'agent/input/cancelled'>): CapturedSettlementFact<Outcome>
@@ -100,7 +104,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   captureContextReduction?(draft: import('./groups.ts').ContextReductionDraft, checkCurrent: () => boolean): CapturedActionFact<Outcome>
   captureCodeStore(event: Event<'code/store'>): CapturedActionFact<Outcome>
   captureTeamTransaction(events: readonly TeamFact[]): CapturedActionFact<Outcome>
-  captureSubagentStart(event: Event<'subagent/start'>): CapturedActionFact<Outcome>
+  captureSubagentStart(event: Event<'subagent/start'>, binding?:import('../events/delivery.ts').SubagentDeliveryLaunchDraft): CapturedActionFact<Outcome>
   assertOpen(): void
   stop(): void
   finish(): void

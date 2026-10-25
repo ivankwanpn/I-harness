@@ -1,3 +1,5 @@
+import { validateDeliveryFrame } from '../conversation/delivery.ts'
+import { isDeliveryEventType } from '../events/delivery.ts'
 import { createHash } from 'node:crypto'
 import type { SessionEvent } from '../events/types.ts'
 import type { BatchKey, EncodedFactBatch, JournalMetadata, JournalPrefix } from '../managed/types.ts'
@@ -65,18 +67,18 @@ export function decodeFactBatch(bytes: Uint8Array): { key: BatchKey; events: Ses
 /** Decodes complete frames only. A torn final envelope is a private suffix;
  * corrupt complete frames fail closed rather than shortening valid history. */
 export function readFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion = 6, header?: import('../conversation/generation.ts').GenerationHistoryScope) {
-  const decoded = decodeJournal(body, metadata)
+  const decoded = decodeJournal(body, metadata, formatVersion)
   validateConversationHistory(decoded.events, formatVersion, header)
   return { events: decoded.events, prefix: decoded.prefix, torn: decoded.torn }
 }
 
 /** Internal bootstrap composition only: same physical decoder, no repair. */
 export function readBootstrapFactJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion: number, header: import('../conversation/generation.ts').GenerationHistoryScope) {
-  const decoded = decodeJournal(body, metadata)
+  const decoded = decodeJournal(body, metadata, formatVersion)
   createBootstrapConversationIndex(decoded.events, undefined, formatVersion, header)
   return decoded
 }
-function decodeJournal(body: Uint8Array, metadata: JournalMetadata) {
+function decodeJournal(body: Uint8Array, metadata: JournalMetadata, formatVersion:number) {
   if (!validJournalMetadata(metadata)) fail()
   const buffer = Buffer.from(body), legacy = buffer.subarray(0, metadata.legacyBodyBytes)
   if (legacy.length !== metadata.legacyBodyBytes || legacyPrefixDigest(metadata.legacyEventCount, legacy) !== metadata.legacyPrefixDigest) fail()
@@ -84,7 +86,7 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata) {
   for (const line of legacy.toString('utf8').split('\n')) {
     if (line.trim()) { try { events.push(JSON.parse(line)) } catch { fail() } }
   }
-  if (events.length !== metadata.legacyEventCount) fail()
+  if (events.length !== metadata.legacyEventCount || events.some(event => isDeliveryEventType(event.type) || event.type === 'agent/input/admitted' && event.provenance?.producer === 'session.delivery.subagent')) fail()
   let offset = metadata.legacyBodyBytes
   if (metadata.separatorBytes) { if (buffer[offset] !== 0x0a) fail(); offset++ }
   let prefixDigest = metadata.legacyPrefixDigest
@@ -93,6 +95,7 @@ function decodeJournal(body: Uint8Array, metadata: JournalMetadata) {
     const end = buffer.indexOf(0x0a, offset)
     if (end < 0) break
     const frame = decodeFactBatch(buffer.subarray(offset, end + 1))
+    validateDeliveryFrame(frame.events, formatVersion)
     if (frame.key.firstSeq !== events.length || frame.key.previousPrefixDigest !== prefixDigest) fail()
     frames.push({ prefix: { eventCount: events.length, bodyBytes: offset, prefixDigest }, batch: { key: frame.key, bytes: buffer.subarray(offset, end + 1) } })
     for (const event of frame.events) events.push(event)

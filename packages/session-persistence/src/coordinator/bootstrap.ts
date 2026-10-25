@@ -6,7 +6,7 @@ import { SessionBindingObservationError } from './types.ts'
 import { captureBootstrapCaptureRequest, encodeBootstrapCaptureReservation, validateCaptureStage } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest, BootstrapCaptureReservation, BootstrapCaptureInspection } from './bootstrap-types.ts'
 import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
-import { encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
 import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest } from './bootstrap-types.ts'
@@ -66,7 +66,7 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.captureReservation)validateCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
-  if (meta.formatVersion !== original.formatVersion && !(original.formatVersion === 11 && meta.formatVersion === 12 && readyState(state))) throw new Error('Bootstrap storage format conflict')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state))) throw new Error('Bootstrap storage format conflict')
   for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
@@ -197,10 +197,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
     targetCurrent(guards)
     // Confirm the original birth frames before changing only the writable header.
-    if (state.meta!.formatVersion === 11) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
+    if ([11,12].includes(state.meta!.formatVersion) && state.meta!.formatVersion < CURRENT_FORMAT_VERSION) await ownership.withSessionOperation(b.invocation.targetSessionId, async () => {
       if (!backend.upgradeSessionFormat) throw new Error('Bootstrap writer cannot upgrade current storage')
-      const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, 11, 12)
-      if (upgraded.formatVersion !== 12) throw new Error('Bootstrap storage upgrade incomplete')
+      const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, state.meta!.formatVersion, CURRENT_FORMAT_VERSION)
+      if (upgraded.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Bootstrap storage upgrade incomplete')
     })
     targetCurrent(guards)
     entry.control!.ready();entry.ready=true;b.phase='completion';entry.headerUnknown=false

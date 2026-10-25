@@ -19,8 +19,8 @@ export function createSourceFacts(operations: Parameters<typeof captureSettlemen
   }
   return {
     retain,
-    capture(group: FactGroupDraft, accepts?: (outcome: InvalidNotIssued) => boolean) {
-      const owned = retain(captureSettlementFact(group, operations, false, accepts ? { accepts, retired: () => { pending.delete(owned) } } : undefined))
+    capture(group: FactGroupDraft, accepts?: (outcome: InvalidNotIssued) => boolean, captureOperations=operations) {
+      const owned = retain(captureSettlementFact(group, captureOperations, false, accepts ? { accepts, retired: () => { pending.delete(owned) } } : undefined, group.kind === "delivery-admission" || group.kind === "delivery-generation" && group.event.op === "open" ? ()=>{pending.delete(owned)} : undefined))
       return owned
     },
     async drain() {

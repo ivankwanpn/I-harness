@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { append, canonicalJsonData, createSession, exportConversationSeed, isStrictFactData, freezeJsonData, legacyPrefixDigest, validateSubagentHeader } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, append, canonicalJsonData, createSession, exportConversationSeed, isStrictFactData, freezeJsonData, legacyPrefixDigest, validateSubagentHeader } from '@i-harness/core-session'
 import { PROVIDER_PROTOCOLS } from '@i-harness/settings'
 import * as p from '@i-harness/session-persistence'
 import { createJsonlBackend } from '../src/index.ts'
@@ -372,7 +372,7 @@ it('P11 literal old format11 stage/header/completion preserve birth and upgrade 
   expect(()=>buildBootstrapHeader(original,stage,undefined,{version:1,kind:'semantic-bootstrap-capture',request:request()})).toThrow()
   const result=await coordinator.resumeSemanticTarget(stage.invocation,guards,original);expect(result.kind).toBe('already-ready')
   expect(await readFile(stagePath(root,r),'utf8')).toBe(predecessorLiteral.stage)
-  const raw=await readFile(join(root,'target.jsonl'),'utf8');expect(JSON.parse(raw.slice(0,raw.indexOf('\n'))).formatVersion).toBe(12);expect(raw.slice(raw.indexOf('\n')+1)).toBe(predecessorLiteral.frame)
+  const raw=await readFile(join(root,'target.jsonl'),'utf8');expect(JSON.parse(raw.slice(0,raw.indexOf('\n'))).formatVersion).toBe(CURRENT_FORMAT_VERSION);expect(raw.slice(raw.indexOf('\n')+1)).toBe(predecessorLiteral.frame)
   await coordinator.close();const loaded=await backend.read('target');await backend.replaceEvents!('target',loaded.events)
   expect((await readFile(join(root,'target.jsonl'),'utf8')).slice(raw.indexOf('\n')+1)).toBe(predecessorLiteral.frame)
 })

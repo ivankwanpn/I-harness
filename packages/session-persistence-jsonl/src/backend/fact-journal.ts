@@ -15,7 +15,7 @@ export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: Se
   const invocation = { version: 1 as const, operationId: reservation.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: reservation.requestDigest }
   const stage = parseBootstrapHeaderStage(await readFile(bootstrapPaths(path, invocation).stage))
   const original = JSON.parse(stage.headerBytes) as SessionMeta
-  if (meta.formatVersion !== original.formatVersion && !(original.formatVersion === 11 && meta.formatVersion === 12)) throw new TypeError('Bootstrap storage format changed')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION)) throw new TypeError('Bootstrap storage format changed')
   for (const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'] as const) {
     if (canonicalJsonData(meta[key]) !== canonicalJsonData(original[key])) throw new TypeError('Bootstrap birth scope changed')
   }
@@ -51,7 +51,7 @@ async function header(handle: FileHandle, path: string, batch: EncodedFactBatch)
   if (!validJournalMetadata(meta.journal)) throw new TypeError('Current managed journal format required')
   if (meta.formatVersion !== CURRENT_FORMAT_VERSION) {
     const seed = meta.semanticSeed
-    if (meta.formatVersion !== 11 || !seed) throw new TypeError('Current managed journal format required')
+    if (![11,12].includes(meta.formatVersion) || !seed) throw new TypeError('Current managed journal format required')
     const invocation = { version: 1 as const, operationId: seed.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: seed.requestDigest }
     const stage = parseBootstrapHeaderStage(await readFile(bootstrapPaths(path, invocation).stage))
     if (!bytes.subarray(0, end + 1).equals(Buffer.from(stage.headerBytes))) throw new TypeError('Original bootstrap header required')
@@ -59,9 +59,9 @@ async function header(handle: FileHandle, path: string, batch: EncodedFactBatch)
     const first = phase === 'seed' ? 0 : seed.seedLength, count = phase === 'seed' ? seed.seedLength : 1 + (seed.initialInputId === undefined ? 0 : 1)
     if (batch.key.batchId !== `bootstrap:${seed.operationId}:${phase}` || batch.key.firstSeq !== first || batch.key.count !== count) throw new TypeError('Original bootstrap phase required')
     const raw = await readFile(path), body = raw.subarray(raw.indexOf(10) + 1)
-    const prefix = body.subarray(0, phase === 'seed' ? 0 : readBootstrapFactJournal(body, meta.journal!, 11, meta).frames.find(frame => frame.batch.key.batchId.endsWith(':seed'))?.batch.bytes.length ?? 0)
+    const prefix = body.subarray(0, phase === 'seed' ? 0 : readBootstrapFactJournal(body, meta.journal!, meta.formatVersion, meta).frames.find(frame => frame.batch.key.batchId.endsWith(':seed'))?.batch.bytes.length ?? 0)
     // The original lane permits only the exact seed/completion/initial shape.
-    readBootstrapFactJournal(Buffer.concat([prefix, Buffer.from(batch.bytes)]), meta.journal!, 11, meta)
+    readBootstrapFactJournal(Buffer.concat([prefix, Buffer.from(batch.bytes)]), meta.journal!, meta.formatVersion, meta)
   }
   return { meta, bytes: end + 1 }
 }
@@ -113,7 +113,7 @@ export function createFactJournalBackend(filePath: (id: string) => string, asser
       const path = filePath(id), bytes = await readFile(path)
       const end = bytes.indexOf(0x0a)
       const meta = parseHeader(bytes.subarray(0, end).toString('utf8'))
-      if (![6, 7, 8, 9, 10, 11, 12].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
+      if (![6, 7, 8, 9, 10, 11, 12, 13].includes(meta.formatVersion) || !validJournalMetadata(meta.journal)) throw new TypeError('Managed journal format required')
       const decoded = readFactJournal(bytes.subarray(end + 1), meta.journal, meta.formatVersion, meta)
       const handle = await open(path, 'r+')
       try {

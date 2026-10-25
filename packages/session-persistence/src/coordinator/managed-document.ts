@@ -1,3 +1,4 @@
+import { createDeliveryControl } from '../../../core-session/src/managed/delivery-control.ts';
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
@@ -54,6 +55,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     assertObservable(): void;
 } {
     const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
+    const deliveryControl = createDeliveryControl(state.view);
     let bootstrapReady = !bootstrap;
     const formatVersion = source.formatVersion;
     const owner = Object.freeze({ sessionId: id, incarnation });
@@ -188,6 +190,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 if (!entries.length)
                     return;
                 try {
+                    deliveryControl.assert(events);
                     const staged = state.stage(events);
                     preflightBatchShape(formatVersion, staged.events);
                     const batch = encodeFactBatch(entries[0]!.bootstrap?.batchId ?? randomUUID(), prefix.prefixDigest, staged.events);
@@ -199,6 +202,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             throw new FactRecoveryRequiredError();
                         for (const entry of entries)
                             assertAuthorized(entry.authorization);
+                        deliveryControl.assert(operation.events);
                         operation.issued = true;
                     }), prefix, batch);
                     completed = finish(current, outcome);
@@ -276,6 +280,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
+            deliveryControl.retire();
             closing = true;
             capacity.revokeNewWork();
             for (const source of inputSources)
@@ -289,6 +294,11 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
             const required: Authorization = { action: { stopped: false }, required: true, assertSource: () => source.assertHeld() };
             const source = createReceivedInputSource(drain, {
+                owner, deliveryControl,
+                guarded(checkCurrent) {
+                    const guarded = {...required,source:{},assertSource() {source.assertHeld();if(!checkCurrent())throw Object.assign(new Error("FACT_PRECONDITION_STALE"),{code:"FACT_PRECONDITION_STALE"})}};
+                    return {assertHeld:held.assertHeld,admit:group=>{sourceDispositions.delete(group);return admit(group,guarded,true)},reconcile:key=>document.reconcile(key),status:group=>sourceDispositions.get(group),quarantineCapture:failSource};
+                },
                 cancellationRetirement: cancellationRetirementFor(state.view, document),
                 assertHeld: held.assertHeld, admit: group => {
                     sourceDispositions.delete(group);

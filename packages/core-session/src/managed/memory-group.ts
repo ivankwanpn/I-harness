@@ -1,3 +1,5 @@
+import { assertDeliveryIssue } from './delivery-control.ts'
+import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import type { Session, SessionEvent } from '../events/types.ts'
 import { appendHooks, subscribers, conversationIndexes } from '../events/state.ts'
 import { createConversationIndex, conversationScopeKey } from '../conversation/validation.ts'
@@ -13,7 +15,9 @@ export function installMemoryGroup(session: Session, drafts: readonly SessionEve
     || cached.index.generationScope !== conversationScopeKey(header)) {
     cached = { formatVersion: session.formatVersion, events: session.events, index: createConversationIndex(session.events, position => session.events[position], session.formatVersion, header) }
   }
+  validateDeliveryFrame(events, session.formatVersion)
   const staged = cached.index.stage(events)
+  assertDeliveryIssue(session,events)
   if (!current()) throw Object.assign(new Error('FACT_PRECONDITION_STALE'), { code: 'FACT_PRECONDITION_STALE' })
   staged.commit(); session.events.push(...events); conversationIndexes.set(session, cached)
   installed?.(events)

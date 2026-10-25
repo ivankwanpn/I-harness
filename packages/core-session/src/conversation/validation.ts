@@ -4,6 +4,7 @@ import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { validateRuntimeContextDiscriminant } from '../events/runtime-context.ts'
 import { conversationFormatError as fail, conversationSeq, validateConversationEventShape, validateSemanticSourceEventShape } from "../events/conversation.ts"
 import type { projectHistory } from './history/replacements.ts'
+import { createDeliveryIndex } from './delivery.ts'
 import { createHistoryIndex } from './history/index.ts'
 import { createGenerationIndex, type GenerationHistoryScope } from './generation.ts'
 import { createInputPreparationIndex } from './input-preparation.ts'
@@ -57,7 +58,9 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
   const history = createHistoryIndex(formatVersion, validateShape, header.parentSession !== undefined || header.semanticSeed !== undefined ? header.seedLength ?? 0 : 0)
   const scope = Object.freeze({ sessionId: header.sessionId, parentSession: header.parentSession, seedLength: header.seedLength,
     ...(header.semanticSeed ? { semanticSeed: Object.freeze({ ...header.semanticSeed }) } : {}) })
-  const generation = createGenerationIndex(scope)
+  const delivery = createDeliveryIndex(scope)
+  let deliveryOrigins: import("./delivery.ts").DeliveryOriginLookup | undefined
+  const generation = createGenerationIndex(scope, { lookupActionOrigin: open => deliveryOrigins?.lookupActionOrigin(open) })
   const preparations = createInputPreparationIndex(scope, capability === semanticSourceStructure ? semanticSourceStructure : undefined)
   const soft = createSoftReductionIndex(scope)
   let count = 0, revision = 0
@@ -87,6 +90,8 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
       const prefixLength = scope.semanticSeed ? Math.min(count, scope.semanticSeed.seedLength + 1 + (scope.semanticSeed.initialInputId === undefined ? 0 : 1)) : 0
       validateBootstrapReadiness([...Array.from({ length: prefixLength }, (_, index) => readCurrent?.(index) ?? events[index]!), ...suffix], formatVersion, scope, capability)
       const stagedHistory = history.stage(readCurrent)
+      const stagedDelivery = delivery.stage()
+      deliveryOrigins = stagedDelivery
       const stagedGeneration = generation.stage()
       const stagedSoft = soft.stage()
       const stagedPreparations = preparations.stage(seq => seq >= count ? suffix[seq - count] : readCurrent?.(seq) ?? events[seq], stagedGeneration.action)
@@ -106,6 +111,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
       }
       for (const [offset, event] of suffix.entries()) {
         validateShape(event, formatVersion)
+        stagedDelivery.advance(event)
         stagedGeneration.advance(event)
         stagedSoft.advance(event)
         stagedPreparations.advance(event)
@@ -204,6 +210,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         } else if (nextFence !== undefined) fail("unaddressable explicit event")
         if (event.type === "step/end" || event.type === "turn/start" || event.type === "turn/end") nextStep = undefined
       }
+      stagedDelivery.validate()
       stagedGeneration.validate()
       stagedPreparations.validate()
       let committed = false
@@ -224,6 +231,7 @@ function conversationIndex(events: readonly SessionEvent[], read: ((index: numbe
         for (const [key, value] of newSteps) steps.set(key, value)
         for (const [key, value] of newCalls) callsById.set(key, value)
         stagedHistory.commit()
+        stagedDelivery.commit()
         stagedGeneration.commit()
         stagedSoft.commit()
         stagedPreparations.commit()

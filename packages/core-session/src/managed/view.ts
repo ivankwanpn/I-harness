@@ -1,3 +1,4 @@
+import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import type { Session, SessionEvent } from '../events/types.ts'
 import { createConversationIndex, createBootstrapConversationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
@@ -53,6 +54,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
           changed.set(event.inputId, false)
         }
       }
+      validateDeliveryFrame(prepared, view.formatVersion)
       const staged = index.stage(prepared)
       let installed = false
       return { events: prepared, install() {

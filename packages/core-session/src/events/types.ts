@@ -31,6 +31,7 @@ export interface ModelActivityInfo {
 // `&` binds tighter than `|`, so the intersection must wrap the whole union —
 // otherwise only the last member would carry `ignorable`.
 export type SessionEvent =
+    | import("./delivery.ts").DeliveryEvent
   | (
     | import('./runtime-context.ts').RuntimeContextRecordV1
     | { type: "turn/start"; seq?: number }
@@ -258,4 +259,4 @@ export interface Session {
   header?: SessionHeader
 }
 
-export const CURRENT_FORMAT_VERSION = 12
+export const CURRENT_FORMAT_VERSION = 13

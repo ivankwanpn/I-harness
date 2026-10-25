@@ -1,3 +1,5 @@
+import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
+import { createDeliveryIndex, validateDeliveryFrame, type DeliveryOriginLookup } from './delivery.ts'
 import { generationLimits, isGenerationEventType, type GenerationActionEvent, type GenerationAttemptEvent, type GenerationEvent } from '../events/generation.ts'
 import { conversationFormatError as fail } from '../events/conversation.ts'
 import type { SessionEventView } from '../managed/types.ts'
@@ -60,11 +62,12 @@ function originKey(event: Extract<GenerationActionEvent, { op: 'open' }>): strin
   return JSON.stringify([event.purpose, event.origin.kind, event.origin.seq, 'parentActionId' in event.origin ? event.origin.parentActionId : null,
     event.origin.kind === 'delegated-input' ? [event.origin.ref, event.origin.ref === 'admitted' ? event.origin.inputId : event.origin.messageId] : null])
 }
-function validateOrigin(event: Extract<GenerationActionEvent, { op: 'open' }>, actions: Pick<ReadonlyMap<string, Action>, 'get'>, ref: (seq: number) => Reference | undefined, scope: GenerationHistoryScope): void {
+function validateOrigin(event: Extract<GenerationActionEvent, { op: 'open' }>, actions: Pick<ReadonlyMap<string, Action>, 'get'>, ref: (seq: number) => Reference | undefined, scope: GenerationHistoryScope, deliveryOrigins?:DeliveryOriginLookup): void {
   const origin = event.origin, target = ref(origin.seq)
   if (!target || origin.seq >= event.seq!) fail('invalid generation origin address')
   if (origin.seq < (scope.seedLength ?? 0)) fail('seed history cannot open generation ownership')
   if (event.purpose === 'main') {
+    if (deliveryOrigins?.lookupActionOrigin(event)) return
     if (origin.kind === 'observation-input' && origin.seq >= (scope.seedLength ?? 0) && target.type === 'agent/input/admitted' && target.inputId === origin.inputId && target.intent === 'system'
       && (target.producer === 'session.notification' && ['plugin', 'child-report'].includes(target.provenanceKind ?? '') || target.producer === 'session.schedule' && target.provenanceKind === 'plugin')) return
     if (origin.kind === 'delegated-input' && scope.parentSession && Number.isSafeInteger(scope.seedLength ?? 0) && origin.seq >= (scope.seedLength ?? 0)) {
@@ -172,7 +175,7 @@ function attemptTransition(action: Action, event: GenerationAttemptEvent): Actio
 }
 
 /** Part of the one conversation transition. Staging never mutates committed facts. */
-export function createGenerationIndex(scope: GenerationHistoryScope = {}) {
+export function createGenerationIndex(scope: GenerationHistoryScope = {}, deliveryOrigins?:DeliveryOriginLookup) {
   const actions = new Map<string, Action>(), origins = new Set<string>(), references = new Map<number, Reference>()
   let document: string | undefined = scope.sessionId
   return {
@@ -193,7 +196,7 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}) {
             let action = getAction(fact.actionId)
             if (fact.type === 'context/action' && fact.op === 'open') {
               if (action || seen.has(originKey(fact)) || origins.has(originKey(fact)) || fact.startedAt > fact.trustedAt || fact.expiresAt <= fact.startedAt) fail('duplicate or invalid generation origin')
-              validateOrigin(fact, { get: getAction }, getRef, scope)
+              validateOrigin(fact, { get: getAction }, getRef, scope, deliveryOrigins)
               seen.add(originKey(fact))
               action = { opened: fact, expiresAt: fact.expiresAt, trustedAt: fact.trustedAt, phase: false, attempts: [], invocations: [] }
             } else {
@@ -224,10 +227,12 @@ export function createGenerationIndex(scope: GenerationHistoryScope = {}) {
   }
 }
 
-export function readGenerationActions(events: readonly SessionEventView[], scope: GenerationHistoryScope = {}): readonly GenerationActionState[] {
-  validateBootstrapReadiness(events, 11, scope)
-  const index = createGenerationIndex(scope), staged = index.stage()
-  for (const event of events) staged.advance(event)
-  staged.commit()
+export function readGenerationActions(events: readonly SessionEventView[], scope: GenerationHistoryScope = {}, formatVersion = CURRENT_FORMAT_VERSION): readonly GenerationActionState[] {
+  validateBootstrapReadiness(events, formatVersion, scope)
+  validateDeliveryFrame(events,formatVersion)
+  const delivery = createDeliveryIndex(scope), origins = delivery.stage()
+  const index = createGenerationIndex(scope, origins), staged = index.stage()
+  for (const event of events) { origins.advance(event); staged.advance(event) }
+  origins.commit(); staged.commit()
   return index.read()
 }

@@ -1,3 +1,4 @@
+import { isDeliveryEventType, validDeliveryEvent } from './delivery.ts'
 import { validateRuntimeContextDiscriminant } from './runtime-context.ts'
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
 import { validateReplacementShape } from './replacement.ts'
@@ -52,6 +53,10 @@ export function validateSemanticSourceEventShape(event: SessionEvent, formatVers
 }
 function conversationEventShape(event: SessionEvent, formatVersion: number, source: boolean): void {
   validateRuntimeContextDiscriminant(event, formatVersion)
+  if (isDeliveryEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)) {
+    if (formatVersion < 13 || !validDeliveryEvent(event)) conversationFormatError('invalid required delivery fact or format')
+    return
+  }
   if (Object.getOwnPropertyDescriptor(event, 'type')?.value === 'runtime/context') return
   if (source) validateSeedSourceEventShape(event, formatVersion)
   else validateSeedEventShape(event, formatVersion)

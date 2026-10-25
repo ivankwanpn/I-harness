@@ -1,3 +1,5 @@
+import { readDeliveries } from './delivery.ts'
+import { isDeliveryEventType } from '../events/delivery.ts'
 import type { SessionView as Session } from "../managed/types.ts"
 import type { ConversationProjection, ConversationCall } from "./types.ts"
 import { conversationSources } from "./sources.ts"
@@ -63,6 +65,21 @@ export function readConversationState(session: Session, projection: Conversation
   const protectedItems = projection.items.filter(item => item.provenance.scope === "session" || item.kind === "input" && turn !== undefined && item.sources.some(source => source.eventIndex > turn!) || item.unit && (item.unit.state !== 'closed' || !item.unit.source.addressable || unsettledUnits.has(item.unit.source.id)) || item.exchange && item.exchange.state !== "closed" || unsettledItems.has(item.id))
   const itemIds = protectedItems.map(item => item.id)
   const sourceIds = [...new Set([...protectedItems.flatMap(item => [...item.sources, ...item.provenance.evidence, ...item.unit ? [item.unit.source] : []].map(source => source.id)), ...[...pending.values()].flatMap(input => input.sourceIds), ...delegations.values()])]
+  const delivery = readDeliveries(session), deliveryRefs = new Set<number>()
+  const consumedDeliverySources=new Set(session.events.flatMap(event=>event.type==='agent/delivery-received'&&delivery.receipt(event.key)?.disposition!=='pending'?[event.sourceSeq]:[]))
+  for (const event of session.events) {
+    if (isDeliveryEventType(event.type) && event.seq !== undefined) deliveryRefs.add(event.seq)
+    if (event.type === 'agent/delivery-source' && event.generationId === delivery.activeGeneration()?.generationId && !consumedDeliverySources.has(event.seq!)) {
+      deliveryRefs.add(event.callSeq); deliveryRefs.add(event.startSeq)
+    }
+    if (event.type === 'agent/delivery-received' && delivery.receipt(event.key)?.disposition === 'pending') {
+      deliveryRefs.add(event.sourceSeq); deliveryRefs.add(event.terminalSeq); deliveryRefs.add(event.seq! + 1)
+    }
+  }
+  for (const [index,event] of session.events.entries()) if (event.seq !== undefined && deliveryRefs.has(event.seq)) {
+    const id=sources.ref(index,'event').id
+    if (!sourceIds.includes(id)) sourceIds.push(id)
+  }
   const lastSeq = session.events.at(-1)?.seq
   return { kind: "available", state: {
     archive: { eventCount: session.events.length, ...(lastSeq === undefined ? {} : { lastSeq }) }, branch, rewrites,

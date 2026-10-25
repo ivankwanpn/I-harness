@@ -116,3 +116,7 @@ export { closeSourceIntervals } from './conversation/history/intervals.ts'
 export { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './conversation/seed-digest.ts'
 
 export { semanticSeedResultRefs, sameManagedArtifactRef } from './results/seed-refs.ts'
+
+export * from './events/delivery.ts'
+export { readDeliveries, validateDeliveryFrame } from './conversation/delivery.ts'
+export type { DeliveryState, DeliveryActionOrigin, DeliveryOriginLookup } from './conversation/delivery.ts'

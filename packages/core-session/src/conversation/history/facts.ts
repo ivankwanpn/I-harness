@@ -15,6 +15,10 @@ export interface HistoryFact {
     calls: readonly { id: string; name: string; outcome: 'success' | 'error' | 'not-dispatched'; result: number }[]
     resultCount: number; mediaCount: number
   }[]
+  readonly deliveryDependencies?: readonly number[]
+  readonly deliveryGeneration?: string
+  readonly deliveryOperation?: 'open'|'close'
+  readonly deliverySourceSeq?: number
   readonly legacyRuntimeContext?: boolean
   readonly index: number; readonly type: SessionEventView['type']; readonly seq?: number
   readonly callId?: string; readonly name?: string; readonly eventSeq?: number
@@ -31,6 +35,9 @@ export interface HistoryArchive { readonly length: number; get(index: number): H
 export function historyFact(event: SessionEventView, index: number, inheritedBoundary = 0): HistoryFact {
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }) }
   switch (event.type) {
+    case 'agent/delivery-generation': return {...base, deliveryOperation:event.op, ...(event.op==='open'?{deliveryGeneration:event.generationId,deliveryDependencies:[event.originInputSeq]}:{})}
+    case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryDependencies:[event.callSeq,event.startSeq]}
+    case 'agent/delivery-received': return {...base,inputId:event.inputId,deliverySourceSeq:event.sourceSeq,deliveryDependencies:[event.sourceSeq,event.terminalSeq,event.seq!+1]}
     case 'conversation/seed-manifest': return { ...base, seedArtifacts: event.artifacts.map(artifact => ({ ...artifact.ref })), seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
     case 'conversation/seed-group': return { ...base,
       seedArtifactIndices: event.group.items.flatMap(item => item.kind !== 'exchange' ? [] : item.results.flatMap(result => result.kind !== 'envelope' ? [] : [
