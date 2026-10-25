@@ -52,8 +52,8 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   const observations = documents.observations
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations)
   const loads = createLoads(backend, ownership, mutations)
-  const lifecycle = createLifecycle(backend, ownership, mutations, documents)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
+  const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed)
 
   async function retire<T>(id: string, run: () => Promise<T>) {
     managed.assertOutsideCapture(id)
@@ -80,10 +80,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     ...(backend.deleteOwnedSession ? {
       async deleteOwnedSession(sessionId:string,manifest:import('./coordinator/types.ts').SessionArtifactManifest){
         managed.assertOutsideCapture(sessionId)
-        const captured={documents:[...manifest.documents],...(manifest.files===undefined?{}:{files:[...manifest.files]})}
-        const admission=observations.beginMutation([sessionId],captured.documents,true)
-        managed.revoke(sessionId)
-        try{await admission.join();await managed.closeOne(sessionId);return await lifecycle.deleteOwnedSession(sessionId,captured)}finally{admission.finish()}
+        return lifecycle.deleteOwnedSession(sessionId,manifest)
       },onDocumentDeleted:lifecycle.onDocumentDeleted,
     }:{}),
     ensureWritableFormat: mutations.ensureWritableFormat,

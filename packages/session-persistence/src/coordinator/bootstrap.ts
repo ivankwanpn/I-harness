@@ -383,7 +383,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const owned=entry,b=owned.bootstrap!
       b.capture??={request,reservation:{version:1,kind:'semantic-bootstrap-capture',request},phase:'unreserved',entered:false}
       const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
-        let originalFailure:unknown
+        let originalFailure:unknown,originalFailed=false,callbackFailed=false
         try {
           await settleCapture(owned)
           await backend.checkBootstrapCaptureRoot!();current(guards,owned)
@@ -410,20 +410,23 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           b.capture!.entered=true;b.capture!.phase='capturing'
           const scope={id,active:true}
           let returned:BootstrapRequest
-          try{returned=await callbackScope.run(scope,capture)}finally{scope.active=false;b.capture!.phase='spent'}
+          try{returned=await callbackScope.run(scope,capture)}catch(error){callbackFailed=true;throw error}finally{scope.active=false;b.capture!.phase='spent'}
           current(guards,owned);io.claim.assertHeld()
           let r:BootstrapRequest
           try{r=captureBootstrapRequest(returned);buildBootstrapHeader(r,undefined,undefined,b.capture!.reservation)}catch{return {kind:'refused',reason:'manifest-invalid'}}
           b.capture!.ownedRequest=r;b.request=r;b.capture!.phase='captured'
           return await run(owned,guards)
         } catch(error) {
-          originalFailure=error
-          const code=(error as {code?:string}).code
+          originalFailed=true;originalFailure=error
+          // A local callback fault is not an owner guard outcome, even when
+          // its value carries a guard code or is null/undefined/falsy.
+          if(callbackFailed)throw error
+          const code=(error as {code?:string}|null|undefined)?.code
           if(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE')return b.issued?blocked(owned,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
           throw error
         } finally {
           if(owned.captureIO)owned.captureIO.activeIssue=undefined
-          try{await settleCapture(owned)}catch(cleanup){throw new AggregateError([...(originalFailure?[originalFailure]:[]),cleanup],'Capture cleanup unresolved',{cause:{invocation:request.invocation}})}
+          try{await settleCapture(owned)}catch(cleanup){throw new AggregateError([...(originalFailed?[originalFailure]:[]),cleanup],'Capture cleanup unresolved',{cause:{invocation:request.invocation}})}
         }
       }).finally(async()=>{if(owned.flight===flight)owned.flight=undefined;if(!b.issued&&!owned.document&&documents.get(id)===owned&&(!owned.captureIO||owned.captureIO.settled)){await releaseCapture(owned);documents.delete(id)}})
       owned.flight=flight;return flight

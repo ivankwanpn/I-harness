@@ -335,6 +335,26 @@ it('deletion locks and tombstones the same captured manifest even if caller chan
   leave.resolve(); await rejected; await deleting
   expect((await backend.deletionReceipt!('source'))!.manifest.documents).toEqual([key('source')])
 })
+it('R1 deletion closes ordinary session and declared-document admissions synchronously before observation join',async()=>{
+  const {backend,coordinator:c}=await fixture(),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>()
+  const appends=vi.spyOn(backend,'append'),writes=vi.spyOn(backend,'putDocument')
+  const observing=c.withSessionBindingObservation!(request,async()=>{entered.resolve();await leave.promise})
+  const revoked=expect(observing).rejects.toMatchObject({reason:'revoked'});await entered.promise
+  const deleting=c.deleteOwnedSession!('source',{documents:[key('source')]}),deletion=deleting.then(()=>({kind:'deleted' as const}),error=>({kind:'error' as const,error}))
+  let enqueueError:unknown,enqueueRefused=false
+  try{c.enqueue('source',[{type:'plan/mode',mode:'on'}])}catch(error){enqueueRefused=true;enqueueError=error}
+  const append=c.append('source',[{type:'plan/mode',mode:'on'}]).then(()=>({kind:'accepted' as const}),error=>({kind:'refused' as const,error}))
+  let documentSettled=false
+  const document=c.putDocumentStrict!(key('source'),{projectId:'late'}).then(()=>{documentSettled=true;return {kind:'accepted' as const}},error=>{documentSettled=true;return {kind:'refused' as const,error}})
+  try{
+    expect.soft(enqueueRefused).toBe(true);if(enqueueRefused)expect.soft(String(enqueueError)).toMatch(/deleting|deleted/)
+    const appendOutcome=await append
+    expect.soft(appendOutcome).toMatchObject({kind:'refused'});expect.soft(documentSettled).toBe(true);if(documentSettled){const outcome=await document;expect.soft(outcome).toMatchObject({kind:'refused'});if(outcome.kind==='refused')expect.soft(String(outcome.error)).toMatch(/Session document is deleted/)}
+    expect.soft(appends).not.toHaveBeenCalled();expect.soft(writes).not.toHaveBeenCalled()
+    console.log(JSON.stringify({control:'R1 ordinary deletion before observation release',enqueueRefused,append:appendOutcome.kind,documentSettled,backendAppends:appends.mock.calls.length,backendDocumentWrites:writes.mock.calls.length}))
+  }finally{leave.resolve();await revoked;await deleting}
+  expect(await deletion).toEqual({kind:'deleted'});expect(await document).toMatchObject({kind:'refused'});expect(appends).not.toHaveBeenCalled();expect(writes).not.toHaveBeenCalled()
+})
 it('actual original bootstrap runs outside target lane and promotes its temporary pin to original live owner', async () => {
   const { backend, coordinator: c } = await fixture()
   const profile = vi.spyOn(backend, 'profile')

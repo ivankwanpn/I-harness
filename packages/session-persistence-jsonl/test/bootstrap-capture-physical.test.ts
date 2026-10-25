@@ -12,6 +12,8 @@ import { createJsonlBackend } from '../src/index.ts'
 import { heldFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 import { createOwnership } from '../../session-persistence/src/coordinator/ownership.ts'
 import { buildBootstrapHeader } from '../../session-persistence/src/coordinator/bootstrap-header.ts'
+import { createBootstrapOwner, type ManagedEntry } from '../../session-persistence/src/coordinator/bootstrap.ts'
+import { createMutations } from '../../session-persistence/src/coordinator/mutations.ts'
 import { acquireSessionLock } from '../../fs-lock/src/index.ts'
 const roots: string[] = [], coordinators: p.SessionCoordinator[] = []
 vi.mock('node:fs/promises', async original => { const fs = await original<typeof import('node:fs/promises')>(); return { ...fs, open: vi.fn(fs.open), rename: vi.fn(fs.rename) } })
@@ -58,6 +60,44 @@ it('P05/P08 spent callback remains fenced and cold generic payload cannot fill i
   expect(await cold.coordinator.bootstrapSemanticTargetWithCapture!(r, guards, async () => { captures++; return payload(r) })).toMatchObject({ kind: 'blocked', reason: 'payload-required' })
   expect(await cold.coordinator.bootstrapSemanticTarget(payload(r), guards)).toMatchObject({ kind: 'blocked', reason: 'payload-required' })
   expect(captures).toBe(1); expect(JSON.parse(await readFile(stagePath(root, r), 'utf8')).kind).toBe('semantic-bootstrap-capture')
+})
+const callbackFaults:readonly(readonly[string,unknown])[]=[
+  ['coded-cancelled',Object.assign(new Error('local coded callback fault'),{code:'FACT_CANCELLED'})],
+  ['coded-stale',Object.assign(new Error('local coded callback fault'),{code:'FACT_PRECONDITION_STALE'})],
+  ['null',null],['undefined',undefined],['false',false],['zero',0],['empty-string',''],['NaN',NaN],['zero-bigint',0n],
+]
+it.each(callbackFaults)('R1-P05 preserves %s callback rejection identity and spends the marker on warm/cold retry',async(_label,fault)=>{
+  const {root,coordinator}=await setup(),r=request();let captures=0
+  const outcome=await coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{captures++;throw fault}).then(value=>({kind:'resolved' as const,value}),error=>({kind:'rejected' as const,error}))
+  expect(outcome.kind).toBe('rejected');if(outcome.kind==='rejected')expect(outcome.error).toBe(fault)
+  const original=await readFile(stagePath(root,r));expect(original).toEqual(Buffer.from(p.encodeBootstrapCaptureReservation({version:1,kind:'semantic-bootstrap-capture',request:r})))
+  expect(await coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{captures++;return payload(r)})).toMatchObject({kind:'blocked',reason:'payload-required'})
+  await coordinator.close();const cold=await setup(root)
+  expect(await cold.coordinator.bootstrapSemanticTargetWithCapture!(r,guards,async()=>{captures++;return payload(r)})).toMatchObject({kind:'blocked',reason:'payload-required'})
+  expect(await cold.coordinator.bootstrapSemanticTarget(payload(r),guards)).toMatchObject({kind:'blocked',reason:'payload-required'})
+  expect(captures).toBe(1);expect(await readFile(stagePath(root,r))).toEqual(original)
+})
+it.each(callbackFaults)('R1-P05 retains original %s callback value beside actual same-owner cleanup failure',async(_label,fault)=>{
+  const {root,backend}=await setup(),r=request(),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),entries=new Map<string,ManagedEntry>(),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  const owner=createBootstrapOwner(backend,ownership,entries,()=>{throw new Error('faulted capture must not attach a target')},createMutations(backend,ownership,200,()=>{}))
+  const cleanupFault=new Error('original readback close failed'),originalFaults:unknown[]=[];let failClose=false,captures=0,closes=0
+  vi.mocked(open).mockImplementation(async(...args)=>{const handle=await native.open(...args);if(!failClose||!String(args[0]).endsWith('.stage')||args[1]!=='r')return handle
+    return new Proxy(handle,{get(target,name){if(name==='close')return async()=>{closes++;if(failClose)throw cleanupFault;return target.close()};const value=Reflect.get(target,name);return typeof value==='function'?value.bind(target):value}})})
+  try{
+    const outcome=await owner.bootstrapSemanticTargetWithCapture(r,guards,async()=>{
+      captures++;const io=entries.get('target')!.captureIO!;expect(io.settled).toBe(true)
+      // Inject a real outstanding read under this retained original owner. The
+      // private-entry flag models the IO issue, without creating replacement
+      // authority or a fake success from the backend.
+      io.settled=false;failClose=true
+      try{await backend.readBootstrapCapture!('target',io.held,r)}catch(error){originalFaults.push(error)}
+      throw fault
+    }).then(value=>({kind:'resolved' as const,value}),error=>({kind:'rejected' as const,error}))
+    expect(outcome.kind).toBe('rejected')
+    if(outcome.kind==='rejected'){expect(outcome.error).toBeInstanceOf(AggregateError);expect((outcome.error as AggregateError).errors).toHaveLength(2);expect((outcome.error as AggregateError).errors[0]).toBe(fault);expect((outcome.error as AggregateError).errors[1]).toBeInstanceOf(AggregateError);expect(((outcome.error as AggregateError).errors[1] as AggregateError).errors).toContain(cleanupFault)}
+    expect(captures).toBe(1);expect(originalFaults).toEqual([cleanupFault]);expect(closes).toBeGreaterThanOrEqual(2)
+    expect(JSON.parse(await readFile(stagePath(root,r),'utf8')).kind).toBe('semantic-bootstrap-capture')
+  }finally{failClose=false;for(const entry of entries.values())await owner.releaseCapture(entry);await Promise.all(ownership.releaseHeldLocks());vi.mocked(open).mockImplementation(native.open)}
 })
 it.each(['invalid','stale','stop'] as const)('P05 %s callback result spends its original reservation permanently without callback2',async cut=>{
   const {root,coordinator}=await setup(),r=request(),controller=new AbortController();let fresh=true,captures=0

@@ -11,6 +11,7 @@ export function createLifecycle(
     Pick<Mutations, "closeAdmission" | "pendingWriteBehind" | "removeWriteBehind" | "flushWriteBehinds" | "cancelAutomaticWaits" | "clearConversationIndexes">,
   { closeAdmissions: closeDocumentAdmissions, pendingWrites: pendingDocuments, observations, withDocumentLeases, retryDisposals }:
     Pick<Documents, "closeAdmissions" | "pendingWrites" | "observations" | "withDocumentLeases" | "retryDisposals">,
+  managed: { revoke(sessionId: string): void; closeOne(sessionId: string): Promise<void> },
 ) {
   const deletedListeners = new Set<(sessionId: string, manifest: SessionArtifactManifest) => Promise<void>>()
   return {
@@ -25,8 +26,10 @@ export function createLifecycle(
       const admission = observations.beginMutation([sessionId], manifest.documents, true)
       closeAdmission(sessionId)
       closeDocumentAdmissions(manifest.documents)
+      managed.revoke(sessionId)
       try {
         await admission.join()
+        await managed.closeOne(sessionId)
         const wb = pendingWriteBehind(sessionId)
         if (wb) { wb.cancelAutomaticWait(); await wb.flush(); removeWriteBehind(sessionId) }
         await pendingDocuments()
