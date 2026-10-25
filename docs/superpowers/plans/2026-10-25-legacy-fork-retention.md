@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript, Node filesystem/SQLite, existing core-session and persistence/B2/F0 APIs, existing fs-lock and Vitest.
 
-**Spec:** docs/superpowers/specs/2026-10-25-legacy-fork-retention.md. Read its closed interfaces, namespace, phases and L1-01..14 in full; these are the exact task requirements.
+**Spec:** docs/superpowers/specs/2026-10-25-legacy-fork-retention.md. Read its closed interfaces, namespace, phases and L1-01..21 in full; these are the exact task requirements.
 
 ## Global constraints
 
