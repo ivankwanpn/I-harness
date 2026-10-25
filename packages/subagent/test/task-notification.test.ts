@@ -20,21 +20,37 @@ describe('ordinary source notification contract', () => {
   })
 
   // Refusal unit controls: successful source proof/execution use the actual service tests.
-  it.each([true, false])('only actual adapter suppression class is accepted (instance=%s)', async actual => {
+  it.each(['matching', 'wrong-id', 'raw-code'] as const)('suppression requires actual class and expected witness identity (%s)', async kind => {
     const tasks = createTaskRegistry()
     const task = tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/helper', description: 'helper', prompt: 'p', agent: 'general', delivery: 'parent' })
     tasks.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'original' })
     let calls = 0, wakes = 0
-    const drain = createNotificationDrain({ tasks, evidence: () => ({ sourceSeq: 1, terminalSeq: 2 }), admit: {
+    const drain = createNotificationDrain({ tasks, evidence: () => ({ evidence: { sourceSeq: 1, terminalSeq: 2 }, expectedInputId: 'delivery-original' }), admit: {
       admit: async () => { throw new Error('generic forbidden') }, wake: () => { wakes++ },
-      admitTaskDelivery: async () => { calls++; throw actual ? new DeliverySuppressedError('delivery-original') : Object.assign(new Error('unclassified original failure'), { code: 'DELIVERY_SUPPRESSED' }) },
+      admitTaskDelivery: async () => { calls++; throw kind === 'raw-code' ? Object.assign(new Error('unclassified original failure'), { code: 'DELIVERY_SUPPRESSED' }) : new DeliverySuppressedError(kind === 'matching' ? 'delivery-original' : 'delivery-other') },
     } })
     expect(await drain.drain()).toBe(0)
-    expect(tasks.notifications()[0]).toMatchObject({ status: actual ? 'suppressed' : 'error' })
+    expect(tasks.notifications()[0]).toMatchObject({ status: kind === 'matching' ? 'suppressed' : 'error' })
     expect(tasks.notifications()[0]!.timeDelivered).toBeUndefined()
     expect(tasks.notifications()[0]!.timeWoken).toBeUndefined()
     expect(wakes).toBe(0); expect(calls).toBe(1)
-    if (actual) { await drain.drain(); expect(calls).toBe(1) }
+    if (kind === 'matching') { await drain.drain(); expect(calls).toBe(1) }
+  })
+
+  it('a receipt for another original delivery cannot acknowledge this outbox row', async () => {
+    const tasks = createTaskRegistry()
+    const task = tasks.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/helper', description: 'helper', prompt: 'p', agent: 'general', delivery: 'parent' })
+    tasks.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'original' })
+    let wakes = 0
+    const drain = createNotificationDrain({ tasks, evidence: () => ({ evidence: { sourceSeq: 1, terminalSeq: 2 }, expectedInputId: 'delivery-original' }), admit: {
+      admit: async () => { throw new Error('generic forbidden') }, wake: () => { wakes++ },
+      admitTaskDelivery: async () => ({ inputId: 'delivery-other', disposition: 'claimed', durability: 'durable' }),
+    } })
+    expect(await drain.drain()).toBe(0)
+    expect(tasks.notifications()[0]).toMatchObject({ status: 'error' })
+    expect(tasks.notifications()[0]!.timeDelivered).toBeUndefined()
+    expect(tasks.notifications()[0]!.timeWoken).toBeUndefined()
+    expect(wakes).toBe(0)
   })
 
   it('renderTaskNotification keeps source-owned presentation shape', () => {

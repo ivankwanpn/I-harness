@@ -85,15 +85,21 @@ it('two genuine sources with equal presentation have distinct receipts and same-
 
 it('reconciles a physically landed receipt on its original handle before one parent request', async () => {
   const f = await createDeliveryFixture({ holdReceiptUnknown: true })
+  const boundary = async <T>(name: string, work: Promise<T>) => {
+    let timer: ReturnType<typeof setTimeout>
+    try { return await Promise.race([work, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original receipt boundary pending: ' + name)), 3000) })]) }
+    catch (error) { await f.evidence('receipt-boundary-' + name, error); throw error }
+    finally { clearTimeout(timer!) }
+  }
   try {
-    await f.start(); f.releaseChild(); await f.waitForReceiptUnknown()
+    await boundary('parent-start', f.start()); f.releaseChild(); await boundary('physical-unknown', f.waitForReceiptUnknown())
     expect(f.parentRequests).toHaveLength(2)
     expect(f.receiptKeys.length).toBeGreaterThan(0)
     const assembly = await f.service.assemblyFor('parent')
     const source = assembly.session.events.find(e => e.type === 'agent/delivery-source')!
     const terminal = assembly.session.events.find(e => e.type === 'subagent/end')!
-    await expect(receivedInputsFor(assembly.factOwner, 'parent').delivery.admit({ sourceSeq: source.seq!, terminalSeq: terminal.seq! }, { text: 'changed uncertain presentation', description: 'changed', display: { kind: 'task', title: 'changed', body: 'changed' } })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-    f.releaseReceipt(); await f.waitForDeliveryRequest(); await f.waitForConsumed()
+    await expect(boundary('original-rerender-observation', receivedInputsFor(assembly.factOwner, 'parent').delivery.admit({ sourceSeq: source.seq!, terminalSeq: terminal.seq! }, { text: 'changed uncertain presentation', description: 'changed', display: { kind: 'task', title: 'changed', body: 'changed' } }))).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    f.releaseReceipt(); await boundary('actual-parent-request', f.waitForDeliveryRequest()); await boundary('actual-claim', f.waitForConsumed())
     const events = (await f.backend.read('parent')).events
     expect(events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1)
     expect(events.filter(e => e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-'))).toHaveLength(1)
@@ -104,7 +110,7 @@ it('reconciles a physically landed receipt on its original handle before one par
     expect(f.launchCount()).toBe(1)
     await f.evidence('original-receipt-unknown')
   } catch (e) { await f.evidence('original-receipt-unknown-failure', e); throw e }
-  finally { await f.close() }
+  finally { f.releaseReceipt(); await boundary('original-cleanup', f.close()) }
 }, 20000)
 
 it.each(['synthetic', 'unknown', 'delegated', 'b2'] as const)('a %s parent keeps accepted unbound spawn and original result read without retrospective delivery authority', async compatibilityOrigin => {
@@ -213,7 +219,7 @@ it('a lost original terminal acknowledgment activates same-capture recovery with
 }, 20000)
 
 it('original unknown terminal recovery continues after Stop while the generation forbids admission and wake', async () => {
-  const f = await createDeliveryFixture({ holdTerminalUnknown: true })
+  const f = await createDeliveryFixture({ holdTerminalUnknown: true, expectStopDiagnostics: true })
   try {
     await f.start(); f.releaseChild(); await f.waitForTerminalReconcile()
     f.service.cancelRunning!('parent')
@@ -249,7 +255,7 @@ it('original unknown terminal recovery continues after Stop while the generation
 }, 20000)
 
 it('Stop source-only settlement stays independent of a held admission after original unknown-end recovery', async () => {
-  const f = await createDeliveryFixture({ holdTerminalUnknown: true, holdReceiptBeforeIssue: true })
+  const f = await createDeliveryFixture({ holdTerminalUnknown: true, holdReceiptBeforeIssue: true, expectStopDiagnostics: true })
   try {
     await f.start(); f.releaseChild(); await f.waitForTerminalReconcile()
     f.releaseTerminalOutcome(); await f.waitForReceiptPrepared()
@@ -269,4 +275,85 @@ it('Stop source-only settlement stays independent of a held admission after orig
     await f.evidence('source-only-stop-held-admission')
   } catch (e) { await f.evidence('source-only-stop-held-admission-failure', e); throw e }
   finally { f.releaseReceiptPreparation(); f.releaseTerminalOutcome(); await f.close() }
+}, 20000)
+
+it('a pending original receipt is scheduled after its first pre-claim prerequisite failure settles and a real owner signal arrives', async () => {
+  const f = await createDeliveryFixture()
+  let blocked = true, resourceCloses = 0, registeredOrder: number | undefined
+  const resourceFault = new Error('original finished source resource release blocked')
+  let source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome> | undefined
+  let off: (() => void) | undefined
+  try {
+    await f.start()
+    const assembly = await f.service.assemblyFor('parent'), action = assembly.factOwner.beginAction()
+    source = action.registerSettlementSource(async () => {
+      resourceCloses++
+      const receipt = assembly.session.events.find(e => e.type === 'agent/delivery-received')
+      if (receipt?.type === 'agent/delivery-received' && registeredOrder === undefined) registeredOrder = f.service.queue('parent').find(row => row.id === receipt.inputId)?.order
+      if (blocked) throw resourceFault
+    })
+    action.finish()
+    const originalCloseFailure = await source.close().then(() => { throw new Error('Original held source unexpectedly closed') }, error => error)
+    expect(originalCloseFailure).toMatchObject({ code: 'FACT_RECOVERY_REQUIRED', errors: [resourceFault] })
+    const removed = Promise.withResolvers<void>()
+    off = f.service.onExecutionState!(state => {
+      if (state.sessionId !== 'parent' || !f.executionErrors().length || registeredOrder === undefined) return
+      const receipt = assembly.session.events.find(e => e.type === 'agent/delivery-received')
+      if (receipt?.type === 'agent/delivery-received' && f.service.queue('parent').find(row => row.id === receipt.inputId)?.order !== registeredOrder) removed.resolve()
+    })
+    f.releaseChild()
+    await Promise.race([removed.promise, new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('Registered pre-claim failure did not remove its service row')), 5000); void removed.promise.finally(() => clearTimeout(timer)) })])
+    const before = (await f.backend.read('parent')).events
+    const receipt = before.find(e => e.type === 'agent/delivery-received')!
+    if (receipt.type !== 'agent/delivery-received') throw new Error('Missing original receipt')
+    expect(f.launchCount()).toBe(1)
+    expect(f.parentRequests).toHaveLength(2)
+    expect(f.executionErrors()).toHaveLength(1)
+    expect(assembly.inbox.isPending(receipt.inputId)).toBe(true)
+    expect(before.filter(e => e.type === 'agent/input/promoted' && e.inputId === receipt.inputId)).toHaveLength(0)
+    expect(Number.isInteger(registeredOrder)).toBe(true)
+    expect(f.service.queue('parent').find(row => row.id === receipt.inputId)?.order).not.toBe(registeredOrder)
+    await f.evidence('preclaim-failure-original-pending', { kind: 'controlled-original-source-prerequisite', originalCloseFailure, resourceCloses, resourceReleased: false, registeredOrder, pendingProjectionOrder: f.service.queue('parent').find(row => row.id === receipt.inputId)?.order })
+    blocked = false; await source.close()
+    // A real same-owner received-input cancellation dirties the receiver. It
+    // neither supplies another child/end nor submits model work of its own.
+    await assembly.inbox.admit({ inputId: 'original-recovery-signal', text: 'cancelled control input', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture.recovery' } })
+    await assembly.inbox.cancel('original-recovery-signal', 'original prerequisite recovered')
+    await f.waitForDeliveryRequest(); await f.waitForConsumed()
+    const after = (await f.backend.read('parent')).events
+    expect(after.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1)
+    expect(after.filter(e => e.type === 'agent/input/promoted' && e.inputId === receipt.inputId)).toHaveLength(1)
+    expect(f.parentRequests).toHaveLength(3)
+    expect(f.launchCount()).toBe(1)
+    expect(resourceCloses).toBe(3)
+    await f.evidence('preclaim-original-recovered-on-real-signal', { kind: 'controlled-original-source-prerequisite', originalCloseFailure, resourceCloses, resourceReleased: true })
+  } catch (e) { await f.evidence('preclaim-original-recovery-failure', e); throw e }
+  finally { off?.(); blocked = false; await source?.close(); await f.close() }
+}, 20000)
+
+it('a claimed delivery whose actual model request fails is never resubmitted by a later owner signal', async () => {
+  const f = await createDeliveryFixture({ failDelivery: true })
+  let off: (() => void) | undefined
+  try {
+    await f.start()
+    const failed = Promise.withResolvers<void>()
+    off = f.service.onExecutionState!(state => {
+      if (state.sessionId === 'parent' && !state.running && state.queued === 0 && f.executionErrors().length === 1) failed.resolve()
+    })
+    f.releaseChild(); await f.waitForDeliveryRequest(); await f.waitForConsumed()
+    await Promise.race([failed.promise, new Promise<never>((_, reject) => { const timer = setTimeout(() => reject(new Error('Original failed model submission did not settle')), 5000); void failed.promise.finally(() => clearTimeout(timer)) })])
+    const assembly = await f.service.assemblyFor('parent')
+    await assembly.inbox.admit({ inputId: 'after-failed-model-signal', text: 'cancelled control input', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'fixture.recovery' } })
+    await assembly.inbox.cancel('after-failed-model-signal', 'real state signal after failed model')
+    await assembly.drainParentNotifications?.(true)
+    const events = (await f.backend.read('parent')).events
+    expect(events.filter(e => e.type === 'agent/delivery-received')).toHaveLength(1)
+    expect(events.filter(e => e.type === 'agent/input/promoted' && e.inputId.startsWith('delivery-'))).toHaveLength(1)
+    expect(f.parentRequests).toHaveLength(3)
+    expect(f.executionErrors()).toHaveLength(1)
+    expect(f.launchCount()).toBe(1)
+    await f.evidence('claimed-failed-model-no-resubmit')
+  } catch (e) { await f.evidence('claimed-failed-model-no-resubmit-failure', e); throw e }
+  finally { off?.(); await f.close() }
+  expect(f.parentRequests).toHaveLength(3)
 }, 20000)

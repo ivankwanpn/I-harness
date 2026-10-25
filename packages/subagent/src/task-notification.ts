@@ -73,7 +73,7 @@ export function renderTaskNotification(state: TaskOutcome, taskId: string, descr
 
 export interface NotificationDrainOptions {
   reconcileSources?: () => Promise<void>
-  evidence?: (taskId: string) => SubagentDeliveryEvidence | undefined
+  evidence?: (taskId: string) => { evidence: SubagentDeliveryEvidence; expectedInputId: string } | undefined
   reportPolicy?: ReportPolicy
   tasks: TaskRegistry
   admit: ParentInputAdmission | undefined
@@ -108,8 +108,9 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
           if (opts.tasks.get(n.submissionId)?.publication === 'unqualified') continue
           const candidate = n.status === "pending" || n.status === "error"
           if (!candidate) continue
-          const evidence = opts.evidence(n.submissionId)
-          if (!evidence) continue
+          const handoff = opts.evidence(n.submissionId)
+          if (!handoff) continue
+          const { evidence, expectedInputId } = handoff
           changed = true
           opts.tasks.updateNotification(n.id, { attempts: n.attempts + 1, ...(n.status === "error" ? { error: undefined } : {}) })
           if (isCancelled(n.parentSessionId)) {
@@ -136,10 +137,11 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
               description: n.description,
               display: { kind: "task", title: `${TASK_REPLY_TITLES[n.state]}: ${n.description}`, body: n.text },
             }) } catch (error) {
-              if (!(error instanceof DeliverySuppressedError)) throw error
+              if (!(error instanceof DeliverySuppressedError) || error.inputId !== expectedInputId) throw error
               opts.tasks.updateNotification(n.id, { status: 'suppressed', error: error.message })
               continue
             }
+            if (receipt.inputId !== expectedInputId) throw new Error('Recipient acknowledged a different original delivery input')
             if (receipt.disposition === 'suppressed' || receipt.disposition === 'cancelled') {
               opts.tasks.updateNotification(n.id, { status: 'suppressed', error: `receiver ${receipt.disposition}` })
               continue

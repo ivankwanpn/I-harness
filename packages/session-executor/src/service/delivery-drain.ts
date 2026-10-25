@@ -10,12 +10,13 @@ export function createDeliveryDrain(options: {
   current(): boolean
   reconcile(): Promise<void>
   pending(): readonly string[]
-  schedule(inputId: string): boolean
+  schedule(inputId: string, settled: () => void): boolean
   report(error: unknown): void
 }) {
   let dirty = false, retired = false, running: Promise<void> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined, backoff = 0
-  const attempted = new Set<string>()
+  let signalRevision = 0
+  const inFlight = new Map<string, { signalRevision: number }>()
   const clear = () => { if (timer !== undefined) clearTimeout(timer); timer = undefined }
   const run = (): Promise<void> => {
     if (running) return running
@@ -29,8 +30,18 @@ export function createDeliveryDrain(options: {
         // actual owner readiness still gates registration on the normal lane.
         for (const inputId of options.pending()) {
           if (retired || !options.current()) return
-          if (attempted.has(inputId)) continue
-          try { if (options.schedule(inputId)) attempted.add(inputId) } catch (error) { options.report(error); failure ??= error }
+          if (inFlight.has(inputId)) continue
+          const registration = { signalRevision }
+          inFlight.set(inputId, registration)
+          const settled = () => {
+            if (inFlight.get(inputId) !== registration) return
+            inFlight.delete(inputId)
+            // Settlement alone grants no retry. Preserve a genuine signal
+            // received while this exact registration was still in flight.
+            if (!retired && options.current() && signalRevision !== registration.signalRevision) { dirty = true; void run() }
+          }
+          try { if (!options.schedule(inputId, settled)) inFlight.delete(inputId) }
+          catch (error) { inFlight.delete(inputId); options.report(error); failure ??= error }
         }
         if (failure) {
           // A blocked observation never dirties itself. Actual source/receiver
@@ -47,8 +58,8 @@ export function createDeliveryDrain(options: {
     return pending
   }
   return {
-    signal() { if (retired) return; clear(); dirty = true; void run() },
-    reconcile() { if (retired) return Promise.resolve(); clear(); dirty = true; return run() },
+    signal() { if (retired) return; signalRevision++; clear(); dirty = true; void run() },
+    reconcile() { if (retired) return Promise.resolve(); signalRevision++; clear(); dirty = true; return run() },
     retire() { retired = true; dirty = false; clear() },
     join() { return running ?? Promise.resolve() },
   }

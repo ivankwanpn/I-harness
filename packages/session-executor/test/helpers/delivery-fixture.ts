@@ -11,10 +11,15 @@ import { createSessionService, createDurableSessionLoader } from '../../src/inde
 import { controlledModel } from '../controlled-model.ts'
 import { createTelemetry, type TelemetryEvent } from '@i-harness/telemetry'
 import { receivedInputsFor } from '../../src/lifecycle/received-inputs.ts'
+import { afterEach, expect, vi } from 'vitest'
+import { generationError } from '@i-harness/llm-seam'
+
+const warningRestorers = new Set<() => void>()
+afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { holdTerminal?: boolean; holdTerminalUnknown?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { holdTerminal?: boolean; holdTerminalUnknown?: boolean; expectStopDiagnostics?: boolean; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   const backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -29,6 +34,21 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
   const originalDocument = await coordinator.openManagedDocument('parent')
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'd1a-fixture', config: { enabled: false } })
   const parentRequests: LLMRequest[] = []
+  const warnings: string[] = [], expectedWarnings = new Set<string>()
+  if (options.holdTerminalUnknown) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: AggregateError: Original delivery sources require settlement`)
+  if (options.holdReceiptUnknown || options.expectStopDiagnostics) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: FactRecoveryRequiredError: Managed facts require reconciliation`)
+  if (options.expectStopDiagnostics) expectedWarnings.add('[i-harness] delivery Stop requires reconciliation: FactRecoveryRequiredError: Managed facts require reconciliation')
+  const originalWarn = console.warn.bind(console)
+  const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => {
+    const message = args.map(String).join(' '); warnings.push(message)
+    if (!expectedWarnings.has(message)) originalWarn(...args)
+  })
+  let warningRestored = false
+  const restoreWarning = () => {
+    if (warningRestored) return
+    warningRestored = true; warn.mockRestore(); warningRestorers.delete(restoreWarning)
+  }
+  warningRestorers.add(restoreWarning)
   const telemetryEvents: TelemetryEvent[] = []
   const telemetry = createTelemetry([{ onEvent(event) { telemetryEvents.push(event) } }])
   const childGate = Promise.withResolvers<void>(), delivery = Promise.withResolvers<void>(), terminal = Promise.withResolvers<void>()
@@ -107,7 +127,10 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
         yield { type: 'tool_call', call: { id: 'normal-parent-step', name: 'fixture_step', args: {} } }
         yield { type: 'end' }; return
       }
-      if (JSON.stringify(request.messages).includes('<task_result>')) delivery.resolve()
+      if (JSON.stringify(request.messages).includes('<task_result>')) {
+        delivery.resolve()
+        if (options.failDelivery) { yield { type: 'error', error: generationError('GENERATION_CLOSED') }; return }
+      }
       if (!resultRead && JSON.stringify(request.messages).includes('read original retained result')) {
         resultRead = true
         yield { type: 'tool_call', call: { id: 'read-original-result', name: 'get_task_output', args: { task_ids: ['task-1'] } } }
@@ -128,7 +151,7 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     if (!process.env.IH_DELIVERY_EVIDENCE_ROOT) return
     await mkdir(process.env.IH_DELIVERY_EVIDENCE_ROOT, { recursive: true })
     const view = originalDocument.view, assembly = closed ? undefined : await service.assemblyFor('parent').catch(() => undefined)
-    await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
+    await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, warnings, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
   }
   return {
     get service() { return service }, backend, get coordinator() { return coordinator }, parentRequests,
@@ -181,10 +204,14 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
       childGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true
       const failures: unknown[] = []
       off()
-      for (const close of [() => service.close(), () => coordinator.close(), () => output.close()]) try { await close() } catch (e) { failures.push(e) }
-      await evidence('cleanup-' + root.split(/[\\/]/).at(-1), failures)
-      closed = failures.length === 0
-      if (failures.length) throw new AggregateError(failures, 'Delivery fixture cleanup failed')
+      try {
+        for (const close of [() => service.close(), () => coordinator.close(), () => output.close()]) try { await close() } catch (e) { failures.push(e) }
+        await evidence('cleanup-' + root.split(/[\\/]/).at(-1), failures)
+        closed = failures.length === 0
+        expect(warnings.filter(message => !expectedWarnings.has(message)), 'unexpected delivery fixture warnings').toEqual([])
+        if (options.holdTerminalUnknown) expect(warnings.some(message => message.includes('Original delivery sources require settlement'))).toBe(true)
+        if (failures.length) throw new AggregateError(failures, 'Delivery fixture cleanup failed')
+      } finally { restoreWarning() }
     },
   }
 }

@@ -125,3 +125,27 @@ it('an actual dirty signal during a failed await is reconciled once instead of b
     expect(attempts).toBe(2)
   } finally { release.resolve(); drain.retire(); await drain.join() }
 })
+
+it('registration settlement alone does not retry but a real signal during that registration is preserved', async () => {
+  const completions: (() => void)[] = []
+  let registrations = 0
+  const drain = createDeliveryDrain({ current: () => true, reconcile: async () => {}, pending: () => ['original-input'],
+    schedule(_id, settled) { registrations++; completions.push(settled); return true }, report() {} })
+  try {
+    await drain.reconcile(); expect(registrations).toBe(1)
+    completions[0]!(); await drain.join(); expect(registrations).toBe(1)
+    drain.signal(); await drain.join(); expect(registrations).toBe(2)
+    drain.signal(); await drain.join(); expect(registrations).toBe(2)
+    completions[1]!(); await drain.join(); expect(registrations).toBe(3)
+    completions[2]!(); await drain.join(); expect(registrations).toBe(3)
+  } finally { drain.retire(); await drain.join() }
+})
+
+it('retirement prevents a signalled in-flight registration from scheduling through its late settlement callback', async () => {
+  let completion: (() => void) | undefined, registrations = 0
+  const drain = createDeliveryDrain({ current: () => true, reconcile: async () => {}, pending: () => ['original-input'],
+    schedule(_id, settled) { registrations++; completion = settled; return true }, report() {} })
+  await drain.reconcile(); drain.signal(); await drain.join()
+  drain.retire(); completion!(); await drain.join()
+  expect(registrations).toBe(1)
+})

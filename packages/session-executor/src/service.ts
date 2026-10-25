@@ -737,15 +737,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             }
           },
           pending: () => published.inbox.pending().filter(input => input.provenance?.producer === 'session.delivery.subagent').map(input => input.inputId),
-          schedule(inputId) {
+          schedule(inputId, settled) {
             if (assemblies.get(sessionId) !== published || closed || closing.has(sessionId) || !published.inbox.isPending(inputId)) return false
             try { published.managedDocument?.assertReady() } catch { return false }
             const input = published.inbox.pending().find(input => input.inputId === inputId)
             if (!input) return false
-            if (queues.get(sessionId)?.byId.get(inputId)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === inputId) return true
+            if (queues.get(sessionId)?.byId.get(inputId)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === inputId) return false
             // Register on existing service pacing; mounting must never await
             // the turn whose preparation may join this creation promise.
-            void submit(sessionId, input.text, new AbortController().signal, { admittedInputId: inputId }, published).catch(() => {})
+            void submit(sessionId, input.text, new AbortController().signal, { admittedInputId: inputId }, published).then(settled, settled)
             return true
           },
           report: error => d.warn(`[i-harness] delivery reconciliation failed: ${String(error)}`),

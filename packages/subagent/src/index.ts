@@ -34,7 +34,7 @@ export type { ParentInputAdmission, NotificationDrainOptions } from "./task-noti
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import { readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
+import { deliveryInputId, readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
 import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
 import { DeliverySourcesError } from './task-notification.ts'
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -277,7 +277,10 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       if (source?.type !== 'agent/delivery-source') return
       const terminal = opts.parentSession.events.findLast(e => e.type === 'subagent/end' && e.taskId === taskId && !!e.resultRevision && !!e.envelope && e.envelope.retention.kind !== 'unavailable' && (e.outcome === 'completed' || e.outcome === 'error'))
       if (terminal?.type !== 'subagent/end') return
-      return { sourceSeq: source.seq!, terminalSeq: terminal.seq! }
+      return { evidence: { sourceSeq: source.seq!, terminalSeq: terminal.seq! }, expectedInputId: deliveryInputId({
+        recipientSessionId: source.recipientSessionId, sourceNamespace: source.sourceNamespace, sourceId: source.sourceId,
+        resultRevision: terminal.resultRevision!, kind: 'subagent',
+      }) }
     },
     isSessionCancelled: (sessionId) => isSessionCancelledChain(tasks, sessionId),
   })
