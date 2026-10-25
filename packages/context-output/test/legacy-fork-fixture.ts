@@ -83,7 +83,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
       const preparation = broker.prepareBootstrapInheritance({ invocation, requestIntent: intent, sourceSessionId: 'source', sourceAvailable: () => { sourceCalls++; return !passive && alive }, assertNewWorkCurrent: current, targetAvailable: () => true })
       let managedScope: import('../src/index.ts').SeedDependencyTransferScope | undefined
       const dependencyScope = (input: import('@i-harness/core-session').BootstrapDependencyRequest) => managedScope ??= service.registerSeedDependencyTransfer({
-        binding: { operationId: invocation.operationId, sourceSessionId: 'source', targetSessionId: 'target', targetDocumentId: 'target', manifestDigest: input.manifestDigest },
+        binding: { operationId: invocation.operationId, sourceSessionId: 'source', targetSessionId: invocation.targetSessionId, targetDocumentId: invocation.targetSessionId, manifestDigest: input.manifestDigest },
         sourceAccess: { sessionId: 'source' }, sourceAvailable: () => !passive && alive, assertSourceCurrent() { current(); preparation.assertSourceCurrent() },
         targetAvailable: () => true, assertTargetCurrent: preparation.targetPreparation.assertTargetCurrent,
         targetScope() { const scope = preparation.targetScope(); return { source: { sourceId: contextSourceIdentity('workspace', project.primaryRoot, scope.scope), readonly: true }, revision: scope.revision } },
@@ -118,7 +118,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
         async confirm(input, isCurrent, facts) {
           preparationCalls++; phase = input; actualFacts = facts
           expect(facts).toBeDefined(); beforeConfirm?.(facts!)
-          await expect(coordinator.profile('target')).rejects.toThrow()
+          await expect(coordinator.profile(invocation.targetSessionId)).rejects.toThrow()
           const prepared = options.f0Warm ? await preparation.targetPreparation.reconcile(input, facts) : await preparation.targetPreparation.confirm(input, isCurrent, facts)
           if (options.f0Warm) { preparation.assertSourceCurrent(); expect(isCurrent()).toBe(true) }
           if (prepared.kind !== 'confirmed') return prepared
@@ -135,7 +135,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
       try {
         const outcome = ownerOnly ? passive ? await port.reconcile(phase!, actualFacts) : await port.confirm(phase!, () => { scopedCurrent(); return true }, actualFacts) : passive ? await coordinator.resumeSemanticTarget(invocation, guards) : await coordinator.bootstrapSemanticTarget(request, guards)
         await afterAttempt?.(scope)
-        if (outcome.kind === 'ready' || outcome.kind === 'already-ready') readScopes.set('target', (await broker.resultReadScopeFor('target'))!)
+        if (outcome.kind === 'ready' || outcome.kind === 'already-ready') readScopes.set(invocation.targetSessionId, (await broker.resultReadScopeFor(invocation.targetSessionId))!)
         return outcome
       }
       finally { await service.closeLegacyForkTransfer(scope) }

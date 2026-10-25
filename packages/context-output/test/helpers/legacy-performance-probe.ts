@@ -82,6 +82,9 @@ export function observeFs(native: typeof Fs): typeof Fs {
     readdir: ((...args: Parameters<typeof native.readdir>) => {
       const captured = context.getStore()
       if (/[/\\]context-output[/\\][a-f0-9]{64}$/.test(String(args[0])) && typeof args[1] === 'object' && args[1]?.withFileTypes) probe.add('inventories')
+      // Inventory recursion is separately counted and is not an authority
+      // namespace pass (its readdir uses withFileTypes).
+      if (/[/\\]legacy-fork-v1$/.test(String(args[0])) && args[1] === undefined) probe.add('authorityNamespaces')
       return observe(native.readdir(...args), 'readdir', result => { probe.add('readdirEntries', result.length, captured) })
     }) as typeof native.readdir,
     lstat: ((...args: Parameters<typeof native.lstat>) => observe(native.lstat(...args), 'lstat')) as typeof native.lstat,

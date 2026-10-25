@@ -341,19 +341,17 @@ export class ContextStore {
       if (sessionId === undefined || root.binding.targetSessionId === sessionId) await terminalSlots(this.directory, resolve(directory, name, 'revoke'), revokedTuple(root), () => this.assertTurn(turn), this.retireLegacyFile)
     }
   }
-  private async expireLegacy(turn: WorkspaceMutationTurn, ref: ContextResultRef): Promise<void> {
-    const c = commitment(ref), base = expiryBase(this.directory, c)
-    if (await exists(base + '.0')) {
-      if (!await this.validateLegacyAuthority(turn, c)) throw Error('Original legacy expiry has no confirmed transfer authority')
-      await terminalSlots(this.directory, base, expiredTuple(this.workspaceId, c), () => this.assertTurn(turn), this.retireLegacyFile)
-    }
-  }
   /** Explicit store-owner validation, before any transfer-related pruning.
    * Incomplete publications remain resumable; they confer no GC authority. */
-  private async validateLegacyAuthority(turn: WorkspaceMutationTurn, wanted?: LegacyCommitment): Promise<boolean> {
+  private async validateLegacyAuthority(turn: WorkspaceMutationTurn): Promise<void> {
+    for await (const _ of this.legacyAuthorityRows(turn)) { /* full original preflight, including EOF */ }
+  }
+  /** Root-local streaming proof. Both passes inspect original publications and
+   * native slots; neither SQLite hints nor a previous turn supply authority. */
+  private async *legacyAuthorityRows(turn: WorkspaceMutationTurn): AsyncGenerator<LegacyCommitment> {
     const guard = () => this.assertTurn(turn), namespace = resolve(this.directory, 'legacy-fork-v1')
-    let matched = false
-    if (!await exists(namespace)) return false
+    guard()
+    if (!await exists(namespace)) return
     await ownedPath(this.directory, namespace); guard()
     for (const name of await readdir(namespace)) {
       if (!/^[a-f0-9]{64}$/.test(name)) throw Error('Foreign legacy transfer namespace')
@@ -377,10 +375,36 @@ export class ContextStore {
         const c: LegacyCommitment = { refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }
         const expiry = await readSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), this.retireLegacyFile); guard()
         if (expiry !== 'live' && expiry !== 'terminal') throw Error('Original legacy expiry unknown')
-        if (wanted && same(c, wanted)) matched = true
+        yield c
       }
     }
-    return matched
+  }
+  /** The full read-only preflight must finish before this callback can perform
+   * any expiry effect. The callback and original turn die with this operation. */
+  private async withLegacyExpiry(turn: WorkspaceMutationTurn, effect: (c: LegacyCommitment) => Promise<void>): Promise<void> {
+    await this.validateLegacyAuthority(turn)
+    for await (const c of this.legacyAuthorityRows(turn)) { this.assertTurn(turn); await effect(c); this.assertTurn(turn) }
+  }
+  private async sweepExpired(turn: WorkspaceMutationTurn): Promise<void> {
+    this.assertTurn(turn)
+    let expired = false
+    for (const artifact of this.artifacts.values()) if (artifact.ref.expiresAt <= Date.now()) { expired = true; break }
+    if (!expired) return
+    await this.withLegacyExpiry(turn, async c => {
+      const artifact = this.artifacts.get(c.refId)
+      // The existing canonical map is the deduplication boundary across rows
+      // and roots. No row/ref membership graph or cleanup reserve is allocated.
+      if (!artifact || artifact.ref.expiresAt > Date.now() || !same(commitment(artifact.ref), c)) return
+      await terminalSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), () => this.assertTurn(turn), this.retireLegacyFile)
+      await this.remove(turn, c.refId)
+    })
+    for (const [id, artifact] of this.artifacts) if (artifact.ref.expiresAt <= Date.now()) {
+      const base = expiryBase(this.directory, commitment(artifact.ref))
+      // A funded prefix is evidence of an obligation, never proof of an
+      // applied grant. Preserve it when no exact committed row removed it.
+      if (await exists(base + '.0') || await exists(base + '.1')) throw Error('Original legacy expiry has no confirmed transfer authority')
+      await this.remove(turn, id)
+    }
   }
   async configureDiskBudget(turn: WorkspaceMutationTurn, maxDiskBytes: number): Promise<void> {
     this.assertTurn(turn)
@@ -494,8 +518,9 @@ export class ContextStore {
   async clear(turn: WorkspaceMutationTurn, sessionId?: string): Promise<void> {
     this.assertTurn(turn)
     await this.revokeLegacyTargets(turn, sessionId)
-    for (const [id, artifact] of this.artifacts) {
-      if (sessionId === undefined || artifact.ref.expiresAt <= Date.now()) { if (artifact.ref.expiresAt <= Date.now()) await this.expireLegacy(turn, artifact.ref); await this.remove(turn, id) }
+    await this.sweepExpired(turn)
+    for (const id of this.artifacts.keys()) {
+      if (sessionId === undefined) await this.remove(turn, id)
       else {
         const path = this.path('owners', id), tracked = await this.ledger.tracked(path)
         if (tracked) await this.ledger.recover(path)
@@ -520,8 +545,7 @@ export class ContextStore {
   }
   async prune(turn: WorkspaceMutationTurn): Promise<void> {
     this.assertTurn(turn)
-    for (const artifact of this.artifacts.values()) if (artifact.ref.expiresAt <= Date.now()) { await this.validateLegacyAuthority(turn); break }
-    for (const [id, artifact] of this.artifacts) if (artifact.ref.expiresAt <= Date.now()) { await this.expireLegacy(turn, artifact.ref); await this.remove(turn, id) }
+    await this.sweepExpired(turn)
   }
   private async removeFiles(turn: WorkspaceMutationTurn, id: string): Promise<void> {
     this.assertTurn(turn)

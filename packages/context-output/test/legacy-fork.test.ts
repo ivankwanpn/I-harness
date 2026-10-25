@@ -7,7 +7,7 @@ import { createSessionCoordinator, compileSemanticSeed } from '../../session-per
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
 import { legacyFixture } from './legacy-fork-fixture.ts'
-import { readFile, readdir, rm, writeFile, symlink, unlink } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile, symlink, unlink, link } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { createLegacyRetentionSelection, captureBootstrapPreparationFacts } from '@i-harness/core-session'
 import { commitment } from '../src/legacy/fork-codec.ts'
@@ -16,10 +16,25 @@ import { ContextStore } from '../src/store.ts'
 import { createBootstrapRequestIntent } from '../../session-persistence/src/coordinator/bootstrap-intent.ts'
 import { contextSourceIdentity } from '../src/index.ts'
 
-const cuts = vi.hoisted(() => ({ afterLink: undefined as undefined | ((path: string) => void), afterRename: undefined as undefined | ((path: string) => void), afterReadFile: undefined as undefined | ((path: string) => void), measure: false, compiles: 0, sourceExports: 0 }))
+const cuts = vi.hoisted(() => ({ afterLink: undefined as undefined | ((path: string) => void), afterRename: undefined as undefined | ((path: string) => void), afterReadFile: undefined as undefined | ((path: string) => void), beforeRow: undefined as undefined | ((row: import('../src/legacy/fork-types.ts').LegacyRow, walk: number) => Promise<void>), failClose: undefined as string | undefined, debtHandle: undefined as import('node:fs/promises').FileHandle | undefined, debtCalls: 0, walks: 0, measure: false, compiles: 0, sourceExports: 0 }))
+vi.mock('../src/legacy/fork-pages.ts', async original => {
+  const api = await original<typeof import('../src/legacy/fork-pages.ts')>()
+  return { ...api, async *walkPages(...args: Parameters<typeof api.walkPages>) {
+    const walk = ++cuts.walks
+    for await (const row of api.walkPages(...args)) { await cuts.beforeRow?.(row, walk); yield row }
+  } }
+})
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, async readFile(...args: Parameters<typeof fs.readFile>) { const result = await fs.readFile(...args); cuts.afterReadFile?.(String(args[0])); return result }, async link(...args: Parameters<typeof fs.link>) { await fs.link(...args); cuts.afterLink?.(String(args[1])) }, async rename(...args: Parameters<typeof fs.rename>) { await fs.rename(...args); cuts.afterRename?.(String(args[0])) } }
+  return { ...fs, async readFile(...args: Parameters<typeof fs.readFile>) { const result = await fs.readFile(...args); cuts.afterReadFile?.(String(args[0])); return result }, async link(...args: Parameters<typeof fs.link>) { await fs.link(...args); cuts.afterLink?.(String(args[1])) }, async rename(...args: Parameters<typeof fs.rename>) { await fs.rename(...args); cuts.afterRename?.(String(args[0])) }, async open(...args: Parameters<typeof fs.open>) {
+    const handle = await fs.open(...args)
+    if (cuts.failClose && String(args[0]) === cuts.failClose) {
+      cuts.failClose = undefined
+      const close = handle.close.bind(handle)
+      handle.close = async () => { cuts.debtCalls++; if (!cuts.debtHandle) { cuts.debtHandle = handle; throw Error('Original effect handle close failed') } await close() }
+    }
+    return handle
+  } }
 })
 vi.mock('../../session-persistence/src/semantic-seed.ts', async original => {
   const api = await original<typeof import('../../session-persistence/src/semantic-seed.ts')>()
@@ -296,6 +311,96 @@ it.each(['plan', 'page', 'disposition'])('preserves original body and manifest w
     await f.service().capture({ sessionId: 'other', callId: 'cold-prune', label: 'prune', text: 'trigger', complete: true }).catch(() => undefined)
     expect(await readFile(manifest)).toEqual(before[0]); expect(await readFile(blob)).toEqual(before[1])
   } finally { vi.restoreAllMocks(); await f.close() }
+})
+
+// Removing the effect-pass native/slot/ledger checks would delete an unproven
+// later ref here. Earlier confirmed effects must remain honest partial progress.
+it.each(['corrupt-slot', 'foreign-slot', 'unknown-ledger'])('retains later canonical refs after an effect-pass %s refusal', async kind => {
+  const f = await legacyFixture({ distinct: 3 })
+  let outside: string | undefined
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
+    const originals = await Promise.all(f.selectedRefs.map(async ref => ({
+      manifest: await readFile(join(directory, 'artifacts', ref.id + '.json')),
+      blob: await readFile(join(directory, 'blobs', ref.id + '.txt')),
+    })))
+    const sourceCalls = f.sourceCalls(), operations = await readdir(join(directory, 'legacy-fork-v1'))
+    const applied = await readFile(join(directory, 'legacy-fork-v1', operations[0]!, 'applied.json'))
+    cuts.walks = 0
+    cuts.beforeRow = async (row, walk) => {
+      if (walk !== 2 || row.refId !== f.selectedRefs[1]!.id) return
+      cuts.beforeRow = undefined
+      if (kind === 'unknown-ledger') await writeFile(join(directory, 'owners', row.refId + '.intent.json'), 'unknown original rewrite')
+      else {
+        const base = join(directory, 'legacy-expiry-v1', row.refId, row.metadataDigest, 'expiry')
+        if (kind === 'corrupt-slot') await writeFile(base + '.0', 'foreign original content')
+        else {
+          outside = join(f.root, 'outside-original-slot')
+          await writeFile(outside, await readFile(base + '.1'))
+          await unlink(base + '.1'); await link(outside, base + '.1')
+        }
+      }
+    }
+    vi.spyOn(Date, 'now').mockReturnValue(Math.max(...f.selectedRefs.map(ref => ref.expiresAt)) + 1)
+    await expect(f.service().capture({ sessionId: 'creator', callId: 'cut-prune', label: 'cut', text: 'trigger', complete: true })).rejects.toThrow()
+    await expect(readFile(join(directory, 'blobs', f.selectedRefs[0]!.id + '.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    for (const index of [1, 2]) {
+      const ref = f.selectedRefs[index]!
+      expect(await readFile(join(directory, 'artifacts', ref.id + '.json'))).toEqual(originals[index]!.manifest)
+      expect(await readFile(join(directory, 'blobs', ref.id + '.txt'))).toEqual(originals[index]!.blob)
+      expect(JSON.parse(await readFile(join(directory, 'owners', ref.id + '.json'), 'utf8'))).toEqual(['creator', 'source', 'target'])
+    }
+    const c = commitment(f.selectedRefs[1]!)
+    expect((await readFile(join(directory, 'legacy-expiry-v1', c.refId, c.metadataDigest, 'expiry.1'))).includes(Buffer.from('"status":"terminal"'))).toBe(kind === 'unknown-ledger')
+    expect(await readFile(join(directory, 'legacy-fork-v1', operations[0]!, 'applied.json'))).toEqual(applied)
+    expect(await readdir(join(directory, 'legacy-fork-v1'))).toEqual(operations)
+    expect(f.sourceCalls()).toBe(sourceCalls)
+    if (outside) expect((await readFile(outside)).every(byte => byte === 0)).toBe(true)
+  } finally { cuts.beforeRow = undefined; vi.restoreAllMocks(); await f.close() }
+})
+
+it('preserves funded expiry without an applied proof and never treats its slot as authority', async () => {
+  const f = await legacyFixture()
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
+    const namespace = join(directory, 'legacy-fork-v1'), operation = (await readdir(namespace))[0]!
+    await rm(join(namespace, operation, 'applied.json'))
+    const manifest = join(directory, 'artifacts', f.visible.id + '.json'), before = await readFile(manifest)
+    vi.spyOn(Date, 'now').mockReturnValue(f.visible.expiresAt + 1)
+    await expect(f.service().clear('unrelated')).rejects.toThrow(/confirmed transfer authority/)
+    expect(await readFile(manifest)).toEqual(before)
+    expect((await readFile(join(directory, 'blobs', f.visible.id + '.txt'))).toString()).toContain('VISIBLE')
+  } finally { vi.restoreAllMocks(); await f.close() }
+})
+
+it('joins the same original handle debt after a streamed effect-pass close refusal', async () => {
+  const f = await legacyFixture({ distinct: 3 })
+  let current: ContextStore | undefined
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const original = ContextStore.prototype.prune
+    vi.spyOn(ContextStore.prototype, 'prune').mockImplementation(function(this: ContextStore, ...args) { current = this; return original.apply(this, args) })
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
+    cuts.walks = cuts.debtCalls = 0
+    cuts.beforeRow = async (row, walk) => {
+      if (walk === 2 && row.refId === f.selectedRefs[1]!.id) {
+        cuts.beforeRow = undefined
+        cuts.failClose = join(directory, 'legacy-expiry-v1', row.refId, row.metadataDigest, 'expiry.0')
+      }
+    }
+    vi.spyOn(Date, 'now').mockReturnValue(Math.max(...f.selectedRefs.map(ref => ref.expiresAt)) + 1)
+    await expect(f.service().capture({ sessionId: 'creator', callId: 'close-cut', label: 'cut', text: 'trigger', complete: true })).rejects.toThrow()
+    expect(cuts.debtHandle?.fd).toBeGreaterThanOrEqual(0)
+    expect(cuts.debtCalls).toBe(1)
+    expect((current as unknown as { fileDebt: Set<unknown> }).fileDebt.size).toBe(1)
+    await current!.joinLegacyFiles()
+    expect(cuts.debtCalls).toBe(2); expect(cuts.debtHandle?.fd).toBe(-1)
+    expect((current as unknown as { fileDebt: Set<unknown> }).fileDebt.size).toBe(0)
+    await expect(readFile(join(directory, 'blobs', f.selectedRefs[0]!.id + '.txt'))).rejects.toMatchObject({ code: 'ENOENT' })
+    for (const ref of f.selectedRefs.slice(1)) expect((await readFile(join(directory, 'blobs', ref.id + '.txt'))).length).toBe(ref.bytes)
+  } finally { cuts.beforeRow = undefined; cuts.failClose = undefined; vi.restoreAllMocks(); await f.close(); cuts.debtHandle = undefined }
 })
 
 it('builds and verifies 10001 typed observations with the rightmost one-child directory', async () => {
