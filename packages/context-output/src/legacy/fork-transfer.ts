@@ -1,4 +1,4 @@
-import { open, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { types } from 'node:util'
@@ -7,11 +7,11 @@ import type { ContextStore } from '../store.ts'
 import type { IndexedLegacyContext } from './index-lifecycle.ts'
 import type { WorkspaceMutationTurn } from '../workspace-mutation.ts'
 import { failuresTogether } from '../workspace-mutation.ts'
-import { continueAtomicJson, confirmAtomicJson, ownedMkdir, readExact, writeAll } from '../artifact/io.ts'
+import { continueAtomicJson, confirmAtomicJson, ownedMkdir } from '../artifact/io.ts'
 import { requireSpace } from '../artifact/quota.ts'
 import { appliedFor, canonicalRecord, checkBinding, checkRoot, commitment, count, fields, hash, recordHash, same, sourceHash, streamHash } from './fork-codec.ts'
 import { buildPages, walkPages } from './fork-pages.ts'
-import { fundSlots, expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
+import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
 import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
 import { prepareLegacyIndex } from './fork-index.ts'
 import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyPage } from './fork-types.ts'
@@ -162,32 +162,8 @@ export function createLegacyForkOwner(ports: Ports) {
         // funding any target owner, then fund every slot/reserve before additions.
         await ports.mutate(context, async turn => {
           check(); await store.confirmLegacyIndex(turn, lease, index,  root, ports.quota()); check()
-          check(); await fundSlots(store.directory, resolve(directory, 'revoke'), revokedTuple(root), ports.quota(), check, store.retireLegacyFile); check()
-          let ordinal = 0
-            for await (const row of walkPages(directory, root, check, facts.groupCount, store.retireLegacyFile)) {
-              const position = ordinal++
-              if (!same(store.legacyHint(index, bindingDigest, position), row)) throw Error('Legacy derived row conflict')
-              const tuple = rowCommitment(row); if (store.legacyFirst(index, bindingDigest, row.refId) !== position) continue
-              await qualify(row); check(); await store.verifyBody(tuple, check); check()
-              await fundSlots(store.directory, expiryBase(store.directory, tuple), expiredTuple(store.workspaceId, tuple), ports.quota(), check, store.retireLegacyFile); check()
-              await store.fundLegacyOwner(turn, row.refId, binding.targetSessionId, ports.quota(), check, binding.invocation.operationId); check()
-            }
-          // Fund the exact original application without publishing its final
-          // name before canonical owners. Final linking reuses this inode.
-          const bytes = Buffer.from(JSON.stringify(appliedFor(root))), final = resolve(directory, 'applied.json')
-          const pending = final + '.' + createHash('sha256').update(bytes).digest('hex') + '.pending'
-          let handle
-          try { handle = await open(pending, 'r+') }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-            await requireSpace(store.directory, ports.quota(), bytes.length); check(); handle = await open(pending, 'wx+')
-          }
-          try {
-            const size = (await handle.stat()).size; check()
-            if (size > bytes.length || !(await readExact(handle, size, 0)).equals(bytes.subarray(0, size))) throw Error('Original application staging conflict')
-            check(); await requireSpace(store.directory, ports.quota(), bytes.length - size); check()
-            await writeAll(handle, bytes.subarray(size), size, () => { check(); return true }); check(); await handle.sync(); check()
-          } finally { await store.retireLegacyFile(handle) }
+          await store.fundLegacyBatch(turn, lease, index, ports.quota(), root, facts.groupCount, check, qualify)
+          check()
         }); check()
         let ordinal = 0
           for await (const row of walkPages(directory, root, check, facts.groupCount, store.retireLegacyFile)) {

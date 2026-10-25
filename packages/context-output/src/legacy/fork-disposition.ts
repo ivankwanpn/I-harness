@@ -6,8 +6,9 @@ import { requireSpace } from '../artifact/quota.ts'
 import { exists } from './owner-ledger.ts'
 import { recordHash } from './fork-codec.ts'
 import type { LegacyRoot, LegacyCommitment } from './fork-types.ts'
+import { fundingParents, nativeFundingFile, fileFields, fundingDescription, assertFundingFile, withFundingFile, sum, type FundingFile, type FundingDescription, type FundingBatchScope, type LegacyFundingBatchOwner } from './funding-batch.ts'
 
-type Terminal = { version: 1; kind: 'legacy-fork-revoked'; bindingDigest: string; planDigest: string }
+export type Terminal = { version: 1; kind: 'legacy-fork-revoked'; bindingDigest: string; planDigest: string }
   | ({ version: 1; kind: 'legacy-ref-expired'; workspaceId: string } & LegacyCommitment)
 const wire = (generation: 0 | 1, tuple: Terminal) => Buffer.from(JSON.stringify({ version: 1, generation, status: generation === 0 ? 'live' : 'terminal', tuple }))
 function encoded(generation: 0 | 1, tuple: Terminal, capacity: number): Buffer {
@@ -51,6 +52,67 @@ export async function fundSlots(directory: string, base: string, tuple: Terminal
   }
   const state = await readSlots(directory, base, tuple, retire); guard()
   if (state !== 'live') throw Error('Disposition is not live: ' + state)
+}
+async function inspectSlotFunding(directory: string, path: string, wanted: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingFile> {
+  await fundingParents(directory, path, guard); guard()
+  if (!await exists(path)) { guard(); return { kind: 'absent' } }
+  await originalSlot(directory, path); guard()
+  const handle = await open(path, 'r')
+  return withFundingFile(handle, retire, async () => {
+    guard(); await originalSlot(directory, path, handle); guard()
+    const info = await handle.stat({ bigint: true }); guard()
+    if (info.size > BigInt(wanted.length)) throw Error('Original disposition funding conflict')
+    const prefix = await readExact(handle, Number(info.size), 0); guard()
+    if (!prefix.equals(wanted.subarray(0, prefix.length))) throw Error('Original disposition funding conflict')
+    const file = nativeFundingFile(info, createHash('sha256').update(prefix).digest('hex'))
+    await assertFundingFile(directory, path, handle, file, prefix.length, guard)
+    return file
+  })
+}
+async function slotFunding(directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile) {
+  const capacity = slotCapacity(tuple), files: [FundingFile, FundingFile] = [
+    await inspectSlotFunding(directory, base + '.0', encoded(0, tuple, capacity), guard, retire),
+    await inspectSlotFunding(directory, base + '.1', Buffer.alloc(capacity), guard, retire),
+  ]
+  const description = fundingDescription(base, 'slots', [tuple.kind, JSON.stringify(tuple), String(capacity), ...fileFields(files[0]), ...fileFields(files[1])], files.map((file, generation) => ({ key: String(generation), peakGrowth: capacity - (file.kind === 'file' ? file.size : 0) })))
+  return { capacity, files, description }
+}
+export async function describeSlotFunding(directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<FundingDescription> { return (await slotFunding(directory, base, tuple, guard, retire)).description }
+export async function fundSlotsInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, base: string, tuple: Terminal, guard: () => void, retire?: RetireFile): Promise<FundingDescription> {
+  const { capacity, files, description } = await slotFunding(directory, base, tuple, guard, retire), allocation = owner.enter(scope, description)
+  owner.assertAllocation(allocation, base); guard(); await ownedMkdir(directory, dirname(base), guard)
+  for (const generation of [0, 1] as const) {
+    const path = `${base}.${generation}`, prior = files[generation], wanted = generation === 0 ? encoded(0, tuple, capacity) : Buffer.alloc(capacity)
+    owner.assertAllocation(allocation, base); guard()
+    if (prior.kind === 'absent') owner.issued(allocation, String(generation), capacity)
+    const handle = await open(path, prior.kind === 'absent' ? 'wx+' : 'r+')
+    await withFundingFile(handle, retire, async () => {
+      guard(); await originalSlot(directory, path, handle); guard()
+      const file = prior.kind === 'file' ? prior : nativeFundingFile(await handle.stat({ bigint: true }), '')
+      let offset = prior.kind === 'file' ? prior.size : 0
+      await assertFundingFile(directory, path, handle, file, offset, guard)
+      if (!(await readExact(handle, offset, 0)).equals(wanted.subarray(0, offset))) throw Error('Original disposition funding conflict')
+      guard()
+      while (offset < capacity) {
+        await assertFundingFile(directory, path, handle, file, offset, guard)
+        if (!(await readExact(handle, offset, 0)).equals(wanted.subarray(0, offset))) throw Error('Original disposition funding conflict')
+        guard()
+        owner.issued(allocation, String(generation), description.primitives[generation]!.peakGrowth)
+        const result = await handle.write(wanted, offset, capacity - offset, offset); guard()
+        if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
+        offset = sum(offset, result.bytesWritten)
+      }
+      await assertFundingFile(directory, path, handle, file, capacity, guard)
+      if (!(await readExact(handle, capacity, 0)).equals(wanted)) throw Error('Original disposition funding conflict')
+      guard(); owner.issued(allocation, String(generation), 0)
+      await handle.sync(); guard()
+      if (!(await readExact(handle, capacity, 0)).equals(wanted)) throw Error('Original disposition funding readback conflict')
+      await assertFundingFile(directory, path, handle, file, capacity, guard)
+    })
+  }
+  const state = await readSlots(directory, base, tuple, retire); guard()
+  if (state !== 'live') throw Error('Disposition is not live: ' + state)
+  owner.finish(allocation); return description
 }
 export async function readSlots(directory: string, base: string, tuple: Terminal, retire?: RetireFile): Promise<'live' | 'terminal' | 'unknown' | 'missing'> {
   const capacity = slotCapacity(tuple)

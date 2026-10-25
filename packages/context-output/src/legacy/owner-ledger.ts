@@ -5,6 +5,7 @@ import { streamJsonData } from '@i-harness/core-session'
 import { boundedJson, ownedPath, writeAll, retireFile, type RetireFile } from '../artifact/io.ts'
 import { physicalIdentity, requireSpace } from '../artifact/quota.ts'
 import { fields, data, same, hash, count } from './fork-codec.ts'
+import { fundingParents, recoveryIssued, fundingHash, snapshotFundingFile, nativeFundingFile, assertFundingFile, withFundingFile, fileFields, frame, fundingDescription, sum, type FundingFile, type FundingDescription, type FundingBatchScope, type LegacyFundingBatchOwner, type FundingAllocation } from './funding-batch.ts'
 
 const absent = (error: unknown) => (error as NodeJS.ErrnoException).code === 'ENOENT'
 const names = (path: string) => { const base = path.replace(/\.json$/, ''); return { journal: base + '.intent.json', rewrite: base + '.rewrite', previous: base + '.previous' } }
@@ -88,7 +89,7 @@ async function reclaim(path: string, length: number, canonical: boolean, current
         position += result.bytesRead
       }
     }
-    current(); await handle.truncate(length); await handle.sync(); current()
+    current(); recoveryIssued(); await handle.truncate(length); recoveryIssued(); await handle.sync(); current()
     const after = await handle.stat({ bigint: true }); current()
     if (requireOne(after) !== expected || after.size !== BigInt(length)) throw Error('Owner reclamation readback unknown')
   } finally { await retireFile(handle, retire) }
@@ -129,7 +130,7 @@ async function writeIntent(path: string, value: Intent | typeof idle, current: (
   try {
     const info = await handle.stat({ bigint: true }); requireOne(info)
     if (info.size !== BigInt(JOURNAL_CAPACITY)) throw Error('Original owner journal funding unavailable')
-    current(); await writeAll(handle, wanted, 0, () => { current(); return true }); current(); await handle.sync(); current()
+    current(); await writeAll(handle, wanted, 0, () => { current(); recoveryIssued(); return true }); current(); recoveryIssued(); await handle.sync(); current()
     const readback = Buffer.alloc(JOURNAL_CAPACITY); let offset = 0
     while (offset < readback.length) { const r = await handle.read(readback, offset, readback.length - offset, offset); current(); if (!r.bytesRead) throw Error('Owner journal short read'); offset += r.bytesRead }
     if (!readback.equals(wanted)) throw Error('Owner journal readback failed')
@@ -181,21 +182,149 @@ export class OwnerLedger {
     const intent: Intent = { version: 1, kind: 'legacy-owner-rewrite', refId: basename(path, '.json'), operation, prior: prior.identity, next: ledgerIdentity(next), capacity }
     const journalBytes = await exists(journal) ? 0 : JOURNAL_CAPACITY
     await requireSpace(this.root, quota, fundingGrowth(prior.capacity, ledgerIdentity(next).bytes, reserve, !journalBytes).additionalBytes); current()
-    // A physical hardlink on the actual canonical file is the setup proof.
+    await this.fundNative(path, prior, intent, journalBytes, current)
+  }
+  async prepareTransferFunding(path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<FundingDescription> {
+    await ownedPath(this.root, path); current()
+    const pending = await readIntent(names(path).journal, this.retire); current()
+    if (pending) {
+      const actual = await this.read(path); current()
+      if (same(actual.identity, pending.next)) { current(); await this.recover(path); current() }
+    }
+    return (await this.transferFunding(path, next, operation, current)).description
+  }
+  private async transferFunding(path: string, next: ReadonlySet<string>, operation: string, current: () => void) {
+    await ownedPath(this.root, path); current()
+    const { journal, rewrite, previous } = names(path), pending = await readIntent(journal, this.retire); current()
+    const prior = await this.read(path); current()
+    if (!prior.owners.size) throw Error('Empty owner ledger is authoritative')
+    const desired = ledgerIdentity(next)
+    let phase = 'normal', capacity = Math.max(prior.capacity, desired.bytes)
+    if (pending) {
+      if (same(prior.identity, pending.next)) throw Error('Legacy funding committed phase drift')
+      if (!same(prior.identity, pending.prior) || !same(desired, pending.next) || operation !== pending.operation) throw Error('Original owner rewrite unresolved')
+      if (!await exists(rewrite) || (await lstat(rewrite)).size < pending.capacity) throw Error('Original owner reserve missing')
+      if (await exists(previous)) await predecessorPair(path, previous); else await independent(path)
+      await independent(rewrite); current(); capacity = pending.capacity; phase = 'pending-prior'
+    } else {
+      if (await exists(previous)) throw Error('Original predecessor phase unresolved')
+      await independent(path); current()
+      if (await exists(rewrite)) { await independent(rewrite); if (await identities(path, rewrite) || (await lstat(rewrite)).size > capacity) throw Error('Owner reserve capacity conflict'); current() }
+    }
+    const files = { canonical: await snapshotFundingFile(this.root, path, current, this.retire), rewrite: await snapshotFundingFile(this.root, rewrite, current, this.retire), journal: await snapshotFundingFile(this.root, journal, current, this.retire) }
+    const predecessor = await snapshotFundingFile(this.root, previous, current, this.retire)
+    if (files.canonical.kind !== 'file' || files.canonical.size !== prior.capacity) throw Error('Legacy funding canonical drift')
+    const reserve = files.rewrite.kind === 'file' ? files.rewrite.size : 0, journalBytes = files.journal.kind === 'absent' ? JOURNAL_CAPACITY : 0
+    const primitives = [
+      { key: 'canonical', peakGrowth: phase === 'normal' ? capacity - prior.capacity : 0 },
+      { key: 'rewrite', peakGrowth: phase === 'normal' ? capacity - reserve : 0 },
+      { key: 'journal', peakGrowth: phase === 'normal' ? journalBytes : 0 },
+      { key: 'alias', peakGrowth: 0 },
+    ]
+    const description = fundingDescription(path, phase, [operation, frame(prior.identity.digest, String(prior.identity.count), String(prior.identity.bytes)), frame(desired.digest, String(desired.count), String(desired.bytes)), String(capacity), pending ? frame(pending.operation, pending.prior.digest, String(pending.prior.count), String(pending.prior.bytes), pending.next.digest, String(pending.next.count), String(pending.next.bytes), String(pending.capacity)) : 'idle', ...fileFields(files.canonical), ...fileFields(files.rewrite), ...fileFields(files.journal), ...fileFields(predecessor)], primitives)
+    return { description, files, prior, intent: { version: 1, kind: 'legacy-owner-rewrite', refId: basename(path, '.json'), operation, prior: prior.identity, next: desired, capacity } as Intent, journalBytes }
+  }
+  async fundInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<FundingDescription> {
+    const state = await this.transferFunding(path, next, operation, current), allocation = owner.enter(scope, state.description)
+    if (state.description.phase !== 'pending-prior') await this.fundNative(path, state.prior, state.intent, state.journalBytes, current, { ...state, owner, allocation })
+    owner.finish(allocation); return state.description
+  }
+  private async fundNative(path: string, prior: Awaited<ReturnType<typeof readLedger>>, intent: Intent, journalBytes: number, current: () => void, batch?: { owner: LegacyFundingBatchOwner; allocation: FundingAllocation; files: { canonical: FundingFile; rewrite: FundingFile; journal: FundingFile }; description: FundingDescription }): Promise<void> {
+    const { journal, rewrite, previous } = names(path), capacity = intent.capacity
+    const checkCanonical = async () => {
+      current(); await ownedPath(this.root, path); current()
+      if (batch) {
+        const now = await snapshotFundingFile(this.root, path, current, this.retire)
+        if (!same(now, batch.files.canonical)) throw Error('Legacy funding canonical drift')
+        batch.owner.issued(batch.allocation, 'alias', 0)
+      }
+    }
+    await checkCanonical()
     await link(path, previous); current()
     await predecessorPair(path, previous); current()
+    if (batch) batch.owner.issued(batch.allocation, 'alias', 0)
     await unlink(previous); current()
-    await pad(path, capacity, true, current, this.retire); current()
-    if (await exists(rewrite)) {
-      if (await identities(path, rewrite)) throw Error('Rewrite aliases canonical')
-      await pad(rewrite, capacity, true, current, this.retire)
-    } else await pad(rewrite, capacity, false, current, this.retire)
+    if (batch) {
+      await this.padInBatch(path, capacity, batch.files.canonical, 'canonical', batch, current)
+      await this.padInBatch(rewrite, capacity, batch.files.rewrite, 'rewrite', batch, current)
+    } else {
+      await pad(path, capacity, true, current, this.retire); current()
+      if (await exists(rewrite)) { if (await identities(path, rewrite)) throw Error('Rewrite aliases canonical'); await pad(rewrite, capacity, true, current, this.retire) }
+      else await pad(rewrite, capacity, false, current, this.retire)
+    }
     const readback = await this.read(path); current()
     if (!same(readback.identity, prior.identity) || readback.capacity !== capacity || (await lstat(rewrite)).size !== capacity) throw Error('Owner funding readback failed')
     if (journalBytes) {
-      await pad(journal, JOURNAL_CAPACITY, false, current, this.retire); current()
+      if (batch) await this.padInBatch(journal, JOURNAL_CAPACITY, batch.files.journal, 'journal', batch, current)
+      else await pad(journal, JOURNAL_CAPACITY, false, current, this.retire)
+      current()
     }
-    await writeIntent(journal, same(prior.identity, intent.next) ? idle : intent, current, this.retire); current()
+    if (batch) await this.writeIntentInBatch(journal, same(prior.identity, intent.next) ? idle : intent, batch, current)
+    else await writeIntent(journal, same(prior.identity, intent.next) ? idle : intent, current, this.retire)
+    current()
+  }
+  private async padInBatch(path: string, capacity: number, prior: FundingFile, primitive: 'canonical' | 'rewrite' | 'journal', batch: { owner: LegacyFundingBatchOwner; allocation: FundingAllocation; files: { canonical: FundingFile; rewrite: FundingFile; journal: FundingFile }; description: FundingDescription }, current: () => void): Promise<void> {
+    const peak = batch.description.primitives.find(p => p.key === primitive)!.peakGrowth
+    batch.owner.assertAllocation(batch.allocation, batch.description.key); current(); await fundingParents(this.root, path, current); current()
+    if (prior.kind === 'absent') batch.owner.issued(batch.allocation, primitive, peak)
+    const handle = await open(path, prior.kind === 'absent' ? 'wx+' : 'r+')
+    await withFundingFile(handle, this.retire, async () => {
+      current(); const info = await handle.stat({ bigint: true }); current(); requireOne(info)
+      const file = prior.kind === 'file' ? prior : nativeFundingFile(info, '')
+      let offset = prior.kind === 'file' ? prior.size : 0
+      await assertFundingFile(this.root, path, handle, file, offset, current)
+      if (prior.kind === 'file') {
+        const now = await snapshotFundingFile(this.root, path, current, this.retire)
+        if (!same(now, prior)) throw Error('Legacy funding original prefix drift')
+      }
+      const expected = await fundingHash(handle, offset, current)
+      if (prior.kind === 'file' && expected.copy().digest('hex') !== prior.content) throw Error('Legacy funding original prefix drift')
+      const checkPrefix = async () => { if ((await fundingHash(handle, offset, current)).digest('hex') !== expected.copy().digest('hex')) throw Error('Legacy funding original prefix drift') }
+      const spaces = Buffer.alloc(8192, 32)
+      while (offset < capacity) {
+        await assertFundingFile(this.root, path, handle, file, offset, current)
+        await checkPrefix(); batch.owner.issued(batch.allocation, primitive, peak)
+        const length = Math.min(spaces.length, capacity - offset), result = await handle.write(spaces, 0, length, offset); current()
+        if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
+        expected.update(spaces.subarray(0, result.bytesWritten)); offset = sum(offset, result.bytesWritten)
+      }
+      await assertFundingFile(this.root, path, handle, file, capacity, current); await checkPrefix(); batch.owner.issued(batch.allocation, primitive, 0)
+      await handle.sync(); current()
+      await assertFundingFile(this.root, path, handle, file, capacity, current)
+      await checkPrefix()
+      batch.files[primitive] = { ...file, size: capacity, content: expected.digest('hex') } as FundingFile
+    })
+  }
+  private async writeIntentInBatch(path: string, value: Intent | typeof idle, batch: { owner: LegacyFundingBatchOwner; allocation: FundingAllocation; files: { journal: FundingFile }; description: FundingDescription }, current: () => void): Promise<void> {
+    const body = Buffer.from(JSON.stringify(value)); if (body.length > JOURNAL_CAPACITY) throw Error('Owner journal capacity exceeded')
+    const wanted = Buffer.concat([body, Buffer.alloc(JOURNAL_CAPACITY - body.length, 32)]), file = batch.files.journal
+    const handle = await open(path, 'r+')
+    await withFundingFile(handle, this.retire, async () => {
+      current(); let offset = 0
+      const before = await snapshotFundingFile(this.root, path, current, this.retire)
+      if (!same(before, file)) throw Error('Legacy funding journal prefix drift')
+      const original = Buffer.alloc(JOURNAL_CAPACITY)
+      let read = 0
+      while (read < original.length) { const r = await handle.read(original, read, original.length - read, read); current(); if (!r.bytesRead) throw Error('Owner journal short read'); read += r.bytesRead }
+      while (offset < wanted.length) {
+        await assertFundingFile(this.root, path, handle, file, JOURNAL_CAPACITY, current)
+        const expected = Buffer.concat([wanted.subarray(0, offset), original.subarray(offset)]), actual = Buffer.alloc(JOURNAL_CAPACITY)
+        let position = 0
+        while (position < actual.length) { const r = await handle.read(actual, position, actual.length - position, position); current(); if (!r.bytesRead) throw Error('Owner journal short read'); position += r.bytesRead }
+        if (!actual.equals(expected)) throw Error('Legacy funding journal prefix drift')
+        const result = await handle.write(wanted, offset, wanted.length - offset, offset); current()
+        if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
+        offset = sum(offset, result.bytesWritten)
+      }
+      await assertFundingFile(this.root, path, handle, file, JOURNAL_CAPACITY, current)
+      if ((await fundingHash(handle, JOURNAL_CAPACITY, current)).digest('hex') !== createHash('sha256').update(wanted).digest('hex')) throw Error('Legacy funding journal prefix drift')
+      batch.owner.issued(batch.allocation, 'journal', 0)
+      await handle.sync(); current()
+      const readback = Buffer.alloc(JOURNAL_CAPACITY); let position = 0
+      while (position < readback.length) { const r = await handle.read(readback, position, readback.length - position, position); current(); if (!r.bytesRead) throw Error('Owner journal short read'); position += r.bytesRead }
+      if (!readback.equals(wanted)) throw Error('Owner journal readback failed')
+      await assertFundingFile(this.root, path, handle, file, JOURNAL_CAPACITY, current)
+    })
   }
   /** Recover only committed storage effects, never an absent next owner set. */
   async recover(path: string): Promise<void> {

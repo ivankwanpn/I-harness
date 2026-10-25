@@ -11,9 +11,11 @@ import { failuresTogether, LeaseRetirement, type WorkspaceMutationOwner, type Wo
 import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
 import { commitment, same, checkRoot, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
-import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots } from './legacy/fork-disposition.ts'
+import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots, describeSlotFunding, fundSlotsInBatch } from './legacy/fork-disposition.ts'
 import { boundedJson, ownedPath, confirmAtomicJson } from './artifact/io.ts'
 import { walkPages } from './legacy/fork-pages.ts'
+import { rowCommitment, transferDirectory } from './legacy/observed-read.ts'
+import { LegacyFundingBatchOwner, fundingPass, describeApplicationFunding, fundApplicationInBatch, sum, type FundingBatchContext, type FundingBatchScope } from './legacy/funding-batch.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
@@ -53,6 +55,8 @@ export class ContextStore {
   private retiring = false
   private quotaDisposed = false
   private closeFlight?: Promise<void>
+  private readonly fundingBatch: LegacyFundingBatchOwner
+  private readonly indexLeases = new WeakMap<IndexUse, LegacyUseLease>()
   private readonly ledger: OwnerLedger
   private readonly fileDebt = new Set<LeaseRetirement>()
   private readonly fileClosing = new Map<LeaseRetirement, Promise<void>>()
@@ -76,6 +80,7 @@ export class ContextStore {
     this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
     this.ledger = new OwnerLedger(this.directory, this.retireLegacyFile)
+    this.fundingBatch = new LegacyFundingBatchOwner(this.directory, context => this.assertFundingContext(context), context => { this.assertRetirementTurn(context.turn); this.assertLease(context.lease, 'exclusive') }, () => this.diskBytes(), () => this.joinLegacyFiles())
     this.index = new LegacyIndexLifecycle({ directory: this.directory, assertTurn: turn => this.assertRetirementTurn(turn), assertLease: this.assertLease, physicalBytes: () => this.diskBytes() })
   }
   async acquireLifetime(signal?: AbortSignal): Promise<void> {
@@ -146,7 +151,12 @@ export class ContextStore {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive')
     return this.index.ready() ? Promise.resolve('ready') : this.index.rebuild(turn, lease, quota, sink => this.feedIndex(sink))
   }
-  indexUse(lease: LegacyUseLease): IndexUse { return this.index.use(lease) }
+  indexUse(lease: LegacyUseLease): IndexUse { const use = this.index.use(lease); this.indexLeases.set(use, lease); return use }
+  private assertFundingContext(context: FundingBatchContext): void {
+    this.assertTurn(context.turn); this.assertLease(context.lease, 'exclusive')
+    if (this.indexLeases.get(context.use) !== context.lease) throw Error('Foreign legacy funding index use or creating lease')
+    context.use.assertCurrent(); context.guard()
+  }
   indexIssue() { return this.index.issue() }
   indexReady(): boolean { return this.index.ready() }
   indexRetirementPending(): boolean { return this.index.retirementPending() }
@@ -272,6 +282,49 @@ export class ContextStore {
     if (!actual.owners.size) throw Error('Empty owner ledger is authoritative')
     const next = new Set(actual.owners); next.add(target)
     await this.ledger.fund(path, next, quota, guard, operation); guard()
+  }
+  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, groupCount: number, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
+    const context = Object.freeze({ turn, lease, use, quota, guard }), check = () => this.assertFundingContext(context)
+    check(); checkRoot(root)
+    if (root.binding.workspaceId !== this.workspaceId || root.binding.targetSessionId !== root.binding.invocation.targetSessionId || !this.legacyReady(use, root)) throw Error('Legacy funding root conflict')
+    sum(0, groupCount)
+    const directory = transferDirectory(this, root.binding.invocation), binding = recordHash('binding', root.binding), base = resolve(directory, 'revoke'), bytes = Buffer.from(JSON.stringify(appliedFor(root))), application = resolve(directory, 'applied.json')
+    const pass = async (scope?: FundingBatchScope) => {
+      const summary = fundingPass()
+      summary.add(scope ? await fundSlotsInBatch(this.fundingBatch, scope, this.directory, base, revokedTuple(root), check, this.retireLegacyFile) : await describeSlotFunding(this.directory, base, revokedTuple(root), check, this.retireLegacyFile)); check()
+      let ordinal = 0, firstOrdinal = -1
+      for await (const row of walkPages(directory, root, check, groupCount, this.retireLegacyFile)) {
+        check(); const position = ordinal; ordinal = sum(ordinal, 1)
+        if (!same(this.legacyHint(use, binding, position), row)) throw Error('Legacy derived row conflict')
+        const first = this.legacyFirst(use, binding, row.refId)
+        if (!Number.isSafeInteger(first) || first < 0 || first > position) throw Error('Legacy derived ordinal conflict')
+        if (first !== position) continue
+        if (position <= firstOrdinal) throw Error('Legacy funding phase order conflict')
+        firstOrdinal = position; summary.ordinal(position)
+        const tuple = rowCommitment(row)
+        await this.canonicalRef(tuple, root.binding.sourceSessionId); check()
+        if (scope) { await qualify(row); check(); await this.verifyBody(tuple, check); check() }
+        const path = this.path('owners', row.refId), actual = await readLedger(path, this.retireLegacyFile); check()
+        if (!actual.owners.size) throw Error('Empty owner ledger is authoritative')
+        const next = new Set(actual.owners); next.add(root.binding.targetSessionId)
+        if (!scope) {
+          const ledger = await this.ledger.prepareTransferFunding(path, next, root.binding.invocation.operationId, check); check()
+          summary.add(await describeSlotFunding(this.directory, expiryBase(this.directory, tuple), expiredTuple(this.workspaceId, tuple), check, this.retireLegacyFile)); check()
+          summary.add(ledger)
+        } else {
+          summary.add(await fundSlotsInBatch(this.fundingBatch, scope, this.directory, expiryBase(this.directory, tuple), expiredTuple(this.workspaceId, tuple), check, this.retireLegacyFile)); check()
+          summary.add(await this.ledger.fundInBatch(this.fundingBatch, scope, path, next, root.binding.invocation.operationId, check)); check()
+        }
+        summary.ref()
+      }
+      check(); const counts = this.legacyCounts(use, binding)
+      if (ordinal !== root.observationCount || counts.observations !== ordinal || counts.refs !== root.distinctRefCount) throw Error('Legacy funding EOF/count conflict')
+      summary.add(scope ? await fundApplicationInBatch(this.fundingBatch, scope, this.directory, application, bytes, check, this.retireLegacyFile) : await describeApplicationFunding(this.directory, application, bytes, check, this.retireLegacyFile)); check()
+      const result = summary.finish()
+      if (result.distinctRefs !== root.distinctRefCount) throw Error('Legacy funding distinct count conflict')
+      return result
+    }
+    await this.fundingBatch.run(context, () => pass(), scope => pass(scope)); check()
   }
   async mergeLegacyOwner(turn: WorkspaceMutationTurn, lease: LegacyUseLease, id: string, target: string, operation: string, guard: () => void): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive'); guard()
