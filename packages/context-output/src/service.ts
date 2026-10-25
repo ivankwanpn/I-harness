@@ -29,9 +29,9 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
-    cleanupIndexUnavailable = false
     for (const id of documents) legacy.retire(id)
-    const outcomes = await Promise.allSettled([artifacts.releaseDocuments(documents), transition(async () => {
+    const managed = artifacts.releaseDocuments(documents)
+    const cleanup = cleanupTransition(documents, async settled => {
       if (!store && !candidate) {
         const inventory = new ContextStore(options.root, workspaceId)
         let present = false
@@ -41,10 +41,13 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         }
         if (!present) return
       }
-      await withLegacyWrite(undefined, (current, lease) => owner.mutate(async turn => { for (const id of documents) await clearLegacyStore(current, turn, lease, id) }), 'cleanup')
-    })])
+      await withLegacyWrite(undefined, (current, lease) => owner.mutate(async turn => {
+        for (const id of documents) { await current.clear(turn, lease, config.maxDiskBytes, id); settled(id) }
+      }), 'cleanup')
+    })
+    const outcomes = await Promise.allSettled([managed, cleanup.promise])
     const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-    if (failures.length) cleanupIndexUnavailable = false
+    if (failures.length && cleanupRequest === cleanup.request) cleanupIndexUnavailable = false
     failuresTogether(failures, 'Original document cleanup failed')
   }
   let protectedResults = 0
@@ -57,6 +60,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let controls = 0
   let error: string|undefined
   let cleanupIndexUnavailable = false
+  let cleanupRequest: symbol | undefined
   const cleanupFailures = new Map<string | undefined, string>()
   let store: ContextStore|undefined
   let candidate: ContextStore|undefined
@@ -135,17 +139,31 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       const value = await work(turn); context.index.assertCurrent(); return value
     }))
   }
-  async function clearLegacyStore(current: ContextStore, turn: WorkspaceMutationTurn, lease: LegacyUseLease, sessionId?: string): Promise<void> {
-    cleanupIndexUnavailable = false
-    try {
-      await current.clear(turn, lease, config.maxDiskBytes, sessionId)
-      if (sessionId === undefined) cleanupFailures.clear()
-      else cleanupFailures.delete(sessionId)
-      cleanupIndexUnavailable = !!current.indexIssue()
-    } catch (failure) {
-      cleanupFailures.set(sessionId, `Requested original cleanup remains incomplete: ${failure instanceof Error ? failure.message : String(failure)}`)
-      throw failure
-    }
+  function cleanupTransition(scopes: readonly (string | undefined)[], work: (settled: (scope: string | undefined) => void) => Promise<void>) {
+    const request = Symbol('cleanup request')
+    const promise = transition(async () => {
+      // Admission and failure handling enclose inventory/open as well as Store
+      // effects. A queued predecessor cannot supply this request's disposition.
+      cleanupRequest = request; cleanupIndexUnavailable = false
+      const pending = new Set(scopes)
+      const settled = (scope: string | undefined) => {
+        pending.delete(scope)
+        if (scope === undefined) cleanupFailures.clear()
+        else cleanupFailures.delete(scope)
+      }
+      try {
+        await work(settled)
+        for (const scope of pending) settled(scope)
+        cleanupIndexUnavailable = !!store?.indexIssue()
+      } catch (failure) {
+        cleanupIndexUnavailable = false
+        // If all canonical scopes settled but the surrounding owner turn failed,
+        // the request still owes original resource cleanup for those scopes.
+        for (const scope of pending.size ? pending : scopes) cleanupFailures.set(scope, `Requested original cleanup remains incomplete: ${failure instanceof Error ? failure.message : String(failure)}`)
+        throw failure
+      }
+    })
+    return { request, promise }
   }
   async function withLegacyIndex<T>(signal: AbortSignal, work: (context: IndexedLegacyContext) => Promise<T>): Promise<T> {
     await initialize(signal)
@@ -369,16 +387,15 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
-      cleanupIndexUnavailable = false
       legacy.retire(sessionId)
-      await transition(async () => {
+      await cleanupTransition([sessionId], async () => {
         protectedResults = await artifacts.protectedCount()
         if (!store) {
           const inventory = new ContextStore(options.root, workspaceId)
           try { await fileAccess(inventory.directory) } catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') return; throw failure }
         }
-        await withLegacyWrite(undefined, (current, lease) => owner.mutate(turn => clearLegacyStore(current, turn, lease, sessionId)), 'cleanup')
-      })
+        await withLegacyWrite(undefined, (current, lease) => owner.mutate(turn => current.clear(turn, lease, config.maxDiskBytes, sessionId)), 'cleanup')
+      }).promise
       return status()
     },
     async close() {

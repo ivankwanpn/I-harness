@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest'
-const io = vi.hoisted(() => ({ beforeRemove: undefined as ((path: string) => Promise<void>) | undefined, afterRename: undefined as ((path: string) => Promise<void>) | undefined, afterWrite: undefined as ((path: string) => Promise<void>) | undefined, opened: undefined as ((handle: import('node:fs/promises').FileHandle, path: string) => void) | undefined }))
+const io = vi.hoisted(() => ({ beforeReadDirectory: undefined as ((path: string) => Promise<void>) | undefined, beforeAccess: undefined as ((path: string) => Promise<void>) | undefined, beforeRemove: undefined as ((path: string) => Promise<void>) | undefined, afterRename: undefined as ((path: string) => Promise<void>) | undefined, afterWrite: undefined as ((path: string) => Promise<void>) | undefined, opened: undefined as ((handle: import('node:fs/promises').FileHandle, path: string) => void) | undefined }))
 vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
-  return { ...fs, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args); io.opened?.(handle, String(args[0])); return handle }, writeFile: async (...args: Parameters<typeof fs.writeFile>) => { const value = await fs.writeFile(...args); await io.afterWrite?.(String(args[0])); return value }, rm: async (...args: Parameters<typeof fs.rm>) => { await io.beforeRemove?.(String(args[0])); return fs.rm(...args) }, rename: async (...args: Parameters<typeof fs.rename>) => { const value = await fs.rename(...args); await io.afterRename?.(String(args[1])); return value } }
+  return { ...fs, readdir: async (...args: Parameters<typeof fs.readdir>) => { await io.beforeReadDirectory?.(String(args[0])); return fs.readdir(...args) }, access: async (...args: Parameters<typeof fs.access>) => { await io.beforeAccess?.(String(args[0])); return fs.access(...args) }, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args); io.opened?.(handle, String(args[0])); return handle }, writeFile: async (...args: Parameters<typeof fs.writeFile>) => { const value = await fs.writeFile(...args); await io.afterWrite?.(String(args[0])); return value }, rm: async (...args: Parameters<typeof fs.rm>) => { await io.beforeRemove?.(String(args[0])); return fs.rm(...args) }, rename: async (...args: Parameters<typeof fs.rename>) => { const value = await fs.rename(...args); await io.afterRename?.(String(args[1])); return value } }
 })
 import { mkdtemp, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -704,4 +704,67 @@ it('keeps an actual A hint refusal visible after quota raise and unrelated B con
       })
     })
   } finally { if (store) await gate.exclusive(undefined, lease => store!.close(lease)); await owner.close(); await f.close() }
+})
+
+
+it.each(['EIO', 'EACCES'] as const)('resets queued clear completion before its actual protected-result inventory rejects with %s', async code => {
+  const root = await mkdtemp(resolve(tmpdir(), 'legacy-index-queued-inventory-')), entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>()
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  let first: Promise<unknown> | undefined, second: Promise<unknown> | undefined
+  try {
+    const a = await service.capture({ ...input, sessionId: 'A' }), b = await service.capture({ ...input, sessionId: 'B', callId: 'survivor' })
+    if (!a || !b) throw Error('fixture refused')
+    const directory = new ContextStore(root, 'w').directory, managed = resolve(directory, 'managed-v1')
+    const paths = [resolve(directory, 'owners', b.id + '.json'), resolve(directory, 'blobs', b.id + '.txt'), resolve(directory, 'artifacts', b.id + '.json')]
+    const before = await Promise.all(paths.map(path => readFile(path)))
+    await service.configure({ maxDiskBytes: await physicalBytes(directory) })
+    const nativeClear = ContextStore.prototype.clear
+    let aCompletedUnavailable = false, inventoryCuts = 0
+    const clearing = vi.spyOn(ContextStore.prototype, 'clear').mockImplementation(async function(this: ContextStore, ...args) {
+      await nativeClear.apply(this, args)
+      if (args[3] === 'A') { expect(this.indexIssue()?.scope).toBe('artifact-index'); expect(this.indexReady()).toBe(false); aCompletedUnavailable = true }
+    })
+    io.beforeRemove = async path => { if (path === resolve(directory, 'blobs', a.id + '.txt')) { entered.resolve(); await resume.promise } }
+    first = service.clear('A')
+    await entered.promise
+    const fault = Object.assign(new Error(`B original protected inventory ${code}`), { code })
+    io.beforeReadDirectory = async path => { if (path === managed) { inventoryCuts++; expect(aCompletedUnavailable).toBe(true); throw fault } }
+    second = service.clear('B')
+    const secondOutcome = second.then(value => ({ kind: 'resolved' as const, value }), error => ({ kind: 'rejected' as const, error }))
+    resume.resolve(); await first
+    expect(await secondOutcome).toEqual({ kind: 'rejected', error: fault })
+    expect(inventoryCuts).toBe(1); expect(aCompletedUnavailable).toBe(true); expect(clearing).toHaveBeenCalledTimes(1)
+    for (const [index, path] of paths.entries()) expect(await readFile(path)).toEqual(before[index])
+    expect(service.status().error).not.toContain('Requested cleanup completed')
+    expect(service.status().error).toContain(fault.message); expect(service.status().error).toContain('Requested original cleanup remains incomplete')
+    io.beforeRemove = undefined; io.beforeReadDirectory = undefined
+    await service.clear('B')
+    expect(service.status().error).not.toContain('cleanup remains incomplete')
+    clearing.mockRestore()
+  } finally { resume.resolve(); io.beforeRemove = undefined; io.beforeReadDirectory = undefined; await Promise.allSettled([first, second]); vi.restoreAllMocks(); await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each(['EIO', 'EACCES'] as const)('records cold document cleanup inventory %s before opening or entering the legacy helper', async code => {
+  const root = await mkdtemp(resolve(tmpdir(), 'legacy-index-document-inventory-'))
+  const original = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  let cold: ReturnType<typeof createContextOutputService> | undefined
+  try {
+    const ref = await original.capture({ ...input, sessionId: 'B' })
+    if (!ref) throw Error('fixture refused')
+    await original.close()
+    const directory = new ContextStore(root, 'w').directory, paths = [resolve(directory, 'owners', ref.id + '.json'), resolve(directory, 'blobs', ref.id + '.txt'), resolve(directory, 'artifacts', ref.id + '.json')]
+    const before = await Promise.all(paths.map(path => readFile(path)))
+    let releaseDocuments!: (documents: readonly string[]) => Promise<void>
+    cold = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, documentDeletions: listener => { releaseDocuments = listener; return () => {} } })
+    const fault = Object.assign(new Error(`B original document inventory ${code}`), { code }), clear = vi.spyOn(ContextStore.prototype, 'clear'), open = vi.spyOn(ContextStore.prototype, 'open')
+    io.beforeAccess = async path => { if (path === resolve(directory, 'artifacts')) throw fault }
+    await expect(releaseDocuments(['B'])).rejects.toBe(fault)
+    expect(clear).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled()
+    for (const [index, path] of paths.entries()) expect(await readFile(path)).toEqual(before[index])
+    expect(cold.status().state).toBe('error'); expect(cold.status().error).toContain(fault.message); expect(cold.status().error).not.toContain('Requested cleanup completed')
+    io.beforeAccess = undefined
+    await releaseDocuments(['B'])
+    expect(cold.status().error).toBeUndefined()
+    clear.mockRestore(); open.mockRestore()
+  } finally { io.beforeAccess = undefined; vi.restoreAllMocks(); await cold?.close(); await original.close(); await rm(root, { recursive: true, force: true }) }
 })
