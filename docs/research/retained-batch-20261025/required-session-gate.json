@@ -1,0 +1,27 @@
+{
+  "head": "f36d8adc5807f623006af8a31ff181371cd37eb4",
+  "cwd": "C:\\Users\\inkik\\.codex\\worktrees\\context-native-transfer\\I-harness-main\\packages\\session-executor",
+  "args": [
+    "../../node_modules/vitest/vitest.mjs",
+    "run",
+    "test/retained-batch-continuation.test.ts",
+    "test/retained-code-output.test.ts",
+    "test/retained-hook-recovery.test.ts",
+    "test/retained-hook-stop.test.ts",
+    "test/guardian-generation.test.ts",
+    "test/code-mode-children-close-boundary.test.ts",
+    "--maxWorkers=2",
+    "--minWorkers=1"
+  ],
+  "started": "2026-10-25T11:28:44.045Z",
+  "ended": "2026-10-25T11:29:15.156Z",
+  "exit": 0,
+  "sourceFiles": 2882,
+  "stable": true,
+  "outputSha256": "0b904fb5f0f90f23280f070455120457b881c7e14bcb1516a4d3786b6737603e",
+  "env": {
+    "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\session-gate-f36d8adc\\config",
+    "IH_LIVE_BATCH_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\session-gate-f36d8adc\\live-batch",
+    "IH_CODE_CLOSE_EVIDENCE": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-retained-batch-continuation\\session-gate-f36d8adc\\close"
+  }
+}
