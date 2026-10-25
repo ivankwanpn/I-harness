@@ -33,20 +33,59 @@ for (const [file, expected] of Object.entries(manifest.sources)) {
 const rust = readdirSync(resolve(root, "native/src"), { recursive: true }).map(String)
   .filter(file => file.endsWith(".rs")).map(file => `native/src/${file.replaceAll("\\", "/")}`).sort()
 assert.deepEqual(Object.keys(manifest.sources).filter(file => file.endsWith(".rs")).sort(), rust)
+const expected = new Map([
+  ["helper-integrity-and-probe", "pass"],
+  ["psec-filesystem-workspace-write", "pass"],
+  ["psec-filesystem-read-only", "pass"],
+  ["psec-junction-alias-reference", "pass"],
+  ["unrestricted-refuses-reference-lock", "pass"],
+  ["unrestricted-refuses-deny-lock", "pass"],
+  ["psec-missing-LOCALAPPDATA-203", "pass"],
+  ["unrestricted-node-exact-argv-cwd-env", "pass"],
+  ["unrestricted-node-binary-pipes", "pass"],
+  ["unrestricted-full-width-exit", "pass"],
+  ["unrestricted-native-pipe-input", "pass"],
+  ["unrestricted-tsx-pipe", "pass"],
+  ["unrestricted-retain-descendant", "pass"],
+  ["unrestricted-job-cancel-timeout", "pass"],
+  ["unrestricted-job-cancel-descendant", "pass"],
+  ["unrestricted-output-cancel-accounting", "pass"],
+  ["unrestricted-cmd", "pass"],
+  ["unrestricted-powershell", "pass"],
+  ["unrestricted-git", "pass"],
+  ["unrestricted-msys-bash-pipe", "pass"],
+  ["psec-node-exact-argv-cwd-env", "pass"],
+  ["psec-node-binary-pipes", "pass"],
+  ["psec-full-width-exit", "pass"],
+  ["psec-native-pipe-input", "pass"],
+  ["psec-tsx-pipe", "pass"],
+  ["psec-retain-descendant", "pass"],
+  ["psec-job-cancel-timeout", "pass"],
+  ["psec-job-cancel-descendant", "pass"],
+  ["psec-output-cancel-accounting", "pass"],
+  ["psec-cmd", "pass"],
+  ["psec-powershell", "pass"],
+  ["psec-git", "pass"],
+  ["psec-msys-bash-pipe", "unsupported"],
+  ["psec-msys-matrix-launcher-retain-tree", "unsupported"],
+  ["psec-msys-matrix-direct-complete-tree", "unsupported"],
+  ["psec-msys-matrix-direct-retain-tree", "unsupported"],
+  ["psec-pty-rejected-before-workload", "pass"],
+  ["unrestricted-pty-input-resize", "pass"],
+  ["unrestricted-pty-retain-descendant", "pass"],
+  ["unrestricted-msys-pty-absolute-runtime-input-resize", "pass"],
+  ["host-loopback-positive", "pass"],
+  ["psec-loopback-egress-denial", "pass"],
+  ["protected-reference-content-metadata-acl", "pass"],
+])
 const rows = new Map()
 for (const row of evidence.results) {
-  assert(["pass", "unsupported"].includes(row.outcome), `failed/unknown observation: ${row.name}`)
   assert(!rows.has(row.name), `duplicate observation: ${row.name}`)
+  assert(expected.has(row.name), `unknown standard observation: ${row.name}`)
+  assert.equal(row.outcome, expected.get(row.name), `unexpected standard outcome: ${row.name}`)
   rows.set(row.name, row.outcome)
 }
-const requireOutcome = (name, outcome) => assert.equal(rows.get(name), outcome, `missing required observation: ${name}`)
-for (const name of ["helper-integrity-and-probe", "unrestricted-msys-bash-pipe", "psec-pty-rejected-before-workload",
-  "unrestricted-pty-input-resize", "unrestricted-pty-retain-descendant", "unrestricted-msys-pty-absolute-runtime-input-resize",
-  "protected-reference-content-metadata-acl"]) requireOutcome(name, "pass")
-for (const engine of ["psec", "unrestricted"]) {
-  for (const name of ["node-exact-argv-cwd-env", "node-binary-pipes", "tsx-pipe", "cmd", "powershell"]) requireOutcome(`${engine}-${name}`, "pass")
-}
-for (const name of ["psec-msys-bash-pipe", "psec-msys-matrix-launcher-retain-tree", "psec-msys-matrix-direct-complete-tree", "psec-msys-matrix-direct-retain-tree"]) requireOutcome(name, "unsupported")
+for (const name of expected.keys()) assert(rows.has(name), `missing required observation: ${name}`)
 const observed = { passed: [...rows.values()].filter(v => v === "pass").length, failed: 0,
   unsupported: [...rows.values()].filter(v => v === "unsupported").length }
 assert.deepEqual(observed, { passed: 39, failed: 0, unsupported: 4 }, "this owner records the original standard matrix only")
