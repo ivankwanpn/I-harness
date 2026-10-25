@@ -77,9 +77,7 @@ it('retains both real configure and native cleanup failures with an explicit ori
   await f.owner.capture({ sessionId: 's', callId: 'seed', label: 'seed', text: 'seed', complete: true })
   const entered = Promise.withResolvers<void>(), resume = Promise.withResolvers<void>(), nativeConfigure = ContextStore.prototype.configureDiskBudget
   let configureFault: unknown
-  let nativeStore: ContextStore | undefined
   const configuring = vi.spyOn(ContextStore.prototype, 'configureDiskBudget').mockImplementation(async function(this: ContextStore, ...args) {
-    nativeStore = this
     entered.resolve(); await resume.promise
     try { return await nativeConfigure.apply(this, args) } catch (cause) { configureFault = cause; throw cause }
   })
@@ -101,7 +99,7 @@ it('retains both real configure and native cleanup failures with an explicit ori
     await writeFile(f.settings, '{}')
     const fresh = await acquireAssemblyResultStore(f.options)
     try { expect(fresh.service).not.toBe(f.owner) } finally { await fresh.release() }
-  } finally { resume.resolve(); configuring.mockRestore(); close.mockRestore(); await read.release(); if (nativeStore) { try { nativeStore.close() } catch {} }; await f.close() }
+  } finally { resume.resolve(); configuring.mockRestore(); close.mockRestore(); await read.release(); await f.close() }
 })
 
 it('keeps a borrowed owner available after repeated lease and service teardown', async () => {
