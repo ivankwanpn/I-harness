@@ -271,6 +271,17 @@ it.each(['owner-response', 'application-response'])('keeps original %s uncertain
     else cuts.afterLink = path => { if (path.replaceAll('\\', '/').endsWith('/applied.json')) throw Error('Original application response lost') }
     expect((await f.run()).kind).toBe('blocked')
     cuts.afterRename = cuts.afterLink = undefined
+    if (cut === 'owner-response') {
+      const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), held = await physicalBytes(directory), budget = f.service().status().config.maxDiskBytes
+      await f.service().configure({ maxDiskBytes: held })
+      await f.coordinator().create({ sessionId: 'managed-sibling' })
+      const sibling = await f.coordinator().openManagedDocument('managed-sibling')
+      const scope = f.service().registerResultScope({ operationId: 'after-original-rename', sessionId: 'managed-sibling', callId: 'body' }, () => { sibling.assertReady(); return true })
+      await expect(f.service().beginResult(scope, 'text-utf8-v1')).rejects.toThrow(/quota/)
+      expect(await physicalBytes(directory)).toBe(held)
+      expect((await readFile(join(directory, 'owners', f.visible.id + '.previous'))).length).toBeGreaterThan(0)
+      await f.service().configure({ maxDiskBytes: budget })
+    }
     const passive = await f.run(true)
     // An applied legacy grant cannot issue B2's missing semantic birth frames.
     expect(passive.kind).toBe('blocked')
