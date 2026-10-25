@@ -7,7 +7,7 @@ import type { ContextCapture, ContextResultRef } from './types.ts'
 import { walkCandidates } from './search-index.ts'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
-import { physicalBytes, requireSpace } from './artifact/quota.ts'
+import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
 import { commitment, same, checkRoot, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
 import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots } from './legacy/fork-disposition.ts'
@@ -219,8 +219,13 @@ export class ContextStore {
   private async admitLegacyIndex(turn: WorkspaceMutationTurn, quota: number, growth: number): Promise<void> {
     this.assertTurn(turn)
     const index = (await stat(resolve(this.directory, 'index.sqlite'))).size
-    await requireSpace(this.directory, quota, index + 32768 + growth)
-    const total = await this.diskBytes(), pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size)
+    const required = index + 32768 + growth
+    // The requireSpace predicate and the SQLite ceiling share this one actual
+    // inventory in the held turn, including the unchanged rollback headroom.
+    if (!Number.isSafeInteger(required) || required < 0 || !Number.isSafeInteger(quota) || quota < 1) throw new Error('Invalid artifact quota')
+    const total = await this.diskBytes()
+    if (!Number.isSafeInteger(total + required) || total + required > quota) throw Object.assign(new Error('Artifact disk quota exceeded'), { code: 'ARTIFACT_QUOTA' })
+    const pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size)
     this.db.exec(`PRAGMA max_page_count=${Math.floor((quota - total - 32768) / pageSize)}`)
   }
   async resetLegacyIndex(turn: WorkspaceMutationTurn, binding: string, quota: number): Promise<void> {
