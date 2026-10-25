@@ -102,7 +102,9 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
         ...(exec?.callEventSeq !== undefined ? { callEventSeq: exec.callEventSeq } : {}),
         ...(exec?.callId !== undefined ? { toolCallId: exec.callId } : {}),
       }
-      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false)
+      let unregisterDelivery: (() => void) | undefined
+      const source = createSpawnSource(subagentFactOwner(deps.parentSession, deps.factOwner), exec.abortSignal, exec.retainOutcome?.(), args.background !== false,
+        () => { unregisterDelivery?.(); deps.onTaskTerminalCommitted?.() }, deps.onTaskTerminalRecovery)
       let task: TaskRecord
       try {
         task = deps.tasks.submit({
@@ -124,7 +126,11 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       try {
         const resultStore = await deps.tasks.prepareResult(task.id, exec, source.settlementHeld)
         await deps.tasks.flushPersistence()
-        await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) })
+        const preparation = delivery === 'parent' && exec.resultConsumer !== 'code' && exec.session === deps.parentSession
+          && exec.sessionId === deps.childSessions?.parentSessionId && deps.notificationNamespace && exec.callEventSeq !== undefined
+          ? await deps.parentNotify?.prepareTaskDelivery?.({ sessionId: exec.sessionId!, namespace: deps.notificationNamespace, taskId: task.id, callSeq: exec.callEventSeq }) : undefined
+        if (preparation?.kind === 'bound') unregisterDelivery = deps.registerDeliverySource?.(task.id, source)
+        await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) }, preparation?.kind === 'bound' ? preparation.binding : undefined)
         const executed = await spawnChild({
           signal: exec.abortSignal,
           generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,

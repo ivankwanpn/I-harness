@@ -27,14 +27,16 @@ export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
-export { createNotificationDrain, ParentNotificationStoppedError, isParentNotificationStopped } from "./task-notification.ts"
+export { createNotificationDrain, ParentNotificationStoppedError, DeliverySuppressedError, isParentNotificationStopped } from "./task-notification.ts"
 export { SHIPPING_REPORT_POLICY } from "./report-policy.ts"
 export type { ReportPolicy } from "./report-policy.ts"
 export type { ParentInputAdmission, NotificationDrainOptions } from "./task-notification.ts"
 
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { SessionView, FactOwner } from "@i-harness/core-session"
+import { readDeliveries, type SessionView, type FactOwner } from "@i-harness/core-session"
+import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
+import { DeliverySourcesError } from './task-notification.ts'
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { ExecService } from "@i-harness/exec"
 // M24b (spec §3.3): optional workflow executor threaded into SubagentToolDeps
@@ -124,6 +126,8 @@ export interface RegisterSubagentResult {
   ready: Promise<void>
   /** Wait for notification admissions and their queued task-document saves. */
   flushPersistence(): Promise<void>
+  drainParentNotifications(): Promise<void>
+  settleParentDeliverySources(): Promise<void>
   dispose(): Promise<void>
   // M26-D1: the durable task protocol registry (records + notification
   // outbox) behind this mount. With persistence the ready chain already
@@ -171,8 +175,24 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // the existing persistence seam (doc key `task:<stateId>`). onTerminalized
   // is a deferred hook (assigned once the notification drain exists below) so
   // every terminalize (spawn settle / cancelTree / recovery classification)
-  // triggers an immediate delivery attempt.
+  // dirties the existing drain after host activation. Original terminal/task
+  // commitment still supplies the decisive handoff signal.
   let notifDrainHook: (() => void) | undefined
+  const deliverySources = new Map<string, { reconcileTerminal(): Promise<void> }>()
+  let settlingDeliverySources: Promise<void> | undefined
+  function settleParentDeliverySources(): Promise<void> {
+    if (settlingDeliverySources) return settlingDeliverySources
+    const pending = (async () => {
+      const results = await Promise.allSettled([...deliverySources].map(async ([id, source]) => {
+        if (deliverySources.get(id) === source) await source.reconcileTerminal()
+      }))
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      if (failures.length) throw new DeliverySourcesError(failures)
+    })()
+    settlingDeliverySources = pending
+    void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
+    return pending
+  }
   const tasks = createTaskRegistry({
     results: opts.results,
     reportPolicy: opts.reportPolicy,
@@ -212,6 +232,16 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     get reasoningEffort() { return opts.reasoningEffort },
     get maxOutputTokens() { return opts.maxOutputTokens },
     tasks,
+    parentNotify: opts.parentNotify,
+    notificationNamespace: opts.persist?.stateId ?? `mount-${crypto.randomUUID()}`,
+    onTaskTerminalCommitted: () => { notifDrainHook?.() },
+    onTaskTerminalRecovery: () => { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') },
+    registerDeliverySource(taskId, source) {
+      const original = deliverySources.get(taskId)
+      if (original && original !== source) throw new Error('Original delivery source cannot be replaced')
+      deliverySources.set(taskId, source)
+      return () => { if (deliverySources.get(taskId) === source) deliverySources.delete(taskId) }
+    },
     // M24b (spec §3.3): thread the optional workflow executor through so the
     // job_* tools see the third layer. Omitted when the host didn't pass one —
     // additive, zero behavior change.
@@ -232,15 +262,29 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // (ParentInputAdmission — run.ts backs it with the real SessionExecutor's
   // inject tier); isSessionCancelled suppresses delivery when the parent chain
   // was cancelled (R-D3 opencode rule). One drain instance per mount; it is
-  // also awaited at the cold-restore chain tail (below).
+  // activated only after the host publishes its actual receiver lane.
   const notifDrain = createNotificationDrain({
+    reconcileSources: settleParentDeliverySources,
     reportPolicy: opts.reportPolicy,
     tasks,
     admit: opts.parentNotify,
+    evidence(taskId) {
+      // A live source stays registered until its own terminal AND task-save
+      // barriers succeed. The notifier cannot retry a failed task save or
+      // treat committed terminal bytes alone as completed handoff ownership.
+      if (deliverySources.has(taskId)) return
+      const source = (readOwnedDeliveryState(opts.parentSession) ?? readDeliveries(opts.parentSession)).source(subagentDeps.notificationNamespace!, taskId)
+      if (source?.type !== 'agent/delivery-source') return
+      const terminal = opts.parentSession.events.findLast(e => e.type === 'subagent/end' && e.taskId === taskId && !!e.resultRevision && !!e.envelope && e.envelope.retention.kind !== 'unavailable' && (e.outcome === 'completed' || e.outcome === 'error'))
+      if (terminal?.type !== 'subagent/end') return
+      return { sourceSeq: source.seq!, terminalSeq: terminal.seq! }
+    },
     isSessionCancelled: (sessionId) => isSessionCancelledChain(tasks, sessionId),
   })
   const notificationDrains = new Set<Promise<number>>()
+  let notificationsActive = false, notificationsRetired = false
   notifDrainHook = () => {
+    if (!notificationsActive || notificationsRetired) return
     const job = notifDrain.drain()
     notificationDrains.add(job)
     void job.catch(() => {}).finally(() => { notificationDrains.delete(job) })
@@ -257,9 +301,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   }
   if (opts.persist) {
     // M26-D1/D2: the unified post-restore chain — task doc restore +
-    // recovery classification (M26) + drain (M26-D2) THEN the M24a G1a mirror
+    // recovery classification (M26) THEN the M24a G1a mirror
     // rebuild + G4 pending-inbox sweep. `ready` gates hosts until it completes.
-    ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks, notifDrain)
+    ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
   }
   return {
     async retainResults() {
@@ -272,7 +316,18 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ensureResident: (entry: ChildAgentEntry, controller?: AbortController) => ensureResidentAgent(subagentDeps, entry, controller),
     followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
     ready, tasks,
+    settleParentDeliverySources,
+    async drainParentNotifications() {
+      if (notificationsRetired) return
+      await ready
+      if (notificationsRetired) return
+      notificationsActive = true
+      const job = notifDrain.drain()
+      notificationDrains.add(job)
+      try { await job } finally { notificationDrains.delete(job) }
+    },
     async dispose() {
+      notificationsRetired = true
       const entries = [...table.entries().values()]
       for (const entry of entries) {
         table.update(entry.path, entry, { closing: true }); entry.controller.abort()
@@ -308,13 +363,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
 // (records + outbox rows), (2) classify ambiguous accepted/running attempts from
 // the durable child log (completed | recovery-required — never re-dispatch),
 // (3) G1a mirrors + G4 sweep (existing M24a steps). Notifications drain (D2-T1)
-// runs here too once wired.
+// activates separately after the host publishes its lane.
 async function restoreTasksAndSweep(
   deps: SubagentToolDeps,
   table: AgentTable,
   persist: SubagentPersistence,
   tasks: TaskRegistry,
-  notifDrain: { drain: () => Promise<number> },
 ): Promise<void> {
   // ADAPTATION (M26-D1, plan T5 Step 3 vs M24a G1a test): the plan's naive
   // order (task doc restore FIRST) suspends on the first await and defers the
@@ -329,8 +383,6 @@ async function restoreTasksAndSweep(
     if (doc !== undefined) tasks.restore(doc as TaskProtocolDocument)
     await tasks.qualifyRestoredResults()
     await classifyRestoredTasks(tasks, deps.childSessions.coordinator)
-    // M26-D2: 冷啟先交付（前次 run 的完成通知 = 本次啟動時父 session 的收件箱輸入）。
-    await notifDrain.drain()
   }
 }
 

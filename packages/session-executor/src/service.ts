@@ -23,6 +23,10 @@
 import { createHash, randomUUID } from "node:crypto"
 import { subscribe, validateImages, contextStateFromBudget, type AdmittedInput, type AsyncInbox, type SessionContextState, type ImageInput, type SessionView as Session, type ManagedAction, type ProducerFactOutcome } from "@i-harness/core-session"
 import { openExecutorDocument } from './lifecycle/managed-document.ts'
+import { receivedInputsFor } from './lifecycle/received-inputs.ts'
+import { createDeliveryDrain, isRetryableDeliveryError } from './service/delivery-drain.ts'
+import { readOwnedDeliveryState } from '../../core-session/src/managed/view.ts'
+import { readDeliveryIndex } from '../../core-session/src/conversation/delivery.ts'
 import { prepareInputExecution } from './lifecycle/input-preparation.ts'
 import { runManualGeneration } from './lifecycle/manual-generation.ts'
 import { completeSubmission } from './service/submission-completion.ts'
@@ -232,6 +236,7 @@ export interface SessionService {
   cancelQueued(sessionId: string, id: string): Promise<{ cancelled: boolean }>
   /** Cancel the executing submission; queued submissions retain their own controllers. */
   cancelRunning?(sessionId: string): { cancelled: boolean }
+  awaitDeliveryStop(sessionId: string): Promise<import('@i-harness/core-session').DeliveryCloseReceipt | undefined>
   /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
    * rows — subagent/job/workflow). Workflow rows are attributed to the session
    * that started the run (the run-level store is shared — another session's
@@ -293,6 +298,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const notificationInputs = new Map<string, Set<string>>()
   const notificationControllers = new Map<string, Map<string, AbortController>>()
   const notificationStops = new Set<Promise<void>>()
+  const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
+  const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
+  function requestDeliveryStop(id: string) {
+    const assembly = liveAssembly(id)
+    if (!assembly) return
+    const delivery = receivedInputsFor(assembly.factOwner, id).delivery
+    const request = delivery.requestClose('user-stop')
+    deliveryStops.set(id, { delivery, fenceId: request.fenceId, settleSources: assembly.settleParentDeliverySources?.bind(assembly) })
+    void request.settled.catch(error => d.warn(`[i-harness] delivery Stop requires reconciliation: ${String(error)}`))
+  }
+  async function awaitDeliveryStop(id: string) {
+    const request = deliveryStops.get(id)
+    await request?.settleSources?.()
+    return request?.delivery.closeReceipt(request.fenceId)
+  }
   function stopNotifications(id: string): void {
     cancelledParents.add(id)
     for (const controller of notificationControllers.get(id)?.values() ?? []) controller.abort()
@@ -307,6 +327,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
     if (opts.parentNotify) return opts.parentNotify
     return {
+      async prepareTaskDelivery(input) {
+        const assembly = owner()
+        if (input.sessionId !== id || !assembly || assemblies.get(id) !== assembly || closed || closing.has(id)) throw new ParentNotificationStoppedError()
+        opts.sessionOperation?.assertOpen(id)
+        const result = await receivedInputsFor(assembly.factOwner, id).delivery.prepareLaunch(input.namespace, input.taskId, input.callSeq)
+        if (assemblies.get(id) !== assembly || owner() !== assembly || closed || closing.has(id)) throw new ParentNotificationStoppedError()
+        return result
+      },
+      async admitTaskDelivery(input) {
+        const assembly = owner()
+        if (input.sessionId !== id || !assembly || assemblies.get(id) !== assembly || closed || closing.has(id)) throw new ParentNotificationStoppedError()
+        opts.sessionOperation?.assertOpen(id)
+        const result = await receivedInputsFor(assembly.factOwner, id).delivery.admit(input.evidence, input)
+        if (assemblies.get(id) !== assembly || owner() !== assembly || closed || closing.has(id)) throw new ParentNotificationStoppedError()
+        deliveryDrains.get(id)?.signal()
+        return result
+      },
       admit(input) {
         const previousAdmission = notificationAdmissions.get(id) ?? Promise.resolve()
         const admission = async () => previousAdmission.catch(() => undefined).then(async () => {
@@ -331,10 +368,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         return job
       },
       wake(sessionId) {
-        if (sessionId !== id || closed || closing.has(id) || cancelledParents.has(id)) return
+        if (sessionId !== id || closed || closing.has(id)) return
         try { opts.sessionOperation?.assertOpen(id) } catch { return }
         const assembly = assemblies.get(id)
         if (!assembly || assembly !== owner()) return
+        deliveryDrains.get(id)?.signal()
+        if (cancelledParents.has(id)) return
         let controllers = notificationControllers.get(id)
         if (!controllers) { controllers = new Map(); notificationControllers.set(id, controllers) }
         for (const inputId of notificationInputs.get(id) ?? []) {
@@ -682,11 +721,42 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           agent: assembly.agent,
           inbox: assembly.inbox,
         }))
+        const published = assembly
+        const delivery = receivedInputsFor(published.factOwner, sessionId).delivery
+        const deliveryDrain = createDeliveryDrain({
+          current: () => !closed && !closing.has(sessionId) && !failedClose.has(sessionId) && assemblies.get(sessionId) === published,
+          reconcile: async () => {
+            const failures: unknown[] = []
+            try { await published.drainParentNotifications?.(true) } catch (error) { failures.push(error) }
+            try { await delivery.settle() } catch (error) { failures.push(error) }
+            if (failures.length) {
+              for (const error of failures) d.warn(`[i-harness] original delivery settlement: ${String(error)}`)
+              // Select a nominal actual-owner classification directly, never
+              // infer retry authority by unwrapping arbitrary aggregates.
+              throw failures.find(isRetryableDeliveryError) ?? failures[0]
+            }
+          },
+          pending: () => published.inbox.pending().filter(input => input.provenance?.producer === 'session.delivery.subagent').map(input => input.inputId),
+          schedule(inputId) {
+            if (assemblies.get(sessionId) !== published || closed || closing.has(sessionId) || !published.inbox.isPending(inputId)) return false
+            try { published.managedDocument?.assertReady() } catch { return false }
+            const input = published.inbox.pending().find(input => input.inputId === inputId)
+            if (!input) return false
+            if (queues.get(sessionId)?.byId.get(inputId)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === inputId) return true
+            // Register on existing service pacing; mounting must never await
+            // the turn whose preparation may join this creation promise.
+            void submit(sessionId, input.text, new AbortController().signal, { admittedInputId: inputId }, published).catch(() => {})
+            return true
+          },
+          report: error => d.warn(`[i-harness] delivery reconciliation failed: ${String(error)}`),
+        })
+        deliveryDrains.set(sessionId, deliveryDrain)
         executionSubscriptions.get(sessionId)?.()
         executionSubscriptions.set(sessionId, subscribe(assembly.session, event => {
           if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
             notifyExecutionState(sessionId)
           }
+          if (event.type === 'agent/delivery-received' || event.type === 'agent/delivery-generation' || event.type === 'agent/delivery-source' || event.type === 'subagent/end' || event.type === 'agent/input/promoted' || event.type === 'agent/input/cancelled') deliveryDrain.signal()
         }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
@@ -694,7 +764,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         for (const hook of [...hooks]) hook(assembly)
         // Recovery admission needs the exact published parent and its lane.
         // Waking schedules through submit without awaiting that turn here.
-        try { await assembly.drainParentNotifications?.() }
+        try { await assembly.drainParentNotifications?.(); await deliveryDrain.reconcile() }
         catch (error) { d.warn(`[i-harness] parent notification recovery failed: ${error instanceof Error ? error.message : String(error)}`) }
         return assembly
       })().catch(error => {
@@ -708,10 +778,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
-    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options)) : submitUnfenced(sessionId, prompt, signal, options)
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)) : submitUnfenced(sessionId, prompt, signal, options, deliveryOwner)
   }
-  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions): Promise<void> {
+  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -794,7 +864,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         const input: AdmittedInput = { inputId: id, text: prompt, preparationPolicy: 'human-host', delivery: 'queue', intent: 'user', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' },
           ...(context ? { supplementalContext: context } : {}), ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }
         const priorAssembly = liveAssembly(sessionId), priorDocument = priorAssembly?.managedDocument
-        try { await priorAssembly?.settleRuntimeContextPublications(); await priorDocument?.settleFinishedActions() }
+        if (deliveryOwner && priorAssembly !== deliveryOwner) throw new ParentNotificationStoppedError()
+        try { await awaitDeliveryStop(sessionId); await priorAssembly?.settleRuntimeContextPublications(); await priorDocument?.settleFinishedActions() }
         catch (failure) {
           if (priorAssembly && !options?.admittedInputId && !controller.signal.aborted && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)) {
             try { await priorAssembly.inbox.admit(input, controller.signal) }
@@ -804,6 +875,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
         controller.signal.throwIfAborted()
         if (closed || closing.has(sessionId) || failedClose.has(sessionId)) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' })
+        // A normal active step can claim the hinted receipt while this submit
+        // waits in the service chain. That proven consumption is a no-op.
+        if (deliveryOwner && liveAssembly(sessionId) !== deliveryOwner) throw new ParentNotificationStoppedError()
+        if (options?.admittedInputId && priorAssembly && !priorAssembly.inbox.isPending(id)) {
+          const state = readOwnedDeliveryState(priorAssembly.session) ?? readDeliveryIndex(priorAssembly.session)
+          if (state.isBound(id) && !state.isEligible(id)) return
+        }
         const assembly = opts.coordinator ? await prepareInputExecution({
           ownerSessionId: sessionId,
           acquire: async () => openExecutorDocument({ coordinator: opts.coordinator!, sessionId, session: await writableSessionFor(sessionId) }),
@@ -814,6 +892,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           localTestEnabled: opts.modelPolicy === 'test-mock',
           prepare: options?.prepareInput ?? opts.transformPrompt,
         }).then(prepared => { preparedInput = prepared; return prepared.assembly }) : await getOrCreate(sessionId)
+        if (deliveryOwner && (assembly !== deliveryOwner || liveAssembly(sessionId) !== deliveryOwner)) throw new ParentNotificationStoppedError()
         if (controller.signal.aborted || closed) return
         const lane = lanes.get(sessionId)!
         await extensionRefreshes.get(sessionId)?.catch(() => undefined)
@@ -964,6 +1043,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function cancelRunning(sessionId: string): { cancelled: boolean } {
+    requestDeliveryStop(sessionId)
+    stopNotifications(sessionId)
     const current = lanes.get(sessionId)?.currentInput()
     if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) {
       const result = lanes.get(sessionId)!.cancelCurrent!()
@@ -988,6 +1069,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    deliveryDrains.get(sessionId)?.retire()
+    const assembly = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
+    if (assembly) receivedInputsFor(assembly.factOwner, sessionId).delivery.revoke()
     opts.coordinator?.revokeManagedDocumentNewWork(sessionId)
     ;(assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId))?.revokeNewWork()
     for (const row of queues.get(sessionId)?.byId.values() ?? []) row.controller.abort()
@@ -1016,6 +1100,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...closing.values(),
       ...notificationAdmissions.values(),
       ...notificationStops,
+      ...[...deliveryDrains.values()].map(drain => drain.join()),
     ])
     executionListeners.clear()
     for (const off of executionSubscriptions.values()) off()
@@ -1064,7 +1149,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (writer !== undefined) await writer.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
-      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
+      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops, deliveryDrains.get(sessionId)?.join()])
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
       try { if (handle) await handle.dispose(); else await opts.coordinator?.closeManagedDocument(sessionId) }
       catch (error) {
@@ -1158,6 +1243,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     queue: (sessionId) => queue(sessionId),
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
     cancelRunning,
+    awaitDeliveryStop,
     // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
     // session whose assembly does not exist (or was closed) has NO tasks
     // (honest empty, never a fabricated row).

@@ -1,5 +1,5 @@
 import type { TaskOutcome, TaskRegistry } from "./task-protocol.ts"
-import type { InputDisplay } from "@i-harness/core-session"
+import type { DeliveryAdmissionReceipt, DeliveryLaunchPreparation, InputDisplay, SubagentDeliveryEvidence, ProducerFactOutcome } from "@i-harness/core-session"
 import { boundedNotification, type ReportPolicy } from "./report-policy.ts"
 
 /**
@@ -14,6 +14,8 @@ import { boundedNotification, type ReportPolicy } from "./report-policy.ts"
  * 未注入（undefined）= durable-only 交付（fail-closed，通知停 pending 不回退）。
  */
 export interface ParentInputAdmission {
+  prepareTaskDelivery?(input: { sessionId: string; namespace: string; taskId: string; callSeq: number }): Promise<DeliveryLaunchPreparation>
+  admitTaskDelivery?(input: { sessionId: string; evidence: SubagentDeliveryEvidence; text: string; description: string; display: InputDisplay }): Promise<DeliveryAdmissionReceipt>
   admit(input: { sessionId: string; text: string; description: string; display?: InputDisplay }): Promise<void>
   /**
    * Currently a no-op in the CLI adapter: admit already wakes via submit().
@@ -28,6 +30,29 @@ export interface ParentInputAdmission {
 export class ParentNotificationStoppedError extends Error {
   readonly code = "PARENT_NOTIFICATION_STOPPED"
   constructor(message = "parent notification admission stopped") { super(message); this.name = "ParentNotificationStoppedError" }
+}
+/** No receiver input was committed. This is an actual adapter's scoped
+ * pre-admission refusal, separate from an acknowledged receipt disposition. */
+export class DeliverySuppressedError extends Error {
+  readonly code = 'DELIVERY_SUPPRESSED'
+  readonly reason = 'generation-closed'
+  constructor(readonly inputId: string) { super('Original delivery generation is closed'); this.name = 'DeliverySuppressedError' }
+}
+/** Nominal original-capture classification. A raw recovery code or an
+ * arbitrary aggregate never grants an automatic retry. */
+export class OriginalTerminalRecoveryError extends Error {
+  readonly code = 'FACT_RECOVERY_REQUIRED'
+  constructor(readonly outcome: Extract<ProducerFactOutcome, { kind: 'unknown' | 'absent' | 'conflict' | 'recovery-required' }>, cause?: unknown) {
+    super('Original terminal capture requires reconciliation', { cause })
+    if (outcome.kind !== 'unknown' && outcome.kind !== 'recovery-required') throw new TypeError('Terminal outcome is not automatically retryable')
+  }
+}
+export class DeliverySourcesError extends AggregateError {
+  readonly retryable: boolean
+  constructor(errors: readonly unknown[]) {
+    super(errors, 'Original delivery sources require settlement')
+    this.retryable = errors.some(error => error instanceof OriginalTerminalRecoveryError)
+  }
 }
 
 export function isParentNotificationStopped(error: unknown): boolean {
@@ -47,6 +72,8 @@ export function renderTaskNotification(state: TaskOutcome, taskId: string, descr
 }
 
 export interface NotificationDrainOptions {
+  reconcileSources?: () => Promise<void>
+  evidence?: (taskId: string) => SubagentDeliveryEvidence | undefined
   reportPolicy?: ReportPolicy
   tasks: TaskRegistry
   admit: ParentInputAdmission | undefined
@@ -65,25 +92,28 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
   const isCancelled = opts.isSessionCancelled ?? (() => false)
   let drainChain: Promise<number> = Promise.resolve(0)
   return {
-    // Idempotent: pending|error|(delivered && !woken) are the only candidates;
+    // Pending/error are handoff candidates. A receipt-acknowledged row never
+    // owns receiver scheduling or model consumption.
     // every transition re-checks the row's current status so a coalesced drain
     // cannot double-admit. Single-threaded per mount; the coordinator doc lease
     // covers cross-process (M23) for the underlying write.
     drain(): Promise<number> {
       const run = async () => {
-        if (!opts.admit) return 0
+        let sourceFailure: unknown
+        try { await opts.reconcileSources?.() } catch (error) { sourceFailure = error }
+        if (!opts.admit?.admitTaskDelivery || !opts.evidence) return 0
         let delivered = 0
         let changed = false
         for (const n of opts.tasks.notifications()) {
           if (opts.tasks.get(n.submissionId)?.publication === 'unqualified') continue
-          const candidate =
-            n.status === "pending" || n.status === "error" ||
-            (n.status === "delivered" && n.timeWoken === undefined)
+          const candidate = n.status === "pending" || n.status === "error"
           if (!candidate) continue
+          const evidence = opts.evidence(n.submissionId)
+          if (!evidence) continue
           changed = true
           opts.tasks.updateNotification(n.id, { attempts: n.attempts + 1, ...(n.status === "error" ? { error: undefined } : {}) })
           if (isCancelled(n.parentSessionId)) {
-            opts.tasks.updateNotification(n.id, { status: "suppressed", error: "parent session cancelled before notification delivery", timeWoken: Date.now() })
+            opts.tasks.updateNotification(n.id, { status: "suppressed", error: "parent session cancelled before notification delivery" })
             continue
           }
           try {
@@ -91,25 +121,35 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
             // Retention may wait on storage while the parent delegation is
             // cancelled. Its completed child's result cannot authorize a wake.
             if (isCancelled(n.parentSessionId)) {
-              opts.tasks.updateNotification(n.id, { status: "suppressed", error: "parent session cancelled before notification delivery", timeWoken: Date.now() })
+              opts.tasks.updateNotification(n.id, { status: "suppressed", error: "parent session cancelled before notification delivery" })
               continue
             }
             const task = opts.tasks.get(n.submissionId)
             const reference = `get_task_output({task_ids:[${JSON.stringify(n.submissionId)}]}) (${task?.retention ?? "memory"})`
-            await opts.admit.admit({
+            let receipt: DeliveryAdmissionReceipt
+            try { receipt = await opts.admit.admitTaskDelivery!({
               sessionId: n.parentSessionId,
+              evidence,
               text: opts.reportPolicy
                 ? boundedNotification((text, description) => renderTaskNotification(n.state, n.submissionId, description, text), n.text, n.description, reference, opts.reportPolicy)
                 : renderTaskNotification(n.state, n.submissionId, n.description, n.text),
               description: n.description,
               display: { kind: "task", title: `${TASK_REPLY_TITLES[n.state]}: ${n.description}`, body: n.text },
-            })
+            }) } catch (error) {
+              if (!(error instanceof DeliverySuppressedError)) throw error
+              opts.tasks.updateNotification(n.id, { status: 'suppressed', error: error.message })
+              continue
+            }
+            if (receipt.disposition === 'suppressed' || receipt.disposition === 'cancelled') {
+              opts.tasks.updateNotification(n.id, { status: 'suppressed', error: `receiver ${receipt.disposition}` })
+              continue
+            }
             opts.tasks.updateNotification(n.id, { status: "delivered", timeDelivered: Date.now(), error: undefined })
-            opts.tasks.updateNotification(n.id, { status: "woken", timeWoken: Date.now(), error: undefined })
-            opts.admit.wake(n.parentSessionId)
+            if (receipt.disposition === 'pending') opts.admit.wake(n.parentSessionId)
             delivered += 1
           } catch (err) {
-            opts.tasks.updateNotification(n.id, { status: isParentNotificationStopped(err) ? "suppressed" : "error", error: err instanceof Error ? err.message : String(err), ...(isParentNotificationStopped(err) ? { timeWoken: Date.now() } : {}) })
+            const stopped = isParentNotificationStopped(err)
+            opts.tasks.updateNotification(n.id, { status: stopped ? "suppressed" : "error", error: err instanceof Error ? err.message : String(err) })
           }
         }
         // ADAPTATION (M26-D1, plan §written "await save()" unconditionally): a
@@ -117,9 +157,9 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
         // `task-<stateId>` doc on every mount — two pre-existing CLI tests
         // assert exactly one *.jsonl per store dir. Save only when a row moved.
         if (changed) await opts.tasks.save()
+        if (sourceFailure) throw sourceFailure
         return delivered
       }
-      if (!opts.reportPolicy) return run()
       const pending = drainChain.then(run)
       drainChain = pending.catch(() => 0)
       return pending

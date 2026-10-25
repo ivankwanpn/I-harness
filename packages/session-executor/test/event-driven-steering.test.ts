@@ -41,8 +41,11 @@ async function untilStarted(control: ReturnType<typeof deferred>) {
 }
 
 function results(assembly: SessionAssembly, name: string) {
-  return assembly.session.events.filter(event => event.type === "tool/result" && event.name === name)
-    .map(event => event as { callId: string; output: Record<string, unknown> })
+  return assembly.session.events.filter(event => event.type === "tool/result").filter(event => event.name === name)
+    .map(event => {
+      if (event.envelope && event.envelope.retention.kind !== 'inline') throw new Error('Expected actual inline tool result in steering fixture')
+      return { callId: event.callId, output: event.envelope?.retention.kind === 'inline' ? event.envelope.retention.value : event.output } as { callId: string; output: Record<string, unknown> }
+    })
 }
 
 async function dispatched(assembly: SessionAssembly, name: string) {
@@ -162,7 +165,7 @@ describe("real assembly: steering releases observation and preserves the produce
       expect(JSON.stringify(final)).not.toContain('"text":"before"')
       expect(assembly.session.events.filter(event => event.type === "code/call" && event.name === "held_read")).toHaveLength(1)
       const invocation = assembly.session.events.find(event => event.type === "code/call" && event.name === "held_read")!
-      expect(assembly.session.events.filter(event => event.type === "code/result")).toEqual([expect.objectContaining({ cellId: id, callId: "callId" in invocation ? invocation.callId : undefined, name: "held_read", output: "original nested result" })])
+      expect(assembly.session.events.filter(event => event.type === "code/result")).toEqual([expect.objectContaining({ cellId: id, callId: "callId" in invocation ? invocation.callId : undefined, name: "held_read", envelope: expect.objectContaining({ retention: expect.objectContaining({ kind: 'inline', value: 'original nested result' }) }) })])
       expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === observation.callId)).toHaveLength(1)
       expect(calls).toBe(1); expect(aborts).toBe(0); expect(assembly.liveResources!().codeCells).toEqual([])
     } finally { release.resolve(); executor.dispose(); await assembly.dispose(); await rm(root, { recursive: true, force: true }) }

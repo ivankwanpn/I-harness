@@ -30,11 +30,11 @@ export async function openExecutorDocument(options: ExecutorDocumentOptions) {
     if (!isManagedFactOwner(document.view, document)) throw new Error('Managed document ownership is unavailable')
     return {
       session: document.view, factOwner: document,
-      document, inbox: receivedInputsFor(document).inbox,
+      document, inbox: receivedInputsFor(document, options.sessionId).inbox,
     }
   }
   const session = options.session ?? options.detachedSession ?? createSession()
   if (!isNondurableSession(session)) throw Object.assign(new Error('Readonly Session requires its actual owned document'), { code: 'FACT_OWNER_UNSUPPORTED' })
   const factOwner = createNondurableFactOwner(session)
-  return { session, factOwner, document: undefined, inbox: receivedInputsFor(factOwner).inbox }
+  return { session, factOwner, document: undefined, inbox: receivedInputsFor(factOwner, options.sessionId).inbox }
 }

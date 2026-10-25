@@ -1,0 +1,158 @@
+import { randomUUID } from 'node:crypto'
+import { committedFactSeqs, deliveryInputId, FactRecoveryRequiredError, isManagedFactOwner, isNondurableSession, readDeliveries,
+  type CapturedSettlementFact, type DeliveryAdmissionReceipt, type DeliveryCloseReceipt, type DeliveryLaunchPreparation,
+  type FactOwner, type InputDisplay, type ProducerFactOutcome, type ReceivedInputSource, type SubagentDeliveryEvidence,
+  type SubagentDeliveryKey } from '@i-harness/core-session'
+import { readOwnedDeliveryState } from '../../../core-session/src/managed/view.ts'
+import { DeliverySuppressedError } from '@i-harness/subagent'
+
+export type DeliveryDrainDisposition =
+  | { kind: 'settled' } | { kind: 'waiting-source' }
+  | { kind: 'retryable'; phase: 'original-physical' | 'temporary-admission' }
+  | { kind: 'blocked'; reason: 'invalid' | 'conflict' | 'unsupported' | 'retired' | 'out-of-scope' | 'explicit-absence-retry' | 'unclassified'; debt: 'retained' | 'none' }
+  | { kind: 'suppressed'; reason: 'generation-closed' | 'cancelled' | 'claimed' }
+type Pending = { fact: CapturedSettlementFact<ProducerFactOutcome>; outcome?: ProducerFactOutcome; running?: Promise<readonly number[] | undefined>; done?: readonly number[]; everIssued?: boolean; retired?: boolean }
+export class RecipientDeliveryRecoveryError extends FactRecoveryRequiredError {
+  constructor(readonly deliveryDisposition: DeliveryDrainDisposition, cause?: unknown) { super(); this.cause = cause }
+}
+const failed = (disposition: DeliveryDrainDisposition, cause?: unknown) => new RecipientDeliveryRecoveryError(disposition, cause)
+
+/** The one recipient adapter shares its owner's already registered received
+ * source. Retained captures own uncertain outcomes; committed indexes own truth. */
+export function createRecipientDelivery(owner: FactOwner, source: ReceivedInputSource<ProducerFactOutcome>, suppliedId?: string) {
+  let recipient = source.owner?.sessionId ?? suppliedId
+  let retired = false, opening: Pending | undefined
+  const admissions = new Map<string, Pending>(), closes = new Map<string, Pending>()
+  const durability = isNondurableSession(owner.view) ? 'nondurable' as const : 'durable' as const
+  const state = () => readOwnedDeliveryState(owner.view) ?? readDeliveries(owner.view)
+  const bind = (id?: string) => {
+    if (id === undefined) return
+    if (recipient !== undefined && recipient !== id) throw new TypeError('Recipient source identity does not match host')
+    recipient = id
+  }
+  bind(suppliedId)
+  const current = () => !retired
+  const assertCurrent = () => { if (retired) throw failed({ kind: 'blocked', reason: 'retired', debt: 'retained' }) }
+  const settle = (record: Pending): Promise<readonly number[] | undefined> => {
+    if (record.done) return Promise.resolve(record.done)
+    if (record.retired) return Promise.resolve(undefined)
+    if (record.running) return record.running
+    const pending = (async () => {
+      let outcome = record.outcome ? await record.fact.observe() : await record.fact.admit()
+      // A later explicit same-owner settlement attempt may retry this original
+      // never-issued capture after its real writer prerequisite changed. The
+      // generic code itself never arms a timer or permits an absent reissue.
+      if (record.outcome && outcome.kind === 'not-issued' && outcome.code === 'FACT_RECOVERY_REQUIRED') outcome = await record.fact.reconcile()
+      record.outcome = outcome
+      if (outcome.kind !== 'not-issued') record.everIssued = true
+      if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required') { outcome = await record.fact.reconcile(); record.outcome = outcome }
+      if (outcome.kind === 'committed' || outcome.kind === 'memory-committed') return record.done = committedFactSeqs(outcome)
+      // Task1's source retires only this observed, known never-issued guarded
+      // negative. No committed sequence is invented, and issued debt stays held.
+      if (!record.everIssued && outcome.kind === 'not-issued' && outcome.code === 'FACT_PRECONDITION_STALE') { record.retired = true; return undefined }
+      const disposition: DeliveryDrainDisposition = outcome.kind === 'unknown' || outcome.kind === 'recovery-required'
+        ? { kind: 'retryable', phase: 'original-physical' }
+        : { kind: 'blocked', reason: outcome.kind === 'conflict' ? 'conflict' : outcome.kind === 'absent' ? 'explicit-absence-retry' : outcome.kind === 'not-issued' && outcome.code === 'FACT_INVALID_GROUP' ? 'invalid' : 'unclassified', debt: 'retained' }
+      throw failed(disposition, outcome)
+    })()
+    record.running = pending
+    void pending.then(() => { record.running = undefined }, () => { record.running = undefined })
+    return pending
+  }
+  const settleCloses = async () => { for (const record of closes.values()) await settle(record) }
+  const adapter = {
+    bind,
+    revoke() { retired = true },
+    async prepareLaunch(namespace: string, sourceId: string, callSeq: number): Promise<DeliveryLaunchPreparation> {
+      assertCurrent(); await settleCloses(); assertCurrent()
+      if (opening) { await settle(opening); opening = undefined; assertCurrent() }
+      if (isManagedFactOwner(owner.view, owner)) (owner as import('@i-harness/session-persistence').ManagedDocument).assertReady()
+      if (!recipient) return { kind: 'unavailable', reason: 'recipient-not-bound' }
+      const view = owner.view, call = view.events[callSeq]
+      if (call?.type !== 'tool/call' || call.name !== 'spawn_agent' || call.seq !== callSeq || callSeq < (view.header?.seedLength ?? 0)
+        || !view.events.some(e => e.type === 'tool/dispatch' && e.callId === call.callId && e.seq! > callSeq)) return { kind: 'unavailable', reason: 'uncertified-call' }
+      const original = state().source(namespace, sourceId)
+      if (original) throw failed({ kind: 'blocked', reason: 'conflict', debt: 'none' })
+      let generation = state().activeGeneration()
+      if (!generation) {
+        const fence = state().lastFenceSeq() ?? -1
+        const human = view.events.findLast(e => e.type === 'agent/input/admitted' && e.intent === 'user' && !e.synthetic
+          && e.provenance?.kind === 'human' && e.provenance.authority === 'request'
+          && (e.provenance.originSessionId === undefined || e.provenance.originSessionId === recipient)
+          && e.seq! >= (view.header?.seedLength ?? 0) && e.seq! > fence)
+        if (!human) {
+          if (fence >= 0) throw failed({ kind: 'blocked', reason: 'out-of-scope', debt: 'none' })
+          return { kind: 'unavailable', reason: 'no-own-human-origin' }
+        }
+        // No await between deciding and retaining the sole original open.
+        opening = { fact: source.captureDeliveryOpen({ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: recipient, generationId: randomUUID(), originInputSeq: human.seq! }, current) }
+        const opened = await settle(opening); opening = undefined; assertCurrent()
+        if (!opened) throw failed({ kind: 'blocked', reason: 'out-of-scope', debt: 'none' })
+        generation = state().activeGeneration()
+      }
+      if (!generation) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+      return { kind: 'bound', binding: { recipientSessionId: recipient, generationId: generation.generationId, sourceNamespace: namespace, sourceId, callSeq } }
+    },
+    async admit(evidence: SubagentDeliveryEvidence, presentation: { text: string; description: string; display: InputDisplay }): Promise<DeliveryAdmissionReceipt> {
+      await settleCloses()
+      const binding = owner.view.events[evidence.sourceSeq], terminal = owner.view.events[evidence.terminalSeq]
+      if (binding?.type !== 'agent/delivery-source' || binding.seq !== evidence.sourceSeq || binding.recipientSessionId !== recipient
+        || state().source(binding.sourceNamespace, binding.sourceId)?.seq !== binding.seq
+        || terminal?.type !== 'subagent/end' || terminal.seq !== evidence.terminalSeq || terminal.seq! <= binding.seq! || terminal.taskId !== binding.sourceId
+        || !terminal.resultRevision || !terminal.envelope || terminal.envelope.retention.kind === 'unavailable' || terminal.envelope.execution.dispatch !== 'dispatched'
+        || !(terminal.outcome === 'completed' && terminal.envelope.execution.outcome === 'succeeded' || terminal.outcome === 'error' && terminal.envelope.execution.outcome === 'failed')) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'none' })
+      const key: SubagentDeliveryKey = { recipientSessionId: binding.recipientSessionId, sourceNamespace: binding.sourceNamespace, sourceId: binding.sourceId, resultRevision: terminal.resultRevision, kind: 'subagent' }
+      const inputId = deliveryInputId(key), original = state().receipt(key)
+      if (original) return { inputId: original.event.inputId, disposition: original.disposition, durability }
+      assertCurrent()
+      const eligible = () => current() && state().activeGeneration()?.generationId === binding.generationId
+      if (!eligible()) throw new DeliverySuppressedError(inputId)
+      let record = admissions.get(inputId)
+      if (!record) {
+        record = { fact: source.captureDeliveryAdmission({ type: 'agent/delivery-received', version: 1, key, sourceSeq: evidence.sourceSeq, terminalSeq: evidence.terminalSeq, inputId }, {
+          type: 'agent/input/admitted', version: 1, inputId, text: presentation.text, delivery: 'steer', intent: 'system',
+          provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'session.delivery.subagent' },
+          synthetic: { description: presentation.description, scope: 'turn', display: presentation.display },
+        }, eligible) }
+        admissions.set(inputId, record)
+      }
+      await settle(record)
+      admissions.delete(inputId)
+      if (record.retired) {
+        // Do not join a close from the notification operation which a host's
+        // close acknowledgment may itself be joining. Until durable closure
+        // proves suppression this remains a truthful blocked, unissued result.
+        if (state().activeGeneration()?.generationId !== binding.generationId) throw new DeliverySuppressedError(inputId)
+        throw failed({ kind: 'blocked', reason: retired ? 'retired' : 'out-of-scope', debt: 'none' })
+      }
+      const receipt = state().receipt(key)
+      if (!receipt) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'retained' })
+      return { inputId: receipt.event.inputId, disposition: receipt.disposition, durability }
+    },
+    requestClose(reason: 'user-stop' | 'rewind') {
+      const fenceId = randomUUID()
+      // captureDeliveryClose installs the actual live fence synchronously.
+      const record = { fact: source.captureDeliveryClose({ type: 'agent/delivery-generation', version: 1, op: 'close', recipientSessionId: recipient!, fenceId, reason }) }
+      closes.set(fenceId, record)
+      const settled = settle(record).then(seqs => {
+        if (!seqs) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'retained' })
+        return { fenceId, closeSeq: seqs[0]!, durability }
+      })
+      void settled.catch(() => {})
+      return { fenceId, settled }
+    },
+    async settle() {
+      await settleCloses()
+      if (opening) { await settle(opening); opening = undefined }
+      for (const [id, record] of admissions) { await settle(record); admissions.delete(id) }
+    },
+    async closeReceipt(fenceId: string): Promise<DeliveryCloseReceipt> {
+      const record = closes.get(fenceId)
+      if (!record) throw new TypeError('Unknown original delivery close')
+      const seqs = await settle(record)
+      if (!seqs) throw failed({ kind: 'blocked', reason: 'invalid', debt: 'retained' })
+      return { fenceId, closeSeq: seqs[0]!, durability }
+    },
+  }
+  return adapter
+}

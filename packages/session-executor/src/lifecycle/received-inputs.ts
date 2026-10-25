@@ -1,5 +1,6 @@
 import { AsyncInbox, canonicalJsonData, committedFactSeqs, FactRecoveryRequiredError, isStrictFactData, readInbox, type CapturedSettlementFact, type FactOwner, type InputFacts, type ProducerFactOutcome, type SessionEvent } from '@i-harness/core-session'
 import { createHash } from 'node:crypto'
+import { createRecipientDelivery } from './recipient-delivery.ts'
 
 type InputEvent = Extract<SessionEvent, { type: 'agent/input/admitted' | 'agent/input/cancelled' }>
 interface Pending { fingerprint?: string; cancellationId?: string; invalid?: InputEvent; fact: CapturedSettlementFact<ProducerFactOutcome> }
@@ -7,12 +8,13 @@ const owners = new WeakMap<FactOwner, ReturnType<typeof createReceivedInputs>>()
 
 /** Shared trusted input composition for one exact document incarnation. Only
  * unresolved received/cancelled captures are retained, never raw history. */
-export function receivedInputsFor(owner: FactOwner) {
+export function receivedInputsFor(owner: FactOwner, recipientSessionId?: string) {
   let inputs = owners.get(owner)
-  if (!inputs) { inputs = createReceivedInputs(owner); owners.set(owner, inputs) }
+  if (!inputs) { inputs = createReceivedInputs(owner, recipientSessionId); owners.set(owner, inputs) }
+  inputs.delivery.bind(recipientSessionId)
   return inputs
 }
-function createReceivedInputs(owner: FactOwner) {
+function createReceivedInputs(owner: FactOwner, recipientSessionId?: string) {
   const pending = new Map<string | symbol, Pending>()
   const settle = async (key: string | symbol, record: Pending) => {
     const outcome = await record.fact.admit()
@@ -22,9 +24,11 @@ function createReceivedInputs(owner: FactOwner) {
   }
   const source = owner.registerReceivedInputSource(async () => {
     const errors: unknown[] = []
+    try { await delivery.settle() } catch (error) { errors.push(error) }
     for (const [key, record] of pending) try { committedFactSeqs(await settle(key, record)) } catch (error) { errors.push(error) }
     if (errors.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(errors, 'Received inputs require recovery') })
   })
+  const delivery = createRecipientDelivery(owner, source, recipientSessionId)
   const receive = (event: InputEvent, admitted: boolean): Promise<ProducerFactOutcome> => {
     let strict = false
     try { strict = isStrictFactData(event) } catch { /* The original invalid input remains source-owned. */ }
@@ -53,5 +57,5 @@ function createReceivedInputs(owner: FactOwner) {
       scheduled: (...args) => optional(facts => facts.scheduled(...args)),
     }
   }
-  return { inbox: new AsyncInbox(owner.view, facts), facts }
+  return { inbox: new AsyncInbox(owner.view, facts), facts, delivery }
 }

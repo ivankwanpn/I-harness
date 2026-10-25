@@ -12,8 +12,14 @@ import type { RoleRegistry } from "../roles.ts"
 import type { RoleModelHost, RoleModelSelection, RoleModelState } from "../child.ts"
 import type { TaskRegistry } from "../task-protocol.ts"
 import type { ReportPolicy } from "../report-policy.ts"
+import type { ParentInputAdmission } from '../task-notification.ts'
 
 export interface SubagentToolDeps extends RoleModelHost {
+  parentNotify?: ParentInputAdmission
+  notificationNamespace?: string
+  onTaskTerminalCommitted?: () => void
+  onTaskTerminalRecovery?: () => void
+  registerDeliverySource?(taskId: string, source: { reconcileTerminal(): Promise<void> }): () => void
   reportPolicy?: ReportPolicy
   table: AgentTable
   jobs: JobRegistry

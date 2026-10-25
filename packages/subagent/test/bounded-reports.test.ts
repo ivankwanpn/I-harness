@@ -97,7 +97,7 @@ it("actual followup changes a job digest and stale result/list pages refuse mixe
   } finally { await sub.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it("strict owned task documents precede a bounded parent notice while full UI presentation remains available", async () => {
+it("strict owned task documents retain full presentation while an unbound generic notice stays pending", async () => {
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   const documents: any[] = [], admissions: any[] = []
@@ -110,11 +110,12 @@ it("strict owned task documents precede a bounded parent notice while full UI pr
   const drain = createNotificationDrain({ tasks, reportPolicy: SHIPPING_REPORT_POLICY, admit: { admit: async input => { expect(documents.some(doc => doc.tasks.some((row: any) => row.resultText === full))).toBe(true); admissions.push(input) }, wake: () => { wakes++ } } })
   const delivery = drain.drain()
   await Promise.resolve(); expect(admissions).toHaveLength(0)
-  release(); await delivery
-  expect(wakes).toBe(1)
-  expect(Buffer.byteLength(admissions[0].text)).toBeLessThanOrEqual(16384)
-  expect(admissions[0].text).toContain("durable")
-  expect(admissions[0].display.body).toBe(full)
+  const retention = tasks.retainResult(t.id)
+  release(); await delivery; await retention
+  expect(wakes).toBe(0)
+  expect(admissions).toHaveLength(0)
+  expect(documents.some(doc => doc.tasks.some((row: any) => row.resultText === full))).toBe(true)
+  expect(tasks.notifications()[0]).toMatchObject({ status: 'pending', text: full })
   expect(tasks.get(t.id)).toMatchObject({ retention: "durable", outcome: "completed" })
 })
 
@@ -128,7 +129,7 @@ it("retains a completed outcome and suppresses parent admission until strict ret
   const drain = createNotificationDrain({ tasks, reportPolicy: SHIPPING_REPORT_POLICY, admit: { admit: async () => { admissions++ }, wake: () => { wakes++ } } })
   const t = tasks.submit({ identity: { parentSessionId: "p" }, agentPath: "root/a", description: "a", prompt: "go", agent: "general", delivery: "parent" })
   tasks.terminalize({ taskId: t.id, outcome: "completed", resultText: "side effect actually completed" })
-  const delivery = drain.drain()
+  const delivery = tasks.retainResult(t.id)
   await Promise.resolve()
   expect(wakes).toBe(0)
   expect(admissions).toBe(0)
@@ -136,10 +137,11 @@ it("retains a completed outcome and suppresses parent admission until strict ret
   await expect(delivery).rejects.toThrow("disk full")
   expect(wakes).toBe(0)
   expect(tasks.get(t.id)).toMatchObject({ outcome: "completed", resultText: "side effect actually completed", retention: "failed" })
-  expect(tasks.notifications()[0]).toMatchObject({ status: "error" })
+  expect(tasks.notifications()[0]).toMatchObject({ status: "pending" })
+  expect(await drain.drain()).toBe(0)
 })
 
-it("many overlapping completion drains admit each bounded preview once with honest memory references", async () => {
+it("overlapping unbound completion drains preserve all memory results without generic admission", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), admitted: string[] = []
   const sub = registerSubagent(ctx, tools, { parentSession: createSession(), parentModel: createMockClient([]), exec: registerExec(ctx), resolveModel: async () => ({ status: "unconfigured", reason: "unused" }), reportPolicy: SHIPPING_REPORT_POLICY,
     parentNotify: { admit: async input => { await Promise.resolve(); admitted.push(input.text) }, wake: () => {} },
@@ -148,9 +150,11 @@ it("many overlapping completion drains admit each bounded preview once with hone
     const task = sub.tasks.submit({ identity: { parentSessionId: "p", callEventSeq: n }, agentPath: `root/${n}`, description: `task ${n}` + "\u0000".repeat(3000), prompt: "go", agent: "general", delivery: "parent" })
     sub.tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: '\u0000結果🙂"\n'.repeat(10000) })
   }
-  await vi.waitFor(() => expect(admitted).toHaveLength(30))
-  expect(new Set(admitted.map(text => text.match(/<task id="([^"]+)"/)?.[1])).size).toBe(30)
-  for (const text of admitted) { expect(Buffer.byteLength(JSON.stringify(text))).toBeLessThanOrEqual(16384); expect(text).toContain("memory"); expect(text).not.toContain("durable") }
+  await Promise.all([sub.drainParentNotifications(), sub.drainParentNotifications(), sub.drainParentNotifications()])
+  expect(admitted).toHaveLength(0)
+  expect(sub.tasks.notifications()).toHaveLength(30)
+  expect(sub.tasks.notifications().every(n => n.status === 'pending')).toBe(true)
+  expect(sub.tasks.list().every(t => t.outcome === 'completed')).toBe(true)
   await sub.dispose()
 })
 
@@ -186,7 +190,7 @@ it("a real completed child tool is never replayed when its full task document re
     sub.roles.register({ name: "effect-worker", description: "controlled worker", systemPrompt: "Use effect then report", tools: ["effect"] })
     const spawned = (await tools.execute({ name: "spawn_agent", args: { message: "go", task_name: "effect", agent_type: "effect-worker" } })).output as any
     await vi.waitFor(() => expect(sub.tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "effect actually completed", retention: "failed" }))
-    await vi.waitFor(() => expect(sub.tasks.notifications()[0]?.status).toBe("error"))
+    expect(sub.tasks.notifications()[0]?.status).toBe("pending")
     expect(admissions).toHaveLength(0)
     expect(sideeffects).toBe(1); expect(modelCalls).toBe(2)
     const inspected = (await tools.execute({ name: "get_task_output", args: { task_ids: [spawned.task_id] } })).output as any
@@ -202,10 +206,9 @@ it("cancellation during strict result retention suppresses admission without rep
   const root = await mkdtemp(join(tmpdir(), "child-retention-cancellation-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "parent" })
-  let release!: () => void, entered!: () => void, checked!: () => void
+  let release!: () => void, entered!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   const retaining = new Promise<void>(resolve => { entered = resolve })
-  const preRetentionCheck = new Promise<void>(resolve => { checked = resolve })
   const strict = coordinator.putDocumentStrict!.bind(coordinator)
   coordinator.putDocumentStrict = async (key, data) => {
     if (key === "task-parent" && (data as any).tasks.some((task: any) => task.resultText === "completed child effect")) {
@@ -235,20 +238,20 @@ it("cancellation during strict result retention suppresses admission without rep
     const drain = createNotificationDrain({ tasks: sub.tasks, reportPolicy: SHIPPING_REPORT_POLICY,
       isSessionCancelled: sessionId => {
         const cancelled = isSessionCancelledChain(sub.tasks, sessionId)
-        if (!cancelled) checked()
         return cancelled
       }, admit: { admit, wake },
     })
     const delivery = drain.drain()
-    await preRetentionCheck
     expect(sub.tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "completed child effect", retention: "pending" })
     sub.tasks.cancelTree(parent.id)
     expect(isSessionCancelledChain(sub.tasks, "parent")).toBe(true)
     release()
     expect(await delivery).toBe(0)
+    await sub.tasks.retainResult(spawned.task_id)
+    await sub.table.get('root/effect')!.followupChain
     expect(admit).not.toHaveBeenCalled()
     expect(wake).not.toHaveBeenCalled()
-    expect(sub.tasks.notifications().find(n => n.submissionId === spawned.task_id)).toMatchObject({ status: "suppressed", text: "completed child effect" })
+    expect(sub.tasks.notifications().find(n => n.submissionId === spawned.task_id)).toMatchObject({ status: "pending", text: "completed child effect" })
     expect(sub.tasks.get(spawned.task_id)).toMatchObject({ outcome: "completed", resultText: "completed child effect", retention: "durable" })
     expect(sub.jobs.read(spawned.job_id)).toMatchObject({ status: "completed", output: "completed child effect" })
     const task = sub.tasks.get(spawned.task_id)!

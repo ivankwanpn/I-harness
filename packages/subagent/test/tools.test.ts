@@ -1144,7 +1144,7 @@ describe("M26-D2 background delivery", () => {
     expect(out.resultText).toBeUndefined()
   }, 15_000)
 
-  it("terminalize delivers to the parent immediately (drain hooked to onTerminalized)", async () => {
+  it("an unbound terminalized source stays pending without generic parent admission", async () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     parentReg.register({ name: "read", description: "read", inputSchema: {}, execute: async () => ({}) })
@@ -1183,11 +1183,11 @@ describe("M26-D2 background delivery", () => {
       await new Promise((r) => setTimeout(r, 50))
     }
     await new Promise((r) => setTimeout(r, 20))
-    expect(admits).toHaveLength(1)
-    expect(tasks.notifications()[0]!.status).toBe("woken")
+    expect(admits).toHaveLength(0)
+    expect(tasks.notifications()[0]!.status).toBe("pending")
   }, 15_000)
 
-  it("registerSubagent wires the drain (background:true spawn → completion admiss to the parent)", async () => {
+  it("registerSubagent activation keeps unbound background results pending and readable", async () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const session = createSession()
@@ -1207,8 +1207,9 @@ describe("M26-D2 background delivery", () => {
     }
     expect(mounted.tasks.get(taskId)!.outcome).toBe("completed")
     await new Promise((r) => setTimeout(r, 50))
-    expect(admits).toHaveLength(1)
-    expect(mounted.tasks.notifications()[0]!.status).toBe("woken")
+    await mounted.drainParentNotifications()
+    expect(admits).toHaveLength(0)
+    expect(mounted.tasks.notifications()[0]!.status).toBe("pending")
   }, 15_000)
 })
 

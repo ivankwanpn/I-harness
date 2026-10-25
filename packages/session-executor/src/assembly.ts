@@ -366,7 +366,9 @@ export interface SessionAssembly {
   /** The real assembly-local exec registry and exact owner-filtered workflow store. */
   backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string }[]
   /** Retry durable parent messages only after the host publishes its lane. */
-  drainParentNotifications?(): Promise<void>
+  drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
+  /** Original retained source settlement only: no recipient admission/wake. */
+  settleParentDeliverySources?(): Promise<void>
   tools: ToolRegistry
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
@@ -1659,7 +1661,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
-      drainParentNotifications: async () => { for (const handle of teamHandles) await handle.drainLeadMessages?.() },
+      drainParentNotifications: async ordinaryOnly => { await subagent.drainParentNotifications(); if (!ordinaryOnly) for (const handle of teamHandles) await handle.drainLeadMessages?.() },
+      settleParentDeliverySources: () => subagent.settleParentDeliverySources(),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       registerBackgroundJob: (input) => {

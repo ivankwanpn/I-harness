@@ -1,6 +1,7 @@
-import { committedFactSeqs, FactRecoveryRequiredError, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ProducerFactOutcome, type SessionEvent } from '@i-harness/core-session'
+import { committedFactSeqs, FactRecoveryRequiredError, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ProducerFactOutcome, type SessionEvent, type SubagentDeliveryLaunchDraft } from '@i-harness/core-session'
 import type { RetainedOutcomeSink } from '@i-harness/core-tools'
 import type { TaskRecord } from '../task-protocol.ts'
+import { OriginalTerminalRecoveryError } from '../task-notification.ts'
 
 export interface PublishedChild { path: string; jobId: string; sessionId?: string; modelLabel?: string }
 type SpawnIdentity = Readonly<{ agent_path: string; job_id: string; task_id: string }>
@@ -18,7 +19,7 @@ export function spawnObservation(base: SpawnIdentity, task: TaskRecord) {
 
 /** Retains the original start disposition, publication identity and real end.
  * Passive outcome reads never join a still-running child. */
-export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true) {
+export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retained?: RetainedOutcomeSink, background = true, onTerminalCommitted?: () => void, onTerminalRecovery?: () => void) {
   const action = owner.beginAction(signal)
   let start: CapturedActionFact<ProducerFactOutcome> | undefined
   let terminal: CapturedSettlementFact<ProducerFactOutcome> | undefined
@@ -31,6 +32,8 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   let saving: Promise<void> | undefined
   let taskSaved = false, terminalSaved = false, unused = false, retainPublished = false
   let resultPublished = false
+  let terminalSignalled = false
+  let recoverySignalled = false, terminalOutcome: ProducerFactOutcome | undefined, taskSaveFailure: unknown
   let settling = false
   const terminalReady = Promise.withResolvers<void>()
   void terminalReady.promise.catch(() => {})
@@ -69,18 +72,33 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     if (taskSaved) return
     if (!taskSave) throw new FactRecoveryRequiredError()
     const pending = saving ??= taskSave().then(() => { taskSaved = true })
-    try { await pending } finally { if (saving === pending) saving = undefined }
+    try { await pending } catch (error) { taskSaveFailure = error; throw error } finally { if (saving === pending) saving = undefined }
+  }
+  const completed = () => {
+    if (terminalSaved && taskSaved && !terminalSignalled) {
+      terminalSignalled = true
+      try { onTerminalCommitted?.() } catch { /* Observers cannot replace the original outcome. */ }
+    }
+    publishResult()
+  }
+  const terminalFailure = (errors: unknown[]) => {
+    const failure = Object.assign(new AggregateError(errors, 'Spawn completion needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+    if (taskSaved && terminalOutcome && (terminalOutcome.kind === 'unknown' || terminalOutcome.kind === 'recovery-required')) {
+      if (!recoverySignalled) { recoverySignalled = true; try { onTerminalRecovery?.() } catch { /* Original outcome remains authoritative. */ } }
+      return new OriginalTerminalRecoveryError(terminalOutcome, failure)
+    }
+    return failure
   }
   const settleTerminal = async () => {
     await prepareTerminal()
     if (captureFailure || !terminal) throw Object.assign(new FactRecoveryRequiredError(), { cause: captureFailure })
     const results = await Promise.allSettled([
-      terminalSaved ? Promise.resolve() : terminal.reconcile().then(outcome => { committedFactSeqs(outcome); terminalSaved = true }),
+      terminalSaved ? Promise.resolve() : terminal.reconcile().then(outcome => { terminalOutcome = outcome; committedFactSeqs(outcome); terminalSaved = true }),
       saveTask(),
     ])
     const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-    if (errors.length) throw Object.assign(new AggregateError(errors, 'Spawn completion needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
-    publishResult()
+    if (errors.length) throw terminalFailure(errors)
+    completed()
   }
   const source = action.registerSettlementSource(async () => {
     if (!unused) await settleTerminal()
@@ -91,6 +109,22 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     publishResult()
   })
   return {
+    async reconcileTerminal() {
+      // This hook never calls prepareEnd or captures a new terminal/result.
+      if (!terminal) return
+      source.assertHeld()
+      let outcome = await terminal.observe()
+      if (outcome.kind === 'unknown' || outcome.kind === 'recovery-required') outcome = await terminal.reconcile()
+      terminalOutcome = outcome
+      const errors: unknown[] = []
+      try { committedFactSeqs(outcome); terminalSaved = true } catch (error) { errors.push(error) }
+      if (!taskSaved) {
+        if (saving) try { await saving } catch (error) { errors.push(error) }
+        else errors.push(taskSaveFailure ?? new FactRecoveryRequiredError())
+      }
+      if (errors.length) throw terminalFailure(errors)
+      completed(); terminalReady.resolve(); await source.close()
+    },
     bindTask(id: string, save: () => Promise<void>) { taskId = id; taskSave = save },
     settling() { settling = true },
     published(info: PublishedChild) {
@@ -104,8 +138,8 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     settlementHeld() { try { source.assertHeld(); return true } catch { return false } },
     identity,
     async releaseUnused() { unused = true; await source.close() },
-    async start(event: Extract<SessionEvent, { type: 'subagent/start' }>) {
-      start ??= action.captureSubagentStart(event)
+    async start(event: Extract<SessionEvent, { type: 'subagent/start' }>, binding?: SubagentDeliveryLaunchDraft) {
+      start ??= action.captureSubagentStart(event, binding)
       committedFactSeqs(await start.admit())
       action.assertOpen()
     },

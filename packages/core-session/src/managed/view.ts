@@ -1,6 +1,6 @@
 import { validateDeliveryFrame } from '../conversation/delivery.ts'
 import type { Session, SessionEvent } from '../events/types.ts'
-import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, type ConversationValidationIndex } from '../conversation/validation.ts'
+import { createConversationIndex, createBootstrapConversationIndex, readConversationDeliveries, readConversationGenerations, conversationScopeKey, type ConversationValidationIndex } from '../conversation/validation.ts'
 import { managedSessions, managedFactOwners, subscribers } from '../events/state.ts'
 import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
@@ -11,6 +11,12 @@ const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
 export function readOwnedDeliveryState(view: SessionView) {
   const index = originalIndexes.get(view)
   return index && readConversationDeliveries(index)
+}
+/** Exact immutable factory view and original scope only. Unbound/mutable or
+ * mismatched observations retain the public strict replay path. */
+export function readOwnedGenerationActions(view: SessionView, scope: import('../conversation/generation.ts').GenerationHistoryScope) {
+  const index = originalIndexes.get(view)
+  return index && index.generationScope === conversationScopeKey(scope) ? readConversationGenerations(index) : undefined
 }
 
 /** Composition capability, never attached to the public readonly Session. The
