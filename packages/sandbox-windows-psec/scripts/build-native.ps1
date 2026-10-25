@@ -7,6 +7,24 @@ if ($ControlledTrace -and !$BridgeOnly) { throw 'Controlled call tracing is avai
 if ($ControlledSkipChildRestore -and (!$BridgeOnly -or !$ControlledTrace)) { throw 'Child-restore counterfactual requires an isolated controlled trace build.' }
 if ($ControlledSeedChildPolicy -and (!$BridgeOnly -or !$ControlledTrace)) { throw 'Nondefault child-policy fixture requires an isolated controlled trace build.' }
 if ($ControlledRawChild -and (!$BridgeOnly -or !$ControlledTrace)) { throw 'Raw slave fixture requires an isolated controlled trace build.' }
+# Enumerate once for both the nonmutating preflight and final exact-byte provenance.
+# Do not require Git/HEAD equality: legitimate canonical working changes may build.
+$nativeSourceRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'native/src')).TrimEnd('\') + '\'
+$nativeSourceFiles = @(Get-ChildItem -LiteralPath $nativeSourceRoot -File -Recurse | ForEach-Object {
+  $sourcePath = [IO.Path]::GetFullPath($_.FullName)
+  if (!$sourcePath.StartsWith($nativeSourceRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Native source path escaped native/src.' }
+  # Substring works on Windows PowerShell 5 / .NET Framework; GetRelativePath does not.
+  'native/src/' + $sourcePath.Substring($nativeSourceRoot.Length).Replace('\', '/')
+})
+$sourceFiles = @('native/Cargo.toml','native/Cargo.lock') + $nativeSourceFiles + @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'native/msys') -File | ForEach-Object { 'native/msys/' + $_.Name })
+foreach ($relative in (@('protocol.md') + $sourceFiles)) {
+  $bytes = [IO.File]::ReadAllBytes((Join-Path $packageRoot $relative))
+  for ($offset = 1; $offset -lt $bytes.Length; $offset++) {
+    if ($bytes[$offset - 1] -eq 13 -and $bytes[$offset] -eq 10) {
+      throw "Canonical LF required: $relative (CRLF at byte $($offset - 1)); preserve/normalize owned input bytes before building."
+    }
+  }
+}
 if ($BridgeOnly) {
   $ControlledOutputDirectory = [IO.Path]::GetFullPath($ControlledOutputDirectory)
   $controlledRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot '../../.tmp')).TrimEnd('\') + '\'
@@ -79,14 +97,6 @@ foreach ($noticeFile in @('CYGWIN_LICENSE','COPYING.LIB','COPYING','SOURCES.md')
   Copy-Item -LiteralPath (Join-Path $packageRoot ('native/msys/notices/' + $noticeFile)) -Destination $noticePath -Force
   $noticeHashes['msys-notices/' + $noticeFile] = (Get-FileHash -Algorithm SHA256 -LiteralPath $noticePath).Hash.ToLowerInvariant()
 }
-$nativeSourceRoot = [IO.Path]::GetFullPath((Join-Path $packageRoot 'native/src')).TrimEnd('\') + '\'
-$nativeSourceFiles = @(Get-ChildItem -LiteralPath $nativeSourceRoot -File -Recurse | ForEach-Object {
-  $sourcePath = [IO.Path]::GetFullPath($_.FullName)
-  if (!$sourcePath.StartsWith($nativeSourceRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Native source path escaped native/src.' }
-  # Substring works on Windows PowerShell 5 / .NET Framework; GetRelativePath does not.
-  'native/src/' + $sourcePath.Substring($nativeSourceRoot.Length).Replace('\', '/')
-})
-$sourceFiles = @('native/Cargo.toml','native/Cargo.lock') + $nativeSourceFiles + @(Get-ChildItem -LiteralPath (Join-Path $packageRoot 'native/msys') -File | ForEach-Object { 'native/msys/' + $_.Name })
 $sourceHashes = [ordered]@{}
 foreach ($relative in ($sourceFiles | Sort-Object)) { $sourceHashes[$relative] = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $packageRoot $relative)).Hash.ToLowerInvariant() }
 $provenance = [ordered]@{
