@@ -36,14 +36,17 @@ export async function captureLegacy(
     const bytes = prefix(original, Math.min(getConfig().maxCaptureBytes, available))
     if (original.length > 0 && bytes.length === 0) return undefined
     const revision = digest(bytes)
+    // The canonical JSON manifest omits undefined optional source fields. Keep
+    // the live map/returned ref identical to that original persisted metadata.
+    const source = captured.source ? Object.fromEntries(Object.entries(captured.source).filter(([, value]) => value !== undefined)) as NonNullable<ContextCapture['source']> : undefined
     const ref: ContextResultRef = {
       id: referenceId(workspaceId, captured.sessionId, captured.callId, revision),
       workspaceId, sessionId: captured.sessionId, callId: captured.callId,
       label: captured.label, revision, bytes: bytes.length, originalBytes,
       complete: captured.complete && bytes.length === originalBytes,
       expiresAt: Date.now() + getConfig().retentionDays * 86400000,
-      ...(captured.source ? { source: captured.source } : {}),
+      ...(source ? { source } : {}),
     }
-    return current.put(turn, { ref, ...(captured.source ? { source: captured.source } : {}) }, bytes, getConfig().maxDiskBytes, owned)
+    return current.put(turn, { ref, ...(source ? { source } : {}) }, bytes, getConfig().maxDiskBytes, owned)
   })
 }

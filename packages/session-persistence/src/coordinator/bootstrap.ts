@@ -12,6 +12,7 @@ import { compileSemanticSeed } from '../semantic-seed.ts'
 import { isStrictFactData } from '@i-harness/core-session'
 import { ownBackendOutcome } from './fact-outcome.ts'
 import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
+import { preparationFacts } from './bootstrap-preparation-facts.ts'
 
 export interface ManagedEntry {
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -70,14 +71,15 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
 export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const read=(invocation:BootstrapInvocation)=>backend.readBootstrapState!(invocation)
-  async function prepareTarget(stage: BootstrapHeaderStage, guards: BootstrapGuards, reconcile: boolean, entry: ManagedEntry): Promise<boolean> {
+  async function prepareTarget(stage: BootstrapHeaderStage, guards: BootstrapGuards, reconcile: boolean, entry: ManagedEntry, events: readonly SessionEvent[]): Promise<boolean> {
     if (!guards.targetPreparation) return true
     if (!reconcile) current(guards, entry)
     try {
       const request = captureBootstrapTargetPreparationRequest({ invocation: stage.invocation, manifestDigest: manifest(stage) })
+      const facts = preparationFacts(stage, events)
       const outcome = captureBootstrapTargetPreparationOutcome(reconcile
-        ? await guards.targetPreparation.reconcile(request)
-        : await guards.targetPreparation.confirm(request, () => { try { current(guards, entry); return true } catch { return false } }))
+        ? await guards.targetPreparation.reconcile(request, facts)
+        : await guards.targetPreparation.confirm(request, () => { try { current(guards, entry); return true } catch { return false } }, facts))
       if (outcome.kind !== 'confirmed') return false
       targetCurrent(guards)
     } catch { return false }
@@ -102,7 +104,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const b=entry.bootstrap!,stage=b.stage!
     if(state.torn)return blocked(entry)
     checkBirth(stage,state)
-    if (!await prepareTarget(stage, guards, true, entry)) return blocked(entry, 'dependency-unavailable')
+    if (!await prepareTarget(stage, guards, true, entry, state.events!)) return blocked(entry, 'dependency-unavailable')
     const closure=await dependencies(stage,state.events!,guards,true,entry)
     const completion=state.events![stage.seed.seedLength]
     if(!closure||completion?.type!=='session/bootstrap'||completion.dependencyClosureDigest!==closure)return blocked(entry,'dependency-unavailable')
@@ -187,7 +189,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!state.meta||!state.events||!state.prefix)return blocked(entry)
       const doc=entry.document??attach(id,entry,buildSession(state.meta,state.events),state.prefix)
       b.phase='dependencies'
-      if (!await prepareTarget(b.stage, guards, false, entry)) return blocked(entry, 'dependency-unavailable')
+      if (!await prepareTarget(b.stage, guards, false, entry, b.request.seed.records)) return blocked(entry, 'dependency-unavailable')
       const closure=await dependencies(b.stage,state.events,guards,false,entry)
       if(!closure)return blocked(entry,'dependency-unavailable')
       current(guards,entry)

@@ -94,19 +94,19 @@ export async function createNativeContextRuntime(options:{
     // A manifest becomes admissible only after the real broker checked the
     // original invocation against the coordinator's retained reservation.
     const targetPreparation:BootstrapTargetPreparationPort={
-      async confirm(request,current){
+      async confirm(request,current,facts){
         if(!available())return{kind:'blocked',reason:'unavailable'}
         if(!request||typeof request!=='object'||!isStrictFactData(request))return{kind:'blocked',reason:'conflict'}
         const digest=Object.getOwnPropertyDescriptor(request,'manifestDigest')?.value
-        const result=await preparation.targetPreparation.confirm(request,current)
+        const result=await preparation.targetPreparation.confirm(request,current,facts)
         if(result.kind==='confirmed'){assertTargetCurrent();manifestDigest=digest}
         return result
       },
-      async reconcile(request){
+      async reconcile(request,facts){
         if(!available())return{kind:'blocked',reason:'unavailable'}
         if(!request||typeof request!=='object'||!isStrictFactData(request))return{kind:'blocked',reason:'conflict'}
         const digest=Object.getOwnPropertyDescriptor(request,'manifestDigest')?.value
-        const result=await preparation.targetPreparation.reconcile(request)
+        const result=await preparation.targetPreparation.reconcile(request,facts)
         if(result.kind==='confirmed'){assertTargetCurrent();manifestDigest=digest}
         return result
       },assertTargetCurrent,

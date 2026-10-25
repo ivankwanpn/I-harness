@@ -25,6 +25,12 @@ export interface ContextSearchResult {
   partial: boolean; reasons: string[];
 }
 export interface ContextOutputService {
+  registerLegacyForkTransfer(capture: import('./legacy/fork-types.ts').LegacyForkCapture): import('./legacy/fork-types.ts').LegacyForkTransferScope;
+  confirmLegacyForkTransfer(scope: import('./legacy/fork-types.ts').LegacyForkTransferScope, request: import('./legacy/fork-types.ts').LegacyPreparationRequest, current: () => boolean, facts: import('@i-harness/core-session').BootstrapPreparationFacts): Promise<import('./legacy/fork-types.ts').LegacyTransferOutcome>;
+  reconcileLegacyForkTransfer(scope: import('./legacy/fork-types.ts').LegacyForkTransferScope, request: import('./legacy/fork-types.ts').LegacyPreparationRequest, facts: import('@i-harness/core-session').BootstrapPreparationFacts): Promise<import('./legacy/fork-types.ts').LegacyTransferOutcome>;
+  closeLegacyForkTransfer(scope: import('./legacy/fork-types.ts').LegacyForkTransferScope): Promise<void>;
+  readLegacyObserved(access: ContextAccess, query: import('./legacy/fork-types.ts').LegacyReadQuery, observation: import('./legacy/fork-types.ts').LegacyReadObservation): Promise<ContextReadResult>;
+  searchLegacyObserved(access: ContextAccess, query: import('./legacy/fork-types.ts').LegacySearchQuery, observation: import('./legacy/fork-types.ts').LegacyReadObservation): Promise<ContextSearchResult>;
   registerSeedDependencyTransfer(access: import('./artifact/bootstrap-transfer.ts').SeedDependencyHostAccess): import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope;
   confirmSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest, current: () => boolean): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
   reconcileSeedDependencies(scope: import('./artifact/bootstrap-transfer.ts').SeedDependencyTransferScope, request: import('@i-harness/core-session').BootstrapDependencyRequest): Promise<import('@i-harness/core-session').BootstrapDependencyOutcome>;
@@ -47,6 +53,8 @@ export interface ContextOutputService {
   close(): Promise<void>;
 }
 export interface ContextOutputOptions {
+  /** Host composition must enable this before publishing legacy transfers. */
+  requireObservedLegacyRecipients?: boolean;
   root: string; workspaceId: string; config?: Partial<ContextOutputConfig>;
   authorize?: (access: ContextAccess, ref: ContextResultRef) => boolean|Promise<boolean>;
   authorizeResult?: (access: ContextAccess, source: {

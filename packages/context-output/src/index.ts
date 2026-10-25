@@ -1,4 +1,5 @@
 export type * from './types.ts'
+export type * from './legacy/fork-types.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
 export { createContextOutputService } from './service.ts'
 export { createContextOutputTools } from './tools.ts'

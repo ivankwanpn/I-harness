@@ -3,6 +3,8 @@ import { basename, dirname, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
 import { isMetadataData } from './metadata-data.ts'
+export type RetireFile = (handle: FileHandle) => Promise<void>
+export const retireFile = (handle: FileHandle, retire?: RetireFile): Promise<void> => retire ? retire(handle) : handle.close()
 
 export async function writeAll(handle: FileHandle, bytes: Uint8Array, position: number, current: () => boolean = () => true): Promise<void> {
   if (!Number.isSafeInteger(position + bytes.length) || position < 0) throw new Error('Artifact range overflow')
@@ -24,13 +26,13 @@ export async function readExact(handle: FileHandle, length: number, position: nu
   }
   return bytes
 }
-export async function boundedJson(path: string, budget = 65536): Promise<unknown> {
+export async function boundedJson(path: string, budget = 65536, retire?: RetireFile): Promise<unknown> {
   const handle = await open(path, 'r')
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > budget) throw new Error('Invalid artifact metadata')
     return JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
-  } finally { await handle.close() }
+  } finally { await retireFile(handle, retire) }
 }
 export async function atomicJson(path: string, value: unknown): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value))
@@ -71,7 +73,7 @@ function immutableBytes(value: unknown): Buffer {
   if (bytes.length > 65536) throw new MetadataConflict('Artifact metadata exceeds limit')
   return bytes
 }
-async function inspectImmutable(root: string, path: string, bytes: Buffer): Promise<{ final: boolean; pending: boolean }> {
+async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<{ final: boolean; pending: boolean }> {
   const temporary = pendingPath(path, bytes)
   try {
     if (resolve(dirname(path)) === resolve(root)) {
@@ -95,11 +97,11 @@ async function inspectImmutable(root: string, path: string, bytes: Buffer): Prom
         || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata conflict')
       return true
     } catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false; throw cause }
-    finally { await handle?.close() }
+    finally { if (handle) await retireFile(handle, retire) }
   }
   return { final: await inspect(path, false), pending: await inspect(temporary, true) }
 }
-async function syncImmutable(root: string, path: string, bytes: Buffer): Promise<string[]> {
+async function syncImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<string[]> {
   await ownedPath(root, path)
   // Windows FlushFileBuffers requires a writable handle; no bytes are written.
   const handle = await open(path, 'r+')
@@ -110,18 +112,18 @@ async function syncImmutable(root: string, path: string, bytes: Buffer): Promise
     if (!info.isFile() || info.size !== bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes)) throw new MetadataConflict('Immutable artifact metadata conflict')
     await handle.sync()
   } catch (cause) { failure = cause }
-  try { await handle.close() }
+  try { await retireFile(handle, retire) }
   catch (cause) { diagnostics.push('Post-sync metadata handle cleanup: ' + (cause instanceof Error ? cause.message : String(cause))) }
   if (failure) throw failure
   return diagnostics
 }
 function confirmed(diagnostics: readonly string[]): ImmutableMetadataOutcome { return { kind: 'confirmed', ...(diagnostics.length ? { diagnostics } : {}) } }
 function metadataFailure(cause: unknown): ImmutableMetadataOutcome { return { kind: cause instanceof MetadataConflict ? 'conflict' : 'unknown', diagnostics: [cause instanceof Error ? cause.message : String(cause)] } }
-export async function confirmAtomicJson(root: string, path: string, value: unknown): Promise<ImmutableMetadataOutcome> {
+export async function confirmAtomicJson(root: string, path: string, value: unknown, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
   try {
-    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes)
+    const bytes = immutableBytes(value), state = await inspectImmutable(root, path, bytes, retire)
     if (!state.final) return { kind: state.pending ? 'unknown' : 'absent' }
-    const diagnostics = await syncImmutable(root, path, bytes)
+    const diagnostics = await syncImmutable(root, path, bytes, retire)
     if (state.pending) diagnostics.push('Retained exact pending metadata')
     return confirmed(diagnostics)
   } catch (cause) { return metadataFailure(cause) }
@@ -129,11 +131,11 @@ export async function confirmAtomicJson(root: string, path: string, value: unkno
 /** Run under the existing artifact mutation lease. Never replaces a known
  * conflicting final or pending file. Each create/write/link/unlink checks current
  * after the immediately preceding await; partial issuance remains unknown. */
-export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean): Promise<ImmutableMetadataOutcome> {
+export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
   try {
-    const bytes = immutableBytes(value), temporary = pendingPath(path, bytes), state = await inspectImmutable(root, path, bytes)
+    const bytes = immutableBytes(value), temporary = pendingPath(path, bytes), state = await inspectImmutable(root, path, bytes, retire)
     if (state.final) {
-      const diagnostics = await syncImmutable(root, path, bytes)
+      const diagnostics = await syncImmutable(root, path, bytes, retire)
       if (state.pending) diagnostics.push('Retained exact pending metadata')
       return confirmed(diagnostics)
     }
@@ -151,9 +153,9 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
       await writeAll(handle, bytes.subarray(info.size), info.size, current)
       if (!current()) return { kind: 'unknown' }
       await handle.sync()
-    } finally { await handle.close() }
-    const beforePublication = await inspectImmutable(root, path, bytes)
-    if (beforePublication.final) return confirmed([...(await syncImmutable(root, path, bytes)), 'Retained exact pending metadata'])
+    } finally { await retireFile(handle, retire) }
+    const beforePublication = await inspectImmutable(root, path, bytes, retire)
+    if (beforePublication.final) return confirmed([...(await syncImmutable(root, path, bytes, retire)), 'Retained exact pending metadata'])
     if (!current()) return { kind: 'unknown' }
     // link is atomic and refuses an existing destination. Unlike rename it
     // cannot clobber a final inserted after the preceding absence check.
@@ -161,11 +163,11 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
     try { await link(temporary, path) }
     catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
-      const state = await inspectImmutable(root, path, bytes)
+      const state = await inspectImmutable(root, path, bytes, retire)
       if (!state.final) return { kind: 'unknown' }
     }
-    const diagnostics = await syncImmutable(root, path, bytes)
-    const finalState = await inspectImmutable(root, path, bytes)
+    const diagnostics = await syncImmutable(root, path, bytes, retire)
+    const finalState = await inspectImmutable(root, path, bytes, retire)
     if (!finalState.final) return { kind: 'unknown', diagnostics: [...diagnostics, 'Final metadata disappeared before cleanup'] }
     // Cleanup never changes an already confirmed physical final into absence
     // or policy denial. Preserve cleanup uncertainty as diagnostic information.

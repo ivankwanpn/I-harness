@@ -1,6 +1,12 @@
 import { lstat, readdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
+/** Missing/zero identities remain path-counted; never guess from timestamps. */
+export function physicalIdentity(info: { dev: number | bigint; ino: number | bigint }): string | undefined {
+  const valid = (n: number | bigint) => typeof n === 'bigint' ? n > 0n : Number.isSafeInteger(n) && n > 0
+  return valid(info.dev) && valid(info.ino) ? `${info.dev}:${info.ino}` : undefined
+}
+
 /** Physical bytes include managed staging, pins, legacy data and search. */
 export async function physicalBytes(root: string): Promise<number> {
   // One tree-wide metadata queue under the existing workspace mutation lock.
@@ -10,6 +16,7 @@ export async function physicalBytes(root: string): Promise<number> {
     type Work = { kind: 'directory' | 'stat'; path: string; initial?: true }
     const work: Work[] = [{ kind: 'directory', path: root, initial: true }]
     let head = 0, active = 0, total = 0, failed = false, failure: unknown
+    const inodes = new Set<string>()
     const enqueue = (entry: Work) => { if (!failed) work.push(entry) }
     async function run(entry: Work): Promise<void> {
       if (entry.kind === 'directory') {
@@ -19,11 +26,15 @@ export async function physicalBytes(root: string): Promise<number> {
         for (const child of entries) enqueue({ kind: 'stat', path: resolve(entry.path, child.name) })
         return
       }
-      const info = await lstat(entry.path)
+      const info = await lstat(entry.path, { bigint: true })
       if (info.isSymbolicLink()) throw new Error('Artifact path unavailable')
       if (info.isDirectory()) enqueue({ kind: 'directory', path: entry.path })
       else {
-        total += info.size
+        const key = physicalIdentity(info)
+        if (key && inodes.has(key)) return
+        if (key) inodes.add(key)
+        if (info.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error('Artifact disk accounting overflow')
+        total += Number(info.size)
         if (!Number.isSafeInteger(total)) throw new Error('Artifact disk accounting overflow')
       }
     }

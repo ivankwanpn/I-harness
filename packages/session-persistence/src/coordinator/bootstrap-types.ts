@@ -13,8 +13,8 @@ export interface BootstrapDependencyPort { confirm(request: BootstrapDependencyR
 export interface BootstrapTargetPreparationRequest { invocation: BootstrapInvocation; manifestDigest: string }
 export type BootstrapTargetPreparationOutcome = { kind: 'confirmed' } | { kind: 'blocked'; reason: 'unknown'|'unavailable'|'conflict'|'policy' }
 export interface BootstrapTargetPreparationPort {
-  confirm(request: BootstrapTargetPreparationRequest, current: () => boolean): Promise<BootstrapTargetPreparationOutcome>;
-  reconcile(request: BootstrapTargetPreparationRequest): Promise<BootstrapTargetPreparationOutcome>;
+  confirm(request: BootstrapTargetPreparationRequest, current: () => boolean, facts?: import('@i-harness/core-session').BootstrapPreparationFacts): Promise<BootstrapTargetPreparationOutcome>;
+  reconcile(request: BootstrapTargetPreparationRequest, facts?: import('@i-harness/core-session').BootstrapPreparationFacts): Promise<BootstrapTargetPreparationOutcome>;
   assertTargetCurrent(): void;
 }
 export interface BootstrapGuards { signal?: AbortSignal; assertCurrent(): void; dependencies: BootstrapDependencyPort; targetPreparation?: BootstrapTargetPreparationPort }

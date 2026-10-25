@@ -55,8 +55,8 @@ it('positively calibrates delegated legacy pre/post accounting and managed reser
     assert(body>0);assert(probe.events.slice(0,body).some(row=>row.kind==='managed-native-lstat'))
     const blob=probe.events.findIndex(row=>row.kind==='legacy-before-native-blob'),blobDone=probe.events.findIndex(row=>row.kind==='legacy-after-native-blob')
     assert(blob>body&&blobDone>blob)
-    assert(probe.events.slice(body,blob).some(row=>row.kind==='legacy-native-stat'))
-    assert(probe.events.slice(blobDone+1).some(row=>row.kind==='legacy-native-stat'))
+    assert(probe.events.slice(body,blob).some(row=>row.kind==='legacy-native-lstat'))
+    assert(probe.events.slice(blobDone+1).some(row=>row.kind==='legacy-native-lstat'))
     await save(f.root,'native-calibration',{events:probe.events,managed:managed.ref,legacy,delegatedNativeSuccess:true,holds:0,physicalBytes:total(await inventory(f.ownedRoot))})
   } finally {probe?.restore();await f.close()}
 },60000)
@@ -104,7 +104,7 @@ it('qualifies a fixed-budget mixed admission schedule at real asynchronous nativ
     if('failure' in observed) throw observed.failure
     const incoming=observed.value
     const afterLegacy=total(await inventory(f.ownedRoot))
-    assert(probe.events.some(row=>row.kind==='legacy-native-stat'))
+    assert(probe.events.some(row=>row.kind==='legacy-native-lstat'))
     assert(probe.events.some(row=>row.kind==='legacy-before-native-blob'))
     assert(probe.events.some(row=>row.kind==='legacy-after-native-blob'))
     if(incoming){const actual=await fs.readFile(join(f.ownedRoot,'blobs',incoming.id+'.txt'));assert.deepEqual(actual,Buffer.from(original).subarray(0,incoming.bytes));assert.equal(incoming.complete,incoming.bytes===Buffer.byteLength(original))}
