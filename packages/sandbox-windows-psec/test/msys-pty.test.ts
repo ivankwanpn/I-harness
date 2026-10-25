@@ -23,8 +23,13 @@ async function fixture() {
   const root = await mkdtemp(join(build, "msys-pty-acceptance-"))
   const exec = createOwnedExec(root), executions: SupervisedExecution[] = [], readers: Promise<void>[] = []
   async function start(args: string[], lifetime: "retain-tree" | "complete-tree" = "retain-tree", command = bash) {
+    // Keep the acceptance tools in the admitted Git runtime's /usr namespace.
+    // Another MSYS distribution on the host PATH has its own PTY and /proc state.
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"))
+    const inheritedPath = Object.entries(process.env).find(([key]) => key.toLowerCase() === "path")?.[1]
     const execution = await exec.launchTransport({ argv: [command, ...args], cwd: root,
-      env: { ...process.env, TERM: "xterm-256color", PS1: "PTY_ACCEPT_READY> ", HISTFILE: join(root, "history") } as Record<string, string>,
+      env: { ...env, PATH: [win32.dirname(bash), inheritedPath].filter(Boolean).join(";"),
+        TERM: "xterm-256color", PS1: "PTY_ACCEPT_READY> ", HISTFILE: join(root, "history") } as Record<string, string>,
       transport: "pty", lifetime, argumentEncoding: "crt", pty: { cols: 100, rows: 24 } })
     executions.push(execution)
     let output = "", bytes = 0

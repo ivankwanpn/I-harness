@@ -1,7 +1,7 @@
 {
   "recordVersion": 1,
-  "helperSha256": "6426b786d0d5140beb11d66a957847f90f665d5755072267457a8dd99ac68ed5",
-  "protocolSha256": "6b0d187edb52222b72bbdc5b6aa777113dd9ac19fa2a5cfa5251013f19e35991",
+  "helperSha256": "300348687570c71e3012545442336f807f8e7f66478d6eaaf1d35e016d70e68d",
+  "protocolSha256": "fc0e8472f35a210d9cab523c226ad53866947f81dde4c525ed3562be1663a287",
   "windowsRelease": "10.0.26200",
   "observationScope": "historical-one-host",
   "applicabilityInputs": [
@@ -38,6 +38,15 @@
       "unrestricted": "observed-pass"
     }
   },
-  "observedAt": "2026-10-13T22:16:49.355Z",
-  "msysPtyTemplateSha256": "6fa3b1f2fc15868cd09e873cef625c6ced400f36c0c67c2c92ce9282231ce186"
+  "observedAt": "2026-10-24T16:48:41.198Z",
+  "msysPtyTemplateSha256": "334994eec6217a985841b65b3d81553556f406ac6baf7de8893bb123805b8b6d",
+  "evidence": {
+    "sha256": "6cbfb6605bffd49a53549f47d623c32a51f0cb4fd7abb6c4a3947d542513eb4d",
+    "scope": "original-standard-control-matrix",
+    "limits": [
+      "One historical host; no current installed-runtime or policy certification.",
+      "Advanced MSYS external-program TTY/proc compatibility and event-owner pathological/fault gates remain separate; this standard matrix does not qualify them.",
+      "PSEC MSYS routes remain unsupported; PSEC PTY remains refused."
+    ]
+  }
 }
