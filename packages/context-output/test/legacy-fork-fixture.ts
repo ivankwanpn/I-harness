@@ -78,7 +78,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
   let alive = true, sourceCalls = 0, acquired = 0, preparationCalls = 0
   let phase: LegacyPreparationRequest | undefined, actualFacts: import('@i-harness/core-session').BootstrapPreparationFacts | undefined
   if (options.disabled) await service.configure({ enabled: false })
-  async function run(passive = false, changeCapture?: (capture: LegacyForkCapture) => void, beforeConfirm?: (facts: import('@i-harness/core-session').BootstrapPreparationFacts) => void, ownerOnly = false) {
+  async function run(passive = false, changeCapture?: (capture: LegacyForkCapture) => void, beforeConfirm?: (facts: import('@i-harness/core-session').BootstrapPreparationFacts) => void, ownerOnly = false, afterAttempt?: (scope: import('../src/index.ts').LegacyForkTransferScope) => Promise<void>) {
       const current = () => { if (passive) throw Error('Passive scope cannot issue B2 work'); document.assertReady(); if (!alive || view !== document.view || view.events.length !== eventCount) throw Error('Original source changed') }
       const preparation = broker.prepareBootstrapInheritance({ invocation, requestIntent: intent, sourceSessionId: 'source', sourceAvailable: () => { sourceCalls++; return !passive && alive }, assertNewWorkCurrent: current, targetAvailable: () => true })
       let managedScope: import('../src/index.ts').SeedDependencyTransferScope | undefined
@@ -134,6 +134,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
       const guards = { assertCurrent: scopedCurrent, targetPreparation: port, dependencies }
       try {
         const outcome = ownerOnly ? passive ? await port.reconcile(phase!, actualFacts) : await port.confirm(phase!, () => { scopedCurrent(); return true }, actualFacts) : passive ? await coordinator.resumeSemanticTarget(invocation, guards) : await coordinator.bootstrapSemanticTarget(request, guards)
+        await afterAttempt?.(scope)
         if (outcome.kind === 'ready' || outcome.kind === 'already-ready') readScopes.set('target', (await broker.resultReadScopeFor('target'))!)
         return outcome
       }

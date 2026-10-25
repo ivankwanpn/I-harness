@@ -1,4 +1,4 @@
-import { open, lstat, realpath, rename, readdir, link, unlink } from 'node:fs/promises'
+import { open, lstat, realpath, rename, readdir, link, unlink, mkdir } from 'node:fs/promises'
 import { basename, dirname, resolve, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { FileHandle } from 'node:fs/promises'
@@ -190,4 +190,19 @@ export async function ownedPath(root: string, path: string): Promise<void> {
   }
   const resolved = await realpath(target), realBase = await realpath(base)
   if (!resolved.startsWith(realBase + sep)) throw new Error('Artifact path unavailable')
+}
+/** Validate each existing ancestor before creating the next owned component. */
+export async function ownedMkdir(root: string, path: string, guard: () => void): Promise<void> {
+  const base = resolve(root), target = resolve(path)
+  if (!target.startsWith(base + sep)) throw Error('Artifact path unavailable')
+  const parents: string[] = []
+  for (let current = target; current !== base; current = dirname(current)) parents.push(current)
+  for (const current of parents.reverse()) {
+    if (dirname(current) !== base) await ownedPath(base, dirname(current))
+    guard()
+    try { await mkdir(current) } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
+    guard(); await ownedPath(base, current); guard()
+    if (!(await lstat(current)).isDirectory()) throw Error('Artifact directory unavailable')
+    guard()
+  }
 }

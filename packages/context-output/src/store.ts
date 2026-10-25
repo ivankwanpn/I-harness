@@ -9,9 +9,10 @@ import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
 import { LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
 import { physicalBytes, requireSpace } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
-import { commitment, same, checkRoot, recordHash } from './legacy/fork-codec.ts'
-import { expiredTuple, expiryBase, terminalSlots, revokedTuple } from './legacy/fork-disposition.ts'
-import { boundedJson, ownedPath } from './artifact/io.ts'
+import { commitment, same, checkRoot, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
+import { expiredTuple, expiryBase, terminalSlots, revokedTuple, readSlots } from './legacy/fork-disposition.ts'
+import { boundedJson, ownedPath, confirmAtomicJson } from './artifact/io.ts'
+import { walkPages } from './legacy/fork-pages.ts'
 import type { LegacyCommitment, LegacyPage, LegacyRoot, LegacyRow } from './legacy/fork-types.ts'
 
 interface Artifact { ref: ContextResultRef; source?: ContextCapture['source'] }
@@ -121,6 +122,9 @@ export class ContextStore {
     try {
       this.db.exec(`PRAGMA max_page_count=${Math.floor(indexBudget / 4096)}`)
       this.schema()
+      // Original committed transfer authority is validated before startup can
+      // reclaim canonical tombstones. Derived SQLite state grants no authority.
+      await this.validateLegacyAuthority(turn)
       // Metadata/blobs/owner ledgers are authoritative. Rebuild every startup,
       // so an interrupted derived-index commit never loses a captured artifact.
       for (const name of await readdir(resolve(this.directory, 'artifacts'))) {
@@ -334,7 +338,44 @@ export class ContextStore {
   }
   private async expireLegacy(turn: WorkspaceMutationTurn, ref: ContextResultRef): Promise<void> {
     const c = commitment(ref), base = expiryBase(this.directory, c)
-    if (await exists(base + '.0')) await terminalSlots(this.directory, base, expiredTuple(this.workspaceId, c), () => this.assertTurn(turn), this.retireLegacyFile)
+    if (await exists(base + '.0')) {
+      if (!await this.validateLegacyAuthority(turn, c)) throw Error('Original legacy expiry has no confirmed transfer authority')
+      await terminalSlots(this.directory, base, expiredTuple(this.workspaceId, c), () => this.assertTurn(turn), this.retireLegacyFile)
+    }
+  }
+  /** Explicit store-owner validation, before any transfer-related pruning.
+   * Incomplete publications remain resumable; they confer no GC authority. */
+  private async validateLegacyAuthority(turn: WorkspaceMutationTurn, wanted?: LegacyCommitment): Promise<boolean> {
+    const guard = () => this.assertTurn(turn), namespace = resolve(this.directory, 'legacy-fork-v1')
+    let matched = false
+    if (!await exists(namespace)) return false
+    await ownedPath(this.directory, namespace); guard()
+    for (const name of await readdir(namespace)) {
+      if (!/^[a-f0-9]{64}$/.test(name)) throw Error('Foreign legacy transfer namespace')
+      const directory = resolve(namespace, name), application = resolve(directory, 'applied.json')
+      await ownedPath(this.directory, directory); guard()
+      // A plan/funding prefix without application is not a completed grant.
+      if (!await exists(application)) continue
+      await ownedPath(this.directory, resolve(directory, 'plan.json')); guard()
+      const root = checkRoot(await boundedJson(resolve(directory, 'plan.json'), 65536, this.retireLegacyFile)); guard()
+      if (root.binding.workspaceId !== this.workspaceId || recordHash('binding', root.binding.invocation) !== name) throw Error('Foreign legacy transfer identity')
+      for (const [path, value] of [
+        ['binding.json', canonicalRecord({ version: 1, kind: 'legacy-fork-binding', binding: root.binding })],
+        ['plan.json', root], ['applied.json', appliedFor(root)],
+      ] as const) {
+        if ((await confirmAtomicJson(this.directory, resolve(directory, path), value, this.retireLegacyFile)).kind !== 'confirmed') throw Error('Original legacy transfer unconfirmed')
+        guard()
+      }
+      const revoked = await readSlots(this.directory, resolve(directory, 'revoke'), revokedTuple(root), this.retireLegacyFile); guard()
+      if (revoked !== 'live' && revoked !== 'terminal') throw Error('Original legacy revocation unknown')
+      for await (const row of walkPages(directory, root, guard, undefined, this.retireLegacyFile)) {
+        const c: LegacyCommitment = { refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }
+        const expiry = await readSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), this.retireLegacyFile); guard()
+        if (expiry !== 'live' && expiry !== 'terminal') throw Error('Original legacy expiry unknown')
+        if (wanted && same(c, wanted)) matched = true
+      }
+    }
+    return matched
   }
   async configureDiskBudget(turn: WorkspaceMutationTurn, maxDiskBytes: number): Promise<void> {
     this.assertTurn(turn)
@@ -474,6 +515,7 @@ export class ContextStore {
   }
   async prune(turn: WorkspaceMutationTurn): Promise<void> {
     this.assertTurn(turn)
+    for (const artifact of this.artifacts.values()) if (artifact.ref.expiresAt <= Date.now()) { await this.validateLegacyAuthority(turn); break }
     for (const [id, artifact] of this.artifacts) if (artifact.ref.expiresAt <= Date.now()) { await this.expireLegacy(turn, artifact.ref); await this.remove(turn, id) }
   }
   private async removeFiles(turn: WorkspaceMutationTurn, id: string): Promise<void> {

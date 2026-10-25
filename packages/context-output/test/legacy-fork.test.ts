@@ -7,7 +7,7 @@ import { createSessionCoordinator, compileSemanticSeed } from '../../session-per
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
 import { legacyFixture } from './legacy-fork-fixture.ts'
-import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { readFile, readdir, rm, writeFile, symlink, unlink } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { createLegacyRetentionSelection, captureBootstrapPreparationFacts } from '@i-harness/core-session'
 import { commitment } from '../src/legacy/fork-codec.ts'
@@ -226,6 +226,77 @@ it('stops after a real page and continues the exact original prefix with fresh s
     expect(JSON.parse(await readFile(join(planDirectory, 'applied.json'), 'utf8'))).toMatchObject({ observationCount: 101, distinctRefCount: 1 })
   } finally { cuts.afterLink = undefined; cuts.measure = false; await f.close() }
 }, 60000)
+
+it('refuses a redirected publication namespace in an already-open store before outside creation', async () => {
+  const f = await legacyFixture(), outside = await mkdtemp(join(tmpdir(), 'ih-l1-publication-outside-'))
+  try {
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex'))
+    await symlink(outside, join(directory, 'legacy-fork-v1'), 'junction')
+    expect((await f.run()).kind).toBe('blocked')
+    expect(await readdir(outside)).toEqual([])
+  } finally { await f.close() }
+})
+
+it('refuses actual target clear without overwriting a symlinked outside inactive disposition', async () => {
+  const f = await legacyFixture(), outside = await mkdtemp(join(tmpdir(), 'ih-l1-clear-outside-'))
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), transfers = join(directory, 'legacy-fork-v1'), plan = join(transfers, (await readdir(transfers))[0]!)
+    const bytes = await readFile(join(plan, 'revoke.1')), protectedFile = join(outside, 'original'), owners = await readFile(join(directory, 'owners', f.visible.id + '.json'))
+    await writeFile(protectedFile, bytes); await unlink(join(plan, 'revoke.1')); await symlink(protectedFile, join(plan, 'revoke.1'), 'file')
+    await expect(f.service().clear('target')).rejects.toThrow()
+    expect(await readFile(protectedFile)).toEqual(bytes)
+    expect(await readFile(join(directory, 'owners', f.visible.id + '.json'))).toEqual(owners)
+  } finally { await f.close() }
+})
+
+it.each(['unchanged', 'changed', 'closed', 'lost'])('qualifies the actual %s original witness inside its live host lifetime after a committed page prefix', async kind => {
+  const f = await legacyFixture({ observations: 101 })
+  let witness!: import('../src/index.ts').LegacyForkCapture
+  try {
+    cuts.afterLink = path => { if (path.replaceAll('\\', '/').endsWith('/pages/0-0.json')) throw Error('Original page publication response lost') }
+    expect((await f.run(false, capture => { witness = capture }, undefined, false, async original => {
+      cuts.afterLink = undefined
+      const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), transfers = join(directory, 'legacy-fork-v1'), plan = join(transfers, (await readdir(transfers))[0]!)
+      const prefix = await readFile(join(plan, 'pages', '0-0.json'))
+      if (kind === 'changed') expect((await f.document.metadata.enterPlan('original changed')).kind).toBe('committed')
+      if (kind === 'closed') await f.coordinator().closeManagedDocument('source')
+      if (kind === 'lost') await f.sourceClear()
+      expect(() => witness.target.assertCurrent()).not.toThrow()
+      if (kind === 'unchanged') expect(() => witness.source!.assertCurrent()).not.toThrow()
+      else expect(() => witness.source!.assertCurrent()).toThrow()
+      const pages = await readdir(join(plan, 'pages')), owner = await readFile(join(directory, 'owners', f.visible.id + '.json')), body = await readFile(join(directory, 'blobs', f.visible.id + '.txt'))
+      const capture = vi.spyOn(f.service(), 'capture'); cuts.measure = true; cuts.sourceExports = cuts.compiles = 0
+      expect((await f.service().confirmLegacyForkTransfer(original, f.phase(), () => true, f.facts())).kind).toBe(kind === 'unchanged' ? 'confirmed' : 'blocked')
+      expect(await readFile(join(plan, 'pages', '0-0.json'))).toEqual(prefix)
+      if (kind !== 'unchanged') {
+        expect(await readdir(join(plan, 'pages'))).toEqual(pages)
+        await expect(readFile(join(plan, 'plan.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+        expect(await readFile(join(directory, 'owners', f.visible.id + '.json'))).toEqual(owner)
+      } else expect(JSON.parse(await readFile(join(plan, 'applied.json'), 'utf8'))).toMatchObject({ observationCount: 101, distinctRefCount: 1 })
+      expect(await readFile(join(directory, 'blobs', f.visible.id + '.txt'))).toEqual(body)
+      expect(capture).not.toHaveBeenCalled(); expect(cuts.sourceExports).toBe(0); expect(cuts.compiles).toBe(0)
+    })).kind).toBe('blocked')
+  } finally { cuts.afterLink = undefined; cuts.measure = false; await f.close() }
+}, 60000)
+
+it.each(['plan', 'page', 'disposition'])('preserves original body and manifest when committed %s authority is corrupt before expiry GC', async kind => {
+  const f = await legacyFixture()
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const directory = join(f.root, 'context-output', createHash('sha256').update('workspace').digest('hex')), transfers = join(directory, 'legacy-fork-v1'), plan = join(transfers, (await readdir(transfers))[0]!)
+    const manifest = join(directory, 'artifacts', f.visible.id + '.json'), blob = join(directory, 'blobs', f.visible.id + '.txt')
+    const before = [await readFile(manifest), await readFile(blob)]
+    const corrupt = kind === 'plan' ? join(plan, 'plan.json') : kind === 'page' ? join(plan, 'pages', '0-0.json') : join(plan, 'revoke.1')
+    await writeFile(corrupt, Buffer.from('corrupt original authority'))
+    vi.spyOn(Date, 'now').mockReturnValue(f.visible.expiresAt + 1)
+    await f.service().capture({ sessionId: 'other', callId: 'prune', label: 'prune', text: 'trigger', complete: true }).catch(() => undefined)
+    expect(await readFile(manifest)).toEqual(before[0]); expect(await readFile(blob)).toEqual(before[1])
+    await f.reopen()
+    await f.service().capture({ sessionId: 'other', callId: 'cold-prune', label: 'prune', text: 'trigger', complete: true }).catch(() => undefined)
+    expect(await readFile(manifest)).toEqual(before[0]); expect(await readFile(blob)).toEqual(before[1])
+  } finally { vi.restoreAllMocks(); await f.close() }
+})
 
 it('builds and verifies 10001 typed observations with the rightmost one-child directory', async () => {
   const open = ContextStore.prototype.open

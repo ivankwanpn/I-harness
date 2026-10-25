@@ -32,3 +32,8 @@ it('rejects mixed directory levels, extra fields and unsafe ranges', () => {
   expect(() => checkPage(page, binding)).toThrow()
   expect(() => checkRoot({ version: 1, kind: 'legacy-fork-plan', binding, observationCount: 0, distinctRefCount: 0, pages: null, extra: true })).toThrow()
 })
+it('rejects an explicitly null immediate via', () => {
+  const row = { refId: 'ctx_' + 'a'.repeat(64), revision: 'b'.repeat(64), metadataDigest: 'c'.repeat(64), metadataEncodedBytes: 1, expiresAt: 2_000_000_000_000,
+    original: { sessionId: 'source', seq: 1, part: 'context/result-ref.ref' }, extent: { kind: 'framed', first: 1, last: 1 }, anchor: { kind: 'seed-group', manifestSeq: 0, ordinal: 0 }, via: null }
+  expect(() => checkPage({ version: 1, kind: 'legacy-fork-leaf', bindingDigest: recordHash('binding', binding), firstRow: 0, rows: [row] }, binding)).toThrow()
+})

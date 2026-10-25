@@ -87,7 +87,7 @@ export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: n
     for (const r of p.rows) {
       fields(r, ['refId', 'revision', 'metadataDigest', 'metadataEncodedBytes', 'expiresAt', 'extent', 'anchor', 'original'], ['via']); checkCommitment(r as LegacyRow); checkAnchor(r.anchor, binding.totalTurns, binding.unframedPrefix, r.extent, groupCount)
       fields(r.original, ['sessionId', 'seq', 'part']); identity(r.original.sessionId, 'legacy original'); if (!count(r.original.seq) || r.original.part !== 'context/result-ref.ref') fail()
-      if (r.via) { fields(r.via, ['sessionId', 'operationId', 'manifestDigest', 'planDigest', 'rowOrdinal']); identity(r.via.sessionId, 'legacy via'); identity(r.via.operationId, 'legacy operation'); if (!hash(r.via.manifestDigest) || !hash(r.via.planDigest) || !count(r.via.rowOrdinal)) fail() }
+      if (r.via !== undefined) { fields(r.via, ['sessionId', 'operationId', 'manifestDigest', 'planDigest', 'rowOrdinal']); identity(r.via.sessionId, 'legacy via'); identity(r.via.operationId, 'legacy operation'); if (!hash(r.via.manifestDigest) || !hash(r.via.planDigest) || !count(r.via.rowOrdinal)) fail() }
     }
   } else {
     if (p.kind !== 'legacy-fork-directory' || !count(p.level) || p.level < 1 || !Array.isArray(p.children) || !p.children.length || p.children.length > 100) fail()

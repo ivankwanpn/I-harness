@@ -1,4 +1,4 @@
-import { mkdir, open, stat } from 'node:fs/promises'
+import { open, stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { types } from 'node:util'
@@ -6,7 +6,7 @@ import { captureBootstrapPreparationFacts, createLegacyRetentionSelection } from
 import type { ContextStore } from '../store.ts'
 import type { WorkspaceMutationTurn } from '../workspace-mutation.ts'
 import { failuresTogether } from '../workspace-mutation.ts'
-import { continueAtomicJson, confirmAtomicJson, ownedPath, readExact, writeAll } from '../artifact/io.ts'
+import { continueAtomicJson, confirmAtomicJson, ownedMkdir, readExact, writeAll } from '../artifact/io.ts'
 import { requireSpace } from '../artifact/quota.ts'
 import { appliedFor, canonicalRecord, checkBinding, checkRoot, commitment, count, fields, hash, recordHash, same, sourceHash, streamHash } from './fork-codec.ts'
 import { buildPages, walkPages } from './fork-pages.ts'
@@ -50,7 +50,13 @@ export function createLegacyForkOwner(ports: Ports) {
     const abort = () => { state.invalid = true }
     const signal = capture.signal
     const state: Scope = { capture, invalid: aborted(signal), attempts: new Set(), count: source?.view.events.length, dispose: () => { if (signal) Reflect.apply(removeSignalListener, signal, ['abort', abort]) } }
-    if (signal) Reflect.apply(addSignalListener, signal, ['abort', abort, { once: true }]); scopes.set(token, state)
+    scopes.set(token, state)
+    try { if (signal) Reflect.apply(addSignalListener, signal, ['abort', abort, { once: true }]) }
+    catch (cause) {
+      state.invalid = true; state.capture = undefined
+      try { state.dispose(); scopes.delete(token) } catch (cleanup) { throw new AggregateError([cause, cleanup], 'Original legacy listener installation cleanup failed') }
+      throw cause
+    }
     return token
   }
   function guard(scope: Scope, signal?: AbortSignal, source = false, current = () => true): void {
@@ -106,7 +112,7 @@ export function createLegacyForkOwner(ports: Ports) {
           value = canonicalRecord(value)
           check(); await ports.mutate(store, async turn => {
             turn.assertCurrent(); check()
-            await mkdir(resolve(directory, 'pages'), { recursive: true }); check(); await ownedPath(store.directory, directory); check()
+            await ownedMkdir(store.directory, resolve(directory, 'pages'), check)
             if (name.startsWith('pages/')) { await store.stageLegacyPage(turn, bindingDigest, name.slice(6), value as LegacyPage, ports.quota()); check() }
             const path = resolve(directory, name), confirmed = await confirmAtomicJson(store.directory, path, value, store.retireLegacyFile); check()
             if (confirmed.kind === 'confirmed') return
