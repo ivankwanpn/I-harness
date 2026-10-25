@@ -5,6 +5,9 @@
 # pnpm parses and hashes these exact patch bytes on every platform.
 /patches/chokidar@5.0.0.patch text eol=lf
 
+# Reviewed native-qualification proof/checksum fixtures are raw hash inputs.
+/packages/context-output/test/qualification/fixtures/** -text
+
 # Keep shipped executable and exact upstream license/source-notice bytes.
 /packages/sandbox-windows-psec/artifacts/** -text
 /packages/sandbox-windows-psec/native/msys/notices/** -text

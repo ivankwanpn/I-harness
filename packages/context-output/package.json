@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit", "qualify:index-native": "node scripts/qualify-index-native.mjs" },
   "dependencies": { "@i-harness/core-tools": "workspace:*", "@i-harness/core-session": "workspace:*", "@i-harness/fs-lock": "workspace:*", "@i-harness/settings": "workspace:*" }
 }

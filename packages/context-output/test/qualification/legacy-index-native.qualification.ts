@@ -5,8 +5,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const probe = fileURLToPath(new URL('./helpers/derived-index-native-probe.mjs', import.meta.url))
-const store = fileURLToPath(new URL('../src/store.ts', import.meta.url))
+const probe = fileURLToPath(new URL('../helpers/derived-index-native-probe.mjs', import.meta.url))
+const store = fileURLToPath(new URL('../../src/store.ts', import.meta.url))
 const policyRevision = 'DELETE-IF10-13-20261025'
 type NativeRow = Record<string, any>
 type Receipt = { scenario: string; node: string; sqlite: string; platform: string; execPath: string; error?: unknown;
@@ -18,8 +18,8 @@ function required(name: string): string {
   return value
 }
 
-// The earlier OFF-required RED is preserved at checkpoint 2cd94218 and in task
-// evidence. This is a new fixed policy wave; no runtime selects a fallback.
+// Historical rejected-policy receipts are provenance, not execution inputs.
+// Run only through qualify:index-native; no runtime selects a fallback.
 // Gate and native close/callback characterizations are deliberately not rerun.
 it.each(['active', 'floor'] as const)('qualifies the fixed DELETE native resource conditions on %s', runtime => {
   expect(process.env.IH_DERIVED_INDEX_POLICY_REVISION).toBe(policyRevision)
