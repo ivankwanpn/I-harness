@@ -47,6 +47,7 @@ export class LegacyIndexLifecycle {
   private state: State = 'absent'
   private handle?: Handle
   private problem?: IndexIssue
+  private readonly hintProblems = new Map<string, IndexIssue>()
   private removing = false
   private readonly uses = new WeakSet<IndexUse>()
   private readonly path: string
@@ -55,11 +56,15 @@ export class LegacyIndexLifecycle {
   }) { this.path = resolve(ports.directory, 'index.sqlite') }
   ready(): boolean { return this.state === 'ready' }
   retirementPending(): boolean { return this.removing || !!this.handle && this.state !== 'ready' }
-  issue(): IndexIssue | undefined { return this.problem }
-  confirmHints(use: IndexUse): void {
+  issue(): IndexIssue | undefined {
+    if (this.problem) return this.problem
+    if (!this.hintProblems.size) return undefined
+    return { code: 'CONTEXT_INDEX_UNAVAILABLE', scope: 'legacy-hints', message: [...new Set([...this.hintProblems.values()].map(issue => issue.message))].join('; ') }
+  }
+  confirmHints(use: IndexUse, binding: string): void {
     if (!this.uses.has(use)) throw unavailable('Foreign derived context index use')
     use.assertCurrent()
-    if (this.problem?.scope === 'legacy-hints') this.problem = undefined
+    this.hintProblems.delete(binding)
   }
   private assert(turn: WorkspaceMutationTurn, lease: LegacyUseLease): void { this.ports.assertLease(lease, 'exclusive'); this.ports.assertTurn(turn) }
   private scalar(db: DatabaseSync, name: string): number | string {
@@ -150,11 +155,16 @@ export class LegacyIndexLifecycle {
     safe(pages)
     if (Number(this.scalar(db, `max_page_count=${pages}`)) !== pages) throw Error('Derived index ceiling readback mismatch')
   }
-  async mutate(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, work: (sql: IndexWrite) => void): Promise<void> {
+  async mutate(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, work: (sql: IndexWrite) => void, hintBinding?: string): Promise<void> {
     this.assert(turn, lease); if (!this.uses.has(use)) throw unavailable('Foreign derived context index use'); use.assertCurrent()
     const bound = await this.envelope(quota, 0)
     this.assert(turn, lease); use.assertCurrent()
-    if (bound.ceiling < bound.current) { this.capacity('Legacy derived index quota unavailable', 'legacy-hints'); throw unavailable(this.problem!.message) }
+    if (bound.ceiling < bound.current) {
+      const issue: IndexIssue = { code: 'CONTEXT_INDEX_UNAVAILABLE', message: 'Legacy derived index quota unavailable', scope: hintBinding === undefined ? 'artifact-index' : 'legacy-hints' }
+      if (hintBinding === undefined) this.problem = issue
+      else this.hintProblems.set(hintBinding, issue)
+      throw unavailable(issue.message)
+    }
     const db = this.handle!.db
     let active = false
     const assertWrite = () => { this.assert(turn, lease); use.assertCurrent(); if (!active) throw Error('Stale derived index write port') }
@@ -217,7 +227,7 @@ export class LegacyIndexLifecycle {
       if (prospective) sink.add(prospective.ref, prospective.bytes)
       return {
         commit: () => { assertBuilding(); if (phase !== 'building') throw Error('Derived construction already committed'); try { db.exec('COMMIT'); phase = 'committed' } catch (failure) { this.invalidate(failure); throw failure } },
-        publish: () => { assertBuilding(); if (phase !== 'committed') throw Error('Derived construction is not committed'); phase = 'published'; original.disposition = 'retain'; this.state = 'ready'; this.problem = undefined },
+        publish: () => { assertBuilding(); if (phase !== 'committed') throw Error('Derived construction is not committed'); phase = 'published'; original.disposition = 'retain'; this.state = 'ready'; this.problem = undefined; this.hintProblems.clear() },
         discard,
       }
     } catch (failure) {

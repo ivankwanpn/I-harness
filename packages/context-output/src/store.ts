@@ -181,7 +181,7 @@ export class ContextStore {
     await this.index.mutate(turn, lease, use, quota, sql => {
       for (const table of ['legacy_rows', 'legacy_pages', 'legacy_plans']) sql.run(`DELETE FROM ${table} WHERE binding=?`, [binding])
       sql.run('INSERT INTO legacy_plans(binding,ready) VALUES (?,0)', [binding])
-    })
+    }, binding)
   }
   async stageLegacyPage(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, binding: string, name: string, page: LegacyPage, quota: number): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
@@ -196,7 +196,7 @@ export class ContextStore {
         if (!positioned) sql.run('INSERT INTO legacy_rows VALUES (?,?,?,?,?)', [binding, ordinal, value.row.refId, value.tuple, encoded])
       }
       sql.run('INSERT INTO legacy_pages VALUES (?,?,?)', [binding, name, pageDigest])
-    })
+    }, binding)
   }
   legacyCounts(use: IndexUse,binding: string): { observations: number; refs: number } {
     const result = use.get('SELECT COALESCE(SUM(n),0) AS observations,COUNT(ref_id) AS refs FROM (SELECT ref_id,COUNT(*) AS n FROM legacy_rows WHERE binding=? GROUP BY ref_id)', [binding])!
@@ -211,8 +211,8 @@ export class ContextStore {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
     const binding = recordHash('binding', root.binding), counts = this.legacyCounts(use, binding)
     if (counts.observations !== root.observationCount || counts.refs !== root.distinctRefCount) throw Error('Legacy derived EOF/count mismatch')
-    await this.index.mutate(turn, lease, use, quota, sql => { sql.run('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)', [binding, recordHash('plan', root), counts.observations, counts.refs]) })
-    this.index.confirmHints(use)
+    await this.index.mutate(turn, lease, use, quota, sql => { sql.run('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)', [binding, recordHash('plan', root), counts.observations, counts.refs]) }, binding)
+    this.index.confirmHints(use, binding)
   }
   legacyHint(use: IndexUse,binding: string, ordinal: number): LegacyRow | undefined {
     const row = use.get('SELECT ref_id,tuple,row_json FROM legacy_rows WHERE binding=? AND ordinal=?', [binding, ordinal])

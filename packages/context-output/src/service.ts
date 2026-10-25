@@ -29,6 +29,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   let unsubscribeDeletions: (() => void) | undefined
   const releaseDocuments = async (documents: readonly string[]) => {
+    cleanupIndexUnavailable = false
     for (const id of documents) legacy.retire(id)
     const outcomes = await Promise.allSettled([artifacts.releaseDocuments(documents), transition(async () => {
       if (!store && !candidate) {
@@ -42,7 +43,9 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       }
       await withLegacyWrite(undefined, (current, lease) => owner.mutate(async turn => { for (const id of documents) await clearLegacyStore(current, turn, lease, id) }), 'cleanup')
     })])
-    failuresTogether(outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : []), 'Original document cleanup failed')
+    const failures = outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (failures.length) cleanupIndexUnavailable = false
+    failuresTogether(failures, 'Original document cleanup failed')
   }
   let protectedResults = 0
   let state: ContextOutputStatus['state'] = config.enabled ? 'ready' : 'disabled'
@@ -54,7 +57,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let controls = 0
   let error: string|undefined
   let cleanupIndexUnavailable = false
-  let cleanupFailure: { sessionId: string | undefined; message: string } | undefined
+  const cleanupFailures = new Map<string | undefined, string>()
   let store: ContextStore|undefined
   let candidate: ContextStore|undefined
   let failedOpeningCleanup: unknown
@@ -70,8 +73,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
 
   function status(): ContextOutputStatus {
-    const issue = store?.indexIssue() && `${cleanupIndexUnavailable ? 'Requested cleanup completed; ' : ''}${store.indexIssue()!.message}`
-    const message = [error, cleanupFailure?.message, issue].filter(Boolean).join('; ')
+    const issue = store?.indexIssue() && `${cleanupIndexUnavailable && cleanupFailures.size === 0 ? 'Requested cleanup completed; ' : ''}${store.indexIssue()!.message}`
+    const message = [error, ...cleanupFailures.values(), issue].filter(Boolean).join('; ')
     return { enabled: config.enabled && !closing && !closed, state: message && state !== 'stopping' && state !== 'disabled' ? 'error' : state, config: { ...config },
       ...(store?.counters() ?? { retainedBytes: 0, results: 0 }), activeJobs: jobs.size,
       ...(message ? { error: message } : {}), ...(protectedResults ? { protectedResults, clearDisposition: 'protected' as const } : {}) }
@@ -133,12 +136,14 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     }))
   }
   async function clearLegacyStore(current: ContextStore, turn: WorkspaceMutationTurn, lease: LegacyUseLease, sessionId?: string): Promise<void> {
+    cleanupIndexUnavailable = false
     try {
       await current.clear(turn, lease, config.maxDiskBytes, sessionId)
-      if (sessionId === undefined || cleanupFailure?.sessionId === sessionId) cleanupFailure = undefined
+      if (sessionId === undefined) cleanupFailures.clear()
+      else cleanupFailures.delete(sessionId)
       cleanupIndexUnavailable = !!current.indexIssue()
     } catch (failure) {
-      cleanupFailure = { sessionId, message: `Requested original cleanup remains incomplete: ${failure instanceof Error ? failure.message : String(failure)}` }
+      cleanupFailures.set(sessionId, `Requested original cleanup remains incomplete: ${failure instanceof Error ? failure.message : String(failure)}`)
       throw failure
     }
   }
@@ -364,6 +369,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
       if (sessionId !== undefined) identity(sessionId, 'sessionId')
+      cleanupIndexUnavailable = false
       legacy.retire(sessionId)
       await transition(async () => {
         protectedResults = await artifacts.protectedCount()

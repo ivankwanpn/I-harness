@@ -4,7 +4,7 @@ vi.mock('node:fs/promises', async original => {
   const fs = await original<typeof import('node:fs/promises')>()
   return { ...fs, open: async (...args: Parameters<typeof fs.open>) => { const handle = await fs.open(...args); io.opened?.(handle, String(args[0])); return handle }, writeFile: async (...args: Parameters<typeof fs.writeFile>) => { const value = await fs.writeFile(...args); await io.afterWrite?.(String(args[0])); return value }, rm: async (...args: Parameters<typeof fs.rm>) => { await io.beforeRemove?.(String(args[0])); return fs.rm(...args) }, rename: async (...args: Parameters<typeof fs.rename>) => { const value = await fs.rename(...args); await io.afterRename?.(String(args[1])); return value } }
 })
-import { mkdtemp, readFile, stat, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -20,6 +20,9 @@ import { OwnerLedger } from '../src/legacy/owner-ledger.ts'
 import * as locking from '@i-harness/fs-lock'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { recordHash } from '../src/legacy/fork-codec.ts'
+import { pageName, walkPages } from '../src/legacy/fork-pages.ts'
+import type { LegacyRoot, LegacyPage } from '../src/legacy/fork-types.ts'
 
 const input = { sessionId: 's', callId: 'c', label: 'saved', text: 'original needle', complete: true }
 
@@ -597,4 +600,108 @@ it('refuses an actual unresolved tracked capture prefix before any admission, re
       })
     })
   } finally { vi.restoreAllMocks(); await gate.exclusive(undefined, lease => store.close(lease)); await owner.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+
+it.each(['clear', 'documents'] as const)('does not describe failed %s cleanup as completed after an earlier capacity-unavailable clear', async operation => {
+  const root = await mkdtemp(resolve(tmpdir(), 'legacy-index-completion-identity-'))
+  let releaseDocuments!: (documents: readonly string[]) => Promise<void>
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true }, documentDeletions: listener => { releaseDocuments = listener; return () => {} } })
+  try {
+    const a = await service.capture({ ...input, sessionId: 'A' }), b = await service.capture({ ...input, sessionId: 'B', callId: 'survivor' })
+    if (!a || !b) throw Error('fixture refused')
+    const directory = new ContextStore(root, 'w').directory
+    await service.configure({ maxDiskBytes: await physicalBytes(directory) })
+    expect((await service.clear('A')).error).toMatch(/Requested cleanup completed.*index unavailable/i)
+    const fault = new Error('B original body unlink refused')
+    io.beforeRemove = async path => { if (path === resolve(directory, 'blobs', b.id + '.txt')) throw fault }
+    await expect(operation === 'clear' ? service.clear('B') : releaseDocuments(['B'])).rejects.toBe(fault)
+    expect(service.status().error).toContain('Requested original cleanup remains incomplete')
+    expect(service.status().error).not.toContain('Requested cleanup completed')
+    expect(JSON.parse(await readFile(resolve(directory, 'owners', b.id + '.json'), 'utf8'))).toEqual([])
+    expect(await stat(resolve(directory, 'blobs', b.id + '.txt'))).toBeDefined()
+    expect(await stat(resolve(directory, 'artifacts', b.id + '.json'))).toBeDefined()
+    io.beforeRemove = undefined
+    await service.clear('B')
+    expect(service.status().error).not.toContain('cleanup remains incomplete')
+  } finally { io.beforeRemove = undefined; await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each(['sequential', 'queued'] as const)('retains independent real-ledger A and B cleanup obligations across %s failures and B-only success', async ordering => {
+  const root = await mkdtemp(resolve(tmpdir(), 'legacy-index-cleanup-scopes-'))
+  const service = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
+  try {
+    const a = await service.capture({ ...input, sessionId: 'A' }), b = await service.capture({ ...input, sessionId: 'B', callId: 'B' })
+    if (!a || !b) throw Error('fixture refused')
+    await service.grant({ sessionId: 'A' }, [a.id], 'shared'); await service.grant({ sessionId: 'B' }, [b.id], 'shared')
+    const directory = new ContextStore(root, 'w').directory, aPath = resolve(directory, 'owners', a.id + '.json'), bPath = resolve(directory, 'owners', b.id + '.json')
+    const aFault = new Error('A original survivor owner write refused'), bFault = new Error('B original survivor owner write refused')
+    io.afterWrite = async path => { if (path.startsWith(aPath + '.') && path.endsWith('.tmp')) throw aFault; if (path.startsWith(bPath + '.') && path.endsWith('.tmp')) throw bFault }
+    if (ordering === 'sequential') {
+      await expect(service.clear('A')).rejects.toBe(aFault); await expect(service.clear('B')).rejects.toBe(bFault)
+    } else {
+      const outcomes = await Promise.allSettled([service.clear('A'), service.clear('B')])
+      expect(outcomes).toEqual([{ status: 'rejected', reason: aFault }, { status: 'rejected', reason: bFault }])
+    }
+    expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['A', 'shared']); expect(JSON.parse(await readFile(bPath, 'utf8'))).toEqual(['B', 'shared'])
+    const bothFailures = service.status()
+    io.afterWrite = undefined
+    await service.clear('B')
+    const afterB = service.status()
+    expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['A', 'shared']); expect(JSON.parse(await readFile(bPath, 'utf8'))).toEqual(['shared'])
+    expect(afterB.state).toBe('error'); expect(afterB.error).toContain(aFault.message); expect(afterB.error).not.toContain(bFault.message)
+    expect(bothFailures.error).toContain(aFault.message); expect(bothFailures.error).toContain(bFault.message)
+    expect((await service.read({ sessionId: 'shared' }, { refId: a.id })).text).toBe(input.text)
+    await service.clear('A')
+    expect(JSON.parse(await readFile(aPath, 'utf8'))).toEqual(['shared']); expect(service.status().error).toBeUndefined(); expect(service.status().state).toBe('ready')
+  } finally { io.afterWrite = undefined; await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('keeps an actual A hint refusal visible after quota raise and unrelated B confirmation until A is repaired', async () => {
+  const f = await legacyFixture()
+  let store: ContextStore | undefined
+  const gate = createLegacyUseGate(), owner = createWorkspaceMutationOwner({ root: f.root, workspaceId: 'workspace' })
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    f.request.invocation.operationId = 'binding-B'; f.request.invocation.targetSessionId = 'second-target'
+    expect((await f.run()).kind).toBe('ready')
+    await f.service().close()
+    store = new ContextStore(f.root, 'workspace', owner, gate.assertLease)
+    const namespace = resolve(store.directory, 'legacy-fork-v1'), originals = await Promise.all((await readdir(namespace)).map(async name => {
+      const directory = resolve(namespace, name), root = JSON.parse(await readFile(resolve(directory, 'plan.json'), 'utf8')) as LegacyRoot
+      return { directory, root }
+    }))
+    const a = originals.find(value => value.root.binding.invocation.operationId !== 'binding-B')!, b = originals.find(value => value.root.binding.invocation.operationId === 'binding-B')!
+    const aBinding = recordHash('binding', a.root.binding), bBinding = recordHash('binding', b.root.binding), quota = 8 * 1024 * 1024
+    await gate.exclusive(undefined, async lease => {
+      await store!.acquireLifetime()
+      await owner.mutate(async turn => {
+        const current = store!, guard = () => { owner.assertTurn(turn); gate.assertLease(lease, 'exclusive') }
+        await current.open(turn, lease, quota, 'query'); await current.ensureIndex(turn, lease, quota)
+        const use = current.indexUse(lease)
+        await current.resetLegacyIndex(turn, lease, use, aBinding, quota)
+        const full = await current.diskBytes()
+        await current.configureDiskBudget(turn, lease, full)
+        const aPage = JSON.parse(await readFile(resolve(a.directory, 'pages', pageName(a.root.pages!)), 'utf8')) as LegacyPage
+        await expect(current.stageLegacyPage(turn, lease, use, aBinding, pageName(a.root.pages!), aPage, full)).rejects.toMatchObject({ code: 'CONTEXT_INDEX_UNAVAILABLE' })
+        expect(current.legacyReady(use, a.root)).toBe(false); expect(use.get('SELECT ready FROM legacy_plans WHERE binding=?', [aBinding])!.ready).toBe(0)
+        const aIssue = current.indexIssue()
+        expect(aIssue?.scope).toBe('legacy-hints')
+        await current.configureDiskBudget(turn, lease, quota)
+        expect(current.indexIssue()).toEqual(aIssue)
+        async function prepare(original: typeof a, binding: string) {
+          await current.resetLegacyIndex(turn, lease, use, binding, quota)
+          for await (const _ of walkPages(original.directory, original.root, guard, undefined, current.retireLegacyFile, async (ref, page) => {
+            await current.stageLegacyPage(turn, lease, use, binding, pageName(ref), page, quota)
+          })) { guard() }
+          await current.confirmLegacyIndex(turn, lease, use, original.root, quota)
+        }
+        await prepare(b, bBinding)
+        use.assertCurrent(); expect(current.legacyReady(use, b.root)).toBe(true); expect(current.legacyReady(use, a.root)).toBe(false)
+        expect(current.indexIssue()).toEqual(aIssue)
+        await prepare(a, aBinding)
+        use.assertCurrent(); expect(current.legacyReady(use, a.root)).toBe(true); expect(current.indexIssue()).toBeUndefined()
+      })
+    })
+  } finally { if (store) await gate.exclusive(undefined, lease => store!.close(lease)); await owner.close(); await f.close() }
 })
