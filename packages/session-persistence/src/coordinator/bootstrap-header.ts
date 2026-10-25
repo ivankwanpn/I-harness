@@ -5,6 +5,8 @@ import { PROVIDER_PROTOCOLS } from '@i-harness/settings'
 import { bootstrapHash, compileSemanticSeed } from '../semantic-seed.ts'
 import type { BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapRequest } from './bootstrap-types.ts'
 import type { SessionMeta } from './types.ts'
+import { encodeBootstrapCaptureReservation, parseBootstrapCaptureReservation, validateCaptureStage } from './bootstrap-capture.ts'
+import type { BootstrapCaptureReservation } from './bootstrap-types.ts'
 
 const bad = (): never => { throw new TypeError('Invalid bootstrap materialization') }
 const digest = (x: unknown): x is string => typeof x === 'string' && /^[a-f0-9]{64}$/.test(x)
@@ -82,8 +84,12 @@ export function bootstrapManifest(stage: Omit<BootstrapHeaderStage,'headerBytes'
   return bootstrapHash('ih.bootstrap.manifest.v1',{version:1,invocation:stage.invocation,target:stage.originalTarget,metadata:stage.metadata,lineage:stage.lineage,headerBase:stage.headerBase,
     seed:{digest:stage.seed.digest,dependencyDigest:stage.seed.dependencyDigest,sourceObservation:stage.seed.sourceObservation,records},...(stage.initial ? {initial:stage.initial}: {})})
 }
-export function buildBootstrapHeader(request: BootstrapRequest, original?: BootstrapHeaderStage, existing?: Record<string,unknown>): {stage:BootstrapHeaderStage;operation:BootstrapHeaderOperation;initial?:SessionEvent} {
+export function buildBootstrapHeader(request: BootstrapRequest, original?: BootstrapHeaderStage, existing?: Record<string,unknown>, captureReservation?: BootstrapCaptureReservation): {stage:BootstrapHeaderStage;operation:BootstrapHeaderOperation;initial?:SessionEvent} {
+  if(original)fields(original,['version','kind','invocation','originalTarget','metadata','lineage','headerBase','seed','headerBytes'],['initial','captureReservation'])
   const r=captureBootstrapRequest(request), initial=initialAdmission(r)
+  if (original && arguments.length >= 4 && !sameBootstrapData(captureReservation, original.captureReservation)) bad()
+  const reservation = original ? original.captureReservation : captureReservation
+  const capturedReservation = reservation === undefined ? undefined : parseBootstrapCaptureReservation(encodeBootstrapCaptureReservation(reservation))
   if (r.target.kind === 'resume' && !original) bad()
   const headerBase:SessionMeta=original?.headerBase ?? { ...existing, formatVersion:12, sessionId:r.invocation.targetSessionId,createdAt:r.invocation.createdAt,
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},...r.metadata,...r.lineage,seedLength:r.seed.records.length }
@@ -91,6 +97,7 @@ export function buildBootstrapHeader(request: BootstrapRequest, original?: Boots
   const core:Omit<BootstrapHeaderStage,'headerBytes'>={version:1,kind:'semantic-bootstrap-header',invocation:r.invocation,originalTarget:original?.originalTarget ?? r.target as BootstrapHeaderStage['originalTarget'],metadata:r.metadata,lineage:r.lineage,headerBase,
     seed:{digest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,sourceObservation:r.seed.sourceObservation,seedLength:r.seed.records.length,groupCount:Math.max(0,r.seed.records.length-1)},
     ...(initial ? {initial:{inputId:r.initial!.inputId,digest:bootstrapInitialInputDigest(initial,r.initial!.startedAt,r.initial!.expiresAt),startedAt:r.initial!.startedAt,expiresAt:r.initial!.expiresAt}}: {})}
+  if (capturedReservation) { core.captureReservation = capturedReservation; validateCaptureStage(capturedReservation, core as BootstrapHeaderStage, r.seed.records) }
   const manifestDigest=bootstrapManifest(core,r.seed.records)
   if(r.target.kind==='resume'&&r.target.manifestDigest!==manifestDigest)bad()
   const semanticSeed:SeedHeaderV1={version:1,codec:'semantic-seed-v1',operationId:r.invocation.operationId,requestDigest:r.invocation.requestDigest,manifestDigest,seedDigest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,seedLength:core.seed.seedLength,groupCount:core.seed.groupCount,
@@ -105,7 +112,7 @@ export function buildBootstrapHeader(request: BootstrapRequest, original?: Boots
 export function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderStage {
   if (bytes.length>262144) bad()
   const value=JSON.parse(Buffer.from(bytes).toString('utf8')) as BootstrapHeaderStage
-  fields(value,['version','kind','invocation','originalTarget','metadata','lineage','headerBase','seed','headerBytes'],['initial'])
+  fields(value,['version','kind','invocation','originalTarget','metadata','lineage','headerBase','seed','headerBytes'],['initial','captureReservation'])
   if (value.version!==1 || value.kind!=='semantic-bootstrap-header' || typeof value.headerBytes!=='string' || Buffer.byteLength(value.headerBytes)>65536 || !value.headerBytes.endsWith('\n')) bad()
   captureBootstrapInvocation(value.invocation); validateTarget(value.originalTarget); if ((value.originalTarget as BootstrapRequest['target']).kind==='resume') bad()
   validateCreation(value.metadata,value.lineage)
@@ -122,6 +129,7 @@ export function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderSta
     || s.initialInputId!==value.initial?.inputId || s.initialInputDigest!==value.initial?.digest || s.initialStartedAt!==value.initial?.startedAt || s.initialExpiresAt!==value.initial?.expiresAt) bad()
   const {semanticSeed:_,...base}=header
   if (!sameBootstrapData(base,value.headerBase) || !sameBootstrapData({...base,...value.metadata,...value.lineage},base)) bad()
+  if (Object.hasOwn(value,'captureReservation')) validateCaptureStage(value.captureReservation!, value)
   if (!Buffer.from(canonicalJsonData(value)+'\n').equals(Buffer.from(bytes))) bad()
   return value
 }

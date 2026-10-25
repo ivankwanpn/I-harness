@@ -10,8 +10,12 @@ export { compileSemanticSeed } from './semantic-seed.ts'
 export type { CompiledSemanticSeed } from './semantic-seed.ts'
 export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken, BootstrapCallerMetadata, BootstrapLineage, BootstrapTarget, BootstrapInitial, BootstrapRequest, BootstrapDependencyRequest, BootstrapDependencyOutcome, BootstrapDependencyPort, BootstrapGuards, BootstrapReceipt, BootstrapOutcome, BootstrapInspection, BootstrapHeaderStage, BootstrapHeaderOperation, HeaderOutcome, BootstrapReadState, BootstrapFrame, BootstrapBackend } from './coordinator/bootstrap-types.ts'
 export { parseBootstrapHeaderStage, rawHeaderDigest, bootstrapManifest } from './coordinator/bootstrap-header.ts'
-export { captureBootstrapRequestIntent } from './coordinator/bootstrap-intent.ts'
-export type { BootstrapRequestIntent } from './coordinator/bootstrap-intent.ts'
+export { captureBootstrapRequestIntent, createBootstrapRequestIntent } from './coordinator/bootstrap-intent.ts'
+export type { BootstrapRequestIntent, BootstrapProjectIntent } from './coordinator/bootstrap-intent.ts'
+export { readForkRequestCore } from './fork-contract.ts'
+export type { ForkRequestCore } from './fork-contract.ts'
+export type { BootstrapCaptureRequest, BootstrapCaptureReservation, BootstrapCaptureInspection, BootstrapCaptureReserveOutcome } from './coordinator/bootstrap-types.ts'
+export { captureBootstrapCaptureRequest, parseBootstrapCaptureReservation, encodeBootstrapCaptureReservation } from './coordinator/bootstrap-capture.ts'
 export { captureBootstrapTargetPreparationRequest } from './coordinator/bootstrap-preparation.ts'
 export type { BootstrapTargetPreparationRequest, BootstrapTargetPreparationOutcome, BootstrapTargetPreparationPort } from './coordinator/bootstrap-types.ts'
 
@@ -52,20 +56,36 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
 
   async function retire<T>(id: string, run: () => Promise<T>) {
+    managed.assertOutsideCapture(id)
     const admission = observations.beginRetirement(id)
     try { await admission.join(); return await run() } finally { admission.finish() }
   }
   return {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
-    bootstrapSemanticTarget(request, guards) { return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
-    resumeSemanticTarget(invocation, guards, originalPayload) { return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
+    bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
+    resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
+    ...(managed.captureSupported()?{
+      inspectBootstrapCapture:managed.inspectBootstrapCapture,
+      bootstrapSemanticTargetWithCapture(request:import('./coordinator/bootstrap-types.ts').BootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
+        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
+        return observations.withBootstrapCapture(request,guards,capture,managed.bootstrapSemanticTargetWithCapture)
+      },
+    }:{}),
     inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
     async openManagedDocument(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
-    ...(backend.deleteOwnedSession ? { deleteOwnedSession: lifecycle.deleteOwnedSession, onDocumentDeleted: lifecycle.onDocumentDeleted } : {}),
+    ...(backend.deleteOwnedSession ? {
+      async deleteOwnedSession(sessionId:string,manifest:import('./coordinator/types.ts').SessionArtifactManifest){
+        managed.assertOutsideCapture(sessionId)
+        const captured={documents:[...manifest.documents],...(manifest.files===undefined?{}:{files:[...manifest.files]})}
+        const admission=observations.beginMutation([sessionId],captured.documents,true)
+        managed.revoke(sessionId)
+        try{await admission.join();await managed.closeOne(sessionId);return await lifecycle.deleteOwnedSession(sessionId,captured)}finally{admission.finish()}
+      },onDocumentDeleted:lifecycle.onDocumentDeleted,
+    }:{}),
     ensureWritableFormat: mutations.ensureWritableFormat,
     create: mutations.create,
     append(sessionId, events) {
@@ -84,10 +104,12 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     updateMeta: mutations.updateMeta,
     flush: mutations.flush,
     async close() {
+      managed.assertOutsideCapture()
       const join = observations.closeAdmission()
+      const joinCapture = managed.closeCaptureAdmission()
       const errors: unknown[] = []
-      try { await join() } catch (error) { errors.push(error) }
-      if (errors.length === 0) try { await managed.close() } catch (error) { errors.push(error) }
+      const joined=await Promise.allSettled([join(),joinCapture(),managed.close()])
+      for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
       // Dependent original leases survive unresolved observation/managed work.
       if (errors.length === 0) await lifecycle.close()
       else {

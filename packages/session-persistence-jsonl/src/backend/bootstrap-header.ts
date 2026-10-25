@@ -3,17 +3,18 @@ import { basename, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { canonicalJsonData, type BootstrapInvocation } from '@i-harness/core-session'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
-import { isHeldFactOwner, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type BootstrapBackend, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
+import { isHeldFactOwner, parseBootstrapHeaderStage, parseBootstrapCaptureReservation, rawHeaderDigest, type HeldFactOwner, type BootstrapBackend, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
+import { bootstrapNamespace, createBootstrapCaptureBackend } from './bootstrap-capture.ts'
 
 export function bootstrapPaths(path: string, invocation: BootstrapInvocation) {
   const key=createHash('sha256').update(canonicalJsonData(invocation)).digest('hex')
-  return {stage:`${path}.bootstrap-${key}.stage`,publish:`${path}.bootstrap-${key}.publish`}
+  return {stage:`${path}.bootstrap-${key}.stage`,promote:`${path}.bootstrap-${key}.promote`,publish:`${path}.bootstrap-${key}.publish`}
 }
 export async function bootstrapArtifacts(path:string):Promise<string[]> {
   const prefix=basename(path)+'.bootstrap-'
   const names=await readdir(dirname(path)).catch((e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return [];throw e})
-  return names.filter(n=>n.startsWith(prefix)&&/^[a-f0-9]{64}\.(stage|publish)$/.test(n.slice(prefix.length)))
+  return names.filter(n=>n.startsWith(prefix)&&/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(n.slice(prefix.length)))
 }
 async function optional(path:string):Promise<Buffer|undefined> { try{return await readFile(path)}catch(e){if((e as NodeJS.ErrnoException).code==='ENOENT')return;throw e} }
 async function bounded(path:string,limit:number):Promise<Buffer|undefined> {
@@ -46,7 +47,8 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'> {
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> {
+  const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath)
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
     scope(id,owner)
     const stage=parseBootstrapHeaderStage(operation.stageBytes)
@@ -62,19 +64,31 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     return true
   }
   return {
+    checkBootstrapCaptureRoot: capture.checkBootstrapCaptureRoot,
+    readBootstrapCapture: capture.readBootstrapCapture,
+    prepareBootstrapCapture: capture.prepareBootstrapCapture,
+    settleBootstrapCaptureIO: capture.settleBootstrapCaptureIO,
     async readBootstrapState(invocation) {
       await assertNotDeleted('session',invocation.targetSessionId)
       const path=filePath(invocation.targetSessionId), paths=bootstrapPaths(path,invocation)
-      const siblings=await bootstrapArtifacts(path), foreign=siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish))
+      const siblings=await bootstrapNamespace(path);let foreign=siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish)&&n!==basename(paths.promote))
       let stageBytes:Buffer|undefined, publicationBytes:Buffer|undefined, raw:Buffer|undefined
+      let stagePresent=siblings.includes(basename(paths.stage)), promotionPresent=siblings.includes(basename(paths.promote)), promotionBytes:Buffer|undefined, captureReservation:import('@i-harness/session-persistence').BootstrapCaptureReservation|undefined
       let publicationPresent=siblings.includes(basename(paths.publish))
-      const retained=()=>({...(stageBytes?{stageBytes}:{}),...(publicationBytes?{publicationBytes}:{}),publicationPresent,foreign})
+      const retained=()=>({stagePresent,promotionPresent,...(promotionBytes?{promotionBytes}:{}),...(captureReservation?{captureReservation}:{}),...(stageBytes?{stageBytes}:{}),...(publicationBytes?{publicationBytes}:{}),publicationPresent,foreign})
       try {
         stageBytes=await bounded(paths.stage,262144)
+        stagePresent ||= stageBytes!==undefined
+        if(stageBytes!==undefined) {
+          try { captureReservation=parseBootstrapCaptureReservation(stageBytes);stageBytes=undefined }
+          catch { try { parseBootstrapHeaderStage(stageBytes!) } catch { stageBytes=undefined;return {kind:'unavailable',...retained()} } }
+        }
+        promotionBytes=await bounded(paths.promote,262144);promotionPresent ||= promotionBytes!==undefined
+        if(promotionPresent&&!captureReservation)foreign=true
         publicationBytes=await bounded(paths.publish,65536)
         publicationPresent ||= publicationBytes!==undefined
         const prefix=await headerPrefix(path)
-        if(!prefix&&!stageBytes&&!publicationPresent&&!foreign)return {kind:'absent'}
+        if(!prefix&&!stagePresent&&!promotionPresent&&!publicationPresent&&!foreign)return {kind:'absent'}
         if(!prefix)return {kind:'present',...retained()}
         if(prefix.indexOf(10)<0)return {kind:'unavailable',...retained()}
         raw=await optional(path)
@@ -87,7 +101,9 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       } catch { return {kind:'unavailable',...retained()} }
     },
     async prepareBootstrapHeader(id,owner,operation) {
-      check(id,owner,operation); await assertNotDeleted('session',id)
+      check(id,owner,operation)
+      if(parseBootstrapHeaderStage(operation.stageBytes).captureReservation)return capture.prepareCapturedHeader(id,owner,operation)
+      await assertNotDeleted('session',id)
       const path=filePath(id),paths=bootstrapPaths(path,operation.invocation)
       let issued=false, cleanup=false
       const before=()=>{scope(id,owner);owner.beforeIssue();issued=true}
@@ -105,9 +121,10 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         } finally {await h.close().catch(error=>{if(synced)cleanup=true;else throw error})}
       }
       try {
-        const siblings=await bootstrapArtifacts(path)
+        const siblings=await bootstrapNamespace(path)
         if(siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish)))return {kind:'conflict'}
         const stage=await bounded(paths.stage,262144),publication=await bounded(paths.publish,65536),target=await optional(path)
+        if(stage!==undefined&&stage.length===0)return {kind:'unknown'}
         if(stage&&!matchingPrefix(stage,operation.stageBytes))return {kind:'conflict'}
         if(publication!==undefined) {
           if(operation.target.kind==='new')return {kind:'conflict'}
@@ -141,12 +158,19 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       }
     },
     async reconcileBootstrapHeader(id,owner,operation):Promise<HeaderOutcome> {
-      check(id,owner,operation); await assertNotDeleted('session',id)
+      check(id,owner,operation)
+      if(parseBootstrapHeaderStage(operation.stageBytes).captureReservation)return capture.reconcileCapturedHeader(id,owner,operation)
+      await assertNotDeleted('session',id)
       const path=filePath(id),paths=bootstrapPaths(path,operation.invocation)
       try {
+        const siblings=await bootstrapNamespace(path)
+        if(siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish)&&n!==basename(paths.promote)))return {kind:'conflict'}
         const stage=await bounded(paths.stage,262144)
         if(!stage)return {kind:'unknown'}
-        if(!stage.equals(Buffer.from(operation.stageBytes)))return {kind:stage.length<operation.stageBytes.length&&stage.equals(Buffer.from(operation.stageBytes.subarray(0,stage.length)))?'unknown':'conflict'}
+        if(!stage.equals(Buffer.from(operation.stageBytes))) {
+          try { const reservation=parseBootstrapCaptureReservation(stage);if(canonicalJsonData(reservation)===canonicalJsonData(parseBootstrapHeaderStage(operation.stageBytes).captureReservation))return {kind:'unknown'} }catch{}
+          return {kind:stage.length<operation.stageBytes.length&&stage.equals(Buffer.from(operation.stageBytes.subarray(0,stage.length)))?'unknown':'conflict'}
+        }
         const publication=await bounded(paths.publish,65536)
         if(publication!==undefined) {
           if(operation.target.kind==='new'||!matchingPrefix(publication,operation.headerBytes))return {kind:'conflict'}

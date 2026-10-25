@@ -39,6 +39,10 @@ export interface SessionModelSelection {
 export interface PersistenceBackend {
   readDocumentObserved?(key: string): Promise<ObservedDocument>
   prepareBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['prepareBootstrapHeader']
+  checkBootstrapCaptureRoot?: import('./bootstrap-types.ts').BootstrapBackend['checkBootstrapCaptureRoot']
+  readBootstrapCapture?: import('./bootstrap-types.ts').BootstrapBackend['readBootstrapCapture']
+  prepareBootstrapCapture?: import('./bootstrap-types.ts').BootstrapBackend['prepareBootstrapCapture']
+  settleBootstrapCaptureIO?: import('./bootstrap-types.ts').BootstrapBackend['settleBootstrapCaptureIO']
   reconcileBootstrapHeader?: import('./bootstrap-types.ts').BootstrapBackend['reconcileBootstrapHeader']
   readBootstrapState?: import('./bootstrap-types.ts').BootstrapBackend['readBootstrapState']
   confirmBootstrapFrames?: import('./bootstrap-types.ts').BootstrapBackend['confirmBootstrapFrames']
@@ -112,6 +116,8 @@ export interface SessionCoordinator {
   bootstrapSemanticTarget(request: import('./bootstrap-types.ts').BootstrapRequest, guards: import('./bootstrap-types.ts').BootstrapGuards): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   inspectBootstrap(invocation: import('./bootstrap-types.ts').BootstrapInvocation): Promise<import('./bootstrap-types.ts').BootstrapInspection>
+  inspectBootstrapCapture?(request: import('./bootstrap-types.ts').BootstrapCaptureRequest): Promise<import('./bootstrap-types.ts').BootstrapCaptureInspection>
+  bootstrapSemanticTargetWithCapture?(request: import('./bootstrap-types.ts').BootstrapCaptureRequest, guards: import('./bootstrap-types.ts').BootstrapGuards, capture: () => Promise<import('./bootstrap-types.ts').BootstrapRequest>): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   readonly storageRoot?: string
   /** Fires only after the actual backend confirms its owned deletion. */
   onDocumentDeleted?(listener: (sessionId: string, manifest: SessionArtifactManifest) => Promise<void>): () => void

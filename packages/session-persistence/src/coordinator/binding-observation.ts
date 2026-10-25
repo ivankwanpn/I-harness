@@ -5,6 +5,8 @@ import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/
 import { bootstrapFields, captureBootstrapInvocation, captureBootstrapRequest } from './bootstrap-header.ts'
 import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards, BootstrapOutcome } from './bootstrap-types.ts'
 import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.ts'
+import { captureBootstrapCaptureRequest } from './bootstrap-capture.ts'
+import type { BootstrapCaptureRequest } from './bootstrap-types.ts'
 import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 
@@ -77,6 +79,30 @@ export function createBindingObservations(
     try { captured = captureBootstrapInvocation(invocation); payload = originalPayload === undefined ? undefined : captureBootstrapRequest(originalPayload); capturedGuards = captureBootstrapGuards(guards) }
     catch { return { kind: 'refused', reason: 'manifest-invalid' } }
     return bootstrapMutation(captured, () => run(captured, capturedGuards, payload))
+  }
+  async function withBootstrapCapture(request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>, run: (request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+    let captured:BootstrapCaptureRequest,capturedGuards:BootstrapGuards
+    try {
+      captured=captureBootstrapCaptureRequest(request)
+      if(!guards||typeof guards!=='object'||utilTypes.isProxy(guards)||typeof capture!=='function'||utilTypes.isProxy(capture))throw new TypeError('Invalid capture arguments')
+      // Capture host methods by descriptor, preserving their original receiver.
+      // This stricter new entry does not alter predecessor generic guard reads.
+      const data=(object:object,key:string):unknown=>{
+        for(let current:object|null=object;current;current=Object.getPrototypeOf(current)){
+          if(utilTypes.isProxy(current))throw new TypeError('Invalid capture host')
+          const field=Object.getOwnPropertyDescriptor(current,key)
+          if(field){if(!('value'in field)||!field.enumerable)throw new TypeError('Invalid capture host field');return field.value}
+        }
+      }
+      const method=(object:object,key:string):Function=>{const value=data(object,key);if(typeof value!=='function'||utilTypes.isProxy(value))throw new TypeError('Invalid capture host method');return value}
+      const assertCurrent=method(guards,'assertCurrent'),dependencies=data(guards,'dependencies'),signal=data(guards,'signal') as AbortSignal|undefined
+      if(!dependencies||typeof dependencies!=='object'||utilTypes.isProxy(dependencies))throw new TypeError('Invalid capture dependencies')
+      const confirm=method(dependencies,'confirm'),reconcile=method(dependencies,'reconcile'),prepared=captureBootstrapGuards(guards)
+      if(signal!==undefined)Reflect.apply(signalAborted,signal,[])
+      capturedGuards={signal,assertCurrent(){Reflect.apply(assertCurrent,guards,[])},dependencies:{confirm(...args){return Reflect.apply(confirm,dependencies,args)},reconcile(...args){return Reflect.apply(reconcile,dependencies,args)}},targetPreparation:prepared.targetPreparation}
+    }
+    catch{return {kind:'refused',reason:'manifest-invalid'}}
+    return bootstrapMutation(captured.invocation,()=>run(captured,capturedGuards,capture))
   }
   function beginMutation(ids: readonly string[], keys: readonly string[], deleted = false) {
     return admitMutation(ids, keys, deleted, [])
@@ -263,6 +289,6 @@ export function createBindingObservations(
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume }
+  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

@@ -8,6 +8,7 @@ import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.
 import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact-journal.ts'
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
+import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
@@ -34,7 +35,10 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   const filePath = (id: string) => artifactPath(id, ".jsonl")
   async function assertPublicBootstrap(sessionId: string, creating = false) {
     const path = filePath(sessionId)
-    if (!(await bootstrapArtifacts(path)).length) return
+    const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
+    if (!namespace.length) return
+    const prefix=basename(path)+'.bootstrap-'
+    if(namespace.some(name=>!(/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(name.slice(prefix.length)))))throw Object.assign(new Error('Unknown bootstrap artifact requires its original owner'),{code:'SESSION_BOOTSTRAP_INCOMPLETE'})
     if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
     const raw = await readFile(path)
     const end = raw.indexOf(10), meta = parseHeader(raw.subarray(0, end).toString('utf8'))
@@ -93,7 +97,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
   return {
     ...createFactJournalBackend(filePath, assertNotDeleted),
-    ...createBootstrapHeaderBackend(filePath, assertNotDeleted),
+    ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.
@@ -343,7 +347,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       const prior = await readFile(marker, "utf8").catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error })
       const receipt = prior === undefined ? undefined : await deletionReceipt(sessionId)
       const stagePrefix = sessionId + '.jsonl.bootstrap-'
-      const isStage = (file: string) => file.startsWith(stagePrefix) && /^[a-f0-9]{64}\.(stage|publish)$/.test(file.slice(stagePrefix.length))
+      const isStage = (file: string) => file.startsWith(stagePrefix) && /^[a-f0-9]{64}\.(stage|publish|promote)$/.test(file.slice(stagePrefix.length))
       const declared = [...(manifest.files ?? [])]
       if (new Set(declared).size !== declared.length) throw new Error("Owned file manifest contains duplicate identities")
       const files = [...new Set([...declared, ...await bootstrapArtifacts(filePath(sessionId)), ...(receipt?.manifest.files ?? []).filter(isStage)])].sort()

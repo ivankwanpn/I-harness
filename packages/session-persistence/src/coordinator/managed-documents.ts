@@ -22,7 +22,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined)
     entry.document=document
     const close=document.close
-    document.close=async()=>{await close();if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}}
+    document.close=async()=>{await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}}
     if(entry.revoked)document.revokeNewWork()
     if(!entry.bootstrap)resolved.set(id,document)
     return document
@@ -31,18 +31,20 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     if(entry?.bootstrap && !entry.ready)throw new FactRecoveryRequiredError()
   }
   async function closeOne(id:string) {
+    bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
-    entry.revoked=true;entry.document?.revokeNewWork();await entry.flight
+    entry.revoked=true;if(entry.captureIO)entry.captureIO.activeIssue=undefined;entry.document?.revokeNewWork();await entry.flight?.catch(()=>{})
+    await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
-    else if(documents.get(id)===entry)documents.delete(id)
+    else {await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
   return {
     ...bootstrap,
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
-    revoke(id:string){const entry=documents.get(id);if(entry){entry.revoked=true;entry.document?.revokeNewWork()}},
+    revoke(id:string){bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry){entry.revoked=true;if(entry.captureIO)entry.captureIO.activeIssue=undefined;entry.document?.revokeNewWork()}},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
     closeOne,

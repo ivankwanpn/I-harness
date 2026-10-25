@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fork-contract": "./src/fork-contract.ts"
   },
   "scripts": {
     "test": "vitest run",

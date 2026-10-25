@@ -24,7 +24,12 @@ export type BootstrapOutcome = { kind: 'ready'|'already-ready'; receipt: Bootstr
   | { kind: 'blocked'; token: BootstrapResumeToken; reason: 'unknown'|'payload-required'|'dependency-unavailable'|'source-changed' }
   | { kind: 'refused'; reason: 'conflict'|'nonempty'|'cached-unprepared'|'wrong-view'|'incompatible'|'manifest-invalid'|'target-policy' }
 export interface BootstrapInspection { kind: 'absent'|'reserved'|'ready'|'conflict'|'unavailable'; invocation: BootstrapInvocation; token?: BootstrapResumeToken; needsConfirmation: boolean }
+export interface BootstrapCaptureRequest { invocation: BootstrapInvocation; core: import('../fork-contract.ts').ForkRequestCore; requestIntent: import('./bootstrap-intent.ts').BootstrapRequestIntent }
+export interface BootstrapCaptureReservation { version: 1; kind: 'semantic-bootstrap-capture'; request: BootstrapCaptureRequest }
+export type BootstrapCaptureInspection = { kind: 'absent' } | { kind: 'reserved'; reservation: BootstrapCaptureReservation } | { kind: 'materialized' } | { kind: 'conflict'|'unavailable' }
+export type BootstrapCaptureReserveOutcome = { kind: 'committed-new' } | { kind: 'present' } | { kind: 'not-issued'; reason: 'cancelled'|'stale-source' } | { kind: 'unknown'|'conflict'|'unsupported' }
 export interface BootstrapHeaderStage {
+  captureReservation?: BootstrapCaptureReservation;
   version: 1; kind: 'semantic-bootstrap-header'; invocation: BootstrapInvocation;
   originalTarget: Exclude<BootstrapTarget, {kind:'resume'}>; metadata: BootstrapCallerMetadata; lineage: BootstrapLineage;
   headerBase: SessionMeta; seed: Omit<CompiledSemanticSeed, 'records'> & { seedLength: number; groupCount: number };
@@ -32,9 +37,13 @@ export interface BootstrapHeaderStage {
 }
 export interface BootstrapHeaderOperation { invocation: BootstrapInvocation; target: BootstrapHeaderStage['originalTarget']; stageBytes: Uint8Array; headerBytes: Uint8Array }
 export type HeaderOutcome = { kind: 'committed'; headerDigest: string; cleanupDiagnostic?: 'file-close-failed' } | { kind: 'absent'|'unknown'|'conflict' } | { kind: 'not-issued'; reason: 'cancelled'|'stale-source' }
-export interface BootstrapReadState { kind: 'absent'|'present'|'unavailable'; stageBytes?: Uint8Array; publicationPresent?: boolean; publicationBytes?: Uint8Array; rawHeader?: string; meta?: SessionMeta; events?: SessionEvent[]; prefix?: JournalPrefix; frames?: BootstrapFrame[]; torn?: boolean; foreign?: boolean }
+export interface BootstrapReadState { kind: 'absent'|'present'|'unavailable'; stagePresent?: boolean; captureReservation?: BootstrapCaptureReservation; promotionPresent?: boolean; promotionBytes?: Uint8Array; stageBytes?: Uint8Array; publicationPresent?: boolean; publicationBytes?: Uint8Array; rawHeader?: string; meta?: SessionMeta; events?: SessionEvent[]; prefix?: JournalPrefix; frames?: BootstrapFrame[]; torn?: boolean; foreign?: boolean }
 export interface BootstrapFrame { prefix: JournalPrefix; batch: EncodedFactBatch }
 export interface BootstrapBackend {
+  checkBootstrapCaptureRoot?(): Promise<void>;
+  readBootstrapCapture?(id: string, owner: HeldFactOwner, request: BootstrapCaptureRequest): Promise<BootstrapCaptureInspection>;
+  prepareBootstrapCapture?(id: string, owner: IssuingFactOwner, reservationBytes: Uint8Array): Promise<BootstrapCaptureReserveOutcome>;
+  settleBootstrapCaptureIO?(id: string, owner: HeldFactOwner): Promise<void>;
   prepareBootstrapHeader(id: string, owner: IssuingFactOwner, operation: BootstrapHeaderOperation): Promise<HeaderOutcome>;
   reconcileBootstrapHeader(id: string, owner: HeldFactOwner, operation: BootstrapHeaderOperation): Promise<HeaderOutcome>;
   readBootstrapState(invocation: BootstrapInvocation): Promise<BootstrapReadState>;

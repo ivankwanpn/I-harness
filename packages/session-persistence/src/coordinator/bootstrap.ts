@@ -1,4 +1,11 @@
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { types as utilTypes } from 'node:util'
+import { SessionLockConflictError } from '@i-harness/fs-lock'
+import { SessionBindingObservationError } from './types.ts'
+import { captureBootstrapCaptureRequest, encodeBootstrapCaptureReservation, validateCaptureStage } from './bootstrap-capture.ts'
+import type { BootstrapCaptureRequest, BootstrapCaptureReservation, BootstrapCaptureInspection } from './bootstrap-types.ts'
+import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
 import { encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
@@ -15,9 +22,11 @@ import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPrepara
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 
 export interface ManagedEntry {
+  captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
   flight?: Promise<unknown>; revoked?: boolean; ready?: boolean; headerUnknown?: boolean;
-  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome };
+  bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome;
+    capture?: { request: BootstrapCaptureRequest; reservation: BootstrapCaptureReservation; phase: 'unreserved'|'reserving'|'reserved'|'capturing'|'captured'|'spent'; entered: boolean; ownedRequest?: BootstrapRequest } };
 }
 const emptyPrefix=():JournalPrefix=>({eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())})
 function current(guards:BootstrapGuards,entry?:ManagedEntry) {
@@ -55,6 +64,7 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
   return frames
 }
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
+  if(stage.captureReservation)validateCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
   if (meta.formatVersion !== original.formatVersion && !(original.formatVersion === 11 && meta.formatVersion === 12 && readyState(state))) throw new Error('Bootstrap storage format conflict')
   for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
@@ -70,6 +80,71 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
 }
 export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
+  const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
+  const callbackScope=new AsyncLocalStorage<{id:string;active:boolean}>()
+  let captureClosed=false
+  function assertOutsideCapture(id?:string) { const scope=callbackScope.getStore();if(scope?.active&&(id===undefined||scope.id===id))throw new SessionBindingObservationError('conflict') }
+  function captureSelfConflict(input:unknown,wrapped=false) {
+    const scope=callbackScope.getStore();if(!scope?.active)return false
+    if(!input||typeof input!=='object'||utilTypes.isProxy(input))return false
+    const invocation=wrapped?Object.getOwnPropertyDescriptor(input,'invocation')?.value:input
+    if(!invocation||typeof invocation!=='object'||utilTypes.isProxy(invocation))return false
+    return Object.getOwnPropertyDescriptor(invocation,'targetSessionId')?.value===scope.id
+  }
+  async function captureBundle(entry:ManagedEntry) {
+    if(entry.captureIO)return entry.captureIO
+    const id=entry.bootstrap!.invocation.targetSessionId,claim=await ownership.pinOwnership(id)
+    const held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
+    const bundle:NonNullable<ManagedEntry['captureIO']>={claim,held,issuer:undefined!,settled:true}
+    bundle.issuer=issuingFactOwner(held,()=>{if(!bundle.activeIssue)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'});bundle.activeIssue()})
+    entry.captureIO=bundle;return bundle
+  }
+  async function settleCapture(entry:ManagedEntry) {
+    const io=entry.captureIO
+    if(io&&!io.settled){await backend.settleBootstrapCaptureIO!(entry.bootstrap!.invocation.targetSessionId,io.held);io.settled=true}
+  }
+  type InspectionResource={request:BootstrapCaptureRequest;done:Promise<BootstrapCaptureInspection>;claim?:Awaited<ReturnType<Ownership['pinOwnership']>>;held?:HeldFactOwner;ioStarted:boolean;ioSettled:boolean;released:boolean}
+  const inspections=new Set<InspectionResource>()
+  async function cleanupInspection(item:InspectionResource) {
+    if(item.held&&item.ioStarted&&!item.ioSettled){await backend.settleBootstrapCaptureIO!(item.request.invocation.targetSessionId,item.held);item.ioSettled=true}
+    if(item.claim&&!item.released){await item.claim.release();item.released=true}
+    inspections.delete(item)
+  }
+  function inspectBootstrapCapture(input:BootstrapCaptureRequest):Promise<BootstrapCaptureInspection> {
+    const request=captureBootstrapCaptureRequest(input)
+    if(captureClosed)return Promise.resolve({kind:'unavailable'})
+    const item:InspectionResource={request,done:undefined!,ioStarted:false,ioSettled:false,released:false}
+    inspections.add(item)
+    item.done=Promise.resolve().then(async()=>{
+      let result:BootstrapCaptureInspection={kind:'unavailable'},failure:unknown
+      try {
+        await backend.checkBootstrapCaptureRoot!()
+        if(captureClosed)throw new Error('Capture inspection closed')
+        item.claim=await ownership.pinOwnership(request.invocation.targetSessionId)
+        item.held=heldFactOwner({sessionId:request.invocation.targetSessionId,incarnation:randomUUID()},ownership,()=>item.claim!.assertHeld())
+        if(captureClosed)throw new Error('Capture inspection closed')
+        item.ioStarted=true
+        result=await ownership.withSessionOperation(request.invocation.targetSessionId,()=>backend.readBootstrapCapture!(request.invocation.targetSessionId,item.held!,request))
+        if(captureClosed)result={kind:'unavailable'}
+        const local=documents.get(request.invocation.targetSessionId)
+        if(result.kind==='absent'&&(local?.bootstrap?.issued||local?.captureIO&&!local.captureIO.settled))result={kind:'unavailable'}
+      }catch(error){failure=error;result={kind:error instanceof SessionLockConflictError?'conflict':'unavailable'}}
+      try{await cleanupInspection(item)}catch(error){throw new AggregateError([...(failure?[failure]:[]),error],'Capture inspection cleanup unresolved',{cause:{invocation:request.invocation,inspection:result}})}
+      return captureClosed?{kind:'unavailable'}:result
+    })
+    return item.done
+  }
+  function closeCaptureAdmission() {
+    assertOutsideCapture();captureClosed=true
+    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture){entry.revoked=true;entry.document?.revokeNewWork()}}
+    const original=[...inspections]
+    return async()=>{
+      const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}))
+      const errors=results.flatMap(result=>result.status==='rejected'?[result.reason]:[])
+      if(errors.length)throw new AggregateError(errors,'Capture inspection cleanup unresolved')
+    }
+  }
+  async function releaseCapture(entry:ManagedEntry) { await settleCapture(entry);if(entry.captureIO)await entry.captureIO.claim.release() }
   const read=(invocation:BootstrapInvocation)=>backend.readBootstrapState!(invocation)
   async function prepareTarget(stage: BootstrapHeaderStage, guards: BootstrapGuards, reconcile: boolean, entry: ManagedEntry, events: readonly SessionEvent[]): Promise<boolean> {
     if (!guards.targetPreparation) return true
@@ -134,8 +209,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function run(entry:ManagedEntry,guards:BootstrapGuards):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
-    const held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
+    let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
+    if(entry.captureIO)entry.captureIO.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
     try {
+      await settleCapture(entry)
       await ownership.withSessionOperation(id,async()=>{mutations.assertWritableBootstrap(id);await ownership.ensureOwnership(id)})
       if(b.pending&&entry.document) {
         const pending=b.pending,key='key' in pending?pending.key:'receipt' in pending?pending.receipt.key:undefined
@@ -143,6 +220,18 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }
       let state=await read(b.invocation)
       if(state.foreign)return {kind:'refused',reason:'conflict'}
+      if(state.stagePresent||state.promotionPresent){b.issued=true;if(!state.captureReservation&&!state.stageBytes)entry.headerUnknown=true}
+      if(state.captureReservation) {
+        b.issued=true
+        if(!sameBootstrapData(state.captureReservation.request.invocation,b.invocation))return {kind:'refused',reason:'conflict'}
+        if(!b.capture)b.capture={request:state.captureReservation.request,reservation:state.captureReservation,phase:'spent',entered:true}
+        if(!sameBootstrapData(b.capture.reservation,state.captureReservation))return {kind:'refused',reason:'conflict'}
+        if(!b.capture.ownedRequest) {
+          if(b.request&&(!sameBootstrapData(b.request.metadata,state.captureReservation.request.core.metadata)||b.request.lineage.origin!=='fork'||b.request.lineage.parentSession!==state.captureReservation.request.core.sourceSessionId))return {kind:'refused',reason:'conflict'}
+          b.request=undefined;entry.headerUnknown=false;return blocked(entry,'payload-required')
+        }
+        b.request=b.capture.ownedRequest
+      }
       if(state.publicationPresent){b.issued=true;entry.headerUnknown=true}
       if(state.meta?.semanticSeed&&(state.meta.sessionId!==id||state.meta.createdAt!==b.invocation.createdAt||state.meta.semanticSeed.operationId!==b.invocation.operationId||state.meta.semanticSeed.requestDigest!==b.invocation.requestDigest))return {kind:'refused',reason:'conflict'}
       if(state.meta?.semanticSeed){b.manifestDigest=state.meta.semanticSeed.manifestDigest;b.issued=true}
@@ -151,7 +240,11 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         b.issued=true
         try {b.stage=parseBootstrapHeaderStage(state.stageBytes);if(!sameBootstrapData(b.stage.invocation,b.invocation))return {kind:'refused',reason:'conflict'}}catch {entry.headerUnknown=true}
       }
-      if(b.issued&&!state.meta?.semanticSeed)entry.headerUnknown=true
+      if(b.stage?.captureReservation&&captureSupported()&&!entry.captureIO) {
+        const io=await captureBundle(entry);held=io.held
+        io.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;io.settled=false}
+      }
+      if(b.issued&&!state.meta?.semanticSeed&&!state.captureReservation)entry.headerUnknown=true
       if(b.stage&&b.request) {
         try {const built=buildBootstrapHeader(b.request,b.stage);b.operation=built.operation}catch{return {kind:'refused',reason:'conflict'}}
       }
@@ -164,18 +257,20 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!b.stage) {
         if(b.request.target.kind==='resume')return blocked(entry,'payload-required')
         if(b.request.target.kind==='existing-empty'&&!state.rawHeader)return blocked(entry,'payload-required')
-        const built=buildBootstrapHeader(b.request,undefined,b.request.target.kind==='existing-empty'?JSON.parse(state.rawHeader!):undefined)
+        const built=buildBootstrapHeader(b.request,undefined,b.request.target.kind==='existing-empty'?JSON.parse(state.rawHeader!):undefined,b.capture?.ownedRequest?b.capture.reservation:undefined)
         b.stage=built.stage;b.operation=built.operation
       }
       if(publicationStatus(state,b.stage)!=='valid')return blocked(entry)
       b.phase='header'
+      if(entry.captureIO)entry.captureIO.settled=false
       let outcome=await ownership.withSessionOperation(id,()=>backend.reconcileBootstrapHeader!(id,held,b.operation!))
+      await settleCapture(entry)
       if(outcome.kind!=='committed') {
         if(outcome.kind==='conflict')return {kind:'refused',reason:'conflict'}
         current(guards,entry)
         outcome=await ownership.withSessionOperation(id,async()=>{
           if(mutations.pendingWriteBehind(id)?.hasWork)return {kind:'conflict' as const}
-          const issuing=issuingFactOwner(held,()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true})
+          const issuing=entry.captureIO?.issuer??issuingFactOwner(held,()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true})
           return backend.prepareBootstrapHeader!(id,issuing,b.operation!)
         })
       }
@@ -233,7 +328,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(code==='FACT_TARGET_UNAVAILABLE')return blocked(entry,'dependency-unavailable')
       if(code==='FACT_PRECONDITION_STALE'||code==='FACT_CANCELLED')return b.issued?blocked(entry,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
       return b.issued?blocked(entry):{kind:'refused',reason:'manifest-invalid'}
-    }
+    } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)} }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest):Promise<BootstrapOutcome> {
     if(!supported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
@@ -250,6 +345,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const first=r?.seed.records[0]
     if(first?.type==='conversation/seed-manifest'&&first.artifacts.length&&first.origins[0]?.kind!=='session')return Promise.resolve({kind:'refused',reason:'target-policy'})
     const id=captured.targetSessionId
+    if(callbackScope.getStore()?.active&&callbackScope.getStore()?.id===id)return Promise.resolve({kind:'refused',reason:'conflict'})
     if(mutations.pendingWriteBehind(id)?.hasWork)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
     let entry=documents.get(id)
     if(entry&&!entry.bootstrap)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
@@ -260,6 +356,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         const compared=r.target.kind==='resume'?{...r,target:previous.target}:r
         if(!sameBootstrapData(compared,previous)||r.target.kind==='resume'&&entry.bootstrap!.stage&&r.target.manifestDigest!==manifest(entry.bootstrap!.stage))return Promise.resolve({kind:'refused',reason:'conflict'})
       }
+      if(r&&entry.bootstrap!.capture&&!entry.bootstrap!.capture.ownedRequest&&!entry.bootstrap!.stage)return Promise.resolve(entry.bootstrap!.capture.phase==='capturing'||entry.bootstrap!.capture.phase==='reserving'?{kind:'refused',reason:'conflict'}:blocked(entry,'payload-required'))
       if(entry.flight)return entry.flight as Promise<BootstrapOutcome>
       entry.bootstrap!.request??=r
     }else{entry={bootstrap:{invocation:captured,request:r,phase:'header',issued:false}};documents.set(id,entry)}
@@ -268,6 +365,69 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     owned.flight=flight;return flight
   }
   return {
+    captureSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture,
+    inspectBootstrapCapture,
+    bootstrapSemanticTargetWithCapture(input:BootstrapCaptureRequest,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>):Promise<BootstrapOutcome> {
+      if(!captureSupported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
+      let request:BootstrapCaptureRequest
+      try{request=captureBootstrapCaptureRequest(input);if(typeof capture!=='function'||utilTypes.isProxy(capture)||utilTypes.isProxy(guards))throw new TypeError('Invalid capture callback')}catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}
+      const id=request.invocation.targetSessionId
+      if(callbackScope.getStore()?.active&&callbackScope.getStore()?.id===id)return Promise.resolve({kind:'refused',reason:'conflict'})
+      if(captureClosed)return Promise.resolve({kind:'not-issued',reason:'cancelled'})
+      let entry=documents.get(id)
+      if(entry&&!entry.bootstrap)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
+      if(entry) {
+        if(!sameBootstrapData(entry.bootstrap!.invocation,request.invocation)||entry.bootstrap!.capture&&!sameBootstrapData(entry.bootstrap!.capture.request,request))return Promise.resolve({kind:'refused',reason:'conflict'})
+        if(entry.flight)return entry.flight as Promise<BootstrapOutcome>
+      }else{entry={bootstrap:{invocation:request.invocation,phase:'header',issued:false}};documents.set(id,entry)}
+      const owned=entry,b=owned.bootstrap!
+      b.capture??={request,reservation:{version:1,kind:'semantic-bootstrap-capture',request},phase:'unreserved',entered:false}
+      const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
+        let originalFailure:unknown
+        try {
+          await settleCapture(owned)
+          await backend.checkBootstrapCaptureRoot!();current(guards,owned)
+          const io=await captureBundle(owned);current(guards,owned)
+          io.settled=false
+          const inspected=await ownership.withSessionOperation(id,()=>backend.readBootstrapCapture!(id,io.held,request))
+          await settleCapture(owned)
+          if(inspected.kind==='materialized')return await run(owned,guards)
+          if(inspected.kind==='conflict')return {kind:'refused',reason:'conflict'}
+          if(b.capture!.ownedRequest){if(inspected.kind==='absent')return blocked(owned);return await run(owned,guards)}
+          if(inspected.kind!=='absent'||b.capture!.phase!=='unreserved'||b.issued){if(inspected.kind==='reserved'){b.issued=true;b.capture!.phase='spent'}return blocked(owned,inspected.kind==='reserved'?'payload-required':'unknown')}
+          current(guards,owned);b.capture!.phase='reserving'
+          io.activeIssue=()=>{current(guards,owned);mutations.assertWritableBootstrap(id);b.issued=true;io.settled=false}
+          io.settled=false
+          const result=await ownership.withSessionOperation(id,()=>backend.prepareBootstrapCapture!(id,io.issuer,encodeBootstrapCaptureReservation(b.capture!.reservation)))
+          io.activeIssue=undefined;await settleCapture(owned)
+          if(result.kind!=='committed-new') {
+            if(!b.issued&&result.kind==='not-issued'){b.capture!.phase='unreserved';return result}
+            if(result.kind==='present')b.issued=true
+            if(!b.issued)b.capture!.phase='unreserved'
+            return result.kind==='conflict'?{kind:'refused',reason:'conflict'}:blocked(owned,result.kind==='present'?'payload-required':'unknown')
+          }
+          b.issued=true;b.capture!.phase='reserved';current(guards,owned);io.claim.assertHeld()
+          b.capture!.entered=true;b.capture!.phase='capturing'
+          const scope={id,active:true}
+          let returned:BootstrapRequest
+          try{returned=await callbackScope.run(scope,capture)}finally{scope.active=false;b.capture!.phase='spent'}
+          current(guards,owned);io.claim.assertHeld()
+          let r:BootstrapRequest
+          try{r=captureBootstrapRequest(returned);buildBootstrapHeader(r,undefined,undefined,b.capture!.reservation)}catch{return {kind:'refused',reason:'manifest-invalid'}}
+          b.capture!.ownedRequest=r;b.request=r;b.capture!.phase='captured'
+          return await run(owned,guards)
+        } catch(error) {
+          originalFailure=error
+          const code=(error as {code?:string}).code
+          if(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE')return b.issued?blocked(owned,code==='FACT_PRECONDITION_STALE'?'source-changed':'unknown'):{kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'}
+          throw error
+        } finally {
+          if(owned.captureIO)owned.captureIO.activeIssue=undefined
+          try{await settleCapture(owned)}catch(cleanup){throw new AggregateError([...(originalFailure?[originalFailure]:[]),cleanup],'Capture cleanup unresolved',{cause:{invocation:request.invocation}})}
+        }
+      }).finally(async()=>{if(owned.flight===flight)owned.flight=undefined;if(!b.issued&&!owned.document&&documents.get(id)===owned&&(!owned.captureIO||owned.captureIO.settled)){await releaseCapture(owned);documents.delete(id)}})
+      owned.flight=flight;return flight
+    },
     bootstrapSemanticTarget:(request:BootstrapRequest,guards:BootstrapGuards)=>{
       const field=request&&Object.getOwnPropertyDescriptor(request,'invocation')
       if(!field||!('value'in field))return Promise.resolve<BootstrapOutcome>({kind:'refused',reason:'manifest-invalid'})
