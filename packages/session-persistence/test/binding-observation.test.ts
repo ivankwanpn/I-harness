@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { exportConversationSeed, deriveMessages, legacyPrefixDigest } from '@i-harness/core-session'
+import { exportConversationSeed, deriveMessages, legacyPrefixDigest, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionBindingObservation, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
@@ -237,7 +237,7 @@ it.each([1, 2, 3, 4, 5])('close joins pending acquisition %s, revokes callback a
   })
   // source is already persistent, so add an ancestor for two new session pins.
   const backend = createJsonlBackend(roots.at(-1)!)
-  await backend.create('ancestor', { sessionId: 'ancestor', createdAt: invocation.createdAt, formatVersion: 12 })
+  await backend.create('ancestor', { sessionId: 'ancestor', createdAt: invocation.createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const running = c.withSessionBindingObservation!({ ...request, existingSessionIds: ['source', 'ancestor'] }, async () => { callbacks++ })
   const rejected = expect(running).rejects.toMatchObject({ reason: 'revoked' })
   await entered.promise
@@ -315,7 +315,7 @@ it('local deletion synchronously revokes and joins, and external deletion shares
   await expect(c.withSessionBindingObservation!(request, async () => 0)).rejects.toMatchObject({ reason: 'deleted' })
   // A fresh session has no local observation. Holding only its document lease
   // still excludes another coordinator's actual tombstone/unlink path.
-  await backend.create('external', { sessionId: 'external', createdAt: invocation.createdAt, formatVersion: 12 })
+  await backend.create('external', { sessionId: 'external', createdAt: invocation.createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const held = await nativeAcquire({ lockPath: lockPathFor(root, `doc:${key('external')}`) })
   const other = createSessionCoordinator(backend, { ...fast, lock: { enabled: true } }); coordinators.push(other)
   try { await expect(other.deleteOwnedSession!('external', { documents: [key('external')] })).rejects.toThrow() } finally { await held.release() }

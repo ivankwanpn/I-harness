@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { legacyPrefixDigest } from '@i-harness/core-session'
+import { legacyPrefixDigest, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createSessionCoordinator, compileSemanticSeed, type SessionCoordinator, type SessionMeta, type ExistingSessionBindingObservation, type ExistingSessionBindingObservationRequest, type PersistenceBackend, type BootstrapRequest } from '../src/index.ts'
 
 vi.mock('@i-harness/fs-lock', async importOriginal => {
@@ -31,7 +31,7 @@ async function fixture(persistent = false) {
   const backend = createJsonlBackend(root) as PersistenceBackend & Required<Pick<PersistenceBackend, 'readDocumentObserved'>>
   const c = createSessionCoordinator(backend, { ...fast, maxDelayMs: 60_000, lock: { enabled: true, lockRoot: root } }); coordinators.push(c)
   if (persistent) await c.create({ sessionId: 'source', createdAt, title: 'original' })
-  else await backend.create('source', { sessionId: 'source', createdAt, formatVersion: 12, title: 'original' })
+  else await backend.create('source', { sessionId: 'source', createdAt, formatVersion: CURRENT_FORMAT_VERSION, title: 'original' })
   return { root, backend, c }
 }
 async function existingEmpty(f: Awaited<ReturnType<typeof fixture>>): Promise<BootstrapRequest> {
@@ -81,7 +81,7 @@ it('E01 closes plain dense request descriptors without invoking accessors, proxi
 it('E01 accepts exactly 64 real existing IDs and acquires no target lease or extra key', async () => {
   const { root, backend, c } = await fixture()
   const ids = ['source', ...Array.from({ length: 63 }, (_, i) => `session-${i}`)]
-  for (const id of ids.slice(1)) await backend.create(id, { sessionId: id, createdAt, formatVersion: 12 })
+  for (const id of ids.slice(1)) await backend.create(id, { sessionId: id, createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const paths: string[] = []
   vi.mocked(acquireSessionLock).mockImplementation(async options => { paths.push(options.lockPath); return nativeAcquire(options) })
   const read = vi.spyOn(backend, 'readDocumentObserved')
@@ -199,7 +199,7 @@ it.each(['releaseOwnership', 'closeManagedDocument'] as const)('E07 %s retires i
 })
 
 it.each([['abort', 1], ['abort', 2], ['abort', 3], ['abort', 4], ['close', 1], ['close', 2], ['close', 3], ['close', 4]] as const)('E08 %s at cold native acquisition %s joins late handle and releases every obtained lease', async (mode, cut) => {
-  const { root, backend, c } = await fixture(); await backend.create('ancestor', { sessionId: 'ancestor', createdAt, formatVersion: 12 })
+  const { root, backend, c } = await fixture(); await backend.create('ancestor', { sessionId: 'ancestor', createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const entered = Promise.withResolvers<void>(), leave = Promise.withResolvers<void>(), controller = new AbortController()
   let acquired = 0, released = 0, live = 0, callbacks = 0
   vi.mocked(acquireSessionLock).mockImplementation(async options => {
@@ -256,7 +256,7 @@ it('E08 preaborted branded signal refuses before native acquisition despite shad
 
 it('E09 self waits refuse before pending work and preserve current nested scope stack', async () => {
   const { backend, c } = await fixture()
-  await backend.create('unrelated', { sessionId: 'unrelated', createdAt, formatVersion: 12 })
+  await backend.create('unrelated', { sessionId: 'unrelated', createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   await c.withExistingSessionBindingObservation!(request, async outer => {
     for (const operation of [() => c.updateMeta('source', { title: 'no' }), () => c.putDocumentStrict!(key('source'), {}), () => c.putDocument(key('source'), {}), () => c.profile('source'), () => c.load('source'), () => c.loadOwned('source'), () => c.openManagedDocument('source'), () => c.ensureWritableFormat!('source'), () => c.deleteOwnedSession!('source', { documents: [key('source')] }), () => c.releaseOwnership('source'), () => c.closeManagedDocument('source'), () => c.close(), () => c.withExistingSessionBindingObservation!(request, async () => 0), () => c.withSessionBindingObservation!({ existingSessionIds: ['source'], target: { ...invocation, targetSessionId: 'target' } }, async () => 0)]) {
       await expect(Promise.resolve().then(async () => operation())).rejects.toMatchObject({ reason: 'conflict' }); outer.assertCurrent()
@@ -313,7 +313,7 @@ it('E11 bootstrap-first pending header admission rejects read immediately', asyn
 })
 
 it('E12 mixed nested fork/read scopes retain only the exact fork target bootstrap exemption', async () => {
-  const { backend, c } = await fixture(); await backend.create('unrelated', { sessionId: 'unrelated', createdAt, formatVersion: 12 })
+  const { backend, c } = await fixture(); await backend.create('unrelated', { sessionId: 'unrelated', createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const target = { ...invocation, targetSessionId: 'target' }, profile = vi.spyOn(backend, 'profile')
   await c.withSessionBindingObservation!({ existingSessionIds: ['source'], target }, async fork => {
     await c.withExistingSessionBindingObservation!({ sessionIds: ['unrelated'] }, async read => {
@@ -326,7 +326,7 @@ it('E12 mixed nested fork/read scopes retain only the exact fork target bootstra
 })
 
 it('E13 partial later document acquisition releases earlier temporaries but preserves persistent adopter and sorted order', async () => {
-  const { root, backend, c } = await fixture(true); await backend.create('ancestor', { sessionId: 'ancestor', createdAt, formatVersion: 12 })
+  const { root, backend, c } = await fixture(true); await backend.create('ancestor', { sessionId: 'ancestor', createdAt, formatVersion: CURRENT_FORMAT_VERSION })
   const bindings = ['source', 'ancestor'].map(key).sort(), held = await nativeAcquire({ lockPath: lockPathFor(root, `doc:${bindings[1]}`) })
   const paths: string[] = []
   vi.mocked(acquireSessionLock).mockImplementation(async options => { paths.push(options.lockPath); return nativeAcquire(options) })
