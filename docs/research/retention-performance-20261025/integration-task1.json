@@ -1,0 +1,64 @@
+{
+  "head": "f4b8d434d944e8b89bd2cfe6db29d406ef8bf141",
+  "donor": "a3dbcfc528e5ed4e87dfb229cf478704271b5e0b",
+  "changed": [
+    "packages/context-output/src/store.ts",
+    "packages/context-output/test/helpers/legacy-performance-probe.ts",
+    "packages/context-output/test/legacy-fork-performance.test.ts"
+  ],
+  "receipts": [
+    {
+      "head": "f4b8d434d944e8b89bd2cfe6db29d406ef8bf141",
+      "donor": "a3dbcfc528e5ed4e87dfb229cf478704271b5e0b",
+      "name": "admission",
+      "args": [
+        "../../node_modules/vitest/vitest.mjs",
+        "run",
+        "test/legacy-fork-performance.test.ts",
+        "-t",
+        "uses one actual physical snapshot|refuses journal headroom",
+        "--maxWorkers=2",
+        "--minWorkers=1"
+      ],
+      "cwd": "packages/context-output",
+      "started": "2026-10-25T11:26:22.472Z",
+      "ended": "2026-10-25T11:26:24.998Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2881,
+      "sha256": "b49c16d185ed23a8a22358079c643b14753f90a9cd8458d0a71c950314cdb269",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\mixed",
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\native"
+      }
+    },
+    {
+      "head": "f4b8d434d944e8b89bd2cfe6db29d406ef8bf141",
+      "donor": "a3dbcfc528e5ed4e87dfb229cf478704271b5e0b",
+      "name": "types",
+      "args": [
+        "../../node_modules/typescript/bin/tsc",
+        "--noEmit"
+      ],
+      "cwd": "packages/context-output",
+      "started": "2026-10-25T11:26:24.998Z",
+      "ended": "2026-10-25T11:26:32.455Z",
+      "exit": 0,
+      "stable": true,
+      "sourceFiles": 2881,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "env": {
+        "IH_CONFIG_DIR": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\config",
+        "IH_STRUCTURE_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\structure",
+        "IH_RESULT_INTEGRITY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\integrity",
+        "IH_LEGACY_FORK_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\legacy",
+        "IH_MIXED_RETENTION_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\mixed",
+        "IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT": "D:\\I-harness-main\\.superpowers\\sdd\\2026-10-25-legacy-retention-performance\\integrated-task1-f4b8d434\\native"
+      }
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "createdUtc": "2026-10-25T11:19:00.824Z",
+  "runtimeExecuted": false,
+  "productFilesModified": false,
+  "facts": [
+    {
+      "path": "packages/context-output/test/helpers/legacy-performance-probe.ts",
+      "redSha256": "F8D32CFFD988BC3DC2D00502A134D1B64C3A4AF7E2D75F8E52DE9DE0A6702B50",
+      "finalSha256": "49572EC2F49C3E88940583C1EC4E4B3BEFF0F4674109DF2A976DF3CEED657721",
+      "currentSha256": "49572EC2F49C3E88940583C1EC4E4B3BEFF0F4674109DF2A976DF3CEED657721",
+      "reconstructedFile": "red-final-probe-helper.ts",
+      "reconstructedSha256": "F8D32CFFD988BC3DC2D00502A134D1B64C3A4AF7E2D75F8E52DE9DE0A6702B50",
+      "exactRecordedRedHashMatch": true,
+      "patch": "red-final-probe-helper.ts.to-final.patch",
+      "reconstructionProvenance": "Inverse of known post-RED edits applied to frozen final source; not a separately preserved raw prior source file."
+    },
+    {
+      "path": "packages/context-output/test/legacy-fork-performance.test.ts",
+      "redSha256": "F8165304AEDF7C0CEB0D29E32748C066A27240120ACCF44359CF2447A48610AA",
+      "finalSha256": "E2A7C216464F36227267E3EDCE89E5319D593C9656CC7768A7F79EB0FC2B1747",
+      "currentSha256": "E2A7C216464F36227267E3EDCE89E5319D593C9656CC7768A7F79EB0FC2B1747",
+      "reconstructedFile": "red-final-probe-test.ts",
+      "reconstructedSha256": "F8165304AEDF7C0CEB0D29E32748C066A27240120ACCF44359CF2447A48610AA",
+      "exactRecordedRedHashMatch": true,
+      "patch": "red-final-probe-test.ts.to-final.patch",
+      "reconstructionProvenance": "Inverse of known post-RED edits applied to frozen final source; not a separately preserved raw prior source file."
+    },
+    {
+      "path": "packages/context-output/src/store.ts",
+      "redSha256": "BD991EE39EA2BEF15D75717CF05E5DB7022268BA0F8897D4ED710C7E2C605C3E",
+      "finalSha256": "596B263C249D9C05DC99B472D2D68580C4EC4E2675A597482D6FC9F8C21E4EF3",
+      "reconstructedFile": "red-final-probe-store.ts",
+      "exactRecordedRedHashMatch": true,
+      "reconstructionProvenance": "BASE Git blob, converted only to the recorded working-tree newline form if necessary."
+    }
+  ]
+}
