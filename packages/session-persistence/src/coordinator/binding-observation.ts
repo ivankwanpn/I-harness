@@ -5,7 +5,7 @@ import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/
 import { bootstrapFields, captureBootstrapInvocation, captureBootstrapRequest } from './bootstrap-header.ts'
 import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards, BootstrapOutcome } from './bootstrap-types.ts'
 import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.ts'
-import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
+import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
@@ -20,7 +20,9 @@ export function createBindingObservations(
 ) {
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
   type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
-  type Scope = { ids: Set<string>; keys: Set<string>; target: SessionBindingObservationRequest['target']; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean }
+  type ScopeKind = { kind: 'fork'; target: BootstrapInvocation } | { kind: 'existing-read' }
+  type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean } & ScopeKind
+  type Captured = { ids: string[]; existing: string[]; signal?: AbortSignal } & ScopeKind
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
   const pendingIds = new Map<string, number>(), pendingKeys = new Map<string, number>(), deletedIds = new Set<string>(), deletedKeys = new Set<string>()
   const retiringIds = new Map<string, number>()
@@ -46,7 +48,7 @@ export function createBindingObservations(
     for (const scope of context.getStore() ?? []) {
       if (!scope.ids.has(original.targetSessionId)) continue
       if (scope.state !== 'active' || isAborted(scope.signal) || closed) throw new Failure('revoked')
-      if (canonicalJsonData(original) !== canonicalJsonData(scope.target)) throw new Failure('conflict')
+      if (scope.kind !== 'fork' || canonicalJsonData(original) !== canonicalJsonData(scope.target)) throw new Failure('conflict')
       allowed.push(scope)
     }
     // Only this callback's captured original target is exempt. All other
@@ -122,6 +124,29 @@ export function createBindingObservations(
     const code = (error as { code?: string })?.code
     return new Failure(code === 'SESSION_DELETED' ? 'deleted' : (error as Error)?.name === 'SessionLockConflictError' ? 'conflict' : (error as Error)?.name === 'SessionLockUnsupportedError' ? 'unsupported' : 'unavailable', { cause: error })
   }
+  async function withExistingSessionBindingObservation<T>(request: ExistingSessionBindingObservationRequest, run: (observation: ExistingSessionBindingObservation) => Promise<T>): Promise<T> {
+    let existing: string[], signal: AbortSignal | undefined
+    try {
+      if (!request || utilTypes.isProxy(request) || Object.getPrototypeOf(request) !== Object.prototype) throw new Error('request')
+      const fields = Object.getOwnPropertyDescriptors(request)
+      if (Reflect.ownKeys(request).some(key => typeof key !== 'string' || !['sessionIds', 'signal'].includes(key)) || !fields.sessionIds || Object.values(fields).some(field => !field.enumerable || !('value' in field) || field.value === undefined)) throw new Error('fields')
+      const supplied = fields.sessionIds.value
+      if (!Array.isArray(supplied) || utilTypes.isProxy(supplied) || Object.getPrototypeOf(supplied) !== Array.prototype) throw new Error('ids')
+      const indexed = Object.getOwnPropertyDescriptors(supplied as object), length = indexed.length?.value
+      if (!Number.isSafeInteger(length) || length < 1 || length > 64 || Reflect.ownKeys(supplied).length !== length + 1) throw new Error('ids')
+      existing = []
+      for (let index = 0; index < length; index++) {
+        const field = indexed[String(index)]
+        if (!field || !('value' in field) || !field.enumerable) throw new Error('ids')
+        existing.push(field.value)
+      }
+      signal = fields.signal?.value
+      isAborted(signal)
+      const safe = (id: unknown): id is string => typeof id === 'string' && id.length > 0 && id.length <= 256 && !/[\\/\u0000-\u001f\u007f]/.test(id) && !id.includes('..')
+      if (typeof run !== 'function' || existing.some(id => !safe(id)) || new Set(existing).size !== existing.length) throw new Error('identity')
+    } catch (cause) { throw new Failure('invalid', { cause }) }
+    return observe({ kind: 'existing-read', ids: [...existing].sort(), existing, signal }, run)
+  }
   async function withSessionBindingObservation<T>(request: SessionBindingObservationRequest, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T> {
     let ids: string[], existing: string[], target: SessionBindingObservationRequest['target'], signal: AbortSignal | undefined
     try {
@@ -147,6 +172,10 @@ export function createBindingObservations(
       if (typeof run !== 'function' || !safe(target.targetSessionId) || existing.length > 64 || existing.some(id => !safe(id)) || new Set(existing).size !== existing.length || existing.includes(target.targetSessionId)) throw new Error('identity')
       ids = [...existing, target.targetSessionId].sort()
     } catch (cause) { throw new Failure('invalid', { cause }) }
+    return observe({ kind: 'fork', ids, existing, target, signal }, run)
+  }
+  async function observe<T>(captured: Captured, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T> {
+    const { ids, existing, signal } = captured
     if (!ownership.lockEnabled || !ownership.pinOwnership || !ownership.withSessionOperation || !backend.profile || !backend.readDocumentObserved) throw new Failure('unsupported')
     const keys = ids.map(bindingKey).sort()
     refuseSelf(ids, keys)
@@ -154,7 +183,7 @@ export function createBindingObservations(
     if (ids.some(id => deletedIds.has(id)) || keys.some(key => deletedKeys.has(key))) throw new Failure('deleted')
     if (ids.some(id => pendingIds.has(id)) || keys.some(key => pendingKeys.has(key))) throw new Failure('conflict')
     const completion = Promise.withResolvers<void>()
-    const scope: Scope = { ids: new Set(ids), keys: new Set(keys), target, state: 'acquiring', pins: [], locks: [], done: completion.promise, signal, callbackFinished: false }
+    const scope: Scope = { ...(captured.kind === 'fork' ? { kind: 'fork', target: captured.target } as const : { kind: 'existing-read' } as const), ids: new Set(ids), keys: new Set(keys), state: 'acquiring', pins: [], locks: [], done: completion.promise, signal, callbackFinished: false }
     scope.done.catch(() => {})
     scopes.add(scope)
     function guard(active = false) {
@@ -188,7 +217,7 @@ export function createBindingObservations(
       void flight.finally(() => { if (cleanupFlight === flight) cleanupFlight = undefined }).catch(() => {})
       return flight
     }
-    let result: T | undefined, callbackError: unknown, failed = false
+    let result: T | undefined, callbackError: unknown, failed = false, callbackPending = false
     try {
       if (signal) {
         // Even an intrinsic installation failure is within the settled lifetime.
@@ -206,25 +235,34 @@ export function createBindingObservations(
           metadata.set(id, capture(profile.meta))
         }); guard()
       }
-      for (const id of ids) { const value = await backend.readDocumentObserved!(bindingKey(id)); guard(); bootstrapFields(value, ['kind'], value.kind === 'present' ? ['value'] : []); if (value.kind !== 'present' && value.kind !== 'absent') throw new Failure('unavailable'); bindings.set(id, capture(value)) }
+      for (const id of ids) { guard(); const value = await backend.readDocumentObserved!(bindingKey(id)); guard(); bootstrapFields(value, ['kind'], value.kind === 'present' ? ['value'] : []); if (value.kind !== 'present' && value.kind !== 'absent') throw new Failure('unavailable'); bindings.set(id, capture(value)) }
       scope.state = 'active'
       const observation: SessionBindingObservation = Object.freeze({
         assertCurrent() { guard(true) },
         metadata(id: string) { guard(true); if (!metadata.has(id)) throw new Failure('invalid'); return metadata.get(id)! },
         binding(id: string) { guard(true); if (!bindings.has(id)) throw new Failure('invalid'); return bindings.get(id)! },
       })
-      result = await context.run([...(context.getStore() ?? []), scope], () => run(observation)); guard(true)
-    } catch (error) { failed = true; callbackError = scope.state === 'active' ? error : normalize(error) }
+      callbackPending = true
+      result = await context.run([...(context.getStore() ?? []), scope], () => run(observation))
+      callbackPending = false
+      guard(true)
+    } catch (error) {
+      failed = true
+      // Existing reads preserve the callback's literal error even if it was
+      // revoked while awaiting it. Final-guard failures still refuse success;
+      // the original fork API retains its established normalization behavior.
+      callbackError = scope.state === 'active' || captured.kind === 'existing-read' && callbackPending ? error : normalize(error)
+    }
     // Retirement is synchronous and occurs before the first disposal await.
     scope.state = 'releasing'; scope.callbackFinished = true
     try { await scope.cleanup(); completion.resolve() }
     catch (cleanupError) {
       completion.reject(cleanupError)
-      throw Object.assign(new AggregateError([...(failed ? [callbackError] : []), cleanupError], 'Binding observation cleanup failed'), { invocation: target, callbackResult: result, callbackError })
+      throw Object.assign(new AggregateError([...(failed ? [callbackError] : []), cleanupError], 'Binding observation cleanup failed'), captured.kind === 'fork' ? { invocation: captured.target, callbackResult: result, callbackError } : { sessionIds: Object.freeze([...existing]), callbackResult: result, callbackError })
     }
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume }
+  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

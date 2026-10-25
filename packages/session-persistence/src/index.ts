@@ -17,7 +17,7 @@ export type { BootstrapTargetPreparationRequest, BootstrapTargetPreparationOutco
 
 export type {
   SessionMeta, SessionModelSelection, PersistenceBackend, SessionArtifactManifest,
-  CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation,
+  CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation, ExistingSessionBindingObservationRequest, ExistingSessionBindingObservation,
 } from "./coordinator/types.ts"
 export { SessionBindingObservationError } from './coordinator/types.ts'
 export { SessionFormatUnsupportedError, registerUpgrade, registerEventType } from "./format/registry.ts"
@@ -56,7 +56,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     try { await admission.join(); return await run() } finally { admission.finish() }
   }
   return {
-    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation } : {}),
+    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
     bootstrapSemanticTarget(request, guards) { return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
     resumeSemanticTarget(invocation, guards, originalPayload) { return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
     inspectBootstrap: managed.inspectBootstrap,

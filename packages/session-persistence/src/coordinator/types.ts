@@ -107,6 +107,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  withExistingSessionBindingObservation?<T>(request: ExistingSessionBindingObservationRequest, run: (observation: ExistingSessionBindingObservation) => Promise<T>): Promise<T>
   withSessionBindingObservation?<T>(request: SessionBindingObservationRequest, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T>
   bootstrapSemanticTarget(request: import('./bootstrap-types.ts').BootstrapRequest, guards: import('./bootstrap-types.ts').BootstrapGuards): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
   resumeSemanticTarget(invocation: import('./bootstrap-types.ts').BootstrapInvocation, guards: import('./bootstrap-types.ts').BootstrapGuards, originalPayload?: import('./bootstrap-types.ts').BootstrapRequest): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
@@ -165,6 +166,15 @@ export interface SessionCoordinator {
 }
 
 export type ObservedDocument = { readonly kind: 'absent' } | { readonly kind: 'present'; readonly value: unknown }
+export interface ExistingSessionBindingObservationRequest {
+  sessionIds: readonly string[]
+  signal?: AbortSignal
+}
+export interface ExistingSessionBindingObservation {
+  assertCurrent(): void
+  metadata(sessionId: string): Readonly<SessionMeta>
+  binding(sessionId: string): ObservedDocument
+}
 export interface SessionBindingObservationRequest {
   existingSessionIds: readonly string[]
   target: import('./bootstrap-types.ts').BootstrapInvocation
