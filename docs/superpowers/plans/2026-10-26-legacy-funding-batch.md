@@ -171,12 +171,13 @@ Record every command independently; no concurrent suites, hidden retries or scal
 - [ ] Run one affected ordinary ContextOutput fast gate and types sequentially on final source:
 
 ```powershell
-pnpm exec vitest list --exclude test/legacy-fork-scale.test.ts -t '^(?!.*10001)' --json --maxWorkers=2 --minWorkers=1
-pnpm exec vitest run --exclude test/legacy-fork-scale.test.ts -t '^(?!.*10001)' --maxWorkers=2 --minWorkers=1
+pnpm exec vitest list --exclude test/legacy-fork-scale.test.ts -t '^(?!.*(?:10001|actual101))' --json --maxWorkers=2 --minWorkers=1
+pnpm exec vitest run --exclude test/legacy-fork-scale.test.ts -t '^(?!.*(?:10001|actual101))' --maxWorkers=2 --minWorkers=1
 pnpm typecheck
 ```
 
 - [ ] Record causal RED/GREEN/test source identity, scoped manifests, exact inventory decomposition, original retained bytes/native resources and cleanup debt outcomes, qualification exclusions and remaining limits. No summing nested native elapsed spans or subtracting counterMs into a claimed uninstrumented time.
+- [ ] FG07 discovery correction: the original legacy-fork-performance file includes an unconditional `actual101` distinct-ref profile. Exclude that name in the ordinary gate as above; retain its file/oracles and all bounded11/31/repeated101/expiry/observer controls. This is not a performance waiver: actual101 requires its separate post-review root reservation under checkpoint5, rather than slipping into an ordinary multi-worktree gate.
 - [ ] Root obtains independent complete connected range review for product, tests, drift/arithmetic/provenance and unknown recovery. Review must inspect actual Store caller and later per-ref merge; disconnected helper success is insufficient. Resolve actionable findings with causal tests/review, then root integrates. No automatic PR/push/release or Git mutation is authorized by this draft.
 
 ## Checkpoint 5 — optional later root performance reservation
