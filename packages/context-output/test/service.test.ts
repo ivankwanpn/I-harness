@@ -118,12 +118,18 @@ describe('review regressions', () => {
       const artifacts = resolve(root, 'context-output', workspace, 'artifacts')
       const manifests = await Promise.all((await readdir(artifacts)).map((name) => readFile(resolve(artifacts, name), 'utf8').then(JSON.parse)))
       const pendingId = manifests.find((manifest) => manifest.ref.label === 'candidate')!.ref.id as string
-      await expect(service.read({ sessionId: 'a' }, { refId: pendingId })).rejects.toThrow()
-      expect((await service.search({ sessionId: 'a' }, { query: 'needle' })).hits).toEqual([])
+      let readSettled = false, searchSettled = false
+      const reading = service.read({ sessionId: 'a' }, { refId: pendingId }).finally(() => { readSettled = true })
+      const readOutcome = expect(reading).rejects.toThrow()
+      const searching = service.search({ sessionId: 'a' }, { query: 'needle' }).finally(() => { searchSettled = true })
+      await new Promise(settle => setTimeout(settle, 20))
+      expect(readSettled).toBe(false); expect(searchSettled).toBe(false)
       expect(service.status().results).toBe(1)
       controller.abort()
       release()
       expect(await outcome).toMatchObject({ rejected: true, error: { name: 'AbortError' } })
+      await readOutcome
+      expect((await searching).hits).toEqual([])
       expect((await service.search({ sessionId: 'a' }, { query: 'needle' })).hits).toEqual([])
     } finally {
       controller.abort(); release(); await outcome

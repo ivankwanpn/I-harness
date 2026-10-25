@@ -104,6 +104,12 @@ const idle = { version: 1, kind: 'legacy-owner-idle' }
 // add fewer than16 ASCII bytes. Finite safe counts/capacities have16 digits.
 const largestIdentity = { digest: 'f'.repeat(64), count: Number.MAX_SAFE_INTEGER, bytes: Number.MAX_SAFE_INTEGER }
 const JOURNAL_CAPACITY = Buffer.byteLength(JSON.stringify({ version: 1, kind: 'legacy-owner-rewrite', refId: 'ctx_' + 'f'.repeat(64), operation: '\u0001'.repeat(1040), prior: largestIdentity, next: largestIdentity, capacity: Number.MAX_SAFE_INTEGER }))
+function fundingGrowth(priorCapacity: number, nextBytes: number, reserve: number, journalPresent: boolean) {
+  const capacity = Math.max(priorCapacity, nextBytes)
+  const additionalBytes = capacity - priorCapacity + Math.max(0, capacity - reserve) + (journalPresent ? 0 : JOURNAL_CAPACITY)
+  if (!Number.isSafeInteger(additionalBytes) || additionalBytes < 0) throw Error('Owner funding allocation overflow')
+  return { capacity, additionalBytes }
+}
 async function readIntent(path: string, retire?: RetireFile): Promise<Intent | undefined> {
   if (!await exists(path)) return undefined
   const info = await nativeInfo(path); requireOne(info)
@@ -133,6 +139,24 @@ export class OwnerLedger {
   constructor(private readonly root: string, private readonly retire?: RetireFile) {}
   private read(path: string) { return readLedger(path, this.retire) }
   async tracked(path: string) { const p = names(path); return await exists(p.rewrite) || await exists(p.journal) || await exists(p.previous) }
+  /** Prospective capture description only; never recovers or funds a prefix. */
+  async describeFunding(path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<{ additionalBytes: number }> {
+    await ownedPath(this.root, path); current()
+    const { journal, rewrite, previous } = names(path), pending = await readIntent(journal, this.retire)
+    const prior = await this.read(path); current()
+    if (pending) {
+      if (!same(prior.identity, pending.prior) || !same(ledgerIdentity(next), pending.next) || operation !== pending.operation) throw Error('Original owner rewrite unresolved')
+      if (!await exists(rewrite) || (await lstat(rewrite)).size < pending.capacity) throw Error('Original owner reserve missing')
+      if (await exists(previous)) await predecessorPair(path, previous); else await independent(path)
+      await independent(rewrite); current()
+      throw Error('Original owner rewrite unresolved')
+    }
+    if (await exists(previous)) throw Error('Original predecessor phase unresolved')
+    await independent(path); current()
+    const present = await exists(rewrite)
+    if (present) { await independent(rewrite); if (await identities(path, rewrite)) throw Error('Rewrite aliases canonical'); current() }
+    return { additionalBytes: fundingGrowth(prior.capacity, ledgerIdentity(next).bytes, present ? (await lstat(rewrite)).size : 0, await exists(journal)).additionalBytes }
+  }
   async fund(path: string, next: ReadonlySet<string>, quota: number, current: () => void, operation: string): Promise<void> {
     await ownedPath(this.root, path); current()
     const { journal, rewrite, previous } = names(path)
@@ -156,7 +180,7 @@ export class OwnerLedger {
     const reserve = await exists(rewrite) ? (await lstat(rewrite)).size : 0
     const intent: Intent = { version: 1, kind: 'legacy-owner-rewrite', refId: basename(path, '.json'), operation, prior: prior.identity, next: ledgerIdentity(next), capacity }
     const journalBytes = await exists(journal) ? 0 : JOURNAL_CAPACITY
-    await requireSpace(this.root, quota, capacity - prior.capacity + Math.max(0, capacity - reserve) + journalBytes); current()
+    await requireSpace(this.root, quota, fundingGrowth(prior.capacity, ledgerIdentity(next).bytes, reserve, !journalBytes).additionalBytes); current()
     // A physical hardlink on the actual canonical file is the setup proof.
     await link(path, previous); current()
     await predecessorPair(path, previous); current()

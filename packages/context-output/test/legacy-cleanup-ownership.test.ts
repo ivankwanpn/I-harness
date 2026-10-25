@@ -101,7 +101,11 @@ it('retains the original failed opening and DB cleanup and refuses replacement b
   const open = ContextStore.prototype.open, close = DatabaseSync.prototype.close
   const workFailure = new Error('original opening failed'), cleanupFailure = new Error('original DB close failed')
   let database: DatabaseSync | undefined, attempts = 0
-  const opening = vi.spyOn(ContextStore.prototype, 'open').mockImplementation(async function(this: ContextStore, ...args) { await open.apply(this, args); throw workFailure })
+  const opening = vi.spyOn(ContextStore.prototype, 'open').mockImplementation(async function(this: ContextStore, ...args) {
+    await open.apply(this, args)
+    await this.ensureIndex(args[0], args[1], args[2])
+    throw workFailure
+  })
   const closing = vi.spyOn(DatabaseSync.prototype, 'close').mockImplementation(function(this: DatabaseSync) {
     database ??= this; expect(this).toBe(database)
     if (++attempts === 1) throw cleanupFailure

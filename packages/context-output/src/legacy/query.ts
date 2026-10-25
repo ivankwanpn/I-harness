@@ -1,5 +1,5 @@
 import { boundary, checkAbort, floorBoundary, serializedBytes } from '../bytes.ts'
-import type { ContextStore } from '../store.ts'
+import type { IndexedLegacyContext } from './index-lifecycle.ts'
 import type { ContextReadResult, ContextResultRef, ContextSearchResult } from '../types.ts'
 
 /** The legacy reader loads the captured body before applying its UTF-8 page. */
@@ -20,18 +20,19 @@ export async function readLegacy(
  * authorization remain the original legacy algorithm. */
 export async function searchLegacy(
   query: { terms: string[]; limit: number; maxBytes: number; filter?: Set<string> },
-  getStore: (signal: AbortSignal) => Promise<ContextStore>,
+  context: IndexedLegacyContext,
   allowed: (ref: ContextResultRef, signal: AbortSignal) => Promise<boolean>,
   owned: AbortSignal,
 ): Promise<ContextSearchResult> {
   const { terms, limit, maxBytes, filter } = query
-  const current = await getStore(owned)
+  const { store: current, index } = context
+  index.assertCurrent()
   const result: ContextSearchResult = { hits: [], partial: false, reasons: [] }
   const mark = (reason: string) => { result.partial = true; if (!result.reasons.includes(reason)) result.reasons.push(reason) }
   const matchers = terms.map((term) => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'))
   let scannedBytes = 0
-  for await (const { ref, verify } of current.candidates(terms, owned, mark)) {
-    checkAbort(owned)
+  for await (const { ref, verify } of current.candidates(index, terms, owned, mark)) {
+    checkAbort(owned); index.assertCurrent()
     if (filter && !filter.has(ref.id) || !await allowed(ref, owned) || !current.get(ref.id)) continue
     if (!ref.complete) mark('incomplete-capture')
     if (!verify) continue
@@ -67,6 +68,6 @@ export async function searchLegacy(
   // A reason added after earlier hits must itself remain inside the budget.
   while (serializedBytes(result) > maxBytes && result.hits.length) result.hits.pop()
   if (serializedBytes(result) > maxBytes) { result.reasons = ['byte-budget']; result.partial = true }
-  checkAbort(owned)
+  checkAbort(owned); index.assertCurrent()
   return result
 }

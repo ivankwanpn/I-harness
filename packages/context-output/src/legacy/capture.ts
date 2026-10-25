@@ -2,6 +2,7 @@ import { checkAbort, prefix } from '../bytes.ts'
 import { digest, referenceId, type ContextStore } from '../store.ts'
 import type { ContextCapture, ContextOutputConfig, ContextOutputService, ContextResultRef } from '../types.ts'
 import type { WorkspaceMutationTurn } from '../workspace-mutation.ts'
+import type { LegacyUseLease } from './use-gate.ts'
 
 /** Prepare the original producer outside both mutation lanes, then commit the
  * normalized bytes with a fresh physical quota decision in the shared turn. */
@@ -10,8 +11,7 @@ export async function captureLegacy(
   captured: ContextCapture,
   producer: Parameters<ContextOutputService['capture']>[2],
   getConfig: () => ContextOutputConfig,
-  getStore: (signal: AbortSignal) => Promise<ContextStore>,
-  mutate: <T>(store: ContextStore, work: (turn: WorkspaceMutationTurn) => Promise<T>) => Promise<T>,
+  schedule: <T>(work: (store: ContextStore, turn: WorkspaceMutationTurn, lease: LegacyUseLease) => Promise<T>) => Promise<T>,
   owned: AbortSignal,
 ): Promise<ContextResultRef | undefined> {
   // A useful index needs fixed overhead. Avoid creating files for an
@@ -27,11 +27,11 @@ export async function captureLegacy(
   }
   const original = Buffer.from(captured.text, 'utf8')
   const originalBytes = produced?.originalBytes ?? original.length
-  const current = await getStore(owned)
-  return mutate(current, async turn => {
+  return schedule(async (current, turn, lease) => {
     checkAbort(owned)
-    await current.prune(turn)
+    await current.prune(turn, lease)
     checkAbort(owned)
+    if (await current.ensureIndex(turn, lease, getConfig().maxDiskBytes) !== 'ready') throw Error(current.indexIssue()?.message ?? 'Derived context index unavailable')
     const available = Math.max(0, Math.floor((getConfig().maxDiskBytes - await current.diskBytes() - 32768) / 3))
     const bytes = prefix(original, Math.min(getConfig().maxCaptureBytes, available))
     if (original.length > 0 && bytes.length === 0) return undefined
@@ -47,6 +47,6 @@ export async function captureLegacy(
       expiresAt: Date.now() + getConfig().retentionDays * 86400000,
       ...(source ? { source } : {}),
     }
-    return current.put(turn, { ref, ...(source ? { source } : {}) }, bytes, getConfig().maxDiskBytes, owned)
+    return current.put(turn, lease, { ref, ...(source ? { source } : {}) }, bytes, getConfig().maxDiskBytes, owned)
   })
 }

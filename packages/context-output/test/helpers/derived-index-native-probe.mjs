@@ -17,7 +17,7 @@ const files = () => readdirSync(directory).map(name => ({ name, bytes: statSync(
 const scalar = (db, sql) => Object.values(db.prepare(sql).get())[0]
 const state = db => Object.fromEntries(['page_size', 'page_count', 'max_page_count', 'journal_mode', 'synchronous', 'temp_store', 'cache_size', 'cache_spill', 'foreign_keys'].map(name => [name, scalar(db, `PRAGMA ${name}`)]))
 const source = readFileSync(storePath, 'utf8')
-const schema = [...source.matchAll(/this\.db\.exec\(`(PRAGMA journal_mode=DELETE;[\s\S]*?|CREATE TABLE legacy_plans[\s\S]*?)`\)/g)].map(match => match[1])
+const schema = [...source.matchAll(/export const (?:ARTIFACT_SCHEMA|LEGACY_SCHEMA) = `([\s\S]*?)`/g)].map(match => match[1])
 if (schema.length !== 2) throw new Error('Cannot extract the exact unchanged two-part schema')
 const loadSchema = db => { for (const sql of schema) db.exec(sql) }
 const originalCounts = 'SELECT COUNT(*) AS observations,COUNT(DISTINCT ref_id) AS refs FROM legacy_rows WHERE binding=?'

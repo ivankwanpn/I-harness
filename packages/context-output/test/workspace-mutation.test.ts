@@ -5,6 +5,7 @@ import { resolve } from 'node:path'
 import * as locking from '@i-harness/fs-lock'
 import { createWorkspaceMutationOwner, type WorkspaceMutationTurn } from '../src/workspace-mutation.ts'
 import { ContextStore } from '../src/store.ts'
+import { createLegacyUseGate } from '../src/legacy/use-gate.ts'
 
 it('requires actual owner tokens, expires them, and rejects own-tail waits/reentry promptly', async () => {
   const root = await mkdtemp(resolve(tmpdir(), 'workspace-turn-'))
@@ -24,15 +25,18 @@ it('requires actual owner tokens, expires them, and rejects own-tail waits/reent
     expect(() => owner.assertTurn(stale)).toThrow(/stale|foreign/)
     const inventory = new ContextStore(root, 'inventory')
     await expect(inventory.acquireLifetime()).rejects.toThrow(/ownership/)
-    await expect(inventory.open({ assertCurrent() {} }, 1024 * 1024)).rejects.toThrow(/lifetime/)
-    const store = new ContextStore(root, 'w', owner)
+    const gate = createLegacyUseGate()
+    await gate.exclusive(undefined, async lease => {
+    await expect(inventory.open({ assertCurrent() {} }, lease, 1024 * 1024, 'query')).rejects.toThrow(/lifetime/)
+    const store = new ContextStore(root, 'w', owner, gate.assertLease)
     await store.acquireLifetime()
     try {
-      await owner.mutate(turn => store.open(turn, 1024 * 1024))
-      await expect(foreign.mutate(turn => store.prune(turn))).rejects.toThrow(/stale|foreign/)
-      await expect(store.prune(stale)).rejects.toThrow(/stale|foreign/)
-      await expect(store.clear({ assertCurrent() {} })).rejects.toThrow(/stale|foreign/)
-    } finally { await store.close() }
+      await owner.mutate(turn => store.open(turn, lease, 1024 * 1024, 'query'))
+      await expect(foreign.mutate(turn => store.prune(turn, lease))).rejects.toThrow(/stale|foreign/)
+      await expect(store.prune(stale, lease)).rejects.toThrow(/stale|foreign/)
+      await expect(store.clear({ assertCurrent() {} }, lease, 1024 * 1024)).rejects.toThrow(/stale|foreign/)
+    } finally { await store.close(lease) }
+    })
   } finally { await owner.close(); await foreign.close(); await rm(root, { recursive: true, force: true }) }
 })
 

@@ -7,9 +7,12 @@ import type { ContextAccess, ContextOutputOptions, ContextOutputService, Context
 import { createArtifactOwnership } from './artifact/ownership.ts'
 import { captureLegacy } from './legacy/capture.ts'
 import { readLegacy, searchLegacy } from './legacy/query.ts'
-import { createWorkspaceMutationOwner, failuresTogether } from './workspace-mutation.ts'
+import { createWorkspaceMutationOwner, failuresTogether, type WorkspaceMutationTurn } from './workspace-mutation.ts'
 import { createLegacyForkOwner } from './legacy/fork-transfer.ts'
 import { captureObservation, observedAllowed, prepareObservedIndex } from './legacy/observed-read.ts'
+import { createLegacyUseGate, type LegacyUseLease } from './legacy/use-gate.ts'
+import type { IndexedLegacyContext } from './legacy/index-lifecycle.ts'
+import { commitment } from './legacy/fork-codec.ts'
 import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from './legacy/fork-types.ts'
 
 export function createContextOutputService(inputOptions: ContextOutputOptions): ContextOutputService {
@@ -21,6 +24,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     authorize: inputOptions.authorize, authorizeResult: inputOptions.authorizeResult, documentDeletions: inputOptions.documentDeletions,
     requireObservedLegacyRecipients: inputOptions.requireObservedLegacyRecipients === true }
   let config = configureContext({ ...DEFAULT_CONTEXT_OUTPUT_CONFIG }, options.config ?? {})
+  const gate = createLegacyUseGate()
   const owner = createWorkspaceMutationOwner(options)
   const artifacts = createArtifactOwnership(options, () => config.maxDiskBytes, owner)
   let unsubscribeDeletions: (() => void) | undefined
@@ -36,8 +40,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         }
         if (!present) return
       }
-      const current = await getStore()
-      await owner.mutate(async turn => { for (const id of documents) await current.clear(turn, id) })
+      await withLegacyWrite(undefined, (current, lease) => owner.mutate(async turn => { for (const id of documents) await clearLegacyStore(current, turn, lease, id) }), 'cleanup')
     })])
     failuresTogether(outcomes.flatMap(result => result.status === 'rejected' ? [result.reason] : []), 'Original document cleanup failed')
   }
@@ -50,6 +53,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let artifactsClosed = false
   let controls = 0
   let error: string|undefined
+  let cleanupIndexUnavailable = false
+  let cleanupFailure: { sessionId: string | undefined; message: string } | undefined
   let store: ContextStore|undefined
   let candidate: ContextStore|undefined
   let failedOpeningCleanup: unknown
@@ -57,42 +62,45 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   let mutations: Promise<unknown> = Promise.resolve()
   let transitions: Promise<unknown> = Promise.resolve()
   const jobs = new Map<AbortController, Promise<unknown>>()
-  const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId, getStore,
-    quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, work, false, true),
-    mutate: (current, work) => serial(() => owner.mutate(turn => { if (current !== store) throw Error('Legacy store identity changed'); return work(turn) })) })
+  const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
+    quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
+    mutate: mutateIndex })
   unsubscribeDeletions = options.documentDeletions?.(releaseDocuments)
 
   function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
 
   function status(): ContextOutputStatus {
-    return { enabled: config.enabled && !closing && !closed, state, config: { ...config },
+    const issue = store?.indexIssue() && `${cleanupIndexUnavailable ? 'Requested cleanup completed; ' : ''}${store.indexIssue()!.message}`
+    const message = [error, cleanupFailure?.message, issue].filter(Boolean).join('; ')
+    return { enabled: config.enabled && !closing && !closed, state: message && state !== 'stopping' && state !== 'disabled' ? 'error' : state, config: { ...config },
       ...(store?.counters() ?? { retainedBytes: 0, results: 0 }), activeJobs: jobs.size,
-      ...(error ? { error } : {}), ...(protectedResults ? { protectedResults, clearDisposition: 'protected' as const } : {}) }
+      ...(message ? { error: message } : {}), ...(protectedResults ? { protectedResults, clearDisposition: 'protected' as const } : {}) }
   }
   function serial<T>(operation: () => Promise<T>): Promise<T> {
     const result = mutations.then(operation)
     mutations = result.catch(() => {})
     return result
   }
-  async function getStore(signal?: AbortSignal): Promise<ContextStore> {
+  async function getStore(lease: LegacyUseLease, mode: 'query'|'cleanup' = 'query', signal?: AbortSignal): Promise<ContextStore> {
+    gate.assertLease(lease, 'exclusive')
     checkAbort(signal)
     if (store) return store
     if (failedOpeningCleanup) throw failedOpeningCleanup
     if (!opening) {
       // Reject impossible startup budgets without creating even a lock path.
-      if (config.maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
-      const next = candidate = new ContextStore(options.root, workspaceId, owner)
+      if (mode === 'query' && config.maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
+      const next = candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease)
       opening = (async () => {
         try {
           await next.acquireLifetime(signal)
           checkAbort(signal)
-          await owner.mutate(turn => next.open(turn, config.maxDiskBytes, signal))
+          await serial(() => owner.mutate(turn => next.open(turn, lease, config.maxDiskBytes, mode, signal)))
           checkAbort(signal)
           if (closing || closed) throw new Error('Context output is closed')
           store = next
           return next
         } catch (failure) {
-          try { await next.close(); candidate = undefined }
+          try { await next.close(lease); candidate = undefined }
           catch (cleanup) { failedOpeningCleanup = new AggregateError([failure, cleanup], 'Legacy store opening and original cleanup failed') }
           if (!(failure instanceof Error && failure.name === 'AbortError')) {
             error = failure instanceof Error ? failure.message : String(failure)
@@ -105,6 +113,72 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const current = await opening
     checkAbort(signal)
     return current
+  }
+  async function initialize(signal?: AbortSignal): Promise<void> {
+    if (!store) await gate.exclusive(signal, lease => getStore(lease, 'query', signal).then(() => {}))
+  }
+  async function withLegacyOriginals<T>(signal: AbortSignal, work: (current: ContextStore) => Promise<T>): Promise<T> {
+    await initialize(signal)
+    return gate.shared(signal, async lease => { gate.assertLease(lease); return work(store!) })
+  }
+  async function withLegacyWrite<T>(signal: AbortSignal | undefined, work: (current: ContextStore, lease: LegacyUseLease) => Promise<T>, mode: 'query'|'cleanup' = 'query'): Promise<T> {
+    return gate.exclusive(signal, async lease => work(await getStore(lease, mode, signal), lease))
+  }
+  function mutateIndex<T>(context: IndexedLegacyContext, work: (turn: WorkspaceMutationTurn) => Promise<T>): Promise<T> {
+    gate.assertLease(context.lease, 'exclusive'); context.index.assertCurrent()
+    return serial(() => owner.mutate(async turn => {
+      gate.assertLease(context.lease, 'exclusive'); context.index.assertCurrent()
+      if (context.store !== store) throw Error('Legacy store identity changed')
+      const value = await work(turn); context.index.assertCurrent(); return value
+    }))
+  }
+  async function clearLegacyStore(current: ContextStore, turn: WorkspaceMutationTurn, lease: LegacyUseLease, sessionId?: string): Promise<void> {
+    try {
+      await current.clear(turn, lease, config.maxDiskBytes, sessionId)
+      if (sessionId === undefined || cleanupFailure?.sessionId === sessionId) cleanupFailure = undefined
+      cleanupIndexUnavailable = !!current.indexIssue()
+    } catch (failure) {
+      cleanupFailure = { sessionId, message: `Requested original cleanup remains incomplete: ${failure instanceof Error ? failure.message : String(failure)}` }
+      throw failure
+    }
+  }
+  async function withLegacyIndex<T>(signal: AbortSignal, work: (context: IndexedLegacyContext) => Promise<T>): Promise<T> {
+    await initialize(signal)
+    const attempt = await indexReadScope(signal, async lease => {
+      if (!store!.indexReady()) return { ready: false as const }
+      return { ready: true as const, value: await work({ store: store!, lease, index: store!.indexUse(lease) }) }
+    })
+    if (attempt.ready) return attempt.value
+    await gate.exclusive(signal, async lease => {
+      if (await serial(() => owner.mutate(turn => store!.ensureIndex(turn, lease, config.maxDiskBytes))) !== 'ready') throw Object.assign(Error(store!.indexIssue()?.message ?? 'Derived context index unavailable'), { code: 'CONTEXT_INDEX_UNAVAILABLE' })
+    })
+    return indexReadScope(signal, lease => work({ store: store!, lease, index: store!.indexUse(lease) }))
+  }
+  async function indexReadScope<T>(signal: AbortSignal, work: (lease: LegacyUseLease) => Promise<T>): Promise<T> {
+    let failedGeneration = false
+    try {
+      return await gate.shared(signal, async lease => {
+        try { return await work(lease) }
+        catch (failure) { failedGeneration = store!.indexRetirementPending(); throw failure }
+      })
+    } catch (failure) {
+      const failures = [failure]
+      // The failed reader's shared scope has settled. Disposal queues behind
+      // the remaining consumers and never upgrades the reader's own lease.
+      if (failedGeneration) try { await gate.exclusive(undefined, lease => serial(() => owner.mutate(turn => store!.retireInvalidIndex(turn, lease)))) } catch (cleanup) { failures.push(cleanup) }
+      failuresTogether(failures, 'Derived query and original disposal failed'); throw failure
+    }
+  }
+  async function withLegacyIndexWrite<T>(signal: AbortSignal, work: (context: IndexedLegacyContext) => Promise<T>): Promise<T> {
+    return withLegacyWrite(signal, async (current, lease) => {
+      if (await serial(() => owner.mutate(turn => current.ensureIndex(turn, lease, config.maxDiskBytes))) !== 'ready') throw Object.assign(Error(current.indexIssue()?.message ?? 'Derived context index unavailable'), { code: 'CONTEXT_INDEX_UNAVAILABLE' })
+      const failures: unknown[] = []
+      let value!: T
+      try { value = await work({ store: current, lease, index: current.indexUse(lease) }) } catch (failure) { failures.push(failure) }
+      if (!current.indexReady()) try { await serial(() => owner.mutate(turn => current.retireInvalidIndex(turn, lease))) } catch (failure) { failures.push(failure) }
+      failuresTogether(failures, 'Legacy operation and derived cleanup failed')
+      return value
+    })
   }
   function run<T>(signal: AbortSignal|undefined, operation: (signal: AbortSignal) => Promise<T>, mutation = false, hostMetadata = false): Promise<T> {
     if (closed || closing) return Promise.reject(new Error('Context output is closed'))
@@ -143,22 +217,22 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     checkAbort(signal)
     return granted === true
   }
-  async function readable(access: ContextAccess, id: string, signal: AbortSignal): Promise<ContextResultRef> {
-    const current = await getStore(signal)
+  async function readable(current: ContextStore, access: ContextAccess, id: string, signal: AbortSignal): Promise<ContextResultRef> {
     const ref = current.get(id)
     if (!ref || !await allowed(access, ref, signal)) throw new Error('Context reference unavailable or unauthorized')
+    await current.canonicalRef(commitment(ref)); checkAbort(signal)
     // An asynchronous host policy may outlive retention.
     if (!current.get(id)) throw new Error('Context reference expired')
     return ref
   }
-  function observed(access: ContextAccess, input: LegacyReadObservation, signal: AbortSignal) {
+  function observed(context: IndexedLegacyContext, access: ContextAccess, input: LegacyReadObservation, signal: AbortSignal) {
     const observation = captureObservation(input)
     if (observation.sessionId !== access.sessionId) throw Error('Legacy observation session mismatch')
-    const guard = () => { checkAbort(signal); assertOpen(); observation.assertCurrent() }
+    const guard = () => { context.index.assertCurrent(); checkAbort(signal); assertOpen(); observation.assertCurrent() }
     async function allowedObserved(ref: ContextResultRef): Promise<boolean> {
-      guard(); const current = await getStore(signal); guard()
+      guard(); context.index.assertCurrent(); const current = context.store; guard()
       if (!current.get(ref.id)) return false
-      if (!await observedAllowed(current, ref, observation, guard)) return false
+      if (!await observedAllowed(context, ref, observation, guard)) return false
       guard()
       if (ref.source && options.authorize && !await options.authorize({ sessionId: access.sessionId, signal }, structuredClone(ref))) return false
       guard(); return !!current.get(ref.id)
@@ -169,19 +243,19 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     identity(access.sessionId, 'sessionId')
     const snapshot = captureObservation(input), caller = { sessionId: access.sessionId }
     const id = query.refId, offset = integer(query.offset ?? 0, 'offset'), budget = Math.min(config.maxReadBytes, integer(query.maxBytes ?? config.maxReadBytes, 'read budget', 1))
-    return run(access.signal, async signal => {
-      const scope = observed(caller, snapshot, signal)
-      const current = await getStore(signal); scope.guard()
-      await prepareObservedIndex(current, snapshot, scope.guard, work => serial(() => owner.mutate(work)), config.maxDiskBytes); scope.guard()
+    return run(access.signal, signal => withLegacyIndexWrite(signal, async context => {
+      const scope = observed(context, caller, snapshot, signal)
+      const current = context.store; scope.guard()
+      await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes); scope.guard()
       const result = await readLegacy(id, offset, budget, signal, async () => {
-        scope.guard(); const current = await getStore(signal); scope.guard(); const ref = current.get(id)
+        scope.guard(); context.index.assertCurrent(); const ref = current.get(id)
         if (!ref || !await scope.allowed(ref)) throw Error('Context reference unavailable or unauthorized')
         scope.guard(); return ref
       }, (id, signal) => store!.bytes(id, signal))
       scope.guard()
       if (!await scope.allowed(result.ref) || result.ref.expiresAt <= Date.now()) throw Error('Context reference expired or unauthorized during read')
       scope.guard(); return result
-    })
+    }))
   }
   async function searchObserved(access: ContextAccess, query: LegacySearchQuery, input: LegacyReadObservation) {
     identity(access.sessionId, 'sessionId')
@@ -191,16 +265,16 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const filter = query.refIds === undefined ? undefined : new Set(query.refIds)
     if (filter && (filter.size > 100 || [...filter].some(id => typeof id !== 'string'))) throw Error('refIds must contain at most 100 references')
     if (maxBytes < serializedBytes({ hits: [], partial: true, reasons: ['byte-budget'] })) throw Error('search budget cannot fit result metadata')
-    return run(access.signal, async signal => {
-      const scope = observed(caller, snapshot, signal)
-      const current = await getStore(signal); scope.guard()
-      await prepareObservedIndex(current, snapshot, scope.guard, work => serial(() => owner.mutate(work)), config.maxDiskBytes); scope.guard()
-      scope.guard(); const result = await searchLegacy({ terms, limit, maxBytes, filter }, getStore, ref => scope.allowed(ref), signal); scope.guard()
+    return run(access.signal, signal => withLegacyIndexWrite(signal, async context => {
+      const scope = observed(context, caller, snapshot, signal)
+      scope.guard()
+      await prepareObservedIndex(context, snapshot, scope.guard, mutateIndex, config.maxDiskBytes); scope.guard()
+      scope.guard(); const result = await searchLegacy({ terms, limit, maxBytes, filter }, context, ref => scope.allowed(ref), signal); scope.guard()
       const confirmed = [] as typeof result.hits
       for (const hit of result.hits) { if (await scope.allowed(hit.ref)) confirmed.push(hit); scope.guard() }
       result.hits = confirmed.filter(hit => hit.ref.expiresAt > Date.now())
       scope.guard(); return result
-    })
+    }))
   }
 
   return {
@@ -227,7 +301,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       configureContext(config, patch)
       await transition(async () => {
         const next = configureContext(config, patch)
-        if (store && next.maxDiskBytes !== config.maxDiskBytes) await owner.mutate(turn => store!.configureDiskBudget(turn, next.maxDiskBytes))
+        if (store && next.maxDiskBytes !== config.maxDiskBytes) await gate.exclusive(undefined, lease => owner.mutate(turn => store!.configureDiskBudget(turn, lease, next.maxDiskBytes)))
         config = next
       })
       return status()
@@ -240,11 +314,11 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       if (!config.enabled && !closed && !closing && controls === 0) return undefined
       // Snapshot caller objects before admitting asynchronous work.
       const captured = structuredClone(input)
-      return run(signal, owned => captureLegacy(workspaceId, captured, producer, () => config, getStore,
-        (current, work) => serial(() => owner.mutate(turn => {
+      return run(signal, owned => captureLegacy(workspaceId, captured, producer, () => config,
+        work => withLegacyWrite(owned, (current, lease) => serial(() => owner.mutate(turn => {
           if (current !== store) throw new Error('Legacy store identity changed')
-          return work(turn)
-        })), owned))
+          return work(current, turn, lease)
+        }))), owned))
     },
     async read(access, query) {
       identity(access.sessionId, 'sessionId')
@@ -252,7 +326,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       const id = query.refId
       const offset = integer(query.offset ?? 0, 'offset')
       const budget = Math.min(config.maxReadBytes, integer(query.maxBytes ?? config.maxReadBytes, 'read budget', 1))
-      return run(access.signal, owned => readLegacy(id, offset, budget, owned, () => readable(caller, id, owned), (id, signal) => store!.bytes(id, signal)))
+      return run(access.signal, owned => withLegacyOriginals(owned, current => readLegacy(id, offset, budget, owned, () => readable(current, caller, id, owned), (id, signal) => current.bytes(id, signal))))
     },
     async search(access, query) {
       identity(access.sessionId, 'sessionId')
@@ -264,7 +338,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       if (maxBytes < serializedBytes({ hits: [], partial: true, reasons: ['byte-budget'] })) throw new Error('search budget cannot fit result metadata')
       const filter = query.refIds === undefined ? undefined : new Set(query.refIds)
       if (filter && (filter.size > 100 || [...filter].some((id) => typeof id !== 'string'))) throw new Error('refIds must contain at most 100 references')
-      return run(access.signal, owned => searchLegacy({ terms, limit, maxBytes, filter }, getStore, (ref, signal) => allowed(caller, ref, signal), owned))
+      return run(access.signal, owned => withLegacyIndex(owned, context => searchLegacy({ terms, limit, maxBytes, filter }, context, (ref, signal) => allowed(caller, ref, signal), owned)))
     },
     async grant(access, refIds, targetSessionId) {
       assertOpen()
@@ -277,16 +351,15 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       if (managedIds.length) await artifacts.grantResults(access, managedIds, targetSessionId)
       const legacyIds = ids.filter(id => !managedIds.includes(id))
       if (!legacyIds.length) return
-      return run(access.signal, async (owned) => {
-        const current = await getStore(owned)
+      return run(access.signal, owned => withLegacyWrite(owned, async (current, lease) => {
         const prepared: ContextResultRef[] = []
-        for (const id of legacyIds) prepared.push(await readable(caller, id, owned))
+        for (const id of legacyIds) prepared.push(await readable(current, caller, id, owned))
         await serial(() => owner.mutate(async turn => {
           checkAbort(owned)
           if (current !== store || prepared.some(ref => JSON.stringify(current.get(ref.id)) !== JSON.stringify(ref))) throw new Error('Context reference expired or changed')
-          await current.addOwners(turn, legacyIds, targetSessionId, config.maxDiskBytes, owned)
+          await current.addOwners(turn, lease, legacyIds, targetSessionId, config.maxDiskBytes, owned)
         }))
-      }, false, true)
+      }, 'cleanup'), false, true)
     },
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')
@@ -297,9 +370,8 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
         if (!store) {
           const inventory = new ContextStore(options.root, workspaceId)
           try { await fileAccess(inventory.directory) } catch (failure) { if ((failure as NodeJS.ErrnoException).code === 'ENOENT') return; throw failure }
-          await getStore()
         }
-        await owner.mutate(turn => store!.clear(turn, sessionId))
+        await withLegacyWrite(undefined, (current, lease) => owner.mutate(turn => clearLegacyStore(current, turn, lease, sessionId)), 'cleanup')
       })
       return status()
     },
@@ -318,7 +390,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
           try { await artifacts.close(); artifactsClosed = true } catch (failure) { failures.push(failure) }
         }
         if (candidate) {
-          try { await candidate.close(); candidate = undefined; store = undefined } catch (failure) { failures.push(failure) }
+          try { await gate.exclusive(undefined, lease => candidate!.close(lease)); candidate = undefined; store = undefined } catch (failure) { failures.push(failure) }
         }
         if (artifactsClosed && !candidate) {
           try { await owner.close() } catch (failure) { failures.push(failure) }

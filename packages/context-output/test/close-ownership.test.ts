@@ -53,10 +53,10 @@ it('retains a later SQLite close failure without repeating completed artifact cl
   const nativeClose = ContextStore.prototype.close
   let nativeStore: ContextStore | undefined
   let failed = false
-  const storeClose = vi.spyOn(ContextStore.prototype, 'close').mockImplementation(async function(this: ContextStore) {
+  const storeClose = vi.spyOn(ContextStore.prototype, 'close').mockImplementation(async function(this: ContextStore, lease) {
     nativeStore = this
     if (!failed) { failed = true; throw fault }
-    await nativeClose.call(this)
+    await nativeClose.call(this, lease)
   })
   try {
     await expect(service.close()).rejects.toBe(fault)
@@ -64,7 +64,7 @@ it('retains a later SQLite close failure without repeating completed artifact cl
     await service.close()
     expect(storeClose).toHaveBeenCalledTimes(2); expect(bodyClose).toHaveBeenCalledTimes(1); expect(unsubscribe).toHaveBeenCalledTimes(1)
     await expect(service.read({ sessionId: 's' }, { refId: 'anything' })).rejects.toThrow(/closed/)
-  } finally { storeClose.mockRestore(); bodyClose.mockRestore(); await service.close(); if (nativeStore) { try { await nativeClose.call(nativeStore) } catch {} }; await rm(root, { recursive: true, force: true }) }
+  } finally { storeClose.mockRestore(); bodyClose.mockRestore(); await service.close(); void nativeStore; await rm(root, { recursive: true, force: true }) }
 })
 
 it.each(['result-scope', 'dependency-scope', 'begin', 'read', 'exec-read', 'transfer-scope', 'transfer-confirm', 'grant'] as const)('fences new %s admission synchronously while a real earlier transition is held', async operation => {

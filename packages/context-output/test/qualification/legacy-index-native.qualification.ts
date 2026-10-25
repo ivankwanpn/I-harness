@@ -6,7 +6,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const probe = fileURLToPath(new URL('../helpers/derived-index-native-probe.mjs', import.meta.url))
-const store = fileURLToPath(new URL('../../src/store.ts', import.meta.url))
+const store = fileURLToPath(new URL('../../src/legacy/index-lifecycle.ts', import.meta.url))
 const policyRevision = 'DELETE-IF10-13-20261025'
 type NativeRow = Record<string, any>
 type Receipt = { scenario: string; node: string; sqlite: string; platform: string; execPath: string; error?: unknown;

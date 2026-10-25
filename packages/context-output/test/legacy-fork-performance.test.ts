@@ -31,6 +31,8 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { ContextStore } from '../src/store.ts'
+import { LegacyIndexLifecycle } from '../src/legacy/index-lifecycle.ts'
+import { createLegacyUseGate } from '../src/legacy/use-gate.ts'
 import { createWorkspaceMutationOwner, type WorkspaceMutationTurn } from '../src/workspace-mutation.ts'
 import { physicalBytes } from '../src/artifact/quota.ts'
 import { legacyFixture } from './legacy-fork-fixture.ts'
@@ -39,6 +41,15 @@ import { OwnerLedger } from '../src/legacy/owner-ledger.ts'
 const evidence = process.env.IH_LEGACY_FORK_EVIDENCE_ROOT!
 const nativeExec = DatabaseSync.prototype.exec
 vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function(this: DatabaseSync, sql: string) { const result = nativeExec.call(this, sql); observeSql(sql); return result })
+const nativePrepare = DatabaseSync.prototype.prepare
+vi.spyOn(DatabaseSync.prototype, 'prepare').mockImplementation(function(this: DatabaseSync, sql: string) {
+  const statement = nativePrepare.call(this, sql)
+  if (/^PRAGMA max_page_count=\d+$/.test(sql)) {
+    const get = statement.get.bind(statement)
+    statement.get = ((...args: unknown[]) => { const value = Reflect.apply(get, statement, args); observeSql(sql); return value }) as typeof statement.get
+  }
+  return statement
+})
 const openStore = ContextStore.prototype.open
 vi.spyOn(ContextStore.prototype, 'open').mockImplementation(function(this: ContextStore, ...args) { return probe.phase('startup', () => openStore.apply(this, args)) })
 const confirm = ContextStore.prototype.confirmLegacyIndex
@@ -50,9 +61,11 @@ vi.spyOn(ContextStore.prototype, 'verifyBody').mockImplementation(function(this:
 const prune = ContextStore.prototype.prune
 vi.spyOn(ContextStore.prototype, 'prune').mockImplementation(function(this: ContextStore, ...args) { return probe.phase('expiry-sweep', () => prune.apply(this, args)) })
 // The private method is observed only in this test; no product API is added.
-const internal = ContextStore.prototype as unknown as { admitLegacyIndex(turn: WorkspaceMutationTurn, quota: number, growth: number): Promise<void> }
-const admission = internal.admitLegacyIndex
-vi.spyOn(internal, 'admitLegacyIndex').mockImplementation(function(this: ContextStore, ...args) { return probe.phase('index-admission', () => admission.apply(this, args)) })
+const internal = LegacyIndexLifecycle.prototype as unknown as { envelope(quota: number, growth: number): Promise<{ ceiling: number; current: number }> }
+const admission = internal.envelope
+vi.spyOn(internal, 'envelope').mockImplementation(function(this: LegacyIndexLifecycle, ...args) { return probe.phase('index-admission', () => admission.apply(this, args)) })
+const reconstruction = LegacyIndexLifecycle.prototype.rebuild
+vi.spyOn(LegacyIndexLifecycle.prototype, 'rebuild').mockImplementation(function(this: LegacyIndexLifecycle, ...args) { return probe.phase('index-reconstruction', () => reconstruction.apply(this, args)) })
 const authority = ContextStore.prototype as unknown as { validateLegacyAuthority(turn: WorkspaceMutationTurn): Promise<unknown> }
 const validate = authority.validateLegacyAuthority
 vi.spyOn(authority, 'validateLegacyAuthority').mockImplementation(function(this: ContextStore, ...args) {
@@ -71,43 +84,51 @@ async function receipt(name: string, extra: Record<string, unknown> = {}) {
   console.info('Actual legacy I/O:', JSON.stringify({ name, ...extra, ...measured, spans: measured.spans.filter(span => !['body-verification', 'index-admission', 'expiry-sweep'].includes(span.phase)), segments: undefined }))
 }
 
-it('uses one actual physical snapshot for an index admission predicate and SQLite ceiling', async () => {
+it('uses one actual physical snapshot for a read-only capture admission and installs no ceiling', async () => {
   await mkdir(evidence, { recursive: true })
-  const root = await mkdtemp(join(evidence, 'admission-')), owner = createWorkspaceMutationOwner({ root, workspaceId: 'workspace' })
-  const store = new ContextStore(root, 'workspace', owner)
-  await store.acquireLifetime(); await owner.mutate(turn => store.open(turn, 8 * 1024 * 1024))
-  const total = await physicalBytes(store.directory), index = (await stat(join(store.directory, 'index.sqlite'))).size
-  const quota = total + index + 32768 + 12345
-  probe.reset()
-  try {
-    await probe.run('admission-control', 'index-admission', () => owner.mutate(turn => store.resetLegacyIndex(turn, 'probe', quota)))
-    expect.soft(probe.total('inventories', 'admission-control')).toBe(1)
-    expect(probe.ceilings).toEqual([Math.floor((quota - total - 32768) / 4096)])
-    expect(probe.total('lstat')).toBeGreaterThan(0)
-    expect(probe.activeIO).toBe(0)
-  } finally { await receipt('single-admission', { total, index, quota }); await store.close(); await owner.close() }
+  const root = await mkdtemp(join(evidence, 'admission-')), owner = createWorkspaceMutationOwner({ root, workspaceId: 'workspace' }), gate = createLegacyUseGate()
+  const store = new ContextStore(root, 'workspace', owner, gate.assertLease)
+  await gate.exclusive(undefined, async lease => {
+    await store.acquireLifetime(); await owner.mutate(async turn => { await store.open(turn, lease, 8 * 1024 * 1024, 'query'); await store.ensureIndex(turn, lease, 8 * 1024 * 1024) })
+    const total = await physicalBytes(store.directory), index = (await stat(join(store.directory, 'index.sqlite'))).size
+    const n0 = index / 4096, journal = n0 * 4104 + (2 * n0 + 3) * 4096, growth = 12345, quota = total + journal + growth
+    const lifecycle = (store as unknown as { index: LegacyIndexLifecycle }).index
+    probe.reset()
+    try {
+      await probe.run('admission-control', 'index-admission', () => owner.mutate(async turn => { expect(await lifecycle.admitCapture(turn, lease, quota, growth)).toBe('incremental') }))
+      expect(probe.total('inventories', 'admission-control')).toBe(1)
+      expect(probe.ceilings).toEqual([])
+      expect(probe.total('lstat')).toBeGreaterThan(0)
+      expect(probe.activeIO).toBe(0)
+    } finally { await receipt('single-admission', { total, index, n0, journal, growth, quota }); await store.close(lease) }
+  })
+  await owner.close()
 })
 
-it('refuses journal headroom shortage, invalid budgets and overflow before index growth, then admits a raised budget', async () => {
+it('chooses fresh before mutation on incremental headroom shortage and rejects unsafe arithmetic', async () => {
   await mkdir(evidence, { recursive: true })
-  const root = await mkdtemp(join(evidence, 'headroom-')), owner = createWorkspaceMutationOwner({ root, workspaceId: 'workspace' })
-  const store = new ContextStore(root, 'workspace', owner)
-  await store.acquireLifetime(); await owner.mutate(turn => store.open(turn, 8 * 1024 * 1024))
-  const total = await physicalBytes(store.directory), index = (await stat(join(store.directory, 'index.sqlite'))).size
-  probe.reset()
-  try {
-    await probe.run('refusal-controls', 'index-admission', async () => {
-      await expect(owner.mutate(turn => internal.admitLegacyIndex.call(store, turn, total + index + 32768 - 1, 0))).rejects.toMatchObject({ code: 'ARTIFACT_QUOTA' })
-      await expect(owner.mutate(turn => internal.admitLegacyIndex.call(store, turn, NaN, 0))).rejects.toThrow('Invalid artifact quota')
-      await expect(owner.mutate(turn => internal.admitLegacyIndex.call(store, turn, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER))).rejects.toThrow('Invalid artifact quota')
-      await expect(owner.mutate(turn => internal.admitLegacyIndex.call(store, turn, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER - index - 32768))).rejects.toMatchObject({ code: 'ARTIFACT_QUOTA' })
-    })
-    expect(probe.ceilings).toEqual([])
-    expect(await physicalBytes(store.directory)).toBe(total)
-    await probe.run('raised-budget', 'index-admission', () => owner.mutate(turn => store.resetLegacyIndex(turn, 'raised', total + index + 32768 + 65536)))
-    expect(probe.ceilings).toHaveLength(1)
-    expect(probe.activeIO).toBe(0)
-  } finally { await receipt('headroom-refusals', { total, index }); await store.close(); await owner.close() }
+  const root = await mkdtemp(join(evidence, 'headroom-')), owner = createWorkspaceMutationOwner({ root, workspaceId: 'workspace' }), gate = createLegacyUseGate()
+  const store = new ContextStore(root, 'workspace', owner, gate.assertLease)
+  await gate.exclusive(undefined, async lease => {
+    await store.acquireLifetime(); await owner.mutate(async turn => { await store.open(turn, lease, 8 * 1024 * 1024, 'query'); await store.ensureIndex(turn, lease, 8 * 1024 * 1024) })
+    const total = await physicalBytes(store.directory), index = (await stat(join(store.directory, 'index.sqlite'))).size
+    const n0 = index / 4096, journal = n0 * 4104 + (2 * n0 + 3) * 4096
+    const lifecycle = (store as unknown as { index: LegacyIndexLifecycle }).index
+    probe.reset()
+    try {
+      await probe.run('refusal-controls', 'index-admission', () => owner.mutate(async turn => {
+        expect(await lifecycle.admitCapture(turn, lease, total + journal - 1, 0)).toBe('fresh')
+        await expect(lifecycle.admitCapture(turn, lease, NaN, 0)).rejects.toThrow(/Unsafe/)
+        await expect(lifecycle.admitCapture(turn, lease, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER + 1)).rejects.toThrow(/Unsafe/)
+      }))
+      expect(probe.ceilings).toEqual([])
+      expect(await physicalBytes(store.directory)).toBe(total)
+      await probe.run('raised-budget', 'index-admission', () => owner.mutate(turn => store.resetLegacyIndex(turn, lease, store.indexUse(lease), 'raised', total + journal + 65536)))
+      expect(probe.ceilings).toHaveLength(1)
+      expect(probe.activeIO).toBe(0)
+    } finally { await receipt('headroom-refusals', { total, index, n0, journal }); await store.close(lease) }
+  })
+  await owner.close()
 })
 
 it.each([
@@ -192,24 +213,22 @@ it.each([
     clock.mockReturnValue(f.selectedRefs[expired - 1]!.expiresAt)
     probe.reset()
     const diagnostics: unknown[] = []
-    let activeDatabase: DatabaseSync | undefined
+    let activeStore: ContextStore | undefined
     const snapshot = async (phase: string, ref?: string) => {
-      const index = join(directory, 'index.sqlite'), db = activeDatabase ?? new DatabaseSync(index, { readOnly: true })
-      try { diagnostics.push({ phase, ref, physical: await physicalBytes(directory), indexBytes: (await stat(index)).size,
-        pageCount: db.prepare('PRAGMA page_count').get(), maxPages: db.prepare('PRAGMA max_page_count').get(), freelist: db.prepare('PRAGMA freelist_count').get(),
-        journalBytes: await stat(index + '-journal').then(info => info.size, () => 0), ...(ref ? { owners: await readFile(ref, 'utf8') } : {}) }) }
-      finally { if (!activeDatabase) db.close() }
+      const index = join(directory, 'index.sqlite'), lifecycle = activeStore && (activeStore as unknown as { index: { state: string; handle?: { generation: symbol; closed: boolean; uncertain: boolean; db: DatabaseSync } } }).index
+      const handle = lifecycle?.handle
+      const db = handle && !handle.closed && !handle.uncertain ? handle.db : undefined
+      diagnostics.push({ phase, ref, physical: await physicalBytes(directory), indexBytes: await stat(index).then(info => info.size, () => 0),
+        lifecycle: lifecycle?.state, generation: handle?.generation.description, closed: handle?.closed, uncertain: handle?.uncertain,
+        ...(db ? { pageCount: db.prepare('PRAGMA page_count').get(), maxPages: db.prepare('PRAGMA max_page_count').get(), freelist: db.prepare('PRAGMA freelist_count').get() } : {}),
+        journalBytes: await stat(index + '-journal').then(info => info.size, () => 0), ...(ref ? { owners: await readFile(ref, 'utf8') } : {}) })
     }
     const clearOriginal = ContextStore.prototype.clear
     const clearSpy = name.includes('full-budget') ? vi.spyOn(ContextStore.prototype, 'clear').mockImplementation(async function(this: ContextStore, ...args) {
-      activeDatabase = (this as unknown as { db: DatabaseSync }).db
-      const prepare = activeDatabase.prepare.bind(activeDatabase)
-      const sqlSpy = vi.spyOn(activeDatabase, 'prepare').mockImplementation((...input: Parameters<typeof prepare>) => {
-        diagnostics.push({ sql: input[0] }); return prepare(...input)
-      })
-      try { await snapshot('before-clear'); await clearOriginal.apply(this, args) }
+      activeStore = this
+      try { await snapshot('before-clear'); await clearOriginal.apply(this, args); await snapshot('after-clear') }
       catch (failure) { await snapshot('after-failure'); throw failure }
-      finally { sqlSpy.mockRestore(); activeDatabase = undefined }
+      finally { activeStore = undefined }
     }) : undefined
     const replace = OwnerLedger.prototype.replace
     const ledgerSpy = name.includes('full-budget') ? vi.spyOn(OwnerLedger.prototype, 'replace').mockImplementation(async function(this: OwnerLedger, ...args) {

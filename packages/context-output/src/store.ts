@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile, open } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, writeFile, open } from 'node:fs/promises'
 import { resolve } from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { LegacyIndexLifecycle, type IndexUse, type RebuildSink, type PendingCaptureIndex } from './legacy/index-lifecycle.ts'
+import type { LegacyUseGate, LegacyUseLease } from './legacy/use-gate.ts'
 import { checkAbort, lexicalChunks } from './bytes.ts'
 import type { ContextCapture, ContextResultRef } from './types.ts'
 import { walkCandidates } from './search-index.ts'
 import { acquireSessionLock, lockPathFor } from '@i-harness/fs-lock'
-import { LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
+import { failuresTogether, LeaseRetirement, type WorkspaceMutationOwner, type WorkspaceMutationTurn } from './workspace-mutation.ts'
 import { physicalBytes } from './artifact/quota.ts'
 import { OwnerLedger, readLedger, exists } from './legacy/owner-ledger.ts'
 import { commitment, same, checkRoot, recordHash, appliedFor, canonicalRecord } from './legacy/fork-codec.ts'
@@ -25,7 +26,7 @@ const REF_ID = /^ctx_[a-f0-9]{64}$/
 async function atomicJson(path: string, value: unknown): Promise<void> {
   const temporary = `${path}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporary, JSON.stringify(value), { flag: 'wx' })
+    await writeFile(temporary, Buffer.isBuffer(value) ? value : JSON.stringify(value), { flag: 'wx' })
     // Windows briefly rejects replacement while another reader's handle is
     // closing. Keep the complete ledger at its old name until rename succeeds.
     for (let attempt = 0; ; attempt++) {
@@ -40,7 +41,7 @@ async function atomicJson(path: string, value: unknown): Promise<void> {
 }
 
 export class ContextStore {
-  private db!: DatabaseSync
+  private readonly index: LegacyIndexLifecycle
   private artifacts = new Map<string, Artifact>()
   private owners = new Map<string, Set<string>>()
   private pending = new Set<string>()
@@ -48,8 +49,8 @@ export class ContextStore {
   private readonly root: string
   private lifetime?: LeaseRetirement
   private acquiring?: Promise<void>
+  private originalsLoaded = false
   private retiring = false
-  private dbClosed = false
   private quotaDisposed = false
   private closeFlight?: Promise<void>
   private readonly ledger: OwnerLedger
@@ -68,13 +69,14 @@ export class ContextStore {
   async joinLegacyFiles(): Promise<void> {
     const settled = await Promise.allSettled([...this.fileDebt].map(async original => { await this.closeLegacyRetirement(original); this.fileDebt.delete(original) }))
     const failures = settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
-    if (failures.length) throw new AggregateError(failures, 'Original legacy file cleanup remains unresolved')
+    failuresTogether(failures, 'Original legacy file cleanup remains unresolved')
   }
 
-  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner) {
+  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }) {
     this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
     this.ledger = new OwnerLedger(this.directory, this.retireLegacyFile)
+    this.index = new LegacyIndexLifecycle({ directory: this.directory, assertTurn: turn => this.assertRetirementTurn(turn), assertLease: this.assertLease, physicalBytes: () => this.diskBytes() })
   }
   async acquireLifetime(signal?: AbortSignal): Promise<void> {
     if (!this.owner || this.retiring) throw new Error('Legacy store ownership unavailable')
@@ -86,6 +88,10 @@ export class ContextStore {
     await this.acquiring
     checkAbort(signal)
   }
+  private assertRetirementTurn(turn: WorkspaceMutationTurn): void {
+    if (!this.owner || !this.lifetime?.lease.held) throw new Error('Legacy store lifetime unavailable')
+    this.owner.assertTurn(turn)
+  }
   private assertTurn(turn: WorkspaceMutationTurn): void {
     if (!this.owner || !this.lifetime?.lease.held || this.retiring) throw new Error('Legacy store lifetime unavailable')
     this.owner.assertTurn(turn)
@@ -94,105 +100,62 @@ export class ContextStore {
     if (!REF_ID.test(id)) throw new Error('Unknown context reference')
     return resolve(this.directory, kind, id + (kind === 'blobs' ? '.txt' : '.json'))
   }
-  async open(turn: WorkspaceMutationTurn, maxDiskBytes: number, signal?: AbortSignal): Promise<void> {
-    this.assertTurn(turn)
-    checkAbort(signal)
-    // Shared admission for capture/read/search. A tiny query budget must not
-    // create even the empty SQLite schema, and retained storage must be checked
-    // before replacing its disposable derived index.
-    if (maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
-    let existingBytes = 0
-    try { existingBytes = await this.diskBytes() }
-    catch (failure) { if ((failure as NodeJS.ErrnoException).code !== 'ENOENT') throw failure }
-    if (existingBytes > maxDiskBytes) throw new Error('Context disk quota is smaller than retained storage')
-    const database = resolve(this.directory, 'index.sqlite')
-    let oldIndexBytes = 0
-    try { oldIndexBytes = (await stat(database)).size }
-    catch (failure) { if ((failure as NodeJS.ErrnoException).code !== 'ENOENT') throw failure }
-    const indexBudget = maxDiskBytes - existingBytes + oldIndexBytes
-    if (indexBudget < 65536) throw new Error('Context disk quota cannot fit the rebuilt index')
-    checkAbort(signal)
+  async open(turn: WorkspaceMutationTurn, lease: LegacyUseLease, maxDiskBytes: number, mode: 'query'|'cleanup', signal?: AbortSignal): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); checkAbort(signal)
+    if (mode === 'query' && maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
+    if (await this.diskBytes() > maxDiskBytes) throw new Error('Context disk quota is smaller than retained storage')
     for (const kind of ['artifacts', 'owners', 'blobs']) await mkdir(resolve(this.directory, kind), { recursive: true })
-    checkAbort(signal)
-    // Index is fully rebuildable. Replacing it avoids duplicated old/new index
-    // storage and recovers corrupt/obsolete schemas without touching artifacts.
-    await rm(database, { force: true })
-    await rm(database + '-journal', { force: true })
-    this.db = new DatabaseSync(database)
-    try {
-      this.db.exec(`PRAGMA max_page_count=${Math.floor(indexBudget / 4096)}`)
-      this.schema()
-      // Original committed transfer authority is validated before startup can
-      // reclaim canonical tombstones. Derived SQLite state grants no authority.
-      await this.validateLegacyAuthority(turn)
-      // Metadata/blobs/owner ledgers are authoritative. Rebuild every startup,
-      // so an interrupted derived-index commit never loses a captured artifact.
-      for (const name of await readdir(resolve(this.directory, 'artifacts'))) {
-        checkAbort(signal)
-        const id = name.endsWith('.json') ? name.slice(0, -5) : ''
-        if (!REF_ID.test(id)) continue
-        const artifact = JSON.parse(await readFile(this.path('artifacts', id), 'utf8')) as Artifact
-        const ref = artifact.ref
-        // Older manifests kept source alongside the ref. Preserve it when
-        // rebuilding after this additive public metadata extension.
-        if (ref && !ref.source && artifact.source) ref.source = artifact.source
-        if (!ref || ref.id !== id || ref.workspaceId !== this.workspaceId
-          || referenceId(ref.workspaceId, ref.sessionId, ref.callId, ref.revision) !== id) throw new Error('Invalid context artifact identity')
-        const ownerPath = this.path('owners', id)
-        // Only already-committed storage cleanup may finish on open. A prior
-        // array with an unresolved original rewrite fences further mutation.
-        try { await this.ledger.recover(ownerPath) } catch { /* exact debt stays */ }
-        const owners = (await readLedger(ownerPath, this.retireLegacyFile)).owners
-        if (owners.size === 0) { await this.removeFiles(turn, id); continue }
-        const bytes = await readFile(this.path('blobs', id))
-        if (bytes.length !== ref.bytes || digest(bytes) !== ref.revision) throw new Error('Context blob integrity failure')
-        this.index(turn, artifact, owners, bytes)
-      }
-      this.db.exec('VACUUM')
-      if (await this.diskBytes() > maxDiskBytes) throw new Error('Context disk quota exceeded while rebuilding index')
+    await this.validateLegacyAuthority(turn)
+    for (const name of await readdir(resolve(this.directory, 'artifacts'))) {
       checkAbort(signal)
-    } catch (error) {
-      // The service retains this exact candidate and closes it through cleanup.
-      // A DB or lease disposal error must not replace the original open error.
-      if (error instanceof Error && /database or disk is full/i.test(error.message)) throw new Error('Context disk quota exceeded while rebuilding index')
-      throw error
+      const id = name.endsWith('.json') ? name.slice(0, -5) : ''
+      if (!REF_ID.test(id)) continue
+      const artifact = await this.readArtifact(id), ownerPath = this.path('owners', id)
+      try { await this.ledger.recover(ownerPath) } catch { /* exact debt remains */ }
+      const owners = (await readLedger(ownerPath, this.retireLegacyFile)).owners
+      if (!owners.size) { await this.removeFiles(turn, id); continue }
+      const bytes = await readFile(this.path('blobs', id))
+      if (bytes.length !== artifact.ref.bytes || digest(bytes) !== artifact.ref.revision) throw Error('Context blob integrity failure')
+      this.artifacts.set(id, artifact); this.owners.set(id, owners)
+    }
+    checkAbort(signal)
+    this.originalsLoaded = true
+    await this.index.retire(turn, lease)
+  }
+  private async readArtifact(id: string): Promise<Artifact> {
+    await ownedPath(this.directory, this.path('artifacts', id))
+    const artifact = JSON.parse(await readFile(this.path('artifacts', id), 'utf8')) as Artifact, ref = artifact.ref
+    if (ref && !ref.source && artifact.source) ref.source = artifact.source
+    if (!ref || ref.id !== id || ref.workspaceId !== this.workspaceId || referenceId(ref.workspaceId, ref.sessionId, ref.callId, ref.revision) !== id) throw Error('Invalid context artifact identity')
+    return artifact
+  }
+  private async feedIndex(sink: RebuildSink): Promise<void> {
+    for (const [id, cached] of this.artifacts) {
+      const artifact = await this.readArtifact(id)
+      if (!same(artifact, cached)) throw Error('Context manifest changed during reconstruction')
+      await ownedPath(this.directory, this.path('owners', id))
+      const owners = (await readLedger(this.path('owners', id), this.retireLegacyFile)).owners
+      if (!owners.size || !this.owners.get(id)?.size) throw Error('Context original membership unavailable during reconstruction')
+      await ownedPath(this.directory, this.path('blobs', id))
+      const bytes = await readFile(this.path('blobs', id))
+      if (bytes.length !== artifact.ref.bytes || digest(bytes) !== artifact.ref.revision) throw Error('Context blob integrity failure')
+      sink.add(artifact.ref, bytes)
     }
   }
-  private schema(): void {
-    this.db.exec(`PRAGMA journal_mode=DELETE; PRAGMA foreign_keys=ON;
-      CREATE TABLE IF NOT EXISTS refs (id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL, complete INTEGER NOT NULL);
-      CREATE INDEX IF NOT EXISTS refs_expiry ON refs(expires_at);
-      CREATE INDEX IF NOT EXISTS refs_complete_expiry ON refs(complete,expires_at);
-      CREATE TABLE IF NOT EXISTS owners (ref_id TEXT REFERENCES refs(id) ON DELETE CASCADE, session_id TEXT, PRIMARY KEY(ref_id,session_id));
-      CREATE TABLE IF NOT EXISTS chunk_rows (rowid INTEGER PRIMARY KEY, ref_id TEXT REFERENCES refs(id) ON DELETE CASCADE);
-      CREATE INDEX IF NOT EXISTS chunk_rows_ref ON chunk_rows(ref_id);
-      CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(ref_id UNINDEXED, offset UNINDEXED, text, tokenize='trigram');`)
-    this.db.exec(`CREATE TABLE legacy_plans (binding TEXT PRIMARY KEY, plan TEXT, observations INTEGER, refs INTEGER, ready INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE legacy_pages (binding TEXT, name TEXT, digest TEXT, PRIMARY KEY(binding,name));
-      CREATE TABLE legacy_rows (binding TEXT, ordinal INTEGER, ref_id TEXT, tuple TEXT, row_json TEXT, PRIMARY KEY(binding,ordinal));
-      CREATE INDEX legacy_rows_ref ON legacy_rows(binding,ref_id,ordinal);`)
+  ensureIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number): Promise<'ready'|'unavailable'> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    return this.index.ready() ? Promise.resolve('ready') : this.index.rebuild(turn, lease, quota, sink => this.feedIndex(sink))
   }
-  private index(turn: WorkspaceMutationTurn, artifact: Artifact, owners: Set<string>, bytes: Buffer): void {
-    this.assertTurn(turn)
-    const id = artifact.ref.id
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      this.db.prepare('INSERT INTO refs VALUES (?,?,?)').run(id, artifact.ref.expiresAt, artifact.ref.complete ? 1 : 0)
-      const addOwner = this.db.prepare('INSERT INTO owners VALUES (?,?)')
-      for (const owner of owners) addOwner.run(id, owner)
-      const addChunk = this.db.prepare('INSERT INTO chunks_fts(ref_id,offset,text) VALUES (?,?,?)')
-      const locateChunk = this.db.prepare('INSERT INTO chunk_rows VALUES (?,?)')
-      for (const chunk of lexicalChunks(bytes)) {
-        const row = addChunk.run(id, chunk.offset, chunk.text.toLowerCase())
-        locateChunk.run(row.lastInsertRowid, id)
-      }
-      this.db.exec('COMMIT')
-      this.artifacts.set(id, artifact)
-      this.owners.set(id, owners)
-    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  indexUse(lease: LegacyUseLease): IndexUse { return this.index.use(lease) }
+  indexIssue() { return this.index.issue() }
+  indexReady(): boolean { return this.index.ready() }
+  indexRetirementPending(): boolean { return this.index.retirementPending() }
+  rejectIndex(failure: unknown): never { this.index.invalidate(failure); throw failure }
+  async retireInvalidIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease): Promise<void> {
+    if (this.index.retirementPending()) await this.index.retire(turn, lease)
   }
   get(id: string): ContextResultRef|undefined {
-    if (!REF_ID.test(id) || this.pending.has(id)) return undefined
+    if (!REF_ID.test(id) || this.pending.has(id) || !this.owners.get(id)?.size) return undefined
     const ref = this.artifacts.get(id)?.ref
     return ref && ref.expiresAt > Date.now() ? structuredClone(ref) : undefined
   }
@@ -205,89 +168,82 @@ export class ContextStore {
     if (!ref || bytes.length !== ref.bytes || digest(bytes) !== ref.revision) throw new Error('Context blob integrity failure')
     return bytes
   }
-  candidates(terms: string[], signal: AbortSignal, mark: (reason: string) => void) {
-    return walkCandidates(this.db, (id) => this.get(id), terms, signal, mark)
+  candidates(use: IndexUse, terms: string[], signal: AbortSignal, mark: (reason: string) => void) {
+    return walkCandidates(use, (id) => this.get(id), terms, signal, mark)
   }
   counters(): { retainedBytes: number; results: number } {
-    const refs = [...this.artifacts.values()].map((a) => a.ref).filter((ref) => !this.pending.has(ref.id) && ref.expiresAt > Date.now())
+    const refs = [...this.artifacts.values()].map((a) => a.ref).filter((ref) => !this.pending.has(ref.id) && !!this.owners.get(ref.id)?.size && ref.expiresAt > Date.now())
     return { retainedBytes: refs.reduce((sum, ref) => sum + ref.bytes, 0), results: refs.length }
   }
   diskBytes(directory = this.directory): Promise<number> { return physicalBytes(directory) }
-  /** Derived metadata grows only in an explicit L0 turn. SQLite's rollback
-   * journal may contain prior pages, so reserve that real upper bound while the
-   * shared turn excludes other writers, then install the remaining page ceiling. */
-  private async admitLegacyIndex(turn: WorkspaceMutationTurn, quota: number, growth: number): Promise<void> {
-    this.assertTurn(turn)
-    const index = (await stat(resolve(this.directory, 'index.sqlite'))).size
-    const required = index + 32768 + growth
-    // The requireSpace predicate and the SQLite ceiling share this one actual
-    // inventory in the held turn, including the unchanged rollback headroom.
-    if (!Number.isSafeInteger(required) || required < 0 || !Number.isSafeInteger(quota) || quota < 1) throw new Error('Invalid artifact quota')
-    const total = await this.diskBytes()
-    if (!Number.isSafeInteger(total + required) || total + required > quota) throw Object.assign(new Error('Artifact disk quota exceeded'), { code: 'ARTIFACT_QUOTA' })
-    const pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size)
-    this.db.exec(`PRAGMA max_page_count=${Math.floor((quota - total - 32768) / pageSize)}`)
+  async resetLegacyIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, binding: string, quota: number): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
+    await this.index.mutate(turn, lease, use, quota, sql => {
+      for (const table of ['legacy_rows', 'legacy_pages', 'legacy_plans']) sql.run(`DELETE FROM ${table} WHERE binding=?`, [binding])
+      sql.run('INSERT INTO legacy_plans(binding,ready) VALUES (?,0)', [binding])
+    })
   }
-  async resetLegacyIndex(turn: WorkspaceMutationTurn, binding: string, quota: number): Promise<void> {
-    this.assertTurn(turn); await this.admitLegacyIndex(turn, quota, 0)
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      for (const table of ['legacy_rows', 'legacy_pages', 'legacy_plans']) this.db.prepare(`DELETE FROM ${table} WHERE binding=?`).run(binding)
-      this.db.prepare('INSERT INTO legacy_plans(binding,ready) VALUES (?,0)').run(binding)
-      this.db.exec('COMMIT')
-    } catch (failure) { this.db.exec('ROLLBACK'); throw failure }
-  }
-  async stageLegacyPage(turn: WorkspaceMutationTurn, binding: string, name: string, page: LegacyPage, quota: number): Promise<void> {
-    this.assertTurn(turn)
-    const pageDigest = recordHash('page', page), prior = this.db.prepare('SELECT digest FROM legacy_pages WHERE binding=? AND name=?').get(binding, name)
+  async stageLegacyPage(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, binding: string, name: string, page: LegacyPage, quota: number): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
+    const pageDigest = recordHash('page', page), prior = use.get('SELECT digest FROM legacy_pages WHERE binding=? AND name=?', [binding, name])
     if (prior) { if (prior.digest !== pageDigest) throw Error('Conflicting derived legacy page'); return }
     const tuples = page.kind === 'legacy-fork-leaf' ? page.rows.map(row => ({ row, tuple: JSON.stringify({ refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }) })) : []
-    await this.admitLegacyIndex(turn, quota, Buffer.byteLength(JSON.stringify(page)) * 4 + 32768)
-    this.db.exec('BEGIN IMMEDIATE')
-    try {
-      this.db.prepare('INSERT OR IGNORE INTO legacy_plans(binding,ready) VALUES (?,0)').run(binding)
-      const byRef = this.db.prepare('SELECT tuple FROM legacy_rows WHERE binding=? AND ref_id=? LIMIT 1'), byOrdinal = this.db.prepare('SELECT row_json FROM legacy_rows WHERE binding=? AND ordinal=?')
-      const add = this.db.prepare('INSERT INTO legacy_rows VALUES (?,?,?,?,?)')
+    await this.index.mutate(turn, lease, use, quota, sql => {
+      sql.run('INSERT OR IGNORE INTO legacy_plans(binding,ready) VALUES (?,0)', [binding])
       for (const [offset, value] of tuples.entries()) {
-        const old = byRef.get(binding, value.row.refId), ordinal = page.kind === 'legacy-fork-leaf' ? page.firstRow + offset : -1, encoded = JSON.stringify(value.row), positioned = byOrdinal.get(binding, ordinal)
+        const old = use.get('SELECT tuple FROM legacy_rows WHERE binding=? AND ref_id=? LIMIT 1', [binding, value.row.refId]), ordinal = page.kind === 'legacy-fork-leaf' ? page.firstRow + offset : -1, encoded = JSON.stringify(value.row), positioned = use.get('SELECT row_json FROM legacy_rows WHERE binding=? AND ordinal=?', [binding, ordinal])
         if (old && old.tuple !== value.tuple || positioned && positioned.row_json !== encoded) throw Error('Conflicting repeated legacy commitment')
-        if (!positioned) add.run(binding, ordinal, value.row.refId, value.tuple, encoded)
+        if (!positioned) sql.run('INSERT INTO legacy_rows VALUES (?,?,?,?,?)', [binding, ordinal, value.row.refId, value.tuple, encoded])
       }
-      this.db.prepare('INSERT INTO legacy_pages VALUES (?,?,?)').run(binding, name, pageDigest)
-      this.db.exec('COMMIT')
-    } catch (failure) { this.db.exec('ROLLBACK'); throw failure }
-    if (await this.diskBytes() > quota) throw Error('Legacy derived index quota unavailable')
+      sql.run('INSERT INTO legacy_pages VALUES (?,?,?)', [binding, name, pageDigest])
+    })
   }
-  legacyCounts(binding: string): { observations: number; refs: number } {
-    const result = this.db.prepare('SELECT COUNT(*) AS observations,COUNT(DISTINCT ref_id) AS refs FROM legacy_rows WHERE binding=?').get(binding)!
+  legacyCounts(use: IndexUse,binding: string): { observations: number; refs: number } {
+    const result = use.get('SELECT COALESCE(SUM(n),0) AS observations,COUNT(ref_id) AS refs FROM (SELECT ref_id,COUNT(*) AS n FROM legacy_rows WHERE binding=? GROUP BY ref_id)', [binding])!
     return { observations: Number(result.observations), refs: Number(result.refs) }
   }
-  legacyFirst(binding: string, refId: string): number { return Number(this.db.prepare('SELECT MIN(ordinal) AS ordinal FROM legacy_rows WHERE binding=? AND ref_id=?').get(binding, refId)!.ordinal) }
-  legacyReady(root: LegacyRoot): boolean {
-    const binding = recordHash('binding', root.binding), header = this.db.prepare('SELECT * FROM legacy_plans WHERE binding=?').get(binding), counts = this.legacyCounts(binding)
+  legacyFirst(use: IndexUse,binding: string, refId: string): number { return Number(use.get('SELECT MIN(ordinal) AS ordinal FROM legacy_rows WHERE binding=? AND ref_id=?', [binding, refId])!.ordinal) }
+  legacyReady(use: IndexUse,root: LegacyRoot): boolean {
+    const binding = recordHash('binding', root.binding), header = use.get('SELECT * FROM legacy_plans WHERE binding=?', [binding]), counts = this.legacyCounts(use, binding)
     return header?.ready === 1 && header.plan === recordHash('plan', root) && counts.observations === root.observationCount && counts.refs === root.distinctRefCount
   }
-  async confirmLegacyIndex(turn: WorkspaceMutationTurn, root: LegacyRoot, quota: number): Promise<void> {
-    this.assertTurn(turn)
-    const binding = recordHash('binding', root.binding), counts = this.legacyCounts(binding)
+  async confirmLegacyIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, root: LegacyRoot, quota: number): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
+    const binding = recordHash('binding', root.binding), counts = this.legacyCounts(use, binding)
     if (counts.observations !== root.observationCount || counts.refs !== root.distinctRefCount) throw Error('Legacy derived EOF/count mismatch')
-    await this.admitLegacyIndex(turn, quota, 8192)
-    this.db.prepare('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)').run(binding, recordHash('plan', root), counts.observations, counts.refs)
+    await this.index.mutate(turn, lease, use, quota, sql => { sql.run('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)', [binding, recordHash('plan', root), counts.observations, counts.refs]) })
+    this.index.confirmHints(use)
   }
-  legacyHint(binding: string, ordinal: number): LegacyRow | undefined {
-    const row = this.db.prepare('SELECT ref_id,tuple,row_json FROM legacy_rows WHERE binding=? AND ordinal=?').get(binding, ordinal)
+  legacyHint(use: IndexUse,binding: string, ordinal: number): LegacyRow | undefined {
+    const row = use.get('SELECT ref_id,tuple,row_json FROM legacy_rows WHERE binding=? AND ordinal=?', [binding, ordinal])
     if (!row) return undefined
-    if (Buffer.byteLength(String(row.row_json)) > 65536) throw Error('Corrupt legacy derived row')
-    const parsed = JSON.parse(String(row.row_json)) as LegacyRow
-    const tuple = JSON.stringify({ refId: parsed.refId, revision: parsed.revision, metadataDigest: parsed.metadataDigest, metadataEncodedBytes: parsed.metadataEncodedBytes, expiresAt: parsed.expiresAt })
-    if (row.ref_id !== parsed.refId || row.tuple !== tuple) throw Error('Corrupt legacy derived key')
-    return parsed
+    try {
+      if (Buffer.byteLength(String(row.row_json)) > 65536) throw Error('Corrupt legacy derived row')
+      const parsed = JSON.parse(String(row.row_json)) as LegacyRow
+      const tuple = JSON.stringify({ refId: parsed.refId, revision: parsed.revision, metadataDigest: parsed.metadataDigest, metadataEncodedBytes: parsed.metadataEncodedBytes, expiresAt: parsed.expiresAt })
+      if (row.ref_id !== parsed.refId || row.tuple !== tuple) throw Error('Corrupt legacy derived key')
+      return parsed
+    } catch (failure) { return this.rejectIndex(failure) }
   }
-  *legacyHints(binding: string, refId: string): Generator<{ ordinal: number; row: LegacyRow }> {
-    for (const row of this.db.prepare('SELECT ordinal,row_json FROM legacy_rows WHERE binding=? AND ref_id=? ORDER BY ordinal').iterate(binding, refId)) yield { ordinal: Number(row.ordinal), row: JSON.parse(String(row.row_json)) as LegacyRow }
+  *legacyHints(use: IndexUse, binding: string, refId: string): Generator<{ ordinal: number; row: LegacyRow }> {
+    let cursor = -1
+    for (;;) {
+      use.assertCurrent()
+      const rows = use.all('SELECT ordinal,row_json FROM legacy_rows WHERE binding=? AND ref_id=? AND ordinal>? ORDER BY ordinal LIMIT 64', [binding, refId, cursor])
+      for (const row of rows) {
+        use.assertCurrent(); cursor = Number(row.ordinal)
+        let parsed: LegacyRow
+        try {
+          if (Buffer.byteLength(String(row.row_json)) > 65536) throw Error('Corrupt legacy derived row')
+          parsed = JSON.parse(String(row.row_json)) as LegacyRow
+        } catch (failure) { return this.rejectIndex(failure) }
+        yield { ordinal: cursor, row: parsed }; use.assertCurrent()
+      }
+      if (rows.length < 64) return
+    }
   }
-  legacyPageHint(binding: string, name: string): boolean { return !!this.db.prepare('SELECT 1 FROM legacy_pages WHERE binding=? AND name=?').get(binding, name) }
-  legacyPageCount(binding: string): number { return Number(this.db.prepare('SELECT COUNT(*) AS count FROM legacy_pages WHERE binding=?').get(binding)!.count) }
+  legacyPageHint(use: IndexUse,binding: string, name: string): boolean { return !!use.get('SELECT 1 FROM legacy_pages WHERE binding=? AND name=?', [binding, name]) }
+  legacyPageCount(use: IndexUse,binding: string): number { return Number(use.get('SELECT COUNT(*) AS count FROM legacy_pages WHERE binding=?', [binding])!.count) }
   async canonicalRef(c: LegacyCommitment, sessionId?: string): Promise<ContextResultRef> {
     await ownedPath(this.directory, this.path('artifacts', c.refId)); await ownedPath(this.directory, this.path('owners', c.refId))
     const artifact = JSON.parse(await readFile(this.path('artifacts', c.refId), 'utf8')) as Artifact
@@ -317,8 +273,8 @@ export class ContextStore {
     const next = new Set(actual.owners); next.add(target)
     await this.ledger.fund(path, next, quota, guard, operation); guard()
   }
-  async mergeLegacyOwner(turn: WorkspaceMutationTurn, id: string, target: string, operation: string, guard: () => void): Promise<void> {
-    this.assertTurn(turn); guard()
+  async mergeLegacyOwner(turn: WorkspaceMutationTurn, lease: LegacyUseLease, id: string, target: string, operation: string, guard: () => void): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive'); guard()
     const path = this.path('owners', id), actual = await readLedger(path, this.retireLegacyFile); guard()
     if (!actual.owners.size) throw Error('Empty owner ledger is authoritative')
     const next = new Set(actual.owners); next.add(target)
@@ -326,7 +282,6 @@ export class ContextStore {
     const confirmed = await readLedger(path, this.retireLegacyFile); guard()
     if (!confirmed.owners.has(target)) throw Error('Original target owner not confirmed')
     this.owners.set(id, confirmed.owners)
-    this.db.prepare('INSERT OR IGNORE INTO owners VALUES (?,?)').run(id, target)
   }
   async revokeLegacyTargets(turn: WorkspaceMutationTurn, sessionId?: string): Promise<void> {
     this.assertTurn(turn)
@@ -406,59 +361,86 @@ export class ContextStore {
       await this.remove(turn, id)
     }
   }
-  async configureDiskBudget(turn: WorkspaceMutationTurn, maxDiskBytes: number): Promise<void> {
-    this.assertTurn(turn)
-    const physicalBytes = await this.diskBytes()
-    if (physicalBytes > maxDiskBytes) throw new Error('Context disk budget is smaller than retained storage; clear results first')
-    const indexBytes = (await stat(resolve(this.directory, 'index.sqlite'))).size
-    const pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size)
-    // Configuration owns the drained mutation lane. Keep all authoritative
-    // files inside the new quota while giving SQLite the remaining page budget.
-    // Raises must replace the old opening ceiling; lowering keeps current pages.
-    const maxPages = Math.floor((maxDiskBytes - physicalBytes + indexBytes) / pageSize)
-    this.db.exec(`PRAGMA max_page_count=${maxPages}`)
+  async configureDiskBudget(turn: WorkspaceMutationTurn, lease: LegacyUseLease, maxDiskBytes: number): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    await this.index.configure(turn, lease, maxDiskBytes)
   }
-  async put(turn: WorkspaceMutationTurn, artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
-    this.assertTurn(turn)
-    const id = artifact.ref.id
-    const existing = this.get(id)
+  private async captureAllocation(turn: WorkspaceMutationTurn, lease: LegacyUseLease, artifact: Artifact, bytes: Buffer): Promise<{ peakGrowth: number; manifestBytes: Buffer; ownerBytes: Buffer }> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    const id = artifact.ref.id, creator = new Set([artifact.ref.sessionId])
+    if (await exists(this.path('blobs', id)) || await exists(this.path('artifacts', id))) throw Error('Prospective capture path already exists')
+    const manifestBytes = Buffer.from(JSON.stringify(artifact)), ownerBytes = Buffer.from(JSON.stringify([...creator]))
+    const tracked = await this.ledger.tracked(this.path('owners', id))
+    if (!tracked && await exists(this.path('owners', id))) {
+      await ownedPath(this.directory, this.path('owners', id))
+      if ((await readLedger(this.path('owners', id), this.retireLegacyFile)).owners.size) throw Error('Prospective capture has foreign owners')
+    }
+    const ownerGrowth = tracked ? (await this.ledger.describeFunding(this.path('owners', id), creator, `capture:${id}`, () => { this.assertTurn(turn); this.assertLease(lease, 'exclusive') })).additionalBytes : ownerBytes.length
+    const peakGrowth = bytes.length + manifestBytes.length + ownerGrowth
+    if (!Number.isSafeInteger(peakGrowth) || peakGrowth < 0) throw Error('Unsafe prospective canonical allocation')
+    return { peakGrowth, manifestBytes, ownerBytes }
+  }
+  async put(turn: WorkspaceMutationTurn, lease: LegacyUseLease, artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    const id = artifact.ref.id, existing = this.get(id)
     if (existing) {
       const facts = (ref: ContextResultRef) => JSON.stringify([ref.label, ref.originalBytes, ref.complete,
         ref.source ? [ref.source.sourceId, ref.source.path, ref.source.revision, ref.source.readonly] : null])
       if (facts(existing) !== facts(artifact.ref)) throw new Error('Conflicting immutable context capture metadata')
-      if (!this.owns(id, artifact.ref.sessionId)) await this.addOwners(turn, [id], artifact.ref.sessionId, maxDiskBytes, signal)
+      if (!this.owns(id, artifact.ref.sessionId)) await this.addOwners(turn, lease, [id], artifact.ref.sessionId, maxDiskBytes, signal)
       return existing
     }
     checkAbort(signal)
-    let published = false
+    const allocation = await this.captureAllocation(turn, lease, artifact, bytes)
+    const admission = await this.index.admitCapture(turn, lease, maxDiskBytes, allocation.peakGrowth)
+    let replacement: PendingCaptureIndex | undefined
+    let use: IndexUse | undefined
+    if (admission === 'fresh') replacement = await this.index.beginCaptureReplacement(turn, lease, maxDiskBytes, allocation.peakGrowth, sink => this.feedIndex(sink), { ref: artifact.ref, bytes })
+    else use = this.index.use(lease)
+    let bodyConfirmed = false
     this.pending.add(id)
     try {
+      checkAbort(signal)
       await writeFile(this.path('blobs', id), bytes, { flag: 'wx', signal })
+      bodyConfirmed = true
       const ownerPath = this.path('owners', id)
       if (await this.ledger.tracked(ownerPath)) {
-        const creator = new Set([artifact.ref.sessionId]), guard = () => { this.assertTurn(turn); checkAbort(signal) }
+        const creator = new Set([artifact.ref.sessionId]), guard = () => { this.assertTurn(turn); this.assertLease(lease, 'exclusive'); checkAbort(signal) }
         await this.ledger.recover(ownerPath)
         await this.ledger.fund(ownerPath, creator, maxDiskBytes, guard, `capture:${id}`)
         await this.ledger.replace(ownerPath, creator, `capture:${id}`, guard)
-      } else await atomicJson(ownerPath, [artifact.ref.sessionId])
+      } else await atomicJson(ownerPath, allocation.ownerBytes)
       checkAbort(signal)
-      await atomicJson(this.path('artifacts', id), artifact)
-      published = true
-      this.index(turn, artifact, new Set([artifact.ref.sessionId]), bytes)
-      if (await this.diskBytes() > maxDiskBytes || signal.aborted) {
-        await this.remove(turn, id)
-        checkAbort(signal)
-        return undefined
-      }
+      await atomicJson(this.path('artifacts', id), allocation.manifestBytes)
+      if (replacement) replacement.commit()
+      else await this.index.mutate(turn, lease, use!, maxDiskBytes, sql => {
+        sql.run('INSERT INTO refs VALUES (?,?,?)', [id, artifact.ref.expiresAt, artifact.ref.complete ? 1 : 0])
+        for (const chunk of lexicalChunks(bytes)) {
+          const row = sql.run('INSERT INTO chunks_fts(ref_id,offset,text) VALUES (?,?,?)', [id, chunk.offset, chunk.text.toLowerCase()])
+          sql.run('INSERT INTO chunk_rows VALUES (?,?)', [row.lastInsertRowid, id])
+        }
+      })
+      const actual = await readLedger(ownerPath, this.retireLegacyFile)
+      if (actual.owners.size !== 1 || !actual.owners.has(artifact.ref.sessionId)) throw Error('Original capture owner not confirmed')
+      const physical = await this.diskBytes()
+      if (physical > maxDiskBytes) throw Error('Context disk quota exceeded')
+      checkAbort(signal)
+      replacement?.publish()
+      this.artifacts.set(id, artifact); this.owners.set(id, actual.owners)
       return structuredClone(artifact.ref)
-    } catch (error) {
-      if (published && this.artifacts.has(id)) await this.remove(turn, id)
-      else await this.removeFiles(turn, id)
-      throw error
+    } catch (failure) {
+      const failures = [failure]
+      this.owners.delete(id); this.index.invalidate(failure)
+      try { if (replacement) await replacement.discard(failure) } catch (cleanup) { failures.push(cleanup) }
+      if (bodyConfirmed || (failure as NodeJS.ErrnoException)?.code !== 'EEXIST') {
+        try { await this.remove(turn, id) } catch (cleanup) { failures.push(cleanup) }
+      }
+      if (!replacement) try { await this.index.retire(turn, lease) } catch (cleanup) { failures.push(cleanup) }
+      failuresTogether(failures, 'Original capture and cleanup failed'); throw failure
     } finally { this.pending.delete(id) }
   }
-  async addOwners(turn: WorkspaceMutationTurn, ids: string[], target: string, maxDiskBytes: number, signal: AbortSignal): Promise<void> {
-    this.assertTurn(turn)
+  async addOwners(turn: WorkspaceMutationTurn, lease: LegacyUseLease, ids: string[], target: string, maxDiskBytes: number, signal: AbortSignal): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
     const tracked: string[] = [], ordinary: string[] = []
     for (const id of ids) (await this.ledger.tracked(this.path('owners', id)) ? tracked : ordinary).push(id)
     for (const id of tracked) {
@@ -466,17 +448,20 @@ export class ContextStore {
       const path = this.path('owners', id)
       await this.ledger.recover(path)
       await this.fundLegacyOwner(turn, id, target, maxDiskBytes, guard)
-      await this.mergeLegacyOwner(turn, id, target, `ordinary:${target}`, guard)
+      await this.mergeLegacyOwner(turn, lease, id, target, `ordinary:${target}`, guard)
     }
     ids = ordinary; if (!ids.length) return
-    // Validate quota before granting. The JSON ledger is durable authority;
-    // SQLite's owner rows are a derived acceleration and can be regenerated.
+    // The original ledger is the only durable membership representation.
     const extra = ids.reduce((sum, id) => sum + (this.owns(id, target) ? 0 : Buffer.byteLength(JSON.stringify(target)) + 1), 0)
     if (await this.diskBytes() + extra * 3 + 8192 > maxDiskBytes) throw new Error('Context disk quota exceeded')
     checkAbort(signal)
-    const previous = new Map(ids.map((id) => [id, new Set(this.owners.get(id))]))
+    const previous = new Map<string, Set<string>>()
+    for (const id of ids) {
+      const actual = (await readLedger(this.path('owners', id), this.retireLegacyFile)).owners
+      if (!actual.size) throw Error('Empty owner ledger is authoritative')
+      previous.set(id, actual)
+    }
     const changed: string[] = []
-    let indexed = false
     try {
       for (const id of ids) {
         checkAbort(signal)
@@ -486,94 +471,88 @@ export class ContextStore {
         await atomicJson(this.path('owners', id), [...owners])
         checkAbort(signal)
       }
-      this.db.exec('BEGIN IMMEDIATE')
-      try {
-        const insert = this.db.prepare('INSERT OR IGNORE INTO owners VALUES (?,?)')
-        for (const id of ids) insert.run(id, target)
-        this.db.exec('COMMIT')
-        indexed = true
-      } catch (failure) { this.db.exec('ROLLBACK'); throw failure }
       if (await this.diskBytes() > maxDiskBytes) throw new Error('Context disk quota exceeded')
       checkAbort(signal)
       // Admission/authority changes only after all owned I/O finishes. No await
       // follows publication; a cancelled batch restores every durable ledger.
       for (const id of ids) this.owners.set(id, new Set([...previous.get(id)!, target]))
     } catch (failure) {
-      for (const id of changed) await atomicJson(this.path('owners', id), [...previous.get(id)!])
-      if (indexed) {
-        this.db.exec('BEGIN IMMEDIATE')
-        try {
-          const remove = this.db.prepare('DELETE FROM owners WHERE ref_id=?')
-          const insert = this.db.prepare('INSERT INTO owners VALUES (?,?)')
-          for (const id of ids) {
-            remove.run(id)
-            for (const owner of previous.get(id)!) insert.run(id, owner)
-          }
-          this.db.exec('COMMIT')
-        } catch (restoreFailure) { this.db.exec('ROLLBACK'); throw restoreFailure }
+      const failures = [failure]
+      for (const id of changed) {
+        try { await atomicJson(this.path('owners', id), [...previous.get(id)!]) }
+        catch (restoration) { this.owners.delete(id); failures.push(restoration) }
       }
+      failuresTogether(failures, 'Original owner grant and restoration failed')
       throw failure
     }
   }
-  async clear(turn: WorkspaceMutationTurn, sessionId?: string): Promise<void> {
-    this.assertTurn(turn)
-    await this.revokeLegacyTargets(turn, sessionId)
-    await this.sweepExpired(turn)
-    for (const id of this.artifacts.keys()) {
-      if (sessionId === undefined) await this.remove(turn, id)
-      else {
-        const path = this.path('owners', id), tracked = await this.ledger.tracked(path)
-        if (tracked) await this.ledger.recover(path)
-        const owners = tracked ? (await readLedger(path, this.retireLegacyFile)).owners : new Set(this.owners.get(id))
-        if (!owners.has(sessionId)) { if (tracked) this.owners.set(id, owners); continue }
-        owners.delete(sessionId)
-        if (owners.size === 0) await this.remove(turn, id)
+  private async cleanupIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease, work: () => Promise<void>): Promise<void> {
+    const failures: unknown[] = []
+    try { await work() } catch (failure) { failures.push(failure) }
+    try { await this.retireInvalidIndex(turn, lease) } catch (failure) { failures.push(failure) }
+    failuresTogether(failures, 'Original cleanup and derived retirement failed')
+  }
+  async clear(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, sessionId?: string): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    await this.joinLegacyFiles()
+    await this.cleanupIndex(turn, lease, async () => {
+      await this.revokeLegacyTargets(turn, sessionId)
+      await this.sweepExpired(turn)
+      for (const id of this.artifacts.keys()) {
+        if (sessionId === undefined) await this.remove(turn, id)
         else {
-          if (tracked) await this.ledger.replace(path, owners, `clear:${sessionId}`, () => this.assertTurn(turn))
-          else await atomicJson(path, [...owners])
-          this.owners.set(id, owners)
-          this.db.exec('BEGIN IMMEDIATE')
-          try {
-            this.db.prepare('DELETE FROM owners WHERE ref_id=?').run(id)
-            for (const current of owners) this.db.prepare('INSERT INTO owners VALUES (?,?)').run(id, current)
-            this.db.exec('COMMIT')
-          } catch (failure) { this.db.exec('ROLLBACK'); throw failure }
+          const path = this.path('owners', id), tracked = await this.ledger.tracked(path)
+          if (tracked) await this.ledger.recover(path)
+          const owners = (await readLedger(path, this.retireLegacyFile)).owners
+          if (!owners.size) { await this.remove(turn, id); continue }
+          if (!owners.has(sessionId)) { this.owners.set(id, owners); continue }
+          owners.delete(sessionId)
+          if (!owners.size) await this.remove(turn, id)
+          else {
+            this.owners.delete(id)
+            if (tracked) await this.ledger.replace(path, owners, `clear:${sessionId}`, () => this.assertTurn(turn))
+            else await atomicJson(path, [...owners])
+            const confirmed = (await readLedger(path, this.retireLegacyFile)).owners
+            if (!same([...confirmed], [...owners])) throw Error('Original survivor membership not confirmed')
+            this.owners.set(id, confirmed)
+          }
         }
       }
-    }
-    this.db.exec('VACUUM')
+    })
+    await this.ensureIndex(turn, lease, quota)
   }
-  async prune(turn: WorkspaceMutationTurn): Promise<void> {
-    this.assertTurn(turn)
-    await this.sweepExpired(turn)
+  async prune(turn: WorkspaceMutationTurn, lease: LegacyUseLease): Promise<void> {
+    this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    await this.joinLegacyFiles()
+    await this.cleanupIndex(turn, lease, () => this.sweepExpired(turn))
   }
   private async removeFiles(turn: WorkspaceMutationTurn, id: string): Promise<void> {
     this.assertTurn(turn)
-    for (const kind of ['artifacts', 'blobs'] as const) await rm(this.path(kind, id), { force: true })
-    // Tracked ledgers retain their authoritative empty tombstone and reserve.
-    if (!await this.ledger.tracked(this.path('owners', id))) await rm(this.path('owners', id), { force: true })
+    const ownerPath = this.path('owners', id)
+    if (await exists(ownerPath) && (await readLedger(ownerPath, this.retireLegacyFile)).owners.size) throw Error('Original tombstone not confirmed')
+    for (const kind of ['blobs', 'artifacts'] as const) await rm(this.path(kind, id), { force: true })
+    if (!await this.ledger.tracked(ownerPath)) await rm(ownerPath, { force: true })
   }
   private async remove(turn: WorkspaceMutationTurn, id: string): Promise<void> {
     this.assertTurn(turn)
-    // Empty ledger is a tombstone: restart can never resurrect revoked owners.
+    this.owners.delete(id)
+    this.index.invalidate(Error('Canonical context removal'))
     const path = this.path('owners', id)
     if (await this.ledger.tracked(path)) { await this.ledger.recover(path); await this.ledger.replace(path, new Set(), 'remove', () => this.assertTurn(turn)) }
     else await atomicJson(path, [])
-    this.db.prepare('DELETE FROM chunks_fts WHERE rowid IN (SELECT rowid FROM chunk_rows WHERE ref_id=?)').run(id)
-    this.db.prepare('DELETE FROM refs WHERE id=?').run(id)
-    this.artifacts.delete(id)
-    this.owners.delete(id)
+    if ((await readLedger(path, this.retireLegacyFile)).owners.size) throw Error('Original tombstone not confirmed')
     await this.removeFiles(turn, id)
-    this.db.exec('VACUUM')
+    this.artifacts.delete(id)
   }
-  close(): Promise<void> {
+  close(lease: LegacyUseLease): Promise<void> {
+    this.assertLease(lease, 'exclusive')
     this.retiring = true
     if (!this.closeFlight) this.closeFlight = (async () => {
       await this.acquiring?.catch(() => {})
       await this.joinLegacyFiles()
-      if ((this.db || this.lifetime) && !this.quotaDisposed) {
+      if ((this.lifetime) && !this.quotaDisposed) {
         if (!this.owner) throw new Error('Legacy store ownership unavailable')
-        await this.owner.cleanup(async () => { if (this.db && !this.dbClosed) { this.db.close(); this.dbClosed = true } })
+        await this.owner.cleanup(async turn => { if (this.originalsLoaded) await this.index.closeRetaining(turn, lease) })
         this.quotaDisposed = true
       }
       // cleanup resolves only after the quota turn has confirmed retirement.
