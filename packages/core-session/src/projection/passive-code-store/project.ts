@@ -3,6 +3,7 @@ import { types } from 'node:util'
 import { validateSemanticSourceMetadata } from '../../events/conversation-source.ts'
 import { meldRewindCut, type RewindCut } from '../rewind.ts'
 import type { CandidateRow, DeferredValueSlot, OwnedPassiveCandidates, PassiveCodeStoreV1 } from './types.ts'
+import { normalizeInheritedCodeStore } from './inherited.ts'
 
 /** Private wire→candidate transport; strings and touches remain verbatim. This
  * helper confers no held-source admission and never manufactures source facts. */
@@ -97,27 +98,7 @@ export function projectPassiveCodeStore(context: CompletedPassiveContext): Owned
   const data = manifest.passive.codeStore, expanded = expandInheritedCodeStore(data)
   const selectedBase = inherited.kind === 'completed' ? data.completed.find(entry => entry.turn === inherited.turn)?.cut : data.latest
   if (selectedBase === undefined) throw new TypeError('Invalid semantic seed')
-  let effectiveBase = selectedBase, emptyBase = false
-  const translated: RewindCut[] = [], seedLength = context.source.view.header?.seedLength ?? 0
-  const inheritedAt = (rank: number) => {
-    const event = context.source.view.events[rank]
-    if (event?.type === 'conversation/seed-group') {
-      const cut = data.groups[event.ordinal]
-      if (cut === undefined) throw new TypeError('Invalid semantic seed')
-      return cut
-    }
-    if (rank === 0) return undefined // An actual rewind before the manifest erases the entire imported state.
-    return data.latest
-  }
-  for (const window of context.source.originalWindows) {
-    let start: number
-    if (window.startRank < seedLength) {
-      const cut = inheritedAt(window.startRank)
-      if (cut === undefined) { emptyBase = true; start = 0 }
-      else { effectiveBase = Math.min(effectiveBase, cut); start = data.cuts[cut]!.end }
-    } else start = data.rows.length + window.startRank
-    meldRewindCut(translated, start, data.rows.length + window.endRank)
-  }
+  const { effectiveBase, emptyBase, translated } = normalizeInheritedCodeStore(context.source.view, data, selectedBase, context.source.originalWindows)
   const visible = (position: number) => !translated.some(window => position >= window.cutFrom && position < window.markerSeq)
   const rows: CandidateRow[] = [], prefix = [0]
   const baseEnd = emptyBase ? 0 : data.cuts[selectedBase]!.end

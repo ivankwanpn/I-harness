@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { semanticSeedFromRecords } from '@i-harness/core-session/internal/bootstrap'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { types as utilTypes } from 'node:util'
 import { SessionLockConflictError } from '@i-harness/fs-lock'
@@ -72,8 +73,7 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   const first=state.events![0]
   if(stage.seed.seedLength&&first?.type==='conversation/seed-manifest') {
     if(stage.seed.sourceObservation.kind!=='semantic')throw new Error('Bootstrap source binding conflict')
-    const seed={version:1 as const,origins:first.origins,selection:first.selection,turns:first.turns,omissions:first.omissions,artifacts:first.artifacts,
-      groups:state.events!.slice(1,stage.seed.seedLength).map(e=>{if(e.type!=='conversation/seed-group')throw new Error('Bootstrap group conflict');return e.group})}
+    const seed=semanticSeedFromRecords(meta.semanticSeed!,state.events!.slice(0,stage.seed.seedLength))
     const compiled=compileSemanticSeed({kind:'seed',seed,digest:stage.seed.digest,sourceObservationDigest:stage.seed.sourceObservation.digest})
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')

@@ -7,7 +7,7 @@ import { seedHash, seedPreimage, semanticSourceDomain } from './seed-digest.ts'
 import type { SemanticSeed, SeedItem, SeedOriginAddress, TurnExtent } from './seed-types.ts'
 import { validateSeedNative } from './seed-native.ts'
 import { validatePassiveCodeStore } from '../projection/passive-code-store/validate.ts'
-import { validateSeedHeader } from './bootstrap-validation.ts'
+import { validateSeedHeader, validateSeedSourceEventShape } from './bootstrap-validation.ts'
 
 /** Reconstruct the actual original manifest version once; callers choose full,
  * prefix or structural validation without re-creating a hardcoded V1 body. */
@@ -16,7 +16,21 @@ export function semanticSeedFromRecords(header: import('../events/bootstrap.ts')
   const manifest = records[0]
   if (!header.seedLength || manifest?.type !== 'conversation/seed-manifest' || manifest.version !== header.version || manifest.codec !== header.codec
     || manifest.digest !== header.seedDigest || manifest.groupCount !== header.groupCount) seedInvalid()
-  const groups = records.slice(1, header.seedLength).map(record => { if (record.type !== 'conversation/seed-group') seedInvalid(); return record.group })
+  return semanticSeedBodyFromRecords(records.slice(0, header.seedLength))
+}
+/** Internal original-capture owner: the birth header does not exist until the
+ * request is validated. Reconstruct its actual manifest, never a partial header.
+ * This also serves growing prefixes without traversing conversation bodies. */
+export function semanticSeedBodyFromRecords(records: readonly import('../managed/types.ts').SessionEventView[]): SemanticSeed {
+  const manifest = records[0]
+  if (manifest?.type !== 'conversation/seed-manifest') seedInvalid()
+  validateSeedSourceEventShape(manifest, 13)
+  if (records.length > manifest.groupCount + 1) seedInvalid()
+  const groups = records.slice(1).map((record, ordinal) => {
+    validateSeedSourceEventShape(record, 13)
+    if (record.type !== 'conversation/seed-group' || record.seq !== ordinal + 1 || record.ordinal !== ordinal || record.manifestSeq !== 0) seedInvalid()
+    return record.group
+  })
   const common = { origins: manifest.origins, turns: manifest.turns, omissions: manifest.omissions, artifacts: manifest.artifacts, groups }
   // This wrapper reuses readonly source records; it must not clone discarded
   // conversation bodies merely to reconstruct a validation input.

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
-import { CURRENT_FORMAT_VERSION, canonicalJsonData, isStrictFactData, freezeJsonData, legacyPrefixDigest, validateSubagentHeader, validateConversationEventShape, validateSemanticSeed, type BootstrapInvocation, type SessionEvent, type SeedHeaderV1 } from '@i-harness/core-session'
-import { bootstrapInitialInputDigest } from '@i-harness/core-session/internal/bootstrap'
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, isStrictFactData, freezeJsonData, legacyPrefixDigest, validateSubagentHeader, validateConversationEventShape, validateSemanticSeed, type BootstrapInvocation, type SessionEvent, type SeedHeader } from '@i-harness/core-session'
+import { bootstrapInitialInputDigest, semanticSeedBodyFromRecords } from '@i-harness/core-session/internal/bootstrap'
 import { PROVIDER_PROTOCOLS } from '@i-harness/settings'
 import { bootstrapHash, compileSemanticSeed } from '../semantic-seed.ts'
 import type { BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapRequest } from './bootstrap-types.ts'
@@ -55,8 +55,7 @@ export function captureBootstrapRequest(value: BootstrapRequest): BootstrapReque
   else {
     const [m,...groups]=seed.records
     if (m?.type !== 'conversation/seed-manifest' || groups.some((g,i) => g.type !== 'conversation/seed-group' || g.seq !== i+1 || g.ordinal !== i || g.manifestSeq !== 0)) bad()
-    const sm=m as import('@i-harness/core-session').SeedManifestRecord
-    const semantic=validateSemanticSeed({version:1,origins:sm.origins,selection:sm.selection,turns:sm.turns,omissions:sm.omissions,artifacts:sm.artifacts,groups:groups.map(g => (g as import('@i-harness/core-session').SeedGroupRecord).group)})
+    const semantic=validateSemanticSeed(semanticSeedBodyFromRecords(seed.records))
     if (seed.sourceObservation.kind !== 'semantic') bad()
     compiled=compileSemanticSeed({kind:'seed',seed:semantic,digest:seed.digest,sourceObservationDigest:(seed.sourceObservation as {kind:"semantic";digest:string}).digest})
   }
@@ -100,7 +99,8 @@ export function buildBootstrapHeader(request: BootstrapRequest, original?: Boots
   if (capturedReservation) { core.captureReservation = capturedReservation; validateCaptureStage(capturedReservation, core as BootstrapHeaderStage, r.seed.records) }
   const manifestDigest=bootstrapManifest(core,r.seed.records)
   if(r.target.kind==='resume'&&r.target.manifestDigest!==manifestDigest)bad()
-  const semanticSeed:SeedHeaderV1={version:1,codec:'semantic-seed-v1',operationId:r.invocation.operationId,requestDigest:r.invocation.requestDigest,manifestDigest,seedDigest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,seedLength:core.seed.seedLength,groupCount:core.seed.groupCount,
+  const discriminator = r.seed.records[0]?.version === 2 ? {version:2 as const,codec:'semantic-seed-v2' as const} : {version:1 as const,codec:'semantic-seed-v1' as const}
+  const semanticSeed:SeedHeader={...discriminator,operationId:r.invocation.operationId,requestDigest:r.invocation.requestDigest,manifestDigest,seedDigest:r.seed.digest,dependencyDigest:r.seed.dependencyDigest,seedLength:core.seed.seedLength,groupCount:core.seed.groupCount,
     ...(core.initial ? {initialInputId:core.initial.inputId,initialInputDigest:core.initial.digest,initialStartedAt:core.initial.startedAt,initialExpiresAt:core.initial.expiresAt}: {})}
   validateSubagentHeader({semanticSeed,...r.lineage})
   const headerBytes=canonicalJsonData({...headerBase,semanticSeed})+'\n'
