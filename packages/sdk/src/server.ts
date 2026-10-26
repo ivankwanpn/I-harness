@@ -41,8 +41,8 @@ import { readForkPrepareRequest, readForkPrepareResult, readForkCommand, readFor
 //                            registry; an unknown id keeps the not-found
 //                            semantics (-32602 "unknown job/task")
 //   session/cancel {sessionId}   [M41b v1.1]
-//                          → { cancelled, reason? } — aborts the in-flight
-//                            submit's per-session AbortController
+//                          → { cancelled, reason? } — requests cancellation,
+//                            then joins the original delivery Stop receipt
 //   session/history {sessionId, afterSeq?, limit?}  [M41a v1]
 //                          → { events, nextSeq }; unknown session → -32602
 //                            with an explicit "session not found" message
@@ -215,15 +215,15 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const preparingSessions = new Map<string, Promise<boolean>>()
   const preparingHistorySessions = new Map<string, Promise<Session | undefined>>()
   const inflight = new Map<string, Set<Inflight>>()
-  const forkFlights = new Set<Promise<RpcMessage>>(), forkContext = new AsyncLocalStorage<{ active: boolean }>(), forkAbort = new AbortController()
+  const requestFlights = new Set<Promise<RpcMessage>>(), requestContext = new AsyncLocalStorage<{ active: boolean }>(), forkAbort = new AbortController()
   let closing: Promise<void> | undefined
   let executionDetached = false, assemblyDetached = false
   let closed = false
   const forkAvailable = () => typeof opts.prepareForkSession === 'function' && typeof opts.executeForkSession === 'function'
-  function forkFlight(use: () => Promise<RpcMessage>): Promise<RpcMessage> {
+  function requestFlight(use: () => Promise<RpcMessage>): Promise<RpcMessage> {
     const scope = { active: true }
-    const promise = Promise.resolve().then(() => forkContext.run(scope, use)).finally(() => { scope.active = false })
-    forkFlights.add(promise); promise.then(() => forkFlights.delete(promise), () => forkFlights.delete(promise)); return promise
+    const promise = Promise.resolve().then(() => requestContext.run(scope, use)).finally(() => { scope.active = false })
+    requestFlights.add(promise); promise.then(() => requestFlights.delete(promise), () => requestFlights.delete(promise)); return promise
   }
   function forkFailure(id: number | string, operation: ForkOperation, cause: unknown): RpcMessage {
     const data = { version: 1 as const, kind: 'session-fork-error' as const, operation, capture: 'unknown' as const, reason: 'internal' as const }
@@ -493,7 +493,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         let request: ForkPrepareRequest
         try { request = readForkPrepareRequest(params) }
         catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork preparation request') }
-        return forkFlight(async () => {
+        return requestFlight(async () => {
           try { return makeSuccess(id, readForkPrepareResult(await opts.prepareForkSession!(request))) }
           catch { return makeFailure(id, INTERNAL_ERROR, 'Session fork preparation unavailable') }
         })
@@ -507,7 +507,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           command = readForkCommand({ operation: (params as { operation: unknown }).operation, mode: method === 'session/fork/begin' ? 'begin' : 'retry' })
           captureBootstrapCaptureRequest({ invocation: command.operation.invocation, core: command.operation.prepared.core, requestIntent: command.operation.prepared.requestIntent })
         } catch { return makeFailure(id, INVALID_PARAMS, 'Invalid fork operation') }
-        return forkFlight(async () => {
+        return requestFlight(async () => {
           try {
             const control: ForkExecutionControl = { ...forkControl, signal: AbortSignal.any([forkAbort.signal, ...(forkControl?.signal ? [forkControl.signal] : [])]) }
             const result = readForkOutcome(await opts.executeForkSession!(command, control), command.operation)
@@ -635,21 +635,30 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/cancel requires a non-empty sessionId")
         }
-        if (service.cancelRunning !== undefined) {
-          const result = service.cancelRunning(p.sessionId)
-          if (result.cancelled) return makeSuccess(id, result)
-          const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId) || inflight.has(p.sessionId)
-          return makeSuccess(id, { cancelled: false, reason: known ? "not-running" : "not-found" })
-        }
-        const inFlight = inflight.get(p.sessionId)?.values().next().value
-        if (inFlight !== undefined) {
-          inFlight.controller.abort()
-          return makeSuccess(id, { cancelled: true })
-        }
-        const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId)
-        return known
-          ? makeSuccess(id, { cancelled: false, reason: "not-running" })
-          : makeSuccess(id, { cancelled: false, reason: "not-found" })
+        const sessionId = p.sessionId
+        return requestFlight(async () => {
+          try {
+            if (service.cancelRunning !== undefined) {
+              // Abort and install the original fence before any settlement wait.
+              const result = service.cancelRunning(sessionId)
+              const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId) || inflight.has(sessionId)
+              const response = result.cancelled ? result : { cancelled: false, reason: known ? "not-running" : "not-found" }
+              if (typeof service.awaitDeliveryStop !== 'function') throw new Error('Cancellation settlement unavailable')
+              await service.awaitDeliveryStop(sessionId)
+              return makeSuccess(id, response)
+            }
+            // Explicit legacy compatibility: FIFO abort has no delivery owner.
+            const inFlight = inflight.get(sessionId)?.values().next().value
+            if (inFlight !== undefined) {
+              inFlight.controller.abort()
+              return makeSuccess(id, { cancelled: true })
+            }
+            const known = service.liveSession(sessionId) !== undefined || knownSessions.has(sessionId)
+            return known
+              ? makeSuccess(id, { cancelled: false, reason: "not-running" })
+              : makeSuccess(id, { cancelled: false, reason: "not-found" })
+          } catch (error) { return hostMethodFailure(id, 'session/cancel', error) }
+        })
       }
       case "session/history": {
         // M41a v1: event-log walk over the in-process assembly. A cold durable
@@ -928,7 +937,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       return () => { notifiers.delete(cb) }
     },
     close() {
-      if (forkContext.getStore()?.active) return Promise.reject(new Error('SDK fork callback cannot close its own request'))
+      if (requestContext.getStore()?.active) return Promise.reject(new Error('SDK request callback cannot close its own request'))
       if (closing) return closing
       closed = true
       forkAbort.abort()
@@ -938,7 +947,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (!executionDetached) {
           try { offExecutionState?.(); executionDetached = true } catch (cause) { errors.push(cause) }
         }
-        await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values(), ...forkFlights])
+        await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values(), ...requestFlights])
         if (!assemblyDetached) { try { offAssembly(); assemblyDetached = true } catch (cause) { errors.push(cause) } }
         for (const [sessionId, unsub] of assemblyUnsubscribes) {
           try { unsub(); if (assemblyUnsubscribes.get(sessionId) === unsub) assemblyUnsubscribes.delete(sessionId) } catch (cause) { errors.push(cause) }
