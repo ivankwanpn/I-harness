@@ -7,14 +7,14 @@
 // file, so the durable rewind fixture is written by THIS test via
 // @i-harness/rewind's RewindStore — the same store root the CLI wires).
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { execFileSync } from "node:child_process"
+import { execFileSync, spawn } from "node:child_process"
 import { createServer } from "node:http"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
-import { createHarnessClient } from "@i-harness/sdk"
-import { fromJSONL } from '@i-harness/core-session'
+import { createHarnessClient, HarnessClient } from "@i-harness/sdk"
+import { fromJSONL, deriveMessages, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { RewindStore, sha256Hex } from "@i-harness/rewind"
 import type { CancelResult, RewindPointsResponse, RewindPlanResponse, RewindExecuteResponse, SessionModelSelection } from "@i-harness/sdk"
 
@@ -132,7 +132,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       try {
         const info = await client.initialize()
         expect(info.capabilities["session-create"]).toEqual(["1"])
-        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        expect(info.capabilities['session-fork-bootstrap']).toEqual(['1'])
         expect(info.capabilities["session-model"]).toEqual(["1"])
         await expect(client.modelState("s1")).resolves.toEqual({
           status: "ready",
@@ -167,6 +167,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         await expect(client.run({ sessionId: "s1", prompt: "fork source" })).resolves.toMatchObject({
           text: expect.stringContaining("fixture ok"),
         })
+        const sourceBeforeFork=fromJSONL(readFileSync(join(sessionDir,'s1.jsonl'),'utf8'))
         const forked = await client.forkSession("s1")
         expect(forked.sessionId).not.toBe("s1")
         const forkHeader = JSON.parse(
@@ -174,8 +175,10 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         ) as { workspaceId?: string }
         expect(forkHeader.workspaceId).toBe("ws-source")
         const forkHistory = await client.history(forked.sessionId)
-        expect(forkHistory.events.some((event) => event.type === "user/message" && event.text === "fork source")).toBe(true)
-        expect(forkHistory.events.at(-1)?.type).toBe("turn/end")
+        const targetSession=fromJSONL(readFileSync(join(sessionDir,`${forked.sessionId}.jsonl`),'utf8'))
+        expect(deriveMessages(targetSession).map(message=>message.content)).toEqual(deriveMessages(sourceBeforeFork).map(message=>message.content))
+        expect(forkHistory.events[0]?.type).toBe('conversation/seed-manifest')
+        expect(forkHistory.events.at(-1)).toMatchObject({type:'session/bootstrap',seedLength:forked.seedLength,operationId:forked.operation.invocation.operationId})
 
         const created = await client.createSession()
         expect(created.sessionId).not.toBe("")
@@ -358,12 +361,9 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         files: [{ path: "a.txt", status: "added", isNewFile: true, afterHash: sha256Hex(new TextEncoder().encode("hello")) }],
       })
 
-      const client = createHarnessClient({
-        command: process.execPath,
-        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
-        cwd: workspace,
-        env: { IH_CONFIG_DIR: canonicalConfigDir },
-      })
+      const child=spawn(process.execPath,['--import',TSX_LOADER,CLI_ENTRY,'sdk','--session-dir',sessionDir],{cwd:workspace,env:{...process.env,IH_CONFIG_DIR:canonicalConfigDir},windowsHide:true,stdio:'pipe'})
+      let stderr='';child.stderr.on('data',chunk=>{stderr+=String(chunk)})
+      const client=new HarnessClient(child.stdout,child.stdin,{child})
       try {
         // handshake: v1.1 capability rows (protocolVersion is 3 since M68
         // batch B — the v1.1 rows themselves are unchanged)
@@ -375,7 +375,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         expect(info.capabilities["session-cancel"]).toEqual(["1"])
         expect(info.capabilities["session-rewind"]).toEqual(["1"])
         expect(info.capabilities["session-create"]).toEqual(["1"])
-        expect(info.capabilities["session-fork"]).toEqual(["1"])
+        expect(info.capabilities['session-fork-bootstrap']).toEqual(['1'])
         expect(info.capabilities["session-model"]).toEqual(["1"])
 
         // one turn → the live assembly (the rewind factory resolves it)
@@ -392,9 +392,10 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         const list = await client.listSessions()
         expect(list.listingUnavailable).toBeUndefined()
         const row = list.sessions.find((s) => s.id === "sdk-w11")
+        console.info(JSON.stringify({control:'actual original SDK list read',row,stderr}))
         expect(row).toBeDefined()
         expect(row!.updatedAt).toBeTypeOf("number")
-        expect(row!.turnCount).toBeTypeOf("number")
+        expect(row!.turnCount,stderr).toBeTypeOf("number")
         expect(row!.turnCount).toBeGreaterThanOrEqual(1)
 
         // rewind round trip via the wire — the factory serves the durable
@@ -538,7 +539,7 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       }
 
       const firstBytes = readFileSync(sessionPath, 'utf8')
-      expect(JSON.parse(firstBytes.split('\n')[0]!).formatVersion).toBe(10)
+      expect(JSON.parse(firstBytes.split('\n')[0]!).formatVersion).toBe(CURRENT_FORMAT_VERSION)
       const rawAfterFirst = fromJSONL(firstBytes).events
       expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
       // M71 T2 — DELIBERATE CONTRACT CHANGE (was TOOL_ABORTED_BEFORE_DISPATCH):

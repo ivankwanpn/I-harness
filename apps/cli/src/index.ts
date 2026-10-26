@@ -12,11 +12,11 @@ import { createCliDiagnostics } from "./diagnostics-bootstrap.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { createSessionCoordinator, forkSession } from "@i-harness/session-persistence"
+import { createSessionCoordinator, createForkSessionController, ForkAdmissionError } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import type { SessionCoordinator, ForkPrepareRequest, ForkCommand, ForkExecutionControl } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
-import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
+import { createDurableSessionLoader, createSessionService, createCliForkHost } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
 import type { SandboxMode } from "@i-harness/sandbox"
 export { HeadlessCleanupError } from "./run.ts"
@@ -705,6 +705,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
     if (assembly.sessionId !== undefined) liveAssemblies.set(assembly.sessionId, assembly)
   })
   const workspaceRoot = process.cwd()
+  let forkClosing = false
+  const forkController = coordinator?.inspectBootstrapCapture && coordinator.bootstrapSemanticTargetWithCapture
+    && coordinator.withSessionBindingObservation && coordinator.withExistingSessionBindingObservation
+    ? createForkSessionController(coordinator, createCliForkHost({ workspace: workspaceRoot, coordinator, contextOutputSettingsPath: settingsPath,
+      assertAvailable() { if (forkClosing) throw new ForkAdmissionError('unavailable') } })) : undefined
   const rewindFor = (sessionId: string) => {
     const assembly = liveAssemblies.get(sessionId)
     if (assembly === undefined || assembly.rewind === undefined) return undefined
@@ -763,16 +768,15 @@ async function runSdkCommand(args: string[]): Promise<number> {
   const server = createSdkServer(service, {
     ...(service.readResultPage ? { readResultPage: service.readResultPage, supportsResultDependencyMembership: true } : {}),
     coordinator,
+    ...(forkController ? {
+      prepareForkSession: (request: ForkPrepareRequest) => forkController.prepare(request),
+      executeForkSession: (command: ForkCommand, control?: ForkExecutionControl) => forkController.execute(command, control),
+    } : {}),
     ...(coordinator !== undefined
       ? {
           createSession: async () => {
             const { id } = await coordinator.create()
             return { sessionId: id }
-          },
-          forkSession: async (sessionId: string) => {
-            await coordinator.flush(sessionId)
-            const result = await forkSession(coordinator, sessionId)
-            return { sessionId: result.sessionId }
           },
           modelState: async (sessionId: string) => {
             const known = service.hasAssembly(sessionId) || (await coordinator.list()).includes(sessionId)
@@ -860,7 +864,10 @@ async function runSdkCommand(args: string[]): Promise<number> {
     if (teardownPromise) return teardownPromise
     const pending = Promise.resolve().then(async () => {
     rl.close()
-    await server.close()
+    forkClosing = true
+    const forkOwners = await Promise.allSettled([server.close(), ...(forkController ? [forkController.close()] : [])])
+    const forkFailures = forkOwners.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    if (forkFailures.length) throw new AggregateError(forkFailures, 'SDK fork cleanup incomplete')
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
     // W6 T4: LAST, so the closes above still reach the record — a closed
