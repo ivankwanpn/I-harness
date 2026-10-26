@@ -24,6 +24,7 @@ import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
 import { canonicalJsonData } from '@i-harness/core-session'
 import { ForkAdmissionError } from '@i-harness/session-persistence'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -101,6 +102,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 } {
   let initialized = false
   let closed = false
+  let closing: Promise<void> | undefined
+  const forkRequestContext = new AsyncLocalStorage<{ active: boolean }>()
   const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
@@ -123,7 +126,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 
       if (!message.method.startsWith("desktop/")) {
         if (['session/fork/prepare', 'session/fork/begin', 'session/fork/retry'].includes(message.method)) {
-          await base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
+          const request = { active: true }
+          try { await forkRequestContext.run(request, () => base.handleLine(line, { fork: { async withNewWork<T>(sourceSessionId: string, _operationId: string, use: () => Promise<T>): Promise<T> {
             if (closed) throw new ForkAdmissionError('cancelled')
             // Base SDK validates the complete operation before invoking this
             // host-only callback. Identity here restricts concurrent admission.
@@ -139,7 +143,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             forkSources.set(sourceSessionId, owned)
             try { return await owned.flight }
             finally { if (forkSources.get(sourceSessionId) === owned) forkSources.delete(sourceSessionId) }
-          } } })
+          } } })) }
+          finally { request.active = false }
           return
         }
         if (message.method === "session/create" && asRecord(message.params)?.clientToken !== undefined && handlers.draftSession) {
@@ -717,21 +722,31 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
     },
-    async close() {
-      await handlers.projectContentSearch?.close()
-      if (closed) return
+    close() {
+      if (forkRequestContext.getStore()?.active) return Promise.reject(new Error('Gateway fork callback cannot close its own request'))
+      if (closing) return closing
       closed = true
-      await probes?.close()
-      await Promise.allSettled(modelSwitches.values())
-      for (const controller of compacting.values()) controller.abort()
-      for (const sessionId of activePrompts.keys()) {
-        const id = `desktop-internal-${randomUUID()}`
-        internalIds.add(id)
-        try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
-        finally { internalIds.delete(id) }
-      }
-      await Promise.allSettled([...compactJobs])
-      await base.close()
+      const attempt = (async () => {
+        const failures: unknown[] = []
+        // Independent auxiliary cleanup cannot skip the original SDK join.
+        try { await handlers.projectContentSearch?.close() } catch (cause) { failures.push(cause) }
+        try { await probes?.close() } catch (cause) { failures.push(cause) }
+        await Promise.allSettled(modelSwitches.values())
+        for (const controller of compacting.values()) controller.abort()
+        for (const sessionId of activePrompts.keys()) {
+          const id = `desktop-internal-${randomUUID()}`
+          internalIds.add(id)
+          try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
+          catch (cause) { failures.push(cause) }
+          finally { internalIds.delete(id) }
+        }
+        await Promise.allSettled([...compactJobs])
+        try { await base.close() } catch (cause) { failures.push(cause) }
+        if (failures.length) throw new AggregateError(failures, 'Gateway router cleanup incomplete')
+      })()
+      closing = attempt
+      void attempt.catch(() => { if (closing === attempt) closing = undefined })
+      return attempt
     },
   }
 }

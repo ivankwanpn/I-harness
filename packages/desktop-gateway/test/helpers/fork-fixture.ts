@@ -46,13 +46,13 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
     return frame.result
   }
   await call('initialize')
-  return { root, workspace, sessions, coordinator, projects, project, runtime, service, management, host, controller, router, call,
+  return { root, workspace, sessions, coordinator, projects, project, runtime, service, management, host, controller, base, router, call,
     async prepare(sourceSessionId: string, targetSessionId: string, operationId: string) {
       const prepared = await call('session/fork/prepare', { version: 1, sourceSessionId }) as import('@i-harness/session-persistence').ForkPrepareResult
       if (prepared.kind !== 'prepared') throw new Error('Actual Gateway preparation refused: ' + JSON.stringify(prepared))
       return createForkOperation(prepared.prepared, { operationId, targetSessionId, createdAt: new Date().toISOString() })
     },
     async execute(operation: ForkOperation, mode: 'begin' | 'retry' = 'begin') { return readForkOutcome(await call('session/fork/' + mode, { operation }), operation) },
-    async close() { await router.close(); await controller.close(); await service.close(); await runtime.close(); await projects.close(); await coordinator.close() },
+    async close() { await router.close(); await base.close(); await controller.close(); await service.close(); await runtime.close(); await projects.close(); await coordinator.close() },
   }
 }

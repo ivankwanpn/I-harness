@@ -26,6 +26,7 @@ import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsPr
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { createGatewayForkHost } from './fork-session.ts'
+import { assertOutsideForkController } from '../../session-persistence/src/fork-controller.ts'
 import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
@@ -502,6 +503,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   return {
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
+      assertOutsideForkController(coordinator)
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
       shutdownRequested = true
