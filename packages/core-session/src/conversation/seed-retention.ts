@@ -49,8 +49,8 @@ export function createLegacyReadVisibility(view: SessionView): LegacyReadVisibil
         if (extent.kind === 'framed' && (!Number.isSafeInteger(extent.first) || !Number.isSafeInteger(extent.last) || extent.first < 1 || extent.last < extent.first || extent.last > turns.total)) return false
         if (extent.kind !== 'framed' && extent.kind !== 'unframed') return false
         const manifest = view.events[0]
-        if (manifest?.type !== 'conversation/seed-manifest' || manifest.seq !== 0 || !visibility.content(facts[0]!)) return false
-        if (anchor.kind === 'manifest') return anchor.seq === 0 && extent.kind === 'unframed' && manifest.turns.unframedPrefix
+        if (manifest?.type !== 'conversation/seed-manifest' || manifest.seq !== 0) return false
+        if (anchor.kind === 'manifest') return anchor.seq === 0 && extent.kind === 'unframed' && manifest.turns.unframedPrefix && visibility.content(facts[0]!)
         if (anchor.kind !== 'seed-group' || anchor.manifestSeq !== 0 || !Number.isSafeInteger(anchor.ordinal) || anchor.ordinal < 0 || extent.kind !== 'framed') return false
         const index = view.events.findIndex(event => event.type === 'conversation/seed-group' && event.manifestSeq === 0 && event.ordinal === anchor.ordinal)
         const event = view.events[index]

@@ -7,6 +7,8 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { contextSourceIdentity } from '@i-harness/context-output'
 import * as api from '../src/lifecycle/result-observation.ts'
 import { acquireResultReadStore } from '../src/lifecycle/result-store.ts'
+import { projectConversation } from '@i-harness/core-session'
+import { legacyFixture } from '../../context-output/test/legacy-fork-fixture.ts'
 
 it('uses actual held metadata/view, revokes escaped context and rejects an append before returning data', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-ro-'))
@@ -67,4 +69,43 @@ it('actual shared service reads real managed and legacy data under held source w
       } finally { profile.mockRestore(); c.snapshot = originalSnapshot; getDocument.mockRestore() }
     }))
   } finally { await lease.release(); await c.close(); await rm(root, { recursive: true, force: true }) }
+})
+it('reads and searches real READY L1 bytes after manifest-only shadow, including cold retained reads', async () => {
+  const f = await legacyFixture(), scopes = api.createResultObservationScope()
+  try {
+    expect((await f.run()).kind).toBe('ready')
+    const target = await f.coordinator().openManagedDocument('target')
+    expect((await target.compaction.commit([{ type: 'compaction/summary', text: 'manifest metadata marker', shadowedSeqs: [0] }])).kind).toBe('committed')
+    expect(projectConversation(target.view).items.filter(item => item.provenance.kind === 'inherited')).toHaveLength(1)
+    const readCurrent = async (visible: boolean) => {
+      const c = f.coordinator(), document = await c.openManagedDocument('target'), getter = (await f.broker().resultReadScopeFor('target'))!, binding = getter()
+      let escaped!: import('@i-harness/context-output').LegacyReadObservation
+      await c.withExistingSessionBindingObservation!({ sessionIds: ['target'] }, observation => scopes.run({ sessionId: 'target', sessionIds: ['target'], observation, document,
+        currentSource() { const current = getter(); if (current.revision !== binding.revision) throw new Error('Project scope changed'); return { sourceId: contextSourceIdentity('workspace', f.project.primaryRoot, current.scope), readonly: true } }, assertHostCurrent() {} }, async () => {
+        const profile = vi.spyOn(c, 'profile').mockRejectedValue(new Error('profile recursion'))
+        const getDocument = vi.spyOn(c, 'getDocument').mockRejectedValue(new Error('binding recursion'))
+        const originalSnapshot = c.snapshot, snapshot = vi.fn(async () => { throw new Error('snapshot recursion') })
+        c.snapshot = snapshot
+        try {
+          const observed = escaped = api.legacyObservationFor(scopes.current('target')!)
+          expect(observed.bootstrap?.manifestDigest).toBe(document.view.header!.semanticSeed!.manifestDigest)
+          if (visible) expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observed)).text).toBe('VISIBLE retained text')
+          else await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observed)).rejects.toThrow(/unauthorized|unavailable/i)
+          expect((await f.service().searchLegacyObserved({ sessionId: 'target' }, { query: 'VISIBLE' }, observed)).hits.map(hit => hit.ref.id)).toEqual(visible ? [f.visible.id] : [])
+          for (const ref of [f.hidden, f.future]) await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: ref.id }, observed)).rejects.toThrow()
+          expect(profile).not.toHaveBeenCalled(); expect(getDocument).not.toHaveBeenCalled(); expect(snapshot).not.toHaveBeenCalled()
+        } finally { profile.mockRestore(); getDocument.mockRestore(); c.snapshot = originalSnapshot }
+      }))
+      await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, escaped)).rejects.toThrow('expired')
+    }
+    await readCurrent(true)
+    await f.sourceClear(); await f.reopen()
+    const sourceCalls = f.sourceCalls()
+    expect((await f.run(true)).kind).toBe('already-ready')
+    expect(f.sourceCalls()).toBe(sourceCalls)
+    await readCurrent(true)
+    const cold = await f.coordinator().openManagedDocument('target')
+    expect((await cold.compaction.commit([{ type: 'compaction/summary', text: 'group shadowed', shadowedSeqs: [1] }])).kind).toBe('committed')
+    await readCurrent(false)
+  } finally { await f.close() }
 })
