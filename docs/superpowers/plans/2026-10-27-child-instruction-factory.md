@@ -120,7 +120,7 @@ C is explicitly later, outside A/B factory implementation. Before code, auxiliar
 
 Stage A complete means reviewed factory/router original ownership and its focused evidence only. Stage B connected population complete means its named gates plus actual consumer target/request/lifetime evidence. Full ID requires every required population including isolated reviewer, preserved D1/O1/Stop/role/model/tools/deadline and original cleanup debts, root integrated fixed-source verification. No full public F1/Task4/Task5/provider B3/R6/package/release credit is inferred.
 
-This turn writes only these two candidates. No future tests, installs, tool children, Git mutations, source edits, moving-tree reads, profiles or network are run. Root reviews/promotes and reserves implementation owners later.
+The original candidate-writing phase performed no runtime or source edits. Root now reserves only Stage A through its ledger; later consumers remain gated. No installs, moving-tree reads, actual profiles/network or recursive agents belong to the assigned implementation.
 
 ## Root dispatch and verification requirements
 

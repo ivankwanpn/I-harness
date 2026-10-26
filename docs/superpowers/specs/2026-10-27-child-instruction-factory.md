@@ -145,7 +145,7 @@ Because its current prepared-request interface has no SessionRequestContext evid
 | A9 | Held root observation; failed-slot cleanup completion removes slot during host.close snapshot/join; sibling failure | Root observe registered before invocation; finite root+admitted-flight+child joins survive slot removal; no skipped siblings/fallback/parent ack, borrowed root resources untouched, environment waits actual owner barrier. |
 | A10 | Isolated actual auxiliary request | Separate later gate in §7; no parent ack/pool stale rules/no-tools or generation-floor regression. |
 
-No tests/runtime/profiles/network/source edits are authorized by this candidate-writing step. Acceptance requires fixed-source evidence later; Task4/Task5, full ID/public F1/provider B3/R6/package/release are not declared complete.
+Controlled Stage A implementation and verification require the exact plan-ledger reservation. Actual profiles/network/remote publication remain excluded. Acceptance requires fixed-source evidence; Task4/Task5, full ID/public F1/provider B3/R6/package/release are not declared complete.
 
 ## 9. Root execution refinements
 
