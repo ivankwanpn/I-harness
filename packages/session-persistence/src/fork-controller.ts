@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { exportConversationSeed, isStrictFactData, type SessionView } from '@i-harness/core-session'
+import { createLegacyRetentionSelection, exportConversationSeed, isStrictFactData, type SessionView } from '@i-harness/core-session'
 import type { SessionCoordinator } from './coordinator/types.ts'
 import type { ManagedDocument } from './coordinator/fact-types.ts'
 import type { BootstrapCallerMetadata, BootstrapGuards, BootstrapOutcome } from './coordinator/bootstrap-types.ts'
@@ -7,6 +7,7 @@ import { createBootstrapRequestIntent, type BootstrapProjectIntent } from './coo
 import { captureBootstrapCaptureRequest } from './coordinator/bootstrap-capture.ts'
 import { sameBootstrapData } from './coordinator/bootstrap-header.ts'
 import { compileSemanticSeed } from './semantic-seed.ts'
+import { observationCleanupFor, type ObservationCleanupHandle } from './coordinator/binding-observation.ts'
 import { readForkCommand, readForkPrepareRequest, readForkPrepareResult, readForkRequestCore, readForkOutcome, ForkOperationError,
   type ForkCommand, type ForkOperation, type ForkOutcome, type ForkPrepareRequest, type ForkPrepareResult,
   type ForkNotIssuedReason, type ForkRefusal, type ForkCaptureState } from './fork-contract.ts'
@@ -36,10 +37,13 @@ export class ForkTargetPolicyDeniedError extends Error {
 class ForkSelectionError extends Error {
   constructor(readonly reason: ForkRefusal) { super('Fork selection ' + reason) }
 }
-type Holder = { operation: ForkOperation; flight?: Promise<ForkOutcome>; source?: ForkSourceWitness; attempted: boolean; enteredB2: boolean; retired: boolean; abort: AbortController; lastOutcome?: ForkOutcome; cleanupDebt?: ForkOperationError }
+type Holder = { operation: ForkOperation; flight?: Promise<ForkOutcome>; source?: ForkSourceWitness; attempted: boolean; enteredB2: boolean; retired: boolean; abort: AbortController; lastOutcome?: ForkOutcome; cleanupHandles?: Set<ObservationCleanupHandle> }
 type Lifecycle = { assertOutside(): void; fence(): () => Promise<void> }
 const issued = new WeakMap<ForkSessionController, SessionCoordinator>()
 const lifecycle = new WeakMap<SessionCoordinator, Set<Lifecycle>>()
+const emptyClosureHosts = new WeakSet<ForkHost>()
+/** Private restriction only: this cannot grant capture or result authority. */
+export function restrictForkHostToEmptyClosure(host: ForkHost): void { emptyClosureHosts.add(host) }
 export function assertForkControllerIssued(coordinator: SessionCoordinator, controller: ForkSessionController): void {
   if (issued.get(controller) !== coordinator) throw new TypeError('Fork controller was not issued for this coordinator')
 }
@@ -53,19 +57,39 @@ export function closeForkControllerAdmission(coordinator: SessionCoordinator): (
 export function createForkSessionController(coordinator: SessionCoordinator, host: ForkHost): ForkSessionController {
   const operations = new Map<string, Holder>(), targets = new Map<string, Holder>(), flights = new Set<Promise<unknown>>()
   const context = new AsyncLocalStorage<boolean>(), admission = new AbortController()
+  const cleanupDebt = new Set<ObservationCleanupHandle>(), preparationDebt = new Set<ObservationCleanupHandle>()
   let closed = false
   function assertOutside() { if (context.getStore()) throw new Error('Fork callback cannot close or retire its own lifetime') }
   function track<T>(work: () => Promise<T>): Promise<T> {
     const promise = Promise.resolve().then(() => context.run(true, work))
     flights.add(promise); promise.then(() => flights.delete(promise), () => flights.delete(promise)); return promise
   }
+  function retainCleanup(cause: unknown, holder?: Holder): ObservationCleanupHandle | undefined {
+    const handle = observationCleanupFor(coordinator, cause)
+    if (!handle) return undefined
+    cleanupDebt.add(handle)
+    if (holder) (holder.cleanupHandles ??= new Set()).add(handle)
+    else preparationDebt.add(handle)
+    return handle
+  }
+  async function settleCleanup(handles: Iterable<ObservationCleanupHandle>): Promise<void> {
+    const original = [...handles]
+    const results = await Promise.allSettled(original.map(handle => handle.retry()))
+    const errors: unknown[] = []
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'rejected') { errors.push(result.reason); continue }
+      const handle = original[index]!
+      cleanupDebt.delete(handle); preparationDebt.delete(handle)
+      for (const holder of operations.values()) holder.cleanupHandles?.delete(handle)
+    }
+    if (errors.length) throw new AggregateError(errors, 'Fork cleanup unresolved')
+  }
   function fence() {
     closed = true; admission.abort()
     for (const holder of operations.values()) { holder.retired = true; holder.abort.abort() }
     return async () => {
       await Promise.allSettled([...flights])
-      const debt = [...operations.values()].flatMap(holder => holder.cleanupDebt ? [holder.cleanupDebt] : [])
-      if (debt.length) throw new AggregateError(debt, 'Fork cleanup unresolved')
+      await settleCleanup(cleanupDebt)
       for (const holder of operations.values()) holder.source = undefined
     }
   }
@@ -73,13 +97,12 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
   function outcome(holder: Holder, kind: 'not-issued'|'refused', reason: string): ForkOutcome {
     return readForkOutcome({ version: 1, kind, operation: holder.operation, capture: captureState(holder), reason }, holder.operation)
   }
-  function hostFault(holder: Holder, cause: unknown, cleanup: boolean): ForkOperationError {
+  function hostFault(holder: Holder, cause: unknown, knownHandle?: ObservationCleanupHandle): ForkOperationError {
+    const handle = knownHandle ?? retainCleanup(cause, holder)
     const hostError = { version: 1 as const, kind: 'session-fork-error' as const, operation: holder.operation, capture: captureState(holder),
-      reason: cleanup ? 'cleanup-incomplete' as const : cause instanceof ForkAdmissionError ? 'host-unavailable' as const : 'internal' as const,
+      reason: handle ? 'cleanup-incomplete' as const : cause instanceof ForkAdmissionError ? 'host-unavailable' as const : 'internal' as const,
       ...(holder.lastOutcome === undefined ? {} : { lastOutcome: holder.lastOutcome }) }
-    const error = new ForkOperationError(holder.operation, cleanup ? 'cleanup' : 'host', { cause, hostError })
-    if (cleanup) holder.cleanupDebt = error
-    return error
+    return new ForkOperationError(holder.operation, handle ? 'cleanup' : 'host', { cause, hostError })
   }
   async function qualify(holder: Holder, owner: Extract<BootstrapOutcome, { kind: 'ready'|'already-ready' }>): Promise<ForkOutcome> {
     try {
@@ -87,15 +110,15 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
         host.assertAvailable(); owner.document.assertReady()
         return readForkOutcome(holder.lastOutcome, holder.operation)
       })
-      holder.cleanupDebt = undefined
       return result
     } catch (cause) {
-      if (cause instanceof ForkTargetPolicyDeniedError) return holder.lastOutcome = outcome(holder, 'refused', 'target-policy')
-      throw hostFault(holder, cause, false)
+      const cleanup = retainCleanup(cause, holder)
+      if (!cleanup && cause instanceof ForkTargetPolicyDeniedError) return holder.lastOutcome = outcome(holder, 'refused', 'target-policy')
+      throw hostFault(holder, cause, cleanup)
     }
   }
   async function handoff(holder: Holder, mode: ForkHandoffMode, control: ForkExecutionControl): Promise<{ result: ForkOutcome; owner: BootstrapOutcome }> {
-    let callbackDone = false, selected: ForkSelectionError | undefined
+    let selected: ForkSelectionError | undefined
     let owner!: BootstrapOutcome
     try {
       const result = await host.withHandoff(holder.operation, mode, control, async handoff => {
@@ -119,6 +142,12 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
             const exported = exportConversationSeed(source.view, { kind: 'session', sessionId: capture.core.sourceSessionId }, capture.core.selection)
             if (exported.kind === 'refused') { selected = new ForkSelectionError(exported.reason); holder.lastOutcome = outcome(holder, 'refused', selected.reason); throw selected }
             const seed = compileSemanticSeed(exported)
+            if (emptyClosureHosts.has(host)) {
+              const retained = createLegacyRetentionSelection(source.view, capture.core.selection)
+              const reason = retained.kind === 'refused' ? retained.reason
+                : seed.records[0]?.type === 'conversation/seed-manifest' && seed.records[0].artifacts.length || !retained.local()[Symbol.iterator]().next().done ? 'source-unsupported' : undefined
+              if (reason) { selected = new ForkSelectionError(reason); holder.lastOutcome = outcome(holder, 'refused', reason); throw selected }
+            }
             return { invocation: capture.invocation, target: { kind: 'new' }, metadata: capture.core.metadata,
               lineage: { origin: 'fork', parentSession: capture.core.sourceSessionId }, seed }
           })
@@ -131,23 +160,27 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
               seedLength: owner.receipt.seedLength, dependencyClosureDigest: owner.receipt.dependencyClosureDigest },
             ...(capture.core.metadata.title === undefined ? {} : { title: capture.core.metadata.title }) }
           : { version: 1, ...owner, operation: holder.operation, capture: captureState(holder) }
-        holder.lastOutcome = readForkOutcome(mapped, holder.operation); callbackDone = true
+        holder.lastOutcome = readForkOutcome(mapped, holder.operation)
         return holder.lastOutcome
       })
       return { result, owner }
     } catch (cause) {
-      if (selected && cause === selected) return { result: holder.lastOutcome!, owner: { kind: 'refused', reason: 'manifest-invalid' } }
-      if (!holder.enteredB2 && mode.kind === 'first' && cause instanceof ForkAdmissionError) return { result: holder.lastOutcome = outcome(holder, 'not-issued', cause.reason), owner: { kind: 'not-issued', reason: 'unsupported' } }
-      throw hostFault(holder, cause, callbackDone || selected !== undefined)
+      const cleanup = retainCleanup(cause, holder)
+      if (!cleanup && selected && cause === selected) return { result: holder.lastOutcome!, owner: { kind: 'refused', reason: 'manifest-invalid' } }
+      if (!cleanup && !holder.enteredB2 && mode.kind === 'first' && cause instanceof ForkAdmissionError) return { result: holder.lastOutcome = outcome(holder, 'not-issued', cause.reason), owner: { kind: 'not-issued', reason: 'unsupported' } }
+      throw hostFault(holder, cause, cleanup)
     }
   }
   async function execute(holder: Holder, supplied: ForkExecutionControl): Promise<ForkOutcome> {
     host.assertAvailable()
+    const prerequisites = new Set([...preparationDebt, ...holder.cleanupHandles ?? []])
+    try { await settleCleanup(prerequisites) }
+    catch (cause) { throw hostFault(holder, cause, [...prerequisites].find(handle => cleanupDebt.has(handle))) }
     if (!coordinator.inspectBootstrapCapture || !coordinator.bootstrapSemanticTargetWithCapture) return holder.lastOutcome = outcome(holder, 'not-issued', 'unsupported')
     const capture = captureBootstrapCaptureRequest({ invocation: holder.operation.invocation, core: holder.operation.prepared.core, requestIntent: holder.operation.prepared.requestIntent })
     const inspection = await coordinator.inspectBootstrapCapture(capture)
     if (inspection.kind === 'conflict') return holder.lastOutcome = outcome(holder, 'refused', 'conflict')
-    if (inspection.kind === 'unavailable') throw hostFault(holder, new ForkAdmissionError('unavailable'), false)
+    if (inspection.kind === 'unavailable') throw hostFault(holder, new ForkAdmissionError('unavailable'))
     const control: ForkExecutionControl = { ...supplied, signal: AbortSignal.any([admission.signal, holder.abort.signal, ...(supplied.signal ? [supplied.signal] : [])]) }
     if (inspection.kind !== 'absent' || holder.attempted || holder.enteredB2) {
       const routing = await coordinator.inspectBootstrap(capture.invocation)
@@ -173,6 +206,7 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
       if (closed) return Promise.resolve({ kind: 'unavailable', reason: 'unavailable' })
       return track(async () => {
         try {
+          await settleCleanup(preparationDebt)
           host.assertAvailable()
           if (!coordinator.inspectBootstrapCapture || !coordinator.bootstrapSemanticTargetWithCapture) return { kind: 'unavailable', reason: 'unsupported' }
           const resolved = await host.resolvePreparation(request, AbortSignal.any([admission.signal, ...(signal ? [signal] : [])]))
@@ -181,6 +215,7 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
           const intent = createBootstrapRequestIntent(core, resolved.project)
           return readForkPrepareResult({ kind: 'prepared', prepared: { version: 1, kind: 'session-fork-prepared', core, requestIntent: intent.intent, requestDigest: intent.requestDigest } })
         } catch (cause) {
+          if (retainCleanup(cause)) throw cause
           if (cause instanceof ForkAdmissionError) return { kind: 'unavailable', reason: ['unsupported','source-unavailable','policy'].includes(cause.reason) ? cause.reason as 'unsupported'|'source-unavailable'|'policy' : 'unavailable' }
           throw cause
         }
@@ -198,7 +233,7 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
       if (prior?.flight) return prior.flight
       const holder = prior ?? { operation, attempted: false, enteredB2: false, retired: closed, abort: new AbortController() }
       operations.set(operation.invocation.operationId, holder); targets.set(operation.invocation.targetSessionId, holder)
-      const flight = track(() => execute(holder, control).catch(cause => { if (cause instanceof ForkOperationError) throw cause; throw hostFault(holder, cause, false) }))
+      const flight = track(() => execute(holder, control).catch(cause => { if (cause instanceof ForkOperationError) throw cause; throw hostFault(holder, cause) }))
       holder.flight = flight; flight.then(() => { if (holder.flight === flight) holder.flight = undefined }, () => { if (holder.flight === flight) holder.flight = undefined })
       return flight
     },
@@ -214,7 +249,7 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
         operations.set(operation.invocation.operationId, holder); targets.set(operation.invocation.targetSessionId, holder)
       }
       holder.retired = true; holder.abort.abort(); await holder.flight?.catch(() => {})
-      if (holder.cleanupDebt) throw holder.cleanupDebt
+      await settleCleanup(holder.cleanupHandles ?? [])
       holder.source = undefined
     },
     close() { assertOutside(); return fence()() },

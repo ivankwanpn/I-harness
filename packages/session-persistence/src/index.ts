@@ -7,6 +7,7 @@ import { createLifecycle } from "./coordinator/lifecycle.ts"
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
+import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
 export * from './fork-contract.ts'
 export { createForkSessionController, ForkAdmissionError, ForkTargetPolicyDeniedError } from './fork-controller.ts'
 export type { ForkSessionController, ForkHost, ForkExecutionControl, ForkSourceWitness, ForkHandoffMode, ForkHandoff } from './fork-controller.ts'
@@ -128,6 +129,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     adoptOwnership: mutations.adoptOwnership,
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
+  associateObservationCleanupOwner(coordinator, observations.cleanupForError)
   return coordinator
 }
 

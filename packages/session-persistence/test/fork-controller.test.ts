@@ -1,12 +1,22 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
+import { acquireSessionLock } from '@i-harness/fs-lock'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionCoordinator, forkSession, retryForkSession } from '../src/index.ts'
 import * as controllerApi from '../src/fork-controller.ts'
 import { createInlineForkHost } from '../src/fork-inline-host.ts'
 import { createForkOperation, ForkOperationError } from '../src/fork-contract.ts'
+import { observationCleanupFor } from '../src/coordinator/binding-observation.ts'
+import { createContextOutputService } from '../../context-output/src/index.ts'
+
+vi.mock('@i-harness/fs-lock', async original => {
+  const actual = await original<typeof import('@i-harness/fs-lock')>()
+  return { ...actual, acquireSessionLock: vi.fn(actual.acquireSessionLock) }
+})
+const nativeAcquire = (await vi.importActual<typeof import('@i-harness/fs-lock')>('@i-harness/fs-lock')).acquireSessionLock
+afterEach(() => { vi.restoreAllMocks(); vi.mocked(acquireSessionLock).mockImplementation(nativeAcquire) })
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'ih-fc-'))
@@ -221,7 +231,7 @@ it('joins the final target barrier before coordinator resource disposal', async 
     await closing; expect(f.c.ownerOf('target')).toBe(false)
   } finally { await f.close() }
 })
-it('retains known outcome and cleanup debt until same-operation successful continuation', async () => {
+it('does not classify an arbitrary post-handoff aggregate as original cleanup debt', async () => {
   const f = await fixture()
   try {
     const host = createInlineForkHost(f.c), handoff = host.withHandoff.bind(host)
@@ -229,10 +239,222 @@ it('retains known outcome and cleanup debt until same-operation successful conti
     const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
     const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
     expect(error).toBeInstanceOf(ForkOperationError)
-    expect(error.hostError).toMatchObject({ reason: 'cleanup-incomplete', lastOutcome: { kind: 'ready', sessionId: 'target' } })
-    await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
+    expect(error.hostError).toMatchObject({ reason: 'internal', lastOutcome: { kind: 'ready', sessionId: 'target' } })
+    await controller.close()
     host.withHandoff = handoff
     expect((await controller.execute({ operation: op, mode: 'retry' })).kind).toBe('adopted')
     await controller.close()
   } finally { await f.close() }
+})
+it('retains the exact real final target release debt through controller close and original retry', async () => {
+  const f = await fixture()
+  let fault = true, finalBarrier = false, attempts = 0, callbacks = 0
+  let originalHandle: Awaited<ReturnType<typeof nativeAcquire>> | undefined
+  let originalLockPath: string | undefined
+  try {
+    const host = createInlineForkHost(f.c), target = host.withReadyTarget.bind(host)
+    host.withReadyTarget = async (...args) => { finalBarrier = true; try { return await target(...args) } finally { finalBarrier = false } }
+    const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    const capture = f.c.bootstrapSemanticTargetWithCapture!.bind(f.c)
+    f.c.bootstrapSemanticTargetWithCapture = (request, guards, use) => capture(request, guards, async () => { callbacks++; return use() })
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options), held = finalBarrier
+      if (held && !originalHandle) { originalHandle = raw; originalLockPath = options.lockPath }
+      return { get held() { return raw.held }, async release() {
+        if (raw === originalHandle) { attempts++; if (fault) throw new Error('real final observation release before action') }
+        await raw.release()
+      } }
+    })
+    const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(error).toBeInstanceOf(ForkOperationError)
+    expect(error).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', lastOutcome: { kind: 'ready', sessionId: 'target' } } })
+    expect(originalHandle?.held).toBe(true); expect(attempts).toBe(1)
+    await expect(nativeAcquire({ lockPath: originalLockPath!, deadlineMs: 10 })).rejects.toThrow()
+    await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
+    expect(originalHandle?.held).toBe(true); expect(attempts).toBe(2)
+    fault = false
+    const outcome = await controller.execute({ operation: op, mode: 'retry' })
+    expect(outcome).toMatchObject({ kind: 'adopted', sessionId: 'target', operation: op })
+    expect(originalHandle?.held).toBe(false); expect(attempts).toBe(3)
+    expect(callbacks).toBe(1)
+    const originalCleanup = observationCleanupFor(f.c, error.cause)!
+    await f.c.withExistingSessionBindingObservation!({ sessionIds: ['target'] }, async () => {
+      await expect(originalCleanup.retry()).rejects.toMatchObject({ reason: 'conflict' })
+    })
+    await controller.close()
+    console.info(JSON.stringify({ control: 'FC07 final target same native handle', attempts, callbacks, held: originalHandle?.held }))
+  } finally { fault = false; await f.close() }
+})
+it.each([undefined, null, false, 0])('nominal release failure preserves literal final callback cause %s', async literal => {
+  const f = await fixture()
+  let fault = true, finalBarrier = false, callbackCalls = 0
+  try {
+    const host = createInlineForkHost(f.c), ready = host.withReadyTarget.bind(host)
+    host.withReadyTarget = async (op, document, use) => {
+      finalBarrier = true
+      try { return await ready(op, document, async () => { await use(); callbackCalls++; throw literal }) }
+      finally { finalBarrier = false }
+    }
+    const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options), selected = finalBarrier
+      return { get held() { return raw.held }, async release() { if (selected && fault) throw new Error('actual cleanup fault'); await raw.release() } }
+    })
+    const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(error).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', lastOutcome: { kind: 'ready' } } })
+    expect(error.cause.callbackError).toBe(literal); expect(error.cause.errors[0]).toBe(literal)
+    expect(observationCleanupFor(f.c, error.cause)).toBeDefined()
+    fault = false; await controller.close(); expect(callbackCalls).toBe(1)
+  } finally { fault = false; await f.close() }
+})
+it('never recognizes fabricated, wrapped or foreign-coordinator cleanup errors', async () => {
+  const f = await fixture(), other = await fixture()
+  let fault = true
+  try {
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options)
+      return { get held() { return raw.held }, async release() { if (fault) throw new Error('foreign actual release'); await raw.release() } }
+    })
+    const original = await other.c.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async () => 'actual result').catch(error => error)
+    const handle = observationCleanupFor(other.c, original)!
+    expect(handle).toBeDefined(); expect(observationCleanupFor(f.c, original)).toBeUndefined()
+    const fake = Object.assign(new AggregateError(original.errors, original.message), { callbackResult: original.callbackResult, callbackError: original.callbackError, sessionIds: original.sessionIds })
+    expect(observationCleanupFor(other.c, fake)).toBeUndefined()
+    expect(observationCleanupFor(other.c, new AggregateError([original], 'wrapper'))).toBeUndefined()
+    fault = false
+    // Another original close acknowledges disposal; nominal origin persists.
+    await other.c.close()
+    expect(observationCleanupFor(other.c, original)).toBe(handle)
+    await handle.retry()
+    const host = createInlineForkHost(f.c), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    host.withReadyTarget = async () => { throw original }
+    const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(error).toMatchObject({ kind: 'host', hostError: { reason: 'internal', lastOutcome: { kind: 'ready' } } })
+    await controller.close()
+  } finally { fault = false; await other.close(); await f.close() }
+})
+it('consumed native release failure stays unresolved without reacquisition or no-op success', async () => {
+  const raws: Awaited<ReturnType<typeof nativeAcquire>>[] = []
+  let finalBarrier = false, selected: Awaited<ReturnType<typeof nativeAcquire>> | undefined, attempts = 0
+  vi.mocked(acquireSessionLock).mockImplementation(async options => {
+    const raw = await nativeAcquire(options); raws.push(raw)
+    if (finalBarrier) selected ??= raw
+    return { get held() { return raw.held }, async release() {
+      if (raw === selected) { attempts++; await raw.release(); throw new Error('consumed native unknown') }
+      await raw.release()
+    } }
+  })
+  const f = await fixture()
+  try {
+    const host = createInlineForkHost(f.c), ready = host.withReadyTarget.bind(host)
+    host.withReadyTarget = async (...args) => { finalBarrier = true; try { return await ready(...args) } finally { finalBarrier = false } }
+    const controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(error).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', lastOutcome: { kind: 'ready' } } })
+    const acquired = raws.length
+    expect(selected?.held).toBe(false); expect(f.c.ownerOf('target')).toBe(true)
+    await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
+    await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
+    expect(raws.length).toBe(acquired); expect(attempts).toBe(1); expect(f.c.ownerOf('target')).toBe(true)
+    console.info(JSON.stringify({ control: 'FC07 consumed native debt', acquired, attempts, consumedHeld: selected?.held, dependentHeld: f.c.ownerOf('target') }))
+  } finally {
+    // Test-only teardown releases recorded raw OS handles; production debt
+    // remains unresolved and no coordinator/controller success is claimed.
+    for (const raw of raws) await raw.release()
+    await rm(f.root, { recursive: true, force: true })
+  }
+})
+it.each(['prepared', 'acquiring'] as const)('controller close retains real preparation cleanup debt (%s)', async phase => {
+  const f = await fixture()
+  let fault = true, attempts = 0
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let originalHandle: Awaited<ReturnType<typeof nativeAcquire>> | undefined
+  try {
+    const controller = controllerApi.createForkSessionController(f.c, createInlineForkHost(f.c))
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options); originalHandle ??= raw
+      if (phase === 'acquiring') { entered.resolve(); await release.promise }
+      return { get held() { return raw.held }, async release() { attempts++; if (fault) throw new Error('real preparation release before action'); await raw.release() } }
+    })
+    const preparing = controller.prepare({ version: 1, sourceSessionId: 'source' }).catch(error => error)
+    let closing: Promise<void>
+    if (phase === 'acquiring') { await entered.promise; closing = controller.close(); release.resolve() }
+    else { const error = await preparing; expect(error).toBeInstanceOf(AggregateError); closing = controller.close() }
+    await expect(closing).rejects.toThrow('Fork cleanup unresolved')
+    expect(originalHandle?.held).toBe(true)
+    expect(await preparing).toBeInstanceOf(AggregateError)
+    fault = false; await controller.close()
+    expect(originalHandle?.held).toBe(false); expect(attempts).toBeGreaterThanOrEqual(2)
+  } finally { fault = false; release.resolve(); await f.close() }
+})
+it('settles retained preparation cleanup before a new execute or explicit prepare retry', async () => {
+  const f = await fixture()
+  let fault = false, attempts = 0
+  let selected: Awaited<ReturnType<typeof nativeAcquire>> | undefined
+  try {
+    const host = createInlineForkHost(f.c), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options)
+      selected ??= raw
+      return { get held() { return raw.held }, async release() { if (raw === selected) { attempts++; if (fault) throw new Error('prepare prerequisite release fault') }; await raw.release() } }
+    })
+    fault = true
+    expect(await controller.prepare({ version: 1, sourceSessionId: 'source' }).catch(error => error)).toBeInstanceOf(AggregateError)
+    const execution = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(execution).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', capture: 'uncaptured' } })
+    expect(await f.c.inspectBootstrapCapture!({ invocation: op.invocation, core: op.prepared.core, requestIntent: op.prepared.requestIntent })).toEqual({ kind: 'absent' })
+    fault = false
+    expect((await controller.prepare({ version: 1, sourceSessionId: 'source' })).kind).toBe('prepared')
+    expect((await controller.execute({ operation: op, mode: 'retry' })).kind).toBe('ready')
+    expect(attempts).toBeGreaterThan(2)
+  } finally { fault = false; await f.close() }
+})
+it('close attempts every independent original preparation cleanup and retains only unresolved handles', async () => {
+  const f = await fixture()
+  const handles: { raw: Awaited<ReturnType<typeof nativeAcquire>>; fault: boolean; attempts: number }[] = []
+  try {
+    await f.c.create({ sessionId: 'other-source' })
+    const controller = controllerApi.createForkSessionController(f.c, createInlineForkHost(f.c))
+    vi.mocked(acquireSessionLock).mockImplementation(async options => {
+      const raw = await nativeAcquire(options), record = { raw, fault: true, attempts: 0 }; handles.push(record)
+      return { get held() { return raw.held }, async release() { record.attempts++; if (record.fault) throw new Error('independent original release'); await raw.release() } }
+    })
+    const results = await Promise.all(['source','other-source'].map(sourceSessionId => controller.prepare({ version: 1, sourceSessionId }).catch(error => error)))
+    expect(results.every(error => error instanceof AggregateError)).toBe(true)
+    expect(handles.length).toBe(2)
+    handles[0]!.fault = false
+    await expect(controller.close()).rejects.toThrow('Fork cleanup unresolved')
+    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual([[false, 2], [true, 2]])
+    handles[1]!.fault = false; await controller.close()
+    expect(handles.map(value => [value.raw.held, value.attempts])).toEqual([[false, 2], [false, 3]])
+  } finally { for (const value of handles) value.fault = false; await f.close() }
+})
+it.each(['managed', 'legacy', 'seed'] as const)('standalone refuses actual typed %s source before a new target header', async kind => {
+  const f = await fixture(), service = createContextOutputService({ root: join(f.root, 'results'), workspaceId: 'workspace', config: { enabled: true } })
+  try {
+    if (kind === 'seed') {
+      const child = await forkSession(f.c, 'source')
+      await expect(forkSession(f.c, child.sessionId)).rejects.toMatchObject({ name: 'ForkPreparationError', result: { kind: 'unavailable', reason: 'unsupported' } })
+      expect((await f.c.list()).sort()).toEqual(['source', child.sessionId].sort())
+    } else {
+      if (kind === 'legacy') {
+        const ref = await service.capture({ sessionId: 'source', callId: 'call', label: 'actual', text: 'actual retained legacy', complete: true })
+        if (!ref) throw new Error('Legacy actual capture refused')
+        await f.c.append('source', [{ type: 'context/result-ref', ref }])
+      } else {
+        const scope = service.registerResultScope({ operationId: 'actual-managed', sessionId: 'source', callId: 'call' }, () => true)
+        const sink = await service.beginResult(scope, 'text-utf8-v1'); await sink.write(Buffer.from('actual retained artifact'))
+        const saved = await sink.finish('complete'); if (saved.kind !== 'committed') throw new Error('Actual managed publication refused')
+        await f.c.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'result' }, { type: 'step/start' }, { type: 'tool/call', callId: 'call', name: 'read', args: {} },
+          { type: 'assistant/message', text: '' }, { type: 'tool/dispatch', callId: 'call', eventSeq: 6 },
+          { type: 'tool/result', callId: 'call', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'bounded', media: [], retention: { kind: 'artifact', ref: saved.ref } } },
+          { type: 'step/end' }, { type: 'turn/end' }, { type: 'compaction/summary', text: 'hidden result', shadowedSeqs: [9] }])
+      }
+      const error = await forkSession(f.c, 'source').catch(error => error)
+      expect(error).toMatchObject({ name: 'ForkOperationError', kind: 'outcome', outcome: { kind: 'not-issued', reason: 'unsupported', capture: 'uncaptured' } })
+      const op = error.operation
+      expect(await f.c.inspectBootstrapCapture!({ invocation: op.invocation, core: op.prepared.core, requestIntent: op.prepared.requestIntent })).toEqual({ kind: 'absent' })
+      expect(await f.c.list()).toEqual(['source'])
+    }
+  } finally { await service.close(); await f.close() }
 })

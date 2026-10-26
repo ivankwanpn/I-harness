@@ -7,13 +7,19 @@ import type { BootstrapInvocation, BootstrapRequest, BootstrapGuards, BootstrapO
 import { captureBootstrapTargetPreparationPort } from './bootstrap-preparation.ts'
 import { captureBootstrapCaptureRequest } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest } from './bootstrap-types.ts'
-import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
+import { SessionBindingObservationError as Failure, type PersistenceBackend, type SessionCoordinator, type SessionBindingObservationRequest, type SessionBindingObservation, type ExistingSessionBindingObservationRequest, type ExistingSessionBindingObservation, type ObservedDocument, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
 const signalAddListener = EventTarget.prototype.addEventListener
 const signalRemoveListener = EventTarget.prototype.removeEventListener
 const isAborted = (signal?: AbortSignal): boolean => signal === undefined ? false : Reflect.apply(signalAborted, signal, [])
+
+export interface ObservationCleanupHandle { retry(): Promise<void> }
+const cleanupOwners = new WeakMap<SessionCoordinator, (error: unknown) => ObservationCleanupHandle | undefined>()
+/** Private lifecycle link; never a property on the public coordinator. */
+export function associateObservationCleanupOwner(coordinator: SessionCoordinator, lookup: (error: unknown) => ObservationCleanupHandle | undefined): void { cleanupOwners.set(coordinator, lookup) }
+export function observationCleanupFor(coordinator: SessionCoordinator, error: unknown): ObservationCleanupHandle | undefined { return cleanupOwners.get(coordinator)?.(error) }
 
 /** Private Documents-owned scope admission. No project policy is interpreted here. */
 export function createBindingObservations(
@@ -26,6 +32,7 @@ export function createBindingObservations(
   type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean } & ScopeKind
   type Captured = { ids: string[]; existing: string[]; signal?: AbortSignal } & ScopeKind
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
+  const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
   const pendingIds = new Map<string, number>(), pendingKeys = new Map<string, number>(), deletedIds = new Set<string>(), deletedKeys = new Set<string>()
   const retiringIds = new Map<string, number>()
   let closed = false
@@ -284,11 +291,21 @@ export function createBindingObservations(
     try { await scope.cleanup(); completion.resolve() }
     catch (cleanupError) {
       completion.reject(cleanupError)
-      throw Object.assign(new AggregateError([...(failed ? [callbackError] : []), cleanupError], 'Binding observation cleanup failed'), captured.kind === 'fork' ? { invocation: captured.target, callbackResult: result, callbackError } : { sessionIds: Object.freeze([...existing]), callbackResult: result, callbackError })
+      const error = Object.assign(new AggregateError([...(failed ? [callbackError] : []), cleanupError], 'Binding observation cleanup failed'), captured.kind === 'fork' ? { invocation: captured.target, callbackResult: result, callbackError } : { sessionIds: Object.freeze([...existing]), callbackResult: result, callbackError })
+      cleanupErrors.set(error, Object.freeze({ async retry() {
+        refuseSelf([...scope.ids], [...scope.keys])
+        if (!scope.callbackFinished) throw new Failure('conflict')
+        // Nominal origin remains recognizable after an independent original
+        // close completed disposal. Never join the permanently rejected done.
+        if (scope.state === 'done') return
+        await scope.cleanup!()
+      } }))
+      throw error
     }
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture }
+  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture,
+    cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>

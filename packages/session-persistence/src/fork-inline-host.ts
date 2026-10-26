@@ -1,7 +1,7 @@
 import type { SessionCoordinator, SessionMeta } from './coordinator/types.ts'
 import type { SessionView, ResultEnvelope } from '@i-harness/core-session'
 import { sameBootstrapData } from './coordinator/bootstrap-header.ts'
-import { ForkAdmissionError, ForkTargetPolicyDeniedError, type ForkHost, type ForkSourceWitness } from './fork-controller.ts'
+import { ForkAdmissionError, ForkTargetPolicyDeniedError, restrictForkHostToEmptyClosure, type ForkHost, type ForkSourceWitness } from './fork-controller.ts'
 
 function requireRoot(meta: Readonly<SessionMeta>): void {
   if (meta.archived) throw new ForkAdmissionError('policy')
@@ -22,7 +22,7 @@ export function createForkSourceWitness(document: ForkSourceWitness['document'])
 }
 /** Conservative root-only standalone host. Shipping hosts supply real result ports. */
 export function createInlineForkHost(coordinator: SessionCoordinator): ForkHost {
-  return {
+  const host: ForkHost = {
     assertAvailable() {
       if (!coordinator.withSessionBindingObservation || !coordinator.withExistingSessionBindingObservation) throw new ForkAdmissionError('unsupported')
     },
@@ -75,4 +75,6 @@ export function createInlineForkHost(coordinator: SessionCoordinator): ForkHost 
       })
     },
   }
+  restrictForkHostToEmptyClosure(host)
+  return host
 }
