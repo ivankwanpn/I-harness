@@ -371,7 +371,7 @@ export interface SessionListResult {
   listingUnavailable?: boolean
 }
 
-/** Additive session/create and session/fork result. */
+/** Session creation result; semantic forks return the closed ForkSuccess superset. */
 export interface SessionIdResult {
   sessionId: string
 }

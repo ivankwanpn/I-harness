@@ -8,8 +8,9 @@ import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { PassThrough } from "node:stream"
 import { append, createSession, type Session, type SessionEvent } from "@i-harness/core-session"
-import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { createSessionService, createCliForkHost, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
+import { createSessionCoordinator, createForkSessionController, type SessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { HarnessClient } from "../src/client.ts"
 import { describeHttpError, modelFailureFacts } from "../../llm-seam/src/index.ts"
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
@@ -39,6 +40,83 @@ async function handshake(server: SdkServer): Promise<void> {
   const reply = await server.handleLine(encodeFrame(makeRequest(0, "initialize", {})))
   expect(JSON.parse(reply!)).toMatchObject({ result: { protocolVersion: 3 } })
 }
+
+it('public fork routes use actual capture once, reject raw/control inputs, and adopt before source access',async()=>{
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fork-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual SDK fork'},{type:'turn/end'}])
+  const controller=createForkSessionController(c,createCliForkHost({workspace:root,coordinator:c})),raw=vi.fn(async()=>({sessionId:'raw-must-not-run'}))
+  const input=new PassThrough(),output=new PassThrough(),client=new HarnessClient(output,input),rl=createInterface({input})
+  const server=createSdkServer(f.service,{coordinator:c,prepareForkSession:request=>controller.prepare(request),executeForkSession:(command,control)=>controller.execute(command,control),forkSession:raw,onWrite:message=>output.write(encodeFrame(message))})
+  rl.on('line',line=>{void server.handleLine(line)})
+  let callbacks=0
+  const capture=c.bootstrapSemanticTargetWithCapture!.bind(c)
+  c.bootstrapSemanticTargetWithCapture=(request,guards,use)=>capture(request,guards,async()=>{callbacks++;return use()})
+  const submit=vi.spyOn(f.service,'submit')
+  try{
+    const info=await client.initialize();expect(info.capabilities['session-fork-bootstrap']).toEqual(['1']);expect(info.capabilities['session-fork']).toBeUndefined()
+    const prepared=await client.prepareForkSession({version:1,sourceSessionId:'source'})
+    if(prepared.kind!=='prepared')throw new Error('Actual SDK preparation unavailable')
+    const attempt=client.createForkAttempt(prepared.prepared),ready=await attempt.run()
+    expect(ready).toMatchObject({kind:'ready',sessionId:attempt.operation.invocation.targetSessionId});expect(callbacks).toBe(1)
+    await c.updateMeta('source',{archived:true})
+    const profile=vi.spyOn(c,'profile').mockRejectedValue(new Error('passive source profile forbidden'))
+    expect((await client.retryForkSession(attempt.operation)).kind).toBe('adopted')
+    expect(profile).not.toHaveBeenCalled();expect(callbacks).toBe(1)
+    await expect(client.request('session/fork',{sessionId:'source'})).rejects.toMatchObject({code:METHOD_NOT_FOUND})
+    await expect(client.request('session/fork/begin',{operation:attempt.operation,signal:{aborted:true}})).rejects.toMatchObject({code:INVALID_PARAMS})
+    expect(raw).not.toHaveBeenCalled();expect(submit).not.toHaveBeenCalled();expect(f.service.hasAssembly('source')).toBe(false)
+  }finally{rl.close();await client.close();await server.close();await controller.close();await f.service.close();await c.close();await f.cleanup();await rm(root,{recursive:true,force:true})}
+})
+it.each(['prepare','target'] as const)('SDK close joins whole actual fork %s callback and repeated close joins the same flight',async phase=>{
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fclose-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual close source'},{type:'turn/end'}])
+  const host=createCliForkHost({workspace:root,coordinator:c}),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  if(phase==='prepare'){const prepare=host.resolvePreparation.bind(host);host.resolvePreparation=async(...args)=>{entered.resolve();await release.promise;return prepare(...args)}}
+  else{const target=host.withReadyTarget.bind(host);host.withReadyTarget=async(...args)=>{entered.resolve();await release.promise;return target(...args)}}
+  const controller=createForkSessionController(c,host),input=new PassThrough(),output=new PassThrough(),client=new HarnessClient(output,input),rl=createInterface({input})
+  const server=createSdkServer(f.service,{coordinator:c,prepareForkSession:request=>controller.prepare(request),executeForkSession:(command,control)=>controller.execute(command,control),onWrite:message=>output.write(encodeFrame(message))})
+  rl.on('line',line=>{void server.handleLine(line)})
+  let running:Promise<unknown>|undefined
+  try{
+    await client.initialize()
+    if(phase==='prepare')running=client.prepareForkSession({version:1,sourceSessionId:'source'})
+    else{const prepared=await client.prepareForkSession({version:1,sourceSessionId:'source'});if(prepared.kind!=='prepared')throw new Error('Actual prepare unavailable');running=client.createForkAttempt(prepared.prepared).run()}
+    await entered.promise
+    if(phase==='target'){expect((await client.cancel('source')).cancelled).toBe(false);expect(f.service.hasAssembly('source')).toBe(false)}
+    let closed=false;const closing=server.close();void closing.then(()=>{closed=true},()=>{closed=true})
+    expect(server.close()).toBe(closing);await Promise.resolve();expect(closed).toBe(false)
+    release.resolve();expect(await running).toMatchObject({kind:phase==='prepare'?'prepared':'ready'});await closing
+    expect(closed).toBe(true)
+  }finally{release.resolve();await running?.catch(()=>{});rl.close();await client.close();await server.close();await controller.close();await f.service.close();await c.close();await f.cleanup();await rm(root,{recursive:true,force:true})}
+})
+it('SDK detach failure still joins the actual final target barrier before close rejects',async()=>{
+  const f=await makeService(),root=await mkdtemp(join(tmpdir(),'ih-sdk-fdetach-')),c=createSessionCoordinator(createJsonlBackend(root),{lock:{enabled:true}})
+  await c.create({sessionId:'source'});await c.append('source',[{type:'turn/start'},{type:'user/message',text:'actual detach source'},{type:'turn/end'}])
+  const subscribe=f.service.onExecutionState!.bind(f.service)
+  f.service.onExecutionState=listener=>{const off=subscribe(listener);return()=>{off();throw new Error('original notification detach failed')}}
+  const host=createCliForkHost({workspace:root,coordinator:c}),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>(),target=host.withReadyTarget.bind(host)
+  host.withReadyTarget=async(...args)=>{entered.resolve();await release.promise;return target(...args)}
+  const controller=createForkSessionController(c,host),input=new PassThrough(),output=new PassThrough(),client=new HarnessClient(output,input),rl=createInterface({input})
+  const server=createSdkServer(f.service,{coordinator:c,prepareForkSession:request=>controller.prepare(request),executeForkSession:(command,control)=>controller.execute(command,control),onWrite:message=>output.write(encodeFrame(message))})
+  rl.on('line',line=>{void server.handleLine(line)})
+  let running:Promise<unknown>|undefined,closing:Promise<void>|undefined
+  try{
+    await client.initialize();const prepared=await client.prepareForkSession({version:1,sourceSessionId:'source'});if(prepared.kind!=='prepared')throw new Error('Actual prepare unavailable')
+    running=client.createForkAttempt(prepared.prepared).run();await entered.promise
+    let settled=false;closing=server.close();void closing.then(()=>{settled=true},()=>{settled=true})
+    await Promise.resolve();await Promise.resolve();expect(settled).toBe(false)
+    release.resolve();expect(await running).toMatchObject({kind:'ready'});await expect(closing).rejects.toThrow('SDK cleanup incomplete')
+  }finally{release.resolve();await running?.catch(()=>{});await closing?.catch(()=>{});rl.close();await client.close();await server.close().catch(()=>{});await controller.close();await f.service.close();await c.close();await f.cleanup();await rm(root,{recursive:true,force:true})}
+})
+it.each(['prepare','execute'] as const)('partial semantic fork handler %s never advertises or invokes work',async phase=>{
+  const service=makeStubService(),work=vi.fn(async()=>{throw new Error('Partial handler must not run')}),server=createSdkServer(service,phase==='prepare'?{prepareForkSession:work}:{executeForkSession:work})
+  try{
+    const info=decodeFrame((await server.handleLine(encodeFrame(makeRequest(1,'initialize',{}))))!)as RpcSuccess
+    expect((info.result as{capabilities:Record<string,string[]>}).capabilities['session-fork-bootstrap']).toBeUndefined()
+    for(const method of ['session/fork/prepare','session/fork/begin','session/fork/retry'])expect((decodeFrame((await server.handleLine(encodeFrame(makeRequest(method,method,{}))))!)as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
+    expect(work).not.toHaveBeenCalled()
+  }finally{await server.close()}
+})
 
 async function makeService(session?: Session): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-"))
@@ -567,11 +645,12 @@ describe("createSdkServer initialize gate (M68 batch B)", () => {
 })
 
 describe("createSdkServer session lifecycle and model capabilities", () => {
-  it("advertises additive session create/fork/model capabilities when the host wires them", async () => {
+  it("advertises creation/model and refuses a retired raw fork capability", async () => {
     const service = makeStubService()
+    const forkSession=vi.fn(async()=>({sessionId:'forked'}))
     const server = createSdkServer(service, {
       createSession: async () => ({ sessionId: "created" }),
-      forkSession: async () => ({ sessionId: "forked" }),
+      forkSession,
       modelState: async () => ({ status: "unconfigured", reason: "No model configured" }),
       setSessionModel: async () => {},
     })
@@ -579,20 +658,24 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       const reply = await server.handleLine(encodeFrame(makeRequest(8, "initialize", {})))
       const info = (decodeFrame(reply!) as RpcSuccess).result as { capabilities: Record<string, string[]> }
       expect(info.capabilities["session-create"]).toEqual(["1"])
-      expect(info.capabilities["session-fork"]).toEqual(["1"])
+      expect(info.capabilities["session-fork"]).toBeUndefined()
+      expect(info.capabilities['session-fork-bootstrap']).toBeUndefined()
       expect(info.capabilities["session-model"]).toEqual(["1"])
+      const retired=await server.handleLine(encodeFrame(makeRequest(81,'session/fork',{sessionId:'source'})))
+      expect((decodeFrame(retired!)as RpcFailure).error.code).toBe(METHOD_NOT_FOUND);expect(forkSession).not.toHaveBeenCalled()
     } finally {
       await server.close()
     }
   })
 
-  it("round-trips create/fork/model state and leaves the live session to the host's rebind", async () => {
+  it("round-trips creation/model, retires raw fork and leaves the live session to the host's rebind", async () => {
     const service = makeStubService()
     const closeSession = vi.mocked(service.closeSession)
     let selection: { provider: string; model: string; reasoningEffort?: string; protocol?: string } | undefined
+    const forkSession=vi.fn(async(sessionId:string)=>({sessionId:sessionId+'-fork'}))
     const server = createSdkServer(service, {
       createSession: async () => ({ sessionId: "created" }),
-      forkSession: async (sessionId) => ({ sessionId: `${sessionId}-fork` }),
+      forkSession,
       modelState: async () => selection === undefined
         ? { status: "unconfigured", reason: "No model configured" }
         : { status: "ready", providerId: selection.provider, modelId: selection.model, label: `${selection.provider}:${selection.model}`, protocol: selection.protocol, reasoningEffort: selection.reasoningEffort, reasoningEfforts: ["off", "low", "high"] },
@@ -603,7 +686,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       const created = await server.handleLine(encodeFrame(makeRequest(9, "session/create", {})))
       expect((decodeFrame(created!) as RpcSuccess).result).toEqual({ sessionId: "created" })
       const forked = await server.handleLine(encodeFrame(makeRequest(10, "session/fork", { sessionId: "created" })))
-      expect((decodeFrame(forked!) as RpcSuccess).result).toEqual({ sessionId: "created-fork" })
+      expect((decodeFrame(forked!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND);expect(forkSession).not.toHaveBeenCalled()
       const before = await server.handleLine(encodeFrame(makeRequest(11, "session/model/state", { sessionId: "created" })))
       expect((decodeFrame(before!) as RpcSuccess).result).toEqual({ status: "unconfigured", reason: "No model configured" })
       const selected = await server.handleLine(encodeFrame(makeRequest(12, "session/model/set", {
@@ -740,7 +823,9 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         label: "fixture:fixture-model",
       })
 
-      for (const [id, method] of [[18, "session/fork"], [19, "session/model/state"]] as const) {
+      const retired=await server.handleLine(encodeFrame(makeRequest(18,'session/fork',{sessionId:'missing'})))
+      expect((decodeFrame(retired!)as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
+      for (const [id, method] of [[19, "session/model/state"]] as const) {
         const reply = await server.handleLine(encodeFrame(makeRequest(id, method, { sessionId: "missing" })))
         const failure = decodeFrame(reply!) as RpcFailure
         expect(failure.error.code).toBe(INVALID_PARAMS)
