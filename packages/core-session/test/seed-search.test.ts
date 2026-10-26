@@ -26,10 +26,15 @@ it('indexes text parts and image metadata without image transport or attachment 
   ] }, { role: 'tool', toolCallId: 'private', content: [{ type: 'text', text: 'TOOL_PART_VISIBLE' }] }])
   const text = deriveSearchText(event)
   expect(text).toContain('FIRST_VISIBLE')
-  expect(text).toContain('image: VISIBLE_IMAGE 2x3 18B')
+  expect(text).toContain('image: VISIBLE_IMAGE 2x3 16B')
   expect(text).toContain('SECOND_VISIBLE')
   expect(text).toContain('TOOL_PART_VISIBLE')
   for (const hidden of ['U0VDUkVU', 'base64:', 'PRIVATE_ATTACHMENT', 'image/png']) expect(text).not.toContain(hidden)
+})
+
+it.each([['AA==', 1], ['AAA=', 2], ['AAAA', 3]] as const)('counts canonical base64 %s image bytes without decoding or indexing its payload', (dataBase64, bytes) => {
+  const event = group([{ role: 'user', content: [{ type: 'image', image: { mediaType: 'image/png', name: 'VISIBLE', dataBase64 } }] }])
+  expect(deriveSearchText(event)).toBe(`\nimage: VISIBLE ?x? ${bytes}B`)
 })
 
 it('does not observe seed metadata, native continuation or thinking outside the visible message slots', () => {

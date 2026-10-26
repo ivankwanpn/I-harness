@@ -1,11 +1,12 @@
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtemp, readFile, readdir, writeFile, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION, exportConversationSeed } from '@i-harness/core-session'
+import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION, exportConversationSeed, readFactJournal } from '@i-harness/core-session'
 import { createFileBackedSessionQuery, closeSessionQueries } from '../src/index.ts'
-import { parseLinePrefix } from '../src/file-backed/inspection.ts'
+import { parseLinePrefix, revisionOf } from '../src/file-backed/inspection.ts'
 import { createSessionCoordinator, compileSemanticSeed, type BootstrapRequest } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 
@@ -98,6 +99,55 @@ it.each([1, 2] as const)('preserves actual V%s B2 header scope, logical facts an
     expect(await query.lineage('target', { direction: 'ancestors' })).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: 'source' })]))
     for (const [name, bytes] of f.files) expect(await readFile(join(f.root, name))).toEqual(bytes)
   } finally { closeSessionQueries(); await f.coordinator.close() }
+})
+
+it('rebuilds a literal version2 persistent cache for canonical-valid inherited-prefix semantic facts with unchanged source revision', async () => {
+  const f = await semanticFixture(1)
+  await f.coordinator.close()
+  const path = join(f.root, 'target.jsonl'), dbPath = join(f.root, 'literal-v2.db')
+  const originalHeader = JSON.parse(f.raw.subarray(0, f.raw.indexOf(10)).toString())
+  const body = Buffer.from(f.snapshot.events.map(event => JSON.stringify(event) + '\n').join(''))
+  const header = { ...originalHeader, journal: { version: 1, legacyBodyBytes: body.length, legacyEventCount: f.snapshot.events.length, legacyPrefixDigest: legacyPrefixDigest(f.snapshot.events.length, body), separatorBytes: 0 } }
+  const bytes = Buffer.concat([Buffer.from(JSON.stringify(header) + '\n'), body])
+  expect(readFactJournal(body, header.journal, 13, header).events).toEqual(f.snapshot.events)
+  expect(parseLinePrefix(bytes).events).toEqual(f.snapshot.events)
+  await writeFile(path, bytes)
+  f.files.set('target.jsonl', bytes)
+  const before = await stat(path), revision = revisionOf(before), oldFingerprint = hash(bytes.subarray(0, bytes.length - 1))
+
+  // Literal old-index fixture, not an old application run. Schema/projection
+  // facts verified at BASE1af3c7ab: version2 uses these tables and empty seed
+  // text; its format13 raw-prefix fingerprint joins lines without final LF.
+  const old = new DatabaseSync(dbPath)
+  try {
+    old.exec(`PRAGMA application_id=0x49485155; PRAGMA user_version=2;
+      CREATE TABLE indexed_sessions(id TEXT PRIMARY KEY,revision TEXT NOT NULL,fingerprint TEXT NOT NULL) STRICT;
+      CREATE VIRTUAL TABLE indexed_docs USING fts5(session_id UNINDEXED,seq UNINDEXED,event_type UNINDEXED,time UNINDEXED,text,tokenize='unicode61');
+      CREATE TABLE lineage(id TEXT PRIMARY KEY,created_at INTEGER NOT NULL,cwd TEXT,parent_session TEXT,seed_length INTEGER,delegation_depth INTEGER,origin TEXT) STRICT;`)
+    old.prepare('INSERT INTO indexed_sessions VALUES (?,?,?)').run('target', revision, oldFingerprint)
+    for (const event of f.snapshot.events) old.prepare('INSERT INTO indexed_docs VALUES (?,?,?,?,?)').run('target', event.seq!, event.type, 0, '')
+    old.prepare('INSERT INTO lineage VALUES (?,?,?,?,?,?,?)').run('target', Date.parse(header.createdAt), null, 'source', header.seedLength, null, 'fork')
+    expect(old.prepare("SELECT COUNT(*) AS count FROM indexed_docs WHERE indexed_docs MATCH 'INHERITED_CONVERSATION_MARKER'").get()).toEqual({ count: 0 })
+    expect(old.prepare('SELECT revision,fingerprint FROM indexed_sessions WHERE id=?').get('target')).toEqual({ revision, fingerprint: oldFingerprint })
+  } finally { old.close() }
+
+  try {
+    const outcomes: string[] = []
+    const query = createFileBackedSessionQuery({ storeRoot: f.root, dbPath, onInspect: (id, outcome) => { if (id === 'target') outcomes.push(outcome) } })
+    expect(await query.search('INHERITED_CONVERSATION_MARKER', { sessionId: 'target' })).toEqual([expect.objectContaining({ sessionId: 'target', seq: 1, eventType: 'conversation/seed-group' })])
+    expect(outcomes).toEqual(['indexed'])
+    outcomes.length = 0
+    expect(await query.search('INHERITED_CONVERSATION_MARKER', { sessionId: 'target' })).toHaveLength(1)
+    expect(outcomes).toEqual(['skip'])
+    closeSessionQueries()
+    const check = new DatabaseSync(dbPath, { readOnly: true })
+    try {
+      expect(check.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 })
+      expect(check.prepare('SELECT revision,fingerprint FROM indexed_sessions WHERE id=?').get('target')).toEqual({ revision, fingerprint: hash(bytes) })
+    } finally { check.close() }
+    for (const [name, content] of f.files) expect(await readFile(join(f.root, name))).toEqual(content)
+    expect(await stat(path)).toMatchObject({ size: before.size, mtimeMs: before.mtimeMs, ctimeMs: before.ctimeMs, ino: before.ino })
+  } finally { closeSessionQueries() }
 })
 
 it.each([1, 2] as const)('searches actual V%s inherited conversation seed text in its target', async version => {

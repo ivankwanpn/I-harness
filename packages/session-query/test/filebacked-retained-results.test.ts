@@ -90,7 +90,7 @@ describe('retained results through actual framed JSONL and file-backed FTS', () 
       closeSessionQueries()
       const check = new DatabaseSync(store.dbPath, { readOnly: true })
       try {
-        expect(check.prepare('PRAGMA user_version').get()).toEqual({ user_version: 2 })
+        expect(check.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 })
         expect(check.prepare('SELECT * FROM indexed_sessions').all()).toEqual(indexed)
       } finally { check.close() }
       expect(readFileSync(store.file)).toEqual(bytes)
@@ -123,11 +123,11 @@ describe('retained results through actual framed JSONL and file-backed FTS', () 
     } finally { store.cleanup() }
   })
 
-  it.each(['foreign', 'future3'] as const)('refuses %s derived databases without resetting their tables or bytes', kind => {
+  it.each(['foreign', 'future4'] as const)('refuses %s derived databases without resetting their tables or bytes', kind => {
     const store = fixture(framed(10, facts(artifact)))
     try {
       const db = new DatabaseSync(store.dbPath)
-      db.exec(`CREATE TABLE sentinel (text TEXT); INSERT INTO sentinel VALUES ('preserve'); PRAGMA application_id=${kind === 'foreign' ? '0x4948524E' : '0x49485155'}; PRAGMA user_version=${kind === 'foreign' ? 1 : 3}`)
+      db.exec(`CREATE TABLE sentinel (text TEXT); INSERT INTO sentinel VALUES ('preserve'); PRAGMA application_id=${kind === 'foreign' ? '0x4948524E' : '0x49485155'}; PRAGMA user_version=${kind === 'foreign' ? 1 : 4}`)
       db.close()
       const before = readFileSync(store.dbPath)
       expect(() => createFileBackedSessionQuery({ storeRoot: store.dir, dbPath: store.dbPath })).toThrowError(expect.objectContaining({ code: 'SESSION_QUERY_INDEX_FOREIGN' }))

@@ -19,7 +19,7 @@ export function deriveSearchText(ev: SessionEvent): string {
       // metadata never become search inputs.
       return ev.group.items.flatMap(item => item.messages.flatMap(message => {
         const content = typeof message.content === 'string' ? message.content : message.content.map(part => part.type === 'text' ? part.text
-          : imageSummaryDescriptor([{ mediaType: part.image.mediaType, name: part.image.name, width: part.image.width, height: part.image.height, bytes: Math.ceil(part.image.dataBase64.length * 3 / 4) }])).join('\n')
+          : imageSummaryDescriptor([{ mediaType: part.image.mediaType, name: part.image.name, width: part.image.width, height: part.image.height, bytes: seedImageBytes(part.image.dataBase64) }])).join('\n')
         const calls = message.role === 'assistant' ? (message.toolCalls ?? []).map(call => `${call.name} ${codeSearchText(call.args)}`) : []
         return [content, ...calls].filter(text => text.length > 0)
       })).join('\n')
@@ -82,6 +82,11 @@ function retainedSearchText(envelope: ResultEnvelope): string {
   return envelope.retention.kind === 'inline'
     ? stringifyJsonData(envelope.retention.value) ?? 'null'
     : envelope.preview
+}
+
+/** Canonical base64 is already validated; count bytes without decoding it. */
+function seedImageBytes(dataBase64: string): number {
+  return dataBase64.length * 3 / 4 - (dataBase64.endsWith('==') ? 2 : dataBase64.endsWith('=') ? 1 : 0)
 }
 
 /** Code Mode may carry nested MCP media blocks, not only a top-level images
