@@ -1,17 +1,16 @@
-import { forkSession, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
+import { ForkAdmissionError, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createHash } from "node:crypto"
 import { readInbox } from "@i-harness/core-session"
 import { recoverColdSessionRewind, sessionArtifactManifest } from "./session-artifacts.ts"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 
-export type SessionManagementAction = "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread" | "delete"
+export type SessionManagementAction = "rename" | "archive" | "restore" | "pin" | "unpin" | "read" | "unread" | "delete"
 export interface SessionBatchCommand { action: "archive" | "restore" | "delete" | "move"; sessionIds: string[]; projectId?: string; expectedOwners?: Record<string, string | null> }
 export interface SessionBatchResult { results: ({ sessionId: string; ok: true; projectId?: string; executionWorkspace?: string } | { sessionId: string; ok: false; error: string })[] }
 export interface SessionNavigation { pinned: boolean; unread: boolean; projectId?: string }
 export interface SessionManagementOptions {
   projectFor?(sessionId: string): Promise<string | undefined>
-  onFork?(sourceSessionId: string, childSessionId: string): Promise<void>
   workspace?: string
   sessionDir?: string
   fence?: SessionManagementFence
@@ -22,7 +21,7 @@ export interface SessionManagementOptions {
   drainSession?(sessionId: string): Promise<void>
   moveProject?(sessionId: string, expectedOwner: string | undefined, projectId: string | undefined): Promise<{ sessionId: string; projectId?: string; executionWorkspace: string }>
 }
-const actions = new Set<SessionManagementAction>(["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread", "delete"])
+const actions = new Set<SessionManagementAction>(["rename", "archive", "restore", "pin", "unpin", "read", "unread", "delete"])
 const navigationActions = new Set<SessionManagementAction>(["pin", "unpin", "read", "unread"])
 interface ManagedAgentState { formatVersion?: unknown; agentTable?: { path?: string; sessionId?: string; status?: string; mailbox?: unknown[]; lastInboxSeq?: number }[]; jobs?: { status?: string }[] }
 
@@ -116,6 +115,21 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
   const manager = {
     fence,
     assertIdle: (id: string) => assertIdle(id),
+    withForkSource<T>(id: string, use: () => Promise<T>): Promise<T> {
+      const idle = async () => {
+        try { await assertIdle(id) }
+        catch (cause) {
+          if (cause instanceof Error && /^(Session is busy|Session has (?:active|pending|an unfinished))/.test(cause.message)) throw new ForkAdmissionError('busy', { cause })
+          throw cause
+        }
+      }
+      return serial(id, () => fence.exclusive(id, async () => {
+        const { meta } = await coordinator.profile(id)
+        if (meta.archived || !await visible(id, meta)) throw new ForkAdmissionError('source-unavailable')
+        await idle(); await coordinator.flush(id)
+        return use()
+      }, idle))
+    },
     async navigation(): Promise<Record<string, SessionNavigation>> {
       const entries = await Promise.all((await coordinator.list()).map(async (id) => {
         const profile = await coordinator.profile(id)
@@ -200,12 +214,6 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
               fence.retire(sessionId)
               await coordinator.deleteOwnedSession(sessionId, manifest)
               return { sessionId }
-            }
-            if (action === "fork") {
-              await coordinator.flush(sessionId)
-              const child = await forkSession(coordinator, sessionId)
-              await options.onFork?.(sessionId, child.sessionId)
-              return child
             }
             await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: action === "archive" })
             return { sessionId }

@@ -1,15 +1,15 @@
 import {join} from 'node:path'
 import {types} from 'node:util'
-import {createContextOutputService,contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope} from '@i-harness/context-output'
-import {isStrictFactData,sameManagedArtifactRef,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
+import {createContextOutputService,contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type LegacyReadObservationRunner} from '@i-harness/context-output'
+import {isStrictFactData,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
-import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort} from '@i-harness/session-persistence'
-import type {SessionProjectContext,ResultReadScopeResolver} from '@i-harness/session-executor'
+import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort,ExistingSessionBindingObservation} from '@i-harness/session-persistence'
+import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 
-export async function createNativeContextRuntime(options:{
-  workspace:string;storageRoot:string;coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'>
+interface NativeContextOptions {
+  workspace:string;storageRoot:string
   // A durable binding is independent of its currently confirmed scope. An
   // absent scope for a bound consumer is revoked authority, never unassigned.
   projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext;revision?:string}>
@@ -19,12 +19,49 @@ export async function createNativeContextRuntime(options:{
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
   registerJob?:CodeRetrievalOptions['registerJob']
-}) {
+}
+type ObservedBindings = {
+  coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'|'openManagedDocument'|'withExistingSessionBindingObservation'>
+  resultReadScopeFor:ResultReadScopeResolver
+  withBindingObservation<T>(ids:readonly string[],observation:ExistingSessionBindingObservation,use:()=>Promise<T>):Promise<T>
+}
+type ProfileOnlyBindings = {coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'>;withBindingObservation?:undefined}
+export async function createNativeContextRuntime(options:NativeContextOptions & (ObservedBindings|ProfileOnlyBindings)) {
   const{canonical,workspaceKey}=await contextWorkspaceIdentity(options.workspace)
   const prepareProject=options.prepareBootstrapInheritance
   const humanSessionId=`native-index-human:${workspaceKey}`
   let references=structuredClone(typeof options.references==='function'?options.references(workspaceKey):options.references??[]),closed=false
   let timer:ReturnType<typeof setInterval>|undefined,refreshing:Promise<unknown>|undefined
+  const observations=createResultObservationScope()
+  const assertAvailable=()=>{if(closed)throw new Error('Native context is closed')}
+  const canonicalSource=(get:()=>import('@i-harness/session-executor').ResultReadScope)=>{
+    assertAvailable();const selected=get()
+    if(selected.projectId&&selected.scope?.id!==selected.projectId)throw new Error('Native context project scope is not confirmed')
+    return{sourceId:contextSourceIdentity(workspaceKey,canonical,selected.scope),readonly:true}
+  }
+  async function withResultObservation<T>(capture:Omit<ResultObservationCapture,'currentSource'>,use:()=>Promise<T>):Promise<T>{
+    assertAvailable()
+    if(!options.withBindingObservation)throw new Error('Native context binding observation unavailable')
+    return options.withBindingObservation(capture.sessionIds,capture.observation,async()=>{
+      const getter=await options.resultReadScopeFor(capture.sessionId)
+      if(!getter)throw new Error('Observed native result scope unavailable')
+      return observations.run({...capture,currentSource:()=>canonicalSource(getter),assertHostCurrent(){assertAvailable();capture.assertHostCurrent()}},use)
+    })
+  }
+  const withLegacyReadObservation:LegacyReadObservationRunner=async(access,use)=>{
+    assertAvailable()
+    if(!options.withBindingObservation)throw new Error('Native context binding observation unavailable')
+    const captured=options
+    let getter:(()=>import('@i-harness/session-executor').ResultReadScope)|undefined
+    return createLegacyReadObservationRunner({coordinator:captured.coordinator,observations,assertHostCurrent:assertAvailable,
+      resolveSource:async()=>()=>{if(!getter)throw new Error('Observed native result scope unavailable');return canonicalSource(getter)},
+      withBindingObservation:(ids,observation,run)=>captured.withBindingObservation(ids,observation,async()=>{
+        getter=await captured.resultReadScopeFor(access.sessionId)
+        if(!getter)throw new Error('Observed native result scope unavailable')
+        return run()
+      }),
+    })(access,use)
+  }
   async function projectScope(sessionId:string){
     if(sessionId===humanSessionId)return undefined
     const {meta}=await options.coordinator.profile(sessionId)
@@ -34,22 +71,32 @@ export async function createNativeContextRuntime(options:{
     return selected.scope
   }
   async function sourceFor(sessionId:string){
+    const observed=observations.current(sessionId)
+    if(observed){assertAvailable();const source=observed.source;observed.assertCurrent();return source}
     const scope=await projectScope(sessionId)
     const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
-  const contextOutput=createContextOutputService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,
+  const contextOutput=createContextOutputService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,requireObservedLegacyRecipients:true,
     ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
     authorizeResult:async(access,metadata)=>{
       try{
         if(metadata.workspaceId!==workspaceKey||!metadata.owner.source||(await sourceFor(access.sessionId)).sourceId!==metadata.owner.source.sourceId)return false
         const visibleRef=metadata.visibleVia??metadata.ref
+        const observed=observations.current(access.sessionId)
+        if(observed){
+          observed.assertCurrent();const view=observed.view,cuts=rewindCuts(view)
+          return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||semanticSeedResultRefs(view).some(ref=>sameManagedArtifactRef(ref,visibleRef))
+            ||view.events.some(event=>!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)&&managedResultRefs(event).some(ref=>sameManagedArtifactRef(ref,visibleRef)))
+        }
         return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>'version' in visible&&sameManagedArtifactRef(visible,visibleRef)))
       }catch{return false}
     },
     authorize:async(access,ref)=>{
       try{
         if(ref.workspaceId!==workspaceKey||!ref.source||(await sourceFor(access.sessionId)).sourceId!==ref.source.sourceId)return false
+        const observed=observations.current(access.sessionId)
+        if(observed){observed.assertCurrent();return true}
         return access.sessionId===ref.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>!('version' in visible)&&visible.id===ref.id))
       }catch{return false}
     }})
@@ -57,6 +104,8 @@ export async function createNativeContextRuntime(options:{
   // around its real readers as source identity alone cannot detect ABA.
   async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{
     if(closed)throw new Error('Native context is closed')
+    const observed=observations.current(sessionId)
+    if(observed){observed.assertCurrent();const page=await operation();assertAvailable();observed.assertCurrent();return page}
     const getter=await options.resultReadScopeFor?.(sessionId)
     const captured=getter?.() ?? await options.projectFor(sessionId)
     const assertCurrent=async()=>{
@@ -74,7 +123,7 @@ export async function createNativeContextRuntime(options:{
   const readResult=contextOutput.readResult.bind(contextOutput),readExecResult=contextOutput.readExecResult.bind(contextOutput)
   contextOutput.readResult=(access,args)=>guardedRead(access.sessionId,()=>readResult(access,args))
   contextOutput.readExecResult=(access,args)=>guardedRead(access.sessionId,()=>readExecResult(access,args))
-  function prepareBootstrapTransfer(input:BootstrapProjectCapture,sourceAccess:ContextAccess|undefined):{targetPreparation:BootstrapTargetPreparationPort;dependencies:BootstrapDependencyPort;close():void}{
+  function prepareBootstrapTransfer(input:BootstrapProjectCapture,sourceAccess:ContextAccess|undefined):{targetPreparation:BootstrapTargetPreparationPort;dependencies:BootstrapDependencyPort;targetScope:BootstrapProjectPreparation['targetScope'];close():void}{
     if(closed||!prepareProject)throw new Error('Bootstrap project preparation unavailable')
     const capture=captureBootstrapProject(input)
     // ContextAccess carries a label and cancellation only. Capture its container
@@ -131,7 +180,8 @@ export async function createNativeContextRuntime(options:{
         return current===undefined?contextOutput.reconcileSeedDependencies(scope,request):contextOutput.confirmSeedDependencies(scope,request,current)
       }catch{return Promise.resolve({kind:'blocked',reason:'policy'})}
     }
-    return{targetPreparation,dependencies:{confirm:(request,current)=>typeof current==='function'?invoke(request,current):Promise.resolve({kind:'blocked',reason:'conflict'}),reconcile:request=>invoke(request)},close(){active=false;preparation.close()}}
+    return{targetPreparation,dependencies:{confirm:(request,current)=>typeof current==='function'?invoke(request,current):Promise.resolve({kind:'blocked',reason:'conflict'}),reconcile:request=>invoke(request)},
+      targetScope(){assertTargetCurrent();return preparation.targetScope()},close(){active=false;preparation.close()}}
   }
   let codeRetrieval:ReturnType<typeof createCodeRetrievalService>
   const reader=createNativeCodeSourceReader({workspace:canonical,references:()=>references,config:()=>codeRetrieval.status().config,
@@ -151,7 +201,7 @@ export async function createNativeContextRuntime(options:{
     refreshing=work
     try{await work}catch{/* The service preserves job error/outcome for its UI. */}finally{if(refreshing===work)refreshing=undefined}
   }
-  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,
+  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,
     async configureReferences(next:NativeReferenceSource[]){
       if(JSON.stringify(references)===JSON.stringify(next))return
       // Visibility changes before awaiting drainage, so old snippets cannot

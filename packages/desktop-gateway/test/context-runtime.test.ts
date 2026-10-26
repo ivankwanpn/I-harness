@@ -3,6 +3,7 @@ import {mkdir,mkdtemp,rm,stat,writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createNativeContextRuntime} from '../src/context-runtime.ts'
+import {createGatewayForkFixture} from './helpers/fork-fixture.ts'
 const cleanup:Array<()=>Promise<void>>=[]
 afterEach(async()=>{for(const operation of cleanup.splice(0).reverse())await operation()})
 async function setup(){
@@ -28,13 +29,23 @@ it('does not create either native store when both are disabled',async()=>{
   await expect(stat(storageRoot)).rejects.toThrow()
 })
 it('binds output references to actual session lineage and current project scope',async()=>{
-  const{runtime,move,visibleRefs}=await setup();await runtime.contextOutput.configure({enabled:true})
-  const ref=await runtime.contextOutput.capture({sessionId:'s',callId:'call',label:'test',text:'captured',complete:true,source:await runtime.sourceFor('s')})
-  await expect(runtime.contextOutput.read({sessionId:'other'},{refId:ref!.id})).rejects.toThrow()
-  await expect(runtime.contextOutput.read({sessionId:'child'},{refId:ref!.id})).rejects.toThrow()
-  visibleRefs.child=[ref!]
-  expect((await runtime.contextOutput.read({sessionId:'child'},{refId:ref!.id})).text).toBe('captured')
-  move();await expect(runtime.contextOutput.read({sessionId:'s'},{refId:ref!.id})).rejects.toThrow()
+  const f=await createGatewayForkFixture(),{runtime}=f
+  try{
+    await runtime.contextOutput.configure({enabled:true})
+    const ref=await runtime.contextOutput.capture({sessionId:'source',callId:'call',label:'test',text:'captured',complete:true,source:await runtime.sourceFor('source')})
+    if(!ref)throw new Error('Actual source capture refused')
+    await expect(runtime.contextOutput.read({sessionId:'other'},{refId:ref.id})).rejects.toThrow()
+    await expect(runtime.contextOutput.read({sessionId:'child'},{refId:ref.id})).rejects.toThrow()
+    await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'actual typed ref'},{type:'context/result-ref',ref},{type:'turn/end'}])
+    const operation=await f.prepare('source','child','scope-positive')
+    expect((await f.execute(operation)).kind).toBe('ready')
+    await runtime.withLegacyReadObservation({sessionId:'child'},async observation=>{
+      expect((await runtime.contextOutput.readLegacyObserved({sessionId:'child'},{refId:ref.id},observation)).text).toBe('captured')
+    })
+    await f.projects.revoke('p')
+    await expect(runtime.contextOutput.read({sessionId:'source'},{refId:ref.id})).rejects.toThrow()
+    await expect(runtime.withLegacyReadObservation({sessionId:'child'},observation=>runtime.contextOutput.readLegacyObserved({sessionId:'child'},{refId:ref.id},observation))).rejects.toThrow()
+  }finally{await f.close()}
 })
 it('authorizes managed results with actual source metadata and denies current project revocation',async()=>{
   const{runtime,move,visibleRefs}=await setup()
