@@ -160,3 +160,11 @@ Complete only when one reviewed integrated source contains actual persistence/SD
 | C6 / FC03 | Real Gateway/Desktop owners and partial runtime type seam; inherited AssemblyOptions needs no service/rewind edit. F1 public slot before O1, C2/ID independent instruction factory reserved. |
 
 Original drafts/candidates and preflight review are preserved. Root promotion authorizes only the assigned implementation scope, not an unrun test, runtime/performance qualification or release. Exact writer/BASE/runtime reservation is recorded in the plan SDD ledger.
+
+## 12. Execution amendments and shared-owner order (2026-10-27)
+
+- FC08–FC09 source at810d9db5 has scoped review approval: presentation remains non-authoritative; actual reservation/materialization establishes only the local operation restriction. Preserve a33–a40 evidence and the disclosed working-B test dependency. No whole F1 acceptance follows.
+- FC10/FC12 adds only coordinator/managed-document.ts and bootstrap.ts plus bootstrap-cached-ready.test.ts. Review immutable738a77ee independently against spec§12. Keep actual read→same-operation retry order, original native owner/cache/frame confirmation and raw/new/payload refusals. A subsequent passive-codec writer may consume only an accepted fixed handoff and edit bootstrap.ts:checkBirth reconstruction; managed-document.ts remains excluded from that later slice.
+- FC11 actual host/controller closure remains in the mapped files. Qualify a real L1 close-before-action failure and retained service dependency, not a synthetic error after successful disposal. SDK/CLI/Gateway close must join the same original handles. Review the frozen host correction with its real consumers; scoped owner approval does not qualify uncommitted host composition.
+- PC06 preserves all original Code Mode store positive assertions through the actual shipping host/controller. Reserve its shared fixture/controller handoff serially. Do not widen inline support, add retentionless authority, encode store data as conversation text or substitute refusal for successful nested inheritance.
+- Continue B actual SDK/server/CLI stdio, then C Gateway/Desktop and D integrated evidence. Direct-host tests and client contract replies are prerequisite evidence, not substitutes for those actual public paths.
