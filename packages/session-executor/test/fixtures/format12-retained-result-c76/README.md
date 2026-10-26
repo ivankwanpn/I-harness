@@ -31,6 +31,14 @@ the emitted bundle hash separately from original source hashes. Emitted bundle
 bytes are not asserted equal to old TypeScript source. Other module-relative
 worker/native assets are outside this producer path and are not copied.
 
+The compiler APIs execute from the selected `dependencyRoot`, even when the
+helper is hosted in another checkout. Before loading either API, validation
+binds its package name/version, package metadata hash, resolved package root,
+resolved entry path and entry content hash to the manifest. Build provenance
+records these exact loaded paths/hashes plus the APIs' reported versions.
+Same-version compiler entries with different content are refused before any
+producer data root or child is created. The helper host supplies no compiler.
+
 The child uses the original service, original JSONL writer, real model-issued
 background spawn, original TaskResultOwner, original ContextOutput retention,
 original source end and original task save. A task-owned loopback SSE provider

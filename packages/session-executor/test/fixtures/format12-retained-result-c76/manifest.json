@@ -17963,12 +17963,24 @@
   ],
   "tooling": {
     "esbuild": {
+      "name": "esbuild",
       "version": "0.28.2",
-      "packageJsonSha256": "9d0bc453f4e791553c4cc2298ba023b409241fd9801e494741666eb0f6051490"
+      "packageJsonSha256": "9d0bc453f4e791553c4cc2298ba023b409241fd9801e494741666eb0f6051490",
+      "packageRoot": "node_modules/.pnpm/esbuild@0.28.2/node_modules/esbuild",
+      "entry": {
+        "relativePath": "lib/main.js",
+        "sha256": "61ec0ba144ff93f4bf0e96ad6fab6f430ede0aa13e27ace8063ed63ba416b3cd"
+      }
     },
     "typescript": {
+      "name": "typescript",
       "version": "5.9.3",
-      "packageJsonSha256": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6"
+      "packageJsonSha256": "822ef7ca6452205657b6288b066481ecf508bfbf43455d715cf7d3ec457561e6",
+      "packageRoot": "node_modules/.pnpm/typescript@5.9.3/node_modules/typescript",
+      "entry": {
+        "relativePath": "lib/typescript.js",
+        "sha256": "3ae902c92cc44dace175c0e69e13a4b0899f6983c6121d76b9ab8dd5795e7675"
+      }
     }
   },
   "provenance": {

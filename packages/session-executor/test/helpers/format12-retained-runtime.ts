@@ -6,8 +6,7 @@ import { readFile, writeFile, mkdir, mkdtemp, realpath, symlink, readdir } from 
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
-import { build } from 'esbuild'
-import ts from 'typescript'
+import type * as TypeScript from 'typescript'
 
 const repository = fileURLToPath(new URL('../../../../', import.meta.url))
 const defaultFixture = fileURLToPath(new URL('../fixtures/format12-retained-result-c76/', import.meta.url))
@@ -27,7 +26,7 @@ interface Manifest {
   version: number; predecessor: string; archive: { path: string; bytes: number; sha256: string }
   sources: SourceRow[]; assets: SourceRow[]; driver: SourceRow
   dependencies: { name: string; version: string; packageRoot: string; packageJsonSha256: string; entries: { specifier: string; relativePath: string; sha256: string }[] }[]
-  tooling: { esbuild: { version: string; packageJsonSha256: string }; typescript: { version: string; packageJsonSha256: string } }
+  tooling: Record<'esbuild' | 'typescript', { name: string; version: string; packageRoot: string; packageJsonSha256: string; entry: { relativePath: string; sha256: string } }>
 }
 export interface Format12ValidationOptions { fixtureDirectory?: string; dependencyRoot?: string }
 async function validate(options: Format12ValidationOptions) {
@@ -72,17 +71,28 @@ async function validate(options: Format12ValidationOptions) {
     }
     dependencies.push({ ...dependency, actualRoot: packageRoot })
   }
-  const require = createRequire(join(dependencyRoot, 'package.json')), toolingBytes = await readFile(require.resolve('esbuild/package.json'))
-  assert.equal(JSON.parse(toolingBytes.toString()).version, manifest.tooling.esbuild.version)
-  assert.equal(sha(toolingBytes), manifest.tooling.esbuild.packageJsonSha256)
-  const typescriptBytes = await readFile(require.resolve('typescript/package.json'))
-  assert.equal(ts.version, manifest.tooling.typescript.version); assert.equal(sha(typescriptBytes), manifest.tooling.typescript.packageJsonSha256)
-  return { manifest, files, rows, dependencies, dependencyRoot, manifestSha256: sha(manifestBytes) }
+  const require = createRequire(join(dependencyRoot, 'package.json')), tooling = {} as Record<'esbuild' | 'typescript', { name: string; version: string; packageRoot: string; packageJsonPath: string; packageJsonSha256: string; entryPath: string; entrySha256: string }>
+  for (const name of ['esbuild', 'typescript'] as const) {
+    const expected = manifest.tooling[name]; assert.equal(expected.name, name, 'Wrong compiler package name')
+    safePath(expected.packageRoot); assert(expected.packageRoot.startsWith('node_modules/.pnpm/'))
+    const packageRoot = await realpath(resolve(dependencyRoot, expected.packageRoot)); within(join(dependencyRoot, 'node_modules'), packageRoot)
+    const packageJsonPath = await realpath(require.resolve(name + '/package.json'))
+    assert.equal(packageJsonPath, join(packageRoot, 'package.json'), 'Compiler metadata resolved outside selected root')
+    const packageBytes = await readFile(packageJsonPath), metadata = JSON.parse(packageBytes.toString())
+    assert.equal(metadata.name, name, 'Wrong compiler metadata name'); assert.equal(metadata.version, expected.version, 'Wrong compiler metadata version')
+    assert.equal(sha(packageBytes), expected.packageJsonSha256, 'Wrong compiler metadata hash')
+    safePath(expected.entry.relativePath)
+    const entryPath = await realpath(require.resolve(name)); within(packageRoot, entryPath)
+    assert.equal(entryPath, resolve(packageRoot, expected.entry.relativePath), 'Wrong selected compiler entry path')
+    assert.equal(sha(await readFile(entryPath)), expected.entry.sha256, 'Wrong selected compiler entry hash')
+    tooling[name] = { name, version: expected.version, packageRoot, packageJsonPath, packageJsonSha256: sha(packageBytes), entryPath, entrySha256: expected.entry.sha256 }
+  }
+  return { manifest, files, rows, dependencies, dependencyRoot, tooling, manifestSha256: sha(manifestBytes) }
 }
 /** Validates all sources/dependencies before any producer process is started. */
 export async function validateFormat12RetainedCapsule(options: Format12ValidationOptions = {}) {
   const checked = await validate(options)
-  return { predecessor, sources: checked.manifest.sources.length, archiveSha256: checked.manifest.archive.sha256, manifestSha256: checked.manifestSha256 }
+  return { predecessor, sources: checked.manifest.sources.length, archiveSha256: checked.manifest.archive.sha256, manifestSha256: checked.manifestSha256, tooling: checked.tooling }
 }
 export interface Format12ProducerOptions extends Format12ValidationOptions {
   /** Fresh, task-owned actual workspace/data root. Current readers use this same root. */
@@ -96,6 +106,12 @@ export interface Format12ProducerOptions extends Format12ValidationOptions {
 export async function produceFormat12RetainedResult(options: Format12ProducerOptions) {
   const timeoutMs = options.timeoutMs ?? 45000; assert(timeoutMs > 0 && timeoutMs <= 60000)
   const checked = await validate(options), root = resolve(options.root)
+  // Both APIs are loaded only after every selected package and entry passed validation.
+  const require = createRequire(join(checked.dependencyRoot, 'package.json'))
+  const esbuild = require(checked.tooling.esbuild.entryPath) as typeof import('esbuild')
+  const ts = require(checked.tooling.typescript.entryPath) as typeof TypeScript
+  assert.equal(esbuild.version, checked.tooling.esbuild.version, 'Executed esbuild API version mismatch')
+  assert.equal(ts.version, checked.tooling.typescript.version, 'Executed TypeScript API version mismatch')
   await mkdir(root, { recursive: true }); assert.deepEqual(await readdir(root), [], 'Fresh producer data root required')
   const runtimeParent = resolve(options.runtimeParent ?? dirname(root)); await mkdir(runtimeParent, { recursive: true })
   const runtimeRoot = await mkdtemp(join(runtimeParent, 'format12-c76-runtime-')), sourceRoot = join(runtimeRoot, 'source')
@@ -112,7 +128,7 @@ export async function produceFormat12RetainedResult(options: Format12ProducerOpt
   const graph = new Map(checked.rows.map(row => [row.path, row]))
   const moduleMetadata: { path: string; url: string; replacements: number; transformedSha256: string }[] = []
   const bundle = join(runtimeRoot, 'old-producer.mjs')
-  const built = await build({ entryPoints: [resolve(sourceRoot, checked.manifest.driver.path)], outfile: bundle, write: true, bundle: true, platform: 'node', format: 'esm', metafile: true, logLevel: 'silent', plugins: [{ name: 'captured-workspace-only', setup(build) {
+  const built = await esbuild.build({ entryPoints: [resolve(sourceRoot, checked.manifest.driver.path)], outfile: bundle, write: true, bundle: true, platform: 'node', format: 'esm', metafile: true, logLevel: 'silent', plugins: [{ name: 'captured-workspace-only', setup(build) {
     build.onLoad({ filter: /\.[cm]?tsx?$/ }, args => {
       const path = relative(sourceRoot, args.path).replaceAll('\\', '/'), original = checked.files.get(path)
       assert(original !== undefined, 'Uncaptured compiler input: ' + path)
@@ -120,14 +136,14 @@ export async function produceFormat12RetainedResult(options: Format12ProducerOpt
       let replacements = 0
       const url = pathToFileURL(args.path).href
       const transformed = ts.transform(parsed, [context => {
-        const visit: ts.Visitor = node => {
+        const visit: TypeScript.Visitor = node => {
           if (ts.isPropertyAccessExpression(node) && ts.isMetaProperty(node.expression) && node.expression.keywordToken === ts.SyntaxKind.ImportKeyword && node.expression.name.text === 'meta') {
             assert(node.name.text === 'url' || node.name.text === 'dirname', 'Unsupported captured import.meta property')
             replacements++; return context.factory.createStringLiteral(node.name.text === 'url' ? url : dirname(args.path))
           }
           return ts.visitEachChild(node, visit, context)
         }
-        return source => ts.visitNode(source, visit) as ts.SourceFile
+        return source => ts.visitNode(source, visit) as TypeScript.SourceFile
       }])
       const contents = replacements ? ts.createPrinter({ newLine: ts.NewLineKind.LineFeed }).printFile(transformed.transformed[0]!) : original
       transformed.dispose()
@@ -156,7 +172,7 @@ export async function produceFormat12RetainedResult(options: Format12ProducerOpt
   assert.deepEqual(bundledInputs, [...checked.manifest.sources.map(row => row.path), checked.manifest.driver.path].sort(), 'Bundled workspace graph changed')
   const residual = Object.values(built.metafile!.outputs).flatMap(output => output.imports).filter(item => item.external && item.path.startsWith('@i-harness/'))
   assert.deepEqual(residual, [], 'Residual workspace external refused')
-  await writeFile(join(runtimeRoot, 'build-provenance.json'), JSON.stringify({ predecessor, manifestSha256: checked.manifestSha256, archiveSha256: checked.manifest.archive.sha256, sourceCount: checked.manifest.sources.length, driverSha256: checked.manifest.driver.sha256, bundleSha256: sha(await readFile(bundle)), compilerTransform: { tool: 'TypeScript', version: ts.version, operation: 'AST property access replacement only for import.meta.url/dirname, bound to each captured extracted module', modules: moduleMetadata.sort((a, b) => a.path.localeCompare(b.path)) }, bundledInputs, externalSpecifiers: [...externalSpecifiers].sort(), residualWorkspaceExternals: residual, graph: built.metafile }, null, 2))
+  await writeFile(join(runtimeRoot, 'build-provenance.json'), JSON.stringify({ predecessor, manifestSha256: checked.manifestSha256, archiveSha256: checked.manifest.archive.sha256, sourceCount: checked.manifest.sources.length, tooling: { esbuild: { ...checked.tooling.esbuild, apiVersion: esbuild.version }, typescript: { ...checked.tooling.typescript, apiVersion: ts.version } }, driverSha256: checked.manifest.driver.sha256, bundleSha256: sha(await readFile(bundle)), compilerTransform: { tool: 'TypeScript', version: ts.version, operation: 'AST property access replacement only for import.meta.url/dirname, bound to each captured extracted module', modules: moduleMetadata.sort((a, b) => a.path.localeCompare(b.path)) }, bundledInputs, externalSpecifiers: [...externalSpecifiers].sort(), residualWorkspaceExternals: residual, graph: built.metafile }, null, 2))
   const env = { ...process.env }, roots: Record<string, string> = {}
   for (const [key, leaf] of Object.entries({ IH_CONFIG_DIR: 'config', IH_STRUCTURE_EVIDENCE_ROOT: 'structure', IH_RESULT_INTEGRITY_EVIDENCE_ROOT: 'result-integrity', IH_LEGACY_FORK_EVIDENCE_ROOT: 'legacy-fork', IH_MIXED_RETENTION_EVIDENCE_ROOT: 'mixed-retention', IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT: 'native-dependency', TEMP: 'temp', TMP: 'temp' })) {
     roots[key] = join(runtimeRoot, leaf); env[key] = roots[key]; await mkdir(roots[key], { recursive: true })
