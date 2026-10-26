@@ -30,10 +30,9 @@ function array(value: unknown): unknown[] {
   return value
 }
 
-/** V1 held source projection. Inherited wire transport is kept separate until
- * the V2 manifest/source codec is authorized; no lookalike event grants it. */
-export function projectPassiveCodeStore(context: CompletedPassiveContext): OwnedPassiveCandidates {
-  context.owner.assertCurrent()
+/** Local positional events use physical windows. Inherited anchors are
+ * translated individually below, before their expanded chronology is melded. */
+function projectLocalCodeStore(context: CompletedPassiveContext): OwnedPassiveCandidates {
   const { view } = context.source, windows: RewindCut[] = []
   for (const window of context.source.originalWindows) meldRewindCut(windows, window.cutFrom, window.markerSeq)
   const visible = (seq: number) => !windows.some(window => seq >= window.cutFrom && seq < window.markerSeq)
@@ -86,7 +85,62 @@ export function projectPassiveCodeStore(context: CompletedPassiveContext): Owned
     }
   }
   const cuts = ranks.map(rank => ({ end: positions.filter(position => position < rank).length, knowledge: { kind: 'unclassified' as const } }))
-  context.owner.assertCurrent()
   return { units: units.size, rows, slots, cuts, latest: cutIds.get(upper)!, completed: completedRanks.map(entry => ({ turn: entry.turn, cut: cutIds.get(entry.rank)! })),
     groups: context.groups.map(group => cutIds.get(Math.min(upper, group.anchor.index))!) }
+}
+
+export function projectPassiveCodeStore(context: CompletedPassiveContext): OwnedPassiveCandidates {
+  const local = projectLocalCodeStore(context), inherited = context.boundary.inherited
+  if (inherited.kind === 'empty') return local
+  const manifest = context.source.view.events[inherited.manifest.index]
+  if (manifest?.type !== 'conversation/seed-manifest' || manifest.version !== 2) throw new TypeError('Invalid semantic seed')
+  const data = manifest.passive.codeStore, expanded = expandInheritedCodeStore(data)
+  const selectedBase = inherited.kind === 'completed' ? data.completed.find(entry => entry.turn === inherited.turn)?.cut : data.latest
+  if (selectedBase === undefined) throw new TypeError('Invalid semantic seed')
+  let effectiveBase = selectedBase, emptyBase = false
+  const translated: RewindCut[] = [], seedLength = context.source.view.header?.seedLength ?? 0
+  const inheritedAt = (rank: number) => {
+    const event = context.source.view.events[rank]
+    if (event?.type === 'conversation/seed-group') {
+      const cut = data.groups[event.ordinal]
+      if (cut === undefined) throw new TypeError('Invalid semantic seed')
+      return cut
+    }
+    if (rank === 0) return undefined // An actual rewind before the manifest erases the entire imported state.
+    return data.latest
+  }
+  for (const window of context.source.originalWindows) {
+    let start: number
+    if (window.startRank < seedLength) {
+      const cut = inheritedAt(window.startRank)
+      if (cut === undefined) { emptyBase = true; start = 0 }
+      else { effectiveBase = Math.min(effectiveBase, cut); start = data.cuts[cut]!.end }
+    } else start = data.rows.length + window.startRank
+    meldRewindCut(translated, start, data.rows.length + window.endRank)
+  }
+  const visible = (position: number) => !translated.some(window => position >= window.cutFrom && position < window.markerSeq)
+  const rows: CandidateRow[] = [], prefix = [0]
+  const baseEnd = emptyBase ? 0 : data.cuts[selectedBase]!.end
+  for (const [position, row] of expanded.rows.entries()) {
+    if (position < baseEnd && visible(position)) rows.push(row)
+    prefix.push(rows.length)
+  }
+  const cuts: OwnedPassiveCandidates['cuts'][number][] = data.cuts.map((cut, oldCut) => {
+    const effective = Math.min(oldCut, effectiveBase)
+    return { end: prefix[Math.min(cut.end, baseEnd)]!, knowledge: emptyBase ? { kind: 'classified', outcome: 'value' }
+      : { kind: 'inherited-observation', oldCut: effective, outcome: data.cuts[effective]!.overLimit ? 'limit-exceeded' : 'value' } }
+  })
+  const offset = rows.length, cutOffset = cuts.length, slotOffset = expanded.slots.length
+  for (const row of local.rows) rows.push(row.kind === 'put' ? { ...row, unit: row.unit + data.units, slot: row.slot + slotOffset } : { ...row, unit: row.unit + data.units })
+  cuts.push(...local.cuts.map(cut => ({ end: offset + cut.end, knowledge: cut.knowledge })))
+  const groups = context.groups.map((group, ordinal) => {
+    const event = context.source.view.events[group.anchor.index]
+    return event?.type === 'conversation/seed-group' ? data.groups[event.ordinal]! : cutOffset + local.groups[ordinal]!
+  })
+  const addressableTurns = new Set(context.groups.flatMap(group => group.extent.kind === 'framed' && group.extent.first === group.extent.last ? [group.extent.first] : []))
+  const completed = [...data.completed.filter(entry => entry.turn <= context.last && addressableTurns.has(entry.turn)).map(entry => ({ ...entry })),
+    ...local.completed.map(entry => ({ turn: entry.turn, cut: cutOffset + entry.cut }))].sort((a, b) => a.turn - b.turn)
+  return { units: data.units + local.units, rows, slots: [...expanded.slots, ...local.slots.map(slot => ({ ...slot, slot: slot.slot + slotOffset }))], cuts,
+    inherited: { data, toCandidate: data.cuts.map((_, oldCut) => ({ oldCut, candidateCut: oldCut })) },
+    latest: cutOffset + local.latest, completed, groups }
 }

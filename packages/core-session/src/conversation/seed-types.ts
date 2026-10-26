@@ -85,7 +85,12 @@ export interface SemanticSeedV1 {
   omissions: readonly SeedOmission[]; artifacts: readonly SeedArtifact[];
   groups: readonly SeedGroup[];
 }
-export type SeedExport = { kind: 'none' }
-  | { kind: 'seed'; seed: SemanticSeedV1; digest: Digest;
+export type SemanticSeedV2 = Omit<SemanticSeedV1, 'version' | 'selection'> & {
+  version: 2; selection: Extract<SeedSelection, { kind: 'completed' }>
+  passive: { codeStore: import('../projection/passive-code-store/types.ts').PassiveCodeStoreV1 }
+}
+export type SemanticSeed = SemanticSeedV1 | SemanticSeedV2
+export type SeedExport<T extends SemanticSeed = SemanticSeed> = { kind: 'none' }
+  | { kind: 'seed'; seed: T; digest: Digest;
       sourceObservationDigest:Digest }
   | { kind: 'refused'; reason: SeedRefusal };

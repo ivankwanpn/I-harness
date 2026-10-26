@@ -5,7 +5,7 @@ import type { DataRow, OwnedPassiveCandidates, PassiveCodeStoreV1 } from './type
 
 export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): PassiveCodeStoreV1 | undefined {
   const selected = new Set<number>(), cuts: PassiveCodeStoreV1['cuts'][number][] = []
-  const captured = new Map<number, { value: unknown; valueJson: string }>()
+  const captured = new Map<number, { value: unknown; valueJson?: string }>()
   const slots = new Map(candidates.slots.map(slot => [slot.slot, slot]))
   const addressable = new Set([candidates.latest, ...candidates.completed.map(entry => entry.cut), ...candidates.groups])
   const body = (slot: number) => {
@@ -14,10 +14,9 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
       const source = slots.get(slot)
       if (!source) throw new TypeError('Invalid semantic seed')
       const value = source.kind === 'inherited-json' ? decodeStoreValueJson(source.valueJson) : captureSelectedData(source.value)
-      // Validate JSON separately from absolute entry-array quota. A valid giant
-      // selected value can establish a fault; malformed data cannot.
-      const valueJson = source.kind === 'inherited-json' ? source.valueJson : json(value, Number.MAX_SAFE_INTEGER, 'Session store', true)
-      result = { value, valueJson }; captured.set(slot, result)
+      // Validate descriptors/JSON before quota classification, but do not
+      // materialize an oversized native string for a discarded fault body.
+      result = { value, ...(source.kind === 'inherited-json' ? { valueJson: source.valueJson } : {}) }; captured.set(slot, result)
     }
     return result
   }
@@ -31,8 +30,10 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
       if (row.kind === 'put') final.set(row.key, position)
     }
     const inheritedBase = candidates.inherited?.toCandidate.filter(entry => entry.candidateCut <= cutId).sort((a, b) => b.candidateCut - a.candidateCut)[0]
-    const unknownFaultBase = cut.knowledge.kind === 'unclassified' && inheritedBase !== undefined &&
-      candidates.inherited!.data.cuts[inheritedBase.oldCut]?.overLimit === true
+    const effectiveObservation = inheritedBase === undefined ? undefined : candidates.cuts[inheritedBase.candidateCut]?.knowledge
+    const effectiveOldCut = effectiveObservation?.kind === 'inherited-observation' ? effectiveObservation.oldCut : inheritedBase?.oldCut
+    const unknownFaultBase = cut.knowledge.kind === 'unclassified' && effectiveOldCut !== undefined && effectiveObservation?.kind !== 'classified' &&
+      candidates.inherited!.data.cuts[effectiveOldCut]?.overLimit === true
     if (unknownFaultBase && qualified.some(position => {
       const row = candidates.rows[position]!
       return row.kind === 'put' && slots.get(row.slot)?.kind === 'local-descriptor'
@@ -55,7 +56,8 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
     if (row.kind === 'eligible') return row
     let key = keyMap.get(row.key); if (key === undefined) { key = keys.length; keys.push(row.key); keyMap.set(row.key, key) }
     if (row.kind === 'touch' || !selected.has(position)) return { kind: 'touch', unit: row.unit, key }
-    const valueJson = body(row.slot).valueJson
+    const capturedBody = body(row.slot)
+    const valueJson = capturedBody.valueJson ??= json(capturedBody.value, MAX_STORE_BYTES, 'Session store', true)
     let value = valueMap.get(valueJson); if (value === undefined) { value = values.length; values.push({ valueJson }); valueMap.set(valueJson, value) }
     return { kind: 'put', unit: row.unit, key, value }
   })

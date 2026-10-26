@@ -31,7 +31,7 @@ interface Reference {
   recovery?: boolean
   inputId?: string; messageId?: string; provenanceKind?: string; producer?: string; originSessionId?: string; intent?: string
 }
-export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number; semanticSeed?: import('../events/bootstrap.ts').SeedHeaderV1 }
+export type GenerationHistoryScope = { sessionId?: string; parentSession?: string; seedLength?: number; semanticSeed?: import('../events/bootstrap.ts').SeedHeader }
 type Action = GenerationActionState
 function source(event: SessionEventView): Reference {
   const reference: Reference = { type: event.type }

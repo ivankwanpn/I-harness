@@ -37,17 +37,20 @@ export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: C
     }
     const before = (index: number): Upper => index < source.coordinates.length ? { kind: 'before-event', at: coordinate(index) } : { kind: 'archive-end', eventCount: source.coordinates.length }
     const requested = selection.atSeq === undefined ? undefined : owner.view.events[selection.atSeq]
+    const manifestIndex = owner.view.events.findIndex(event => event.type === 'conversation/seed-manifest' && event.version === 2)
+    const manifest = manifestIndex < 0 ? undefined : coordinate(manifestIndex)
+    const inheritedLatest: InheritedLatest = manifest ? { kind: 'latest', manifest } : { kind: 'empty' }
     const local = source.turns.ends.find(end => end.turn === last)
     let boundary: Boundary
     if (requested?.type === 'conversation/seed-group') {
       boundary = { kind: 'explicit-inherited-group', lastTurn: last, group: coordinate(selection.atSeq!), ordinal: requested.ordinal,
-        upper: before(owner.view.header?.seedLength ?? 0), inherited: { kind: 'empty' } }
+        upper: before(owner.view.header?.seedLength ?? 0), inherited: manifest ? { kind: 'completed', manifest, turn: last } : { kind: 'empty' } }
     } else if (local) {
       const next = source.turns.starts.find(start => start.seq > local.seq)
-      boundary = { kind: 'local-completed', lastTurn: last, end: coordinate(local.seq), upper: before(next?.seq ?? source.coordinates.length), inherited: { kind: 'empty' } }
+      boundary = { kind: 'local-completed', lastTurn: last, end: coordinate(local.seq), upper: before(next?.seq ?? source.coordinates.length), inherited: inheritedLatest }
     } else {
       const next = source.turns.starts[0]
-      boundary = { kind: 'inherited-default', lastTurn: last, upper: before(next?.seq ?? source.coordinates.length), inherited: { kind: 'empty' } }
+      boundary = { kind: 'inherited-default', lastTurn: last, upper: before(next?.seq ?? source.coordinates.length), inherited: inheritedLatest }
     }
     const groups = selected.groups.map((group, ordinal) => {
       const establishments = group.items.map(item => coordinate(item.establishmentIndex))

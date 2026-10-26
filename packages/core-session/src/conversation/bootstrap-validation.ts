@@ -1,9 +1,9 @@
 import type { SessionEventView } from '../managed/types.ts'
-import type { SeedHeaderV1 } from '../events/bootstrap.ts'
+import type { SeedHeader } from '../events/bootstrap.ts'
 import type { GenerationHistoryScope } from './generation.ts'
 import { canonicalJsonData } from '../serialization/json-data.ts'
-import { seedCount, seedData, seedDigest, seedFields, seedId, seedInvalid, validateSemanticSeed, validateSemanticSeedStructure, validateSemanticSeedPrefix } from './seed-codec.ts'
-import { seedHash, EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './seed-digest.ts'
+import { seedCount, seedData, seedDigest, seedFields, seedId, seedInvalid, validateSemanticSeed, validateSemanticSeedStructure, validateSemanticSeedPrefix, semanticSeedFromRecords } from './seed-codec.ts'
+import { seedHash, semanticSeedDomain, EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from './seed-digest.ts'
 import { validateAdmitted, type AdmittedInput } from '../inbox.ts'
 import { validateConversationEventShape } from '../events/conversation.ts'
 import { bootstrapInitialInputDigest } from './bootstrap-initial.ts'
@@ -20,11 +20,11 @@ export function validateSemanticBootstrapHistory(events: readonly SessionEventVi
   validateBootstrapReadiness(events, formatVersion, header)
 }
 
-export function validateSeedHeader(header: SeedHeaderV1): void {
+export function validateSeedHeader(header: SeedHeader): void {
   seedData(header)
   seedFields(header, ['version', 'codec', 'operationId', 'requestDigest', 'manifestDigest', 'seedDigest', 'dependencyDigest', 'seedLength', 'groupCount'],
     ['initialInputId', 'initialInputDigest', 'initialStartedAt', 'initialExpiresAt'])
-  if (header.version !== 1 || header.codec !== 'semantic-seed-v1' || !seedId(header.operationId)
+  if (!(header.version === 1 && header.codec === 'semantic-seed-v1' || header.version === 2 && header.codec === 'semantic-seed-v2' && header.seedLength > 0) || !seedId(header.operationId)
     || ![header.requestDigest, header.manifestDigest, header.seedDigest, header.dependencyDigest].every(seedDigest)
     || !seedCount(header.seedLength) || !seedCount(header.groupCount) || (header.seedLength === 0 ? header.groupCount !== 0 : header.seedLength !== header.groupCount + 1)) seedInvalid()
   if (header.seedLength === 0 && (header.seedDigest !== EMPTY_SEMANTIC_SEED_DIGEST || header.dependencyDigest !== EMPTY_SEMANTIC_DEPENDENCY_DIGEST)) seedInvalid()
@@ -43,8 +43,8 @@ function seedEventShape(event: SessionEventView, formatVersion: number, payload:
   if (formatVersion < 11) seedInvalid()
   if (payload) seedData(event)
   if (event.type === 'conversation/seed-manifest') {
-    seedFields(event, ['type', 'version', 'seq', 'codec', 'digest', 'groupCount', 'origins', 'selection', 'turns', 'omissions', 'artifacts'])
-    if (event.version !== 1 || event.seq !== 0 || event.codec !== 'semantic-seed-v1' || !seedDigest(event.digest) || !seedCount(event.groupCount)) seedInvalid()
+    seedFields(event, ['type', 'version', 'seq', 'codec', 'digest', 'groupCount', 'origins', 'selection', 'turns', 'omissions', 'artifacts', ...(event.version === 2 ? ['passive'] : [])])
+    if (!(event.version === 1 && event.codec === 'semantic-seed-v1' || event.version === 2 && event.codec === 'semantic-seed-v2') || event.seq !== 0 || !seedDigest(event.digest) || !seedCount(event.groupCount)) seedInvalid()
   } else if (event.type === 'conversation/seed-group') {
     seedFields(event, ['type', 'version', 'seq', 'manifestSeq', 'ordinal', 'group'])
     if (event.version !== 1 || !seedCount(event.seq) || event.seq < 1 || event.manifestSeq !== 0 || !seedCount(event.ordinal)) seedInvalid()
@@ -67,7 +67,7 @@ export function validateBootstrapReadiness(events: readonly SessionEventView[], 
     else validateSeedEventShape(event, formatVersion)
     if (position < header.seedLength) {
       if (event.seq !== position || (position === 0 ? event.type !== 'conversation/seed-manifest' : event.type !== 'conversation/seed-group')) seedInvalid()
-      if (event.type === 'conversation/seed-manifest' && (event.digest !== header.seedDigest || event.groupCount !== header.groupCount)) seedInvalid()
+      if (event.type === 'conversation/seed-manifest' && (event.version !== header.version || event.codec !== header.codec || event.digest !== header.seedDigest || event.groupCount !== header.groupCount)) seedInvalid()
       if (event.type === 'conversation/seed-group' && event.ordinal !== position - 1) seedInvalid()
     } else if (position === header.seedLength) {
       if (event.type !== 'session/bootstrap' || event.seq !== position || event.operationId !== header.operationId || event.manifestDigest !== header.manifestDigest
@@ -87,19 +87,17 @@ export function validateBootstrapReadiness(events: readonly SessionEventView[], 
   if (events.length < header.seedLength + 1 + (header.initialInputId === undefined ? 0 : 1)) {
     if (capability !== bootstrapStaging) incomplete()
     const manifest = events[0]
-    if (manifest?.type === 'conversation/seed-manifest') validateSemanticSeedPrefix({ version: 1, origins: manifest.origins, selection: manifest.selection, turns: manifest.turns,
-      omissions: manifest.omissions, artifacts: manifest.artifacts, groups: events.slice(1, header.seedLength).map(event => { if (event.type !== 'conversation/seed-group') seedInvalid(); return event.group }) })
+    if (manifest?.type === 'conversation/seed-manifest') validateSemanticSeedPrefix(semanticSeedFromRecords(header, events))
     return
   }
   if (header.seedLength) {
     const manifest = events[0]
     if (manifest?.type !== 'conversation/seed-manifest') seedInvalid()
-    const groups = events.slice(1, header.seedLength).map(record => { if (record.type !== 'conversation/seed-group') seedInvalid(); return record.group })
-    const data = { version: 1, origins: manifest.origins, selection: manifest.selection, turns: manifest.turns, omissions: manifest.omissions, artifacts: manifest.artifacts, groups }
+    const data = semanticSeedFromRecords(header, events)
     if (capability === semanticSourceStructure) validateSemanticSeedStructure(data)
     else {
       const seed = validateSemanticSeed(data)
-      if (seedHash('ih.semantic-seed.v1', seed) !== header.seedDigest || seedHash('ih.semantic-seed.dependencies.v1', seed.artifacts) !== header.dependencyDigest) seedInvalid()
+      if (seedHash(semanticSeedDomain(seed), seed) !== header.seedDigest || seedHash('ih.semantic-seed.dependencies.v1', seed.artifacts) !== header.dependencyDigest) seedInvalid()
     }
   }
 }
