@@ -19,6 +19,7 @@ export { createStaleSubagentsSection } from "./section.ts"
 export { forkTurns } from "./fork.ts"
 export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"
+export type { ChildInstructionContextInput, ChildInstructionContext, ChildInstructionContextFactory } from './child/instruction-context.ts'
 export { createSubagentTools } from "./tools.ts"
 export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
