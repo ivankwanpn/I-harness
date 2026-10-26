@@ -149,7 +149,11 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
           owner = await coordinator.bootstrapSemanticTargetWithCapture!(capture, handoff.guards, async () => {
             if (mode.kind !== 'first' || holder.attempted) throw new Error('Original fork capture cannot be replayed')
             handoff.guards.assertCurrent(); source.assertUnchanged(); holder.attempted = true; holder.source = source
-            const exported = exportConversationSeed(source.view, { kind: 'session', sessionId: capture.core.sourceSessionId }, capture.core.selection)
+            const exported = exportConversationSeed(source.view, { kind: 'session', sessionId: capture.core.sourceSessionId }, capture.core.selection, {
+              kind: 'public-completed-passive', owner: { kind: 'held-public-fork', sourceSessionId: capture.core.sourceSessionId,
+                view: source.view, factOwner: source.document,
+                assertCurrent() { handoff.guards.assertCurrent(); source.assertUnchanged() } },
+            })
             if (exported.kind === 'refused') { selected = new ForkSelectionError(exported.reason); holder.lastOutcome = outcome(holder, 'refused', selected.reason); throw selected }
             const seed = compileSemanticSeed(exported)
             if (emptyClosureHosts.has(host)) {
