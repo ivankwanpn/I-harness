@@ -63,6 +63,15 @@ and closed streams, the parent independently reads the final raw task document
 and complete original journal, checks their exact result revision/ref/end and
 the original error outbox, and rejects any original notification admission.
 
+The task-owned local provider holds the actual child SSE result until the
+original initial parent `service.submit` has finished. A real spawn and child
+request must already exist before release; the response handler checks parent
+completion again before sending the original result bytes. This is an explicit
+fast-child ordering control. It leaves the end-before-notification-admission
+gate in place and records parent completion, response release and original
+source/end/save/admission stages. Cleanup rejects unresolved local gates rather
+than sending child result bytes early or admitting a notification before end.
+
 The deliberate refusal leaves original managed close debt. Original service
 and coordinator close failures are recorded recursively. The child sends its
 cut message and actually exits73. This is process-release evidence, not
@@ -84,6 +93,9 @@ Later PF03 evidence preserves two original Windows EPERM task-save failures,
 including a short-root failure. One bounded IO control did not reproduce them;
 their cause remains unresolved. Removing live task-file polling and a later
 successful qualification do not establish an OS/filesystem fix.
+PF04 also preserves the separate run030 pending-retention timeout with four
+successful original strict puts and no demonstrated EPERM. Its controlled SSE
+ordering and any later pass do not by themselves explain that earlier failure.
 
 Runtime assumptions are Node>=22.18, esbuild0.28.2, the manifest's TypeScript
 compiler version, and the manifest's installed

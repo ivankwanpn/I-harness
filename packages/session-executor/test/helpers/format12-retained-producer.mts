@@ -37,6 +37,16 @@ async function main() {
   const id = (await coordinator.create()).id
   const counters = { parentRequests: 0, childRequests: 0, spawnCalls: 0, admissionRefusals: 0 }
   const rejected: unknown[] = [], batches: unknown[] = [], cleanup: unknown[] = [], gates: unknown[] = []
+  const stages: { sequence: number; phase: string; ms: number; detail?: unknown }[] = []
+  const stage = (phase: string, detail?: unknown) => { stages.push({ sequence: stages.length + 1, phase, ms: performance.now(), ...(detail !== undefined ? { detail } : {}) }) }
+  const childRequested = Promise.withResolvers<void>(), childResponseRelease = Promise.withResolvers<void>(), admissionGateCleanup = Promise.withResolvers<never>()
+  void childResponseRelease.promise.catch(() => {}); void admissionGateCleanup.promise.catch(() => {})
+  let parentFinished = false, childResponseReleased = false
+  async function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try { return await Promise.race([promise, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original fixture deadline: ' + label)), 15000) })]) }
+    finally { clearTimeout(timer) }
+  }
   const endCommitted = Promise.withResolvers<void>()
   const savedErrorOutbox = Promise.withResolvers<any>()
   void savedErrorOutbox.promise.catch(() => {})
@@ -49,6 +59,7 @@ async function main() {
     const pending = strictPut(key, document)
     if (key === taskDocKey(id)) {
       const sequence = ++writeSequence
+      stage('original-strict-put-start', { sequence, key })
       try {
         const snapshot = JSON.parse(JSON.stringify(document))
         taskWrites.push({ phase: 'original-strict-put-start', sequence, key, snapshot })
@@ -56,10 +67,11 @@ async function main() {
           try {
             lastSavedDocument = snapshot
             taskWrites.push({ phase: 'original-strict-put-success', sequence, key })
+            stage('original-strict-put-success', { sequence, key })
             const task = snapshot.tasks?.[0], notification = snapshot.notifications?.[0]
             if (snapshot.tasks?.length === 1 && snapshot.notifications?.length === 1 && task.status === 'completed' && task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'artifact' && notification.submissionId === task.id && notification.status === 'error' && notification.attempts === 1) savedErrorOutbox.resolve(snapshot)
           } catch (error) { savedErrorOutbox.reject(error) }
-        }, error => { taskWrites.push({ phase: 'original-strict-put-failure', sequence, key, error: errorEvidence(error) }) })
+        }, error => { taskWrites.push({ phase: 'original-strict-put-failure', sequence, key, error: errorEvidence(error) }); stage('original-strict-put-failure', { sequence, key, error: errorEvidence(error) }) })
       } catch (error) { savedErrorOutbox.reject(error) }
     }
     return pending
@@ -70,14 +82,20 @@ async function main() {
     const decoded = decodeFactBatch(args[3].bytes)
     if (args[0] === id && decoded.events.some(event => event.type === 'agent/input/admitted' && event.inputId.startsWith('parent-notify-'))) {
       counters.admissionRefusals++
+      stage('original-parent-notify-pre-native-refusal', { key: args[3].key })
       rejected.push({ key: args[3].key, events: decoded.events, originalBackendInvoked: false })
       return { kind: 'not-issued', code: 'FACT_PRECONDITION_STALE' }
     }
+    const sourceStart = args[0] === id && decoded.events.some(event => event.type === 'subagent/start')
+    const sourceEnd = args[0] === id && decoded.events.some(event => event.type === 'subagent/end')
+    if (sourceStart || sourceEnd) stage(sourceStart ? 'original-source-start-issued' : 'original-end-issued', { key: args[3].key })
     const outcome = await append(...args)
     batches.push({ sessionId: args[0], key: args[3].key, events: decoded.events, outcome })
+    if (sourceStart && outcome.kind === 'committed') stage('original-source-start-committed', { key: args[3].key })
     if (args[0] === id && outcome.kind === 'committed' && decoded.events.some(event => event.type === 'subagent/end')) {
       endKey = args[3].key
       gates.push({ phase: 'actual-native-end-committed', key: endKey })
+      stage('original-end-committed', { key: endKey })
       endCommitted.resolve()
     }
     return outcome
@@ -93,9 +111,13 @@ async function main() {
       const last = request.messages.at(-1)
       let delta: unknown
       if (last?.role === 'user' && JSON.stringify(last.content).includes(childPrompt)) {
-        counters.childRequests++; delta = { content: resultText }
+        counters.childRequests++; stage('actual-child-request-held'); childRequested.resolve()
+        await childResponseRelease.promise
+        assert(parentFinished, 'Child result response preceded initial parent completion')
+        stage('actual-child-response-sent'); delta = { content: resultText }
       } else {
         counters.parentRequests++
+        stage('actual-parent-request', { request: counters.parentRequests })
         if (!spawned) {
           spawned = true; counters.spawnCalls++
           delta = { tool_calls: [{ index: 0, id: 'format12-original-spawn', type: 'function', function: { name: 'spawn_agent', arguments: JSON.stringify({ message: childPrompt, task_name: 'format12-original', background: true, fork_turns: 'none' }) } }] }
@@ -113,8 +135,10 @@ async function main() {
     sessionOperation: { assertOpen() {}, async run(targetId, operation) {
       if (targetId === id && operation.name === 'admission') {
         gates.push({ phase: 'original-notification-operation-held', operation: operation.name, targetId })
-        await endCommitted.promise
+        stage('original-notification-operation-held')
+        await Promise.race([endCommitted.promise, admissionGateCleanup.promise])
         assert(endKey); gates.push({ phase: 'original-notification-operation-released', key: endKey })
+        stage('original-notification-operation-released', { key: endKey })
       }
       return operation()
     } },
@@ -122,7 +146,12 @@ async function main() {
   })
   let primary: unknown
   try {
-    await service.submit(id, 'Spawn exactly one original bounded child fixture.', new AbortController().signal)
+    stage('initial-parent-submit-start')
+    await bounded(service.submit(id, 'Spawn exactly one original bounded child fixture.', new AbortController().signal), 'initial parent submission')
+    parentFinished = true; stage('initial-parent-submit-finished')
+    await bounded(childRequested.promise, 'actual child request before response release')
+    assert.equal(counters.spawnCalls, 1); assert.equal(counters.childRequests, 1)
+    stage('child-response-release-after-parent'); childResponseReleased = true; childResponseRelease.resolve()
     const assembly = service.liveAssembly(id)!
     let deadline: ReturnType<typeof setTimeout> | undefined
     const [taskDoc] = await Promise.race([
@@ -133,6 +162,7 @@ async function main() {
     assert.equal(taskDoc.tasks.length, 1); assert.equal(taskDoc.notifications.length, 1)
     assert.equal(task.status, 'completed'); assert.equal(task.result.envelope.retention.kind, 'artifact')
     assert.equal(task.delivery, 'parent'); assert.equal(counters.childRequests, 1); assert.equal(counters.spawnCalls, 1)
+    assert(stages.find(entry => entry.phase === 'initial-parent-submit-finished')!.sequence < stages.find(entry => entry.phase === 'child-response-release-after-parent')!.sequence)
     const ends = assembly.session.events.filter(event => event.type === 'subagent/end')
     assert.equal(ends.length, 1); assert.equal(ends[0]!.taskId, task.id); assert.equal(ends[0]!.resultRevision, task.result.revision); assert.deepEqual(ends[0]!.envelope, task.result.envelope)
     const pages: any[] = [], parts: string[] = []
@@ -151,18 +181,22 @@ async function main() {
     await coordinator.flush(id)
     await json('original-task-document.json', taskDoc)
     await json('original-task-write-observations-before-close.json', taskWrites)
+    await json('producer-stages-before-close.json', stages)
     await json('original-parent-events.json', assembly.session.events)
     await json('original-pages.json', pages)
     await json('original-provider-requests.json', providerRequests)
     await json('producer-observation.json', { nonce, predecessor: 'c76a56011e16057030c2fa7106d358b1eac99657', id, taskId: task.id, childSessionId: task.childSessionId, revision: task.result.revision, ref: task.result.envelope.retention.ref, expectedBytes: expectedBytes.length, expectedDigest: digest(expectedBytes), readbackDigest: digest(readback), pageCount: pages.length, counters, outbox: taskDoc.notifications, location: await contextWorkspaceLocation(root, sessions) })
-  } catch (error) { primary = error; await json('primary-failure.json', { error: errorEvidence(error), counters }); await json('original-task-write-observations-before-close.json', taskWrites); throw error }
+  } catch (error) { primary = error; stage('primary-failure', errorEvidence(error)); await json('primary-failure.json', { error: errorEvidence(error), counters }); await json('original-task-write-observations-before-close.json', taskWrites); await json('producer-stages-before-close.json', stages); throw error }
   finally {
+    if (!childResponseReleased) { stage('child-response-gate-cancelled-in-cleanup'); childResponseRelease.reject(new Error('Fixture cleanup before successful initial parent completion')) }
+    admissionGateCleanup.reject(new Error('Fixture cleanup before original end commitment'))
     for (const [name, close] of [['service', () => service.close()], ['coordinator', () => coordinator.close()]] as const) {
       try { await close(); cleanup.push({ name, outcome: 'closed' }) } catch (error) { cleanup.push({ name, outcome: 'failed', error: errorEvidence(error) }) }
     }
     await json('original-native-batches.json', batches); await json('deliberately-unissued-notifications.json', rejected)
     await json('original-notification-gates.json', gates)
     await json('original-task-write-observations.json', taskWrites)
+    await json('producer-stages.json', stages)
     await json('cleanup.json', { primary: primary ? String(primary) : null, outcomes: cleanup, counters })
     provider.closeAllConnections(); await new Promise<void>((resolve, reject) => provider.close(error => error ? reject(error) : resolve()))
     if (cleanup.some((entry: any) => entry.outcome === 'failed')) {

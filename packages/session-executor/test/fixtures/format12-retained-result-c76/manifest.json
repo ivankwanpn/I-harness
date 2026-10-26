@@ -4,8 +4,8 @@
   "purpose": "Original format12 ordinary retained-result producer; no current-reader qualification",
   "archive": {
     "path": "source.json.gz",
-    "bytes": 1157560,
-    "sha256": "0741947ceb2fde6781346aa08f6e800fc56fe5148a7c0828cc6a586d5283126a"
+    "bytes": 1158247,
+    "sha256": "f77e501d45484de64553c3e36b3232e2ac6934fbfce45dbe67c2ce10ba3c9619"
   },
   "sources": [
     {
@@ -17734,8 +17734,8 @@
   ],
   "driver": {
     "path": "packages/session-executor/test/helpers/format12-retained-producer.mts",
-    "bytes": 12524,
-    "sha256": "8b1a6c2fc914044c15e7fb5807f76e1c0edef26276b93b82fe956cc0f3a3790b",
+    "bytes": 15867,
+    "sha256": "b74ff272849c4842a4774b422b559bcc1a27fb08692af5b8fa83d459fc590960",
     "imports": [
       {
         "path": "node:assert/strict",
