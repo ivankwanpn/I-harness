@@ -7,7 +7,7 @@ import { SessionBindingObservationError } from './types.ts'
 import { captureBootstrapCaptureRequest, encodeBootstrapCaptureReservation, validateCaptureStage } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest, BootstrapCaptureReservation, BootstrapCaptureInspection } from './bootstrap-types.ts'
 import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
-import { CURRENT_FORMAT_VERSION, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
 import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest } from './bootstrap-types.ts'
@@ -21,6 +21,7 @@ import { isStrictFactData } from '@i-harness/core-session'
 import { ownBackendOutcome } from './fact-outcome.ts'
 import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
+import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 
 export interface ManagedEntry {
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean };
@@ -175,23 +176,28 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!reconcile)current(guards,entry)
     return outcome.kind==='confirmed'?outcome.closureDigest:undefined
   }
-  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards):Promise<BootstrapOutcome> {
+  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,stage=b.stage!
+    cached?.assertCurrent()
     if(state.torn)return blocked(entry)
     checkBirth(stage,state)
     if (!await prepareTarget(stage, guards, true, entry, state.events!)) return blocked(entry, 'dependency-unavailable')
+    cached?.assertCurrent()
     const closure=await dependencies(stage,state.events!,guards,true,entry)
+    cached?.assertCurrent()
     const completion=state.events![stage.seed.seedLength]
     if(!closure||completion?.type!=='session/bootstrap'||completion.dependencyClosureDigest!==closure)return blocked(entry,'dependency-unavailable')
     const doc=entry.document??attach(b.invocation.targetSessionId,entry,buildSession(state.meta,state.events!),state.prefix!)
     const frames=framesFor(stage,state.events!)
-    const confirmed=await ownership.withSessionOperation(b.invocation.targetSessionId,()=>backend.confirmBootstrapFrames!(b.invocation.targetSessionId,entry.control!.held,frames))
+    const held=cached?.held??entry.control!.held
+    const confirmed=await ownership.withSessionOperation(b.invocation.targetSessionId,()=>backend.confirmBootstrapFrames!(b.invocation.targetSessionId,held,frames))
+    cached?.assertCurrent()
     if(!isStrictFactData(confirmed)||confirmed.kind!=='committed'||!Array.isArray(confirmed.receipts)||confirmed.receipts.length!==frames.length)return blocked(entry)
     // These are confirmations of original issued frames, not new appends.
     // Apply the same key/incarnation/last-seq/prefix checks as the normal pump.
     const receipts=[]
     for(const [index,frame] of frames.entries()) {
-      const checked=ownBackendOutcome({kind:'committed',receipt:confirmed.receipts[index]},frame.batch.key,entry.control!.held.owner,true)
+      const checked=ownBackendOutcome({kind:'committed',receipt:confirmed.receipts[index]},frame.batch.key,held.owner,true)
       if(checked.kind!=='committed')return blocked(entry)
       receipts.push(checked.receipt)
     }
@@ -202,10 +208,42 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const upgraded = await backend.upgradeSessionFormat(b.invocation.targetSessionId, state.meta!.formatVersion, CURRENT_FORMAT_VERSION)
       if (upgraded.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('Bootstrap storage upgrade incomplete')
     })
+    cached?.assertCurrent()
     targetCurrent(guards)
-    entry.control!.ready();entry.ready=true;b.phase='completion';entry.headerUnknown=false
+    if(cached)cached.assertCurrent();else entry.control!.ready()
+    entry.ready=true;b.phase='completion';entry.headerUnknown=false
     return {kind:'already-ready',document:doc,receipt:{version:1,invocation:b.invocation,manifestDigest:manifest(stage),seedLength:stage.seed.seedLength,dependencyClosureDigest:closure,
       ...(stage.seed.seedLength?{seed:receipts[0]}:{}),completion:receipts.at(-1)!,...(stage.initial?{initial:{inputId:stage.initial.inputId,seq:stage.seed.seedLength+1,startedAt:stage.initial.startedAt,expiresAt:stage.initial.expiresAt}}:{})}}
+  }
+  function resumeCachedReady(entry:ManagedEntry,invocation:BootstrapInvocation,guards:BootstrapGuards):Promise<BootstrapOutcome> {
+    if(!entry.document)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
+    let cached:ManagedReadyObservation
+    try{cached=captureManagedReadyObservation(entry.document,ownership)}catch{return Promise.resolve({kind:'refused',reason:'cached-unprepared'})}
+    const previous=entry.flight
+    const candidate:ManagedEntry={document:entry.document,ready:true,bootstrap:{invocation,phase:'completion',issued:true}}
+    const assertCurrent=()=>{if(documents.get(invocation.targetSessionId)!==entry||entry.revoked)throw new FactRecoveryRequiredError();cached.assertCurrent()}
+    const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
+      try{
+        await previous;assertCurrent()
+        const state=await read(invocation);assertCurrent()
+        if(state.kind==='unavailable')return blocked(candidate)
+        if(!state.meta?.semanticSeed||!state.stageBytes||!state.events||!state.prefix||!readyState(state))return{kind:'refused',reason:'cached-unprepared'}
+        let stage:BootstrapHeaderStage
+        try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{return{kind:'refused',reason:'cached-unprepared'}}
+        if(!sameBootstrapData(stage.invocation,invocation)||state.meta.sessionId!==invocation.targetSessionId||state.meta.createdAt!==invocation.createdAt)return{kind:'refused',reason:'conflict'}
+        if(!sameBootstrapData(cached.prefix,state.prefix)||cached.view.formatVersion!==state.meta.formatVersion
+          ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
+        candidate.bootstrap!.stage=stage;candidate.bootstrap!.manifestDigest=manifest(stage)
+        checkBirth(stage,state);assertCurrent()
+        return await adopt(candidate,state,guards,cached)
+      }catch(error){
+        const code=(error as {code?:string}|null|undefined)?.code
+        if(code==='FACT_TARGET_UNAVAILABLE')return blocked(candidate,'dependency-unavailable')
+        if(error instanceof FactRecoveryRequiredError)return{kind:'refused',reason:'wrong-view'}
+        return blocked(candidate)
+      }
+    }).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    entry.flight=flight;return flight
   }
   async function run(entry:ManagedEntry,guards:BootstrapGuards):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
@@ -348,7 +386,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(callbackScope.getStore()?.active&&callbackScope.getStore()?.id===id)return Promise.resolve({kind:'refused',reason:'conflict'})
     if(mutations.pendingWriteBehind(id)?.hasWork)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
     let entry=documents.get(id)
-    if(entry&&!entry.bootstrap)return Promise.resolve({kind:'refused',reason:'cached-unprepared'})
+    if(entry&&!entry.bootstrap)return r?Promise.resolve({kind:'refused',reason:'cached-unprepared'}):resumeCachedReady(entry,captured,guards)
     if(entry) {
       if(!sameBootstrapData(entry.bootstrap!.invocation,captured))return Promise.resolve({kind:'refused',reason:'conflict'})
       if(r&&entry.bootstrap!.request) {
