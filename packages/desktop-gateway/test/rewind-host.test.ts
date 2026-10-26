@@ -37,6 +37,10 @@ it.each(["conversation", "all", "files"] as const)("previews and rewinds a cold 
     const plan = await call("desktop/rewind/plan", { sessionId: "s", target: 0, mode }) as { fingerprint: string }
     expect(await call("desktop/rewind/execute", { sessionId: "s", target: 0, mode, fingerprint: plan.fingerprint })).toMatchObject({ eventAppended: true, truncated: mode !== "files" })
     expect(await readFile(path, "utf8")).toBe(mode === "conversation" ? "after" : "before")
-    expect((await backend.read("s")).events.at(-1)).toMatchObject({ type: "rewind/point", seq: 3, anchorSeq: 0 })
+    const events = (await backend.read("s")).events
+    expect(events.slice(-2)).toMatchObject([
+      { type: "agent/delivery-generation", version: 1, op: "close", recipientSessionId: "s", reason: "rewind", seq: 3, fenceId: expect.any(String) },
+      { type: "rewind/point", seq: 4, anchorSeq: 0 },
+    ])
   } finally { await host.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
 })
