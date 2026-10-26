@@ -188,10 +188,12 @@ async function bridge(arm: 'H1' | 'H2') {
   const action = document.beginAction()
   const call = { callId: 'original-' + arm, name: 'code_exec', args: { code, yield_time_ms: 5000 } }
   const cleanup: { name: string; outcome: string; error?: unknown }[] = []
+  const cleanupErrors: unknown[] = []
   let body: Buffer | undefined, batchError: unknown, frozen: unknown
+  let primaryFailed = false, primaryError: unknown, evidenceFailed = false, evidenceError: unknown
   async function clean(name: string, work: () => void | Promise<unknown>) {
     try { await work(); cleanup.push({ name, outcome: 'fulfilled' }) }
-    catch (error) { cleanup.push({ name, outcome: 'rejected', error: errorInfo(error) }) }
+    catch (error) { cleanupErrors.push(error); cleanup.push({ name, outcome: 'rejected', error: errorInfo(error) }) }
   }
   try {
     await action.facts.tools.call({ type: 'tool/call', ...call })
@@ -239,6 +241,8 @@ async function bridge(arm: 'H1' | 'H2') {
     expect(createHash('sha256').update(body).digest('hex')).toBe(actualRef!.contentDigest)
     frozen = { batchHolds, batchClosed, outputClosed, originalAborts, registrationRefusals, codeBodies, gateBodies, writes, finishes, actualReceipt, actualRef, storeCaptures: captures.length, storeOutcomes, readyOutput, events: [...document.view.events] }
     record('observations.frozen', frozen as object)
+  } catch (error) {
+    primaryFailed = true; primaryError = error
   } finally {
     record('cleanup.begin')
     releaseGate.resolve()
@@ -251,12 +255,19 @@ async function bridge(arm: 'H1' | 'H2') {
     await clean('result.service.close', () => service.close())
     await clean('context.unmount', () => ctx.scope.unmount())
     record('cleanup.done', { cleanup })
-    await mkdir(evidence, { recursive: true })
-    const journal = await readFile(join(root, 's', id + '.jsonl'))
-    await writeFile(join(evidence, arm + '-journal.jsonl'), journal)
-    if (body) await writeFile(join(evidence, arm + '-artifact.json'), body)
-    await writeFile(join(evidence, arm + '.json'), JSON.stringify({ arm, root, sessionId: id, code, trace, overflow, appends, frozen, cleanup, originalError: errorInfo(originalError), batchError: errorInfo(batchError), privateSeam: 'pendingOutputReceipts, 353 flags and original installed callback are not public and are not claimed' }, null, 2))
+    try {
+      await mkdir(evidence, { recursive: true })
+      const journal = await readFile(join(root, 's', id + '.jsonl'))
+      await writeFile(join(evidence, arm + '-journal.jsonl'), journal)
+      if (body) await writeFile(join(evidence, arm + '-artifact.json'), body)
+      await writeFile(join(evidence, arm + '.json'), JSON.stringify({ arm, root, sessionId: id, code, trace, overflow, appends, frozen, cleanup, primaryFailed, primaryError: errorInfo(primaryError), originalError: errorInfo(originalError), batchError: errorInfo(batchError), privateSeam: 'pendingOutputReceipts, 353 flags and original installed callback are not public and are not claimed' }, null, 2))
+    } catch (error) { evidenceFailed = true; evidenceError = error }
   }
+  // Save failure evidence first. Preserve an original rejection (even undefined)
+  // instead of masking it with a secondary cleanup/evidence failure.
+  if (primaryFailed) throw primaryError
+  if (evidenceFailed) throw evidenceError
+  if (cleanupErrors.length) throw new AggregateError(cleanupErrors, 'Bridge cleanup failed')
   expect(overflow).toBe(0)
   expect(observerFailures).toBe(0)
 }
