@@ -53,6 +53,16 @@ adapter then reaches a deliberately refused pre-native admission. The old drain
 saves its own error outbox, attempts1. No fake consumer, result envelope,
 registry terminal status, receipt or format-version rewrite is used.
 
+Readiness observes the original coordinator's actual successful strict task
+document save and the independent original backend end commit. The observer
+forwards the same document, returns the exact original write promise and leaves
+its errors and saved retention label unchanged. It adds no save/retry and does
+not poll the task file during writes. Original source/result/end creation and
+the old tool's full paged body read remain decisive. After actual child exit
+and closed streams, the parent independently reads the final raw task document
+and complete original journal, checks their exact result revision/ref/end and
+the original error outbox, and rejects any original notification admission.
+
 The deliberate refusal leaves original managed close debt. Original service
 and coordinator close failures are recorded recursively. The child sends its
 cut message and actually exits73. This is process-release evidence, not
@@ -70,6 +80,10 @@ Recorded construction evidence preserves earlier local failures, including an
 old notification/end ordering race and a Vitest-intercepted attempted exit.
 The SDD predecessor report binds the original pre-run graph, driver, local
 production and portable qualification separately.
+Later PF03 evidence preserves two original Windows EPERM task-save failures,
+including a short-root failure. One bounded IO control did not reproduce them;
+their cause remains unresolved. Removing live task-file polling and a later
+successful qualification do not establish an OS/filesystem fix.
 
 Runtime assumptions are Node>=22.18, esbuild0.28.2, the manifest's TypeScript
 compiler version, and the manifest's installed

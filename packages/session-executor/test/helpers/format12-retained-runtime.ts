@@ -180,16 +180,25 @@ export async function produceFormat12RetainedResult(options: Format12ProducerOpt
   env.IH_FORMAT12_PRODUCER_ROOT = root; roots.IH_FORMAT12_PRODUCER_ROOT = root
   const cwd = join(sourceRoot, 'packages/session-executor')
   const child = spawn(process.execPath, [bundle], { cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((accept, reject) => { child.once('error', reject); child.once('close', (code, signal) => accept({ code, signal })) })
+  // Own error/close before checking the actual piped streams. Never substitute
+  // streams or leave an owned child behind if the spawn contract is violated.
+  void closed.catch(() => {})
+  const stdoutPipe = child.stdout, stderrPipe = child.stderr
+  if (!stdoutPipe || !stderrPipe) {
+    child.kill(); await closed.catch(() => {})
+    throw new Error('Owned original producer has no stdout/stderr pipes')
+  }
   let stdout = '', stderr = '', timedOut = false
   const messages: any[] = []
-  child.stdout.on('data', bytes => { stdout += bytes.toString() }); child.stderr.on('data', bytes => { stderr += bytes.toString() }); child.on('message', message => messages.push(message))
+  stdoutPipe.on('data', bytes => { stdout += bytes.toString() }); stderrPipe.on('data', bytes => { stderr += bytes.toString() }); child.on('message', message => messages.push(message))
   const timer = setTimeout(() => { timedOut = true; child.kill() }, timeoutMs)
-  const disposition = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((accept, reject) => { child.once('error', reject); child.once('close', (code, signal) => accept({ code, signal })) }).finally(() => clearTimeout(timer))
-  const processEvidence = { pid: child.pid, argv: [process.execPath, bundle], cwd, windowsHide: true, roots, ...disposition, timedOut, childCloseObserved: true, stdoutEnded: child.stdout.readableEnded, stderrEnded: child.stderr.readableEnded, stdout, stderr, messages }
+  const disposition = await closed.finally(() => clearTimeout(timer))
+  const processEvidence = { pid: child.pid, argv: [process.execPath, bundle], cwd, windowsHide: true, roots, ...disposition, timedOut, childCloseObserved: true, stdoutEnded: stdoutPipe.readableEnded, stderrEnded: stderrPipe.readableEnded, stdout, stderr, messages }
   await writeFile(join(runtimeRoot, 'process.json'), JSON.stringify(processEvidence, null, 2) + '\n')
   assert(!timedOut, 'Original producer deadline; evidence: ' + runtimeRoot)
   assert.equal(disposition.signal, null); assert.equal(disposition.code, 73, 'Original producer/cut failed; evidence: ' + runtimeRoot)
-  assert(child.stdout.readableEnded && child.stderr.readableEnded, 'Original child streams did not end')
+  assert(stdoutPipe.readableEnded && stderrPipe.readableEnded, 'Original child streams did not end')
   const expectedWarning = "[subagent] role 'general' declares 3 tool(s) absent from the parent registry; the child runs without them: code_context_search, code_context_status, code_context_index"
   assert.equal(stderr.trim(), expectedWarning, 'Unexpected original producer diagnostic; evidence: ' + runtimeRoot)
   assert.equal(stdout, '', 'Unexpected original producer stdout; evidence: ' + runtimeRoot)
@@ -199,5 +208,39 @@ export async function produceFormat12RetainedResult(options: Format12ProducerOpt
   const observation = JSON.parse(await readFile(join(root, 'producer-observation.json'), 'utf8'))
   const expectedBody = await readFile(join(root, 'expected-body.json')), originalReadback = await readFile(join(root, 'original-readback.json'))
   assert(originalReadback.equals(expectedBody)); assert.equal(sha(expectedBody), observation.expectedDigest); assert(observation.pageCount > 1)
-  return { root, runtimeRoot, sessionId: observation.id as string, childSessionId: observation.childSessionId as string, taskId: observation.taskId as string, resultRevision: observation.revision as string, ref: observation.ref as Record<string, unknown>, expectedBody, observation, process: processEvidence }
+  // Independent raw verification begins only after the actual original writer
+  // exited and its streams closed. The child evidence is a successful original
+  // put's observed argument, not a substitute for this final original file.
+  const savedBytes = await readFile(join(root, 'original-task-document.json')), saved = JSON.parse(savedBytes.toString())
+  const writes = JSON.parse(await readFile(join(root, 'original-task-write-observations.json'), 'utf8')) as { phase: string; sequence: number; snapshot?: unknown }[]
+  const savedWrite = writes.find(write => write.phase === 'original-strict-put-start' && JSON.stringify(write.snapshot) === JSON.stringify(saved) && writes.some(outcome => outcome.sequence === write.sequence && outcome.phase === 'original-strict-put-success'))
+  assert(savedWrite, 'Observed original task snapshot has no successful strict write')
+  const taskBytes = await readFile(join(root, 'sessions', 'task-' + observation.id + '.doc.jsonl')), document = JSON.parse(taskBytes.toString())
+  assert.equal(document.formatVersion, 2); assert.equal(document.tasks.length, 1); assert.equal(document.notifications.length, 1)
+  const task = document.tasks[0], notification = document.notifications[0]
+  assert.equal(task.id, observation.taskId); assert.equal(task.parentSessionId, observation.id); assert.equal(task.status, 'completed'); assert.equal(task.delivery, 'parent')
+  assert.equal(task.result.kind, 'retained'); assert.equal(task.result.envelope.retention.kind, 'artifact')
+  assert.equal(task.result.revision, observation.revision); assert.deepEqual(task.result.envelope.retention.ref, observation.ref)
+  assert.deepEqual(task.result, saved.tasks[0].result)
+  assert.equal(notification.submissionId, task.id); assert.equal(notification.status, 'error'); assert.equal(notification.attempts, 1)
+  assert.deepEqual(notification, saved.notifications[0])
+  const journal = await readFile(join(root, 'sessions', observation.id + '.jsonl')), headerEnd = journal.indexOf(10)
+  assert(headerEnd > 0); const header = JSON.parse(journal.subarray(0, headerEnd).toString()); assert.equal(header.formatVersion, 12)
+  const ends: { offset: number; bytes: number; sha256: string; batchId: string; event: any }[] = []
+  let cursor = headerEnd + 1, notificationAdmissions = 0
+  while (cursor < journal.length) {
+    const end = journal.indexOf(10, cursor); assert(end >= cursor, 'Incomplete original frame after writer exit')
+    const bytes = journal.subarray(cursor, end + 1), frame = JSON.parse(bytes.toString()); assert.equal(frame.recordKind, 'session/fact-batch')
+    for (const event of frame.events) {
+      if (event.type === 'subagent/end') ends.push({ offset: cursor, bytes: bytes.length, sha256: sha(bytes), batchId: frame.batchId, event })
+      if (event.type === 'agent/input/admitted' && event.inputId.startsWith('parent-notify-')) notificationAdmissions++
+    }
+    cursor = end + 1
+  }
+  assert.equal(ends.length, 1); assert.equal(notificationAdmissions, 0)
+  const terminal = ends[0]!
+  assert.equal(terminal.event.taskId, task.id); assert.equal(terminal.event.resultRevision, task.result.revision); assert.deepEqual(terminal.event.envelope, task.result.envelope)
+  const postCloseVerification = { originalWriterExited: true, pid: child.pid, header, taskDocumentSha256: sha(taskBytes), savedObservationSha256: sha(savedBytes), savedWriteSequence: savedWrite.sequence, savedRetentionLabel: saved.tasks[0].retention, finalRetentionLabel: task.retention, journalSha256: sha(journal), terminal, notificationAdmissions }
+  await writeFile(join(runtimeRoot, 'post-close-original-verification.json'), JSON.stringify(postCloseVerification, null, 2) + '\n')
+  return { root, runtimeRoot, sessionId: observation.id as string, childSessionId: observation.childSessionId as string, taskId: observation.taskId as string, resultRevision: observation.revision as string, ref: observation.ref as Record<string, unknown>, expectedBody, observation, process: processEvidence, postCloseVerification }
 }

@@ -38,6 +38,32 @@ async function main() {
   const counters = { parentRequests: 0, childRequests: 0, spawnCalls: 0, admissionRefusals: 0 }
   const rejected: unknown[] = [], batches: unknown[] = [], cleanup: unknown[] = [], gates: unknown[] = []
   const endCommitted = Promise.withResolvers<void>()
+  const savedErrorOutbox = Promise.withResolvers<any>()
+  void savedErrorOutbox.promise.catch(() => {})
+  const taskWrites: unknown[] = []
+  let writeSequence = 0, lastSavedDocument: unknown
+  const strictPut = coordinator.putDocumentStrict!.bind(coordinator)
+  coordinator.putDocumentStrict = (key, document) => {
+    // Return the exact original promise; the observer never changes a write,
+    // retries it, suppresses its error, or supplies producer state.
+    const pending = strictPut(key, document)
+    if (key === taskDocKey(id)) {
+      const sequence = ++writeSequence
+      try {
+        const snapshot = JSON.parse(JSON.stringify(document))
+        taskWrites.push({ phase: 'original-strict-put-start', sequence, key, snapshot })
+        void pending.then(() => {
+          try {
+            lastSavedDocument = snapshot
+            taskWrites.push({ phase: 'original-strict-put-success', sequence, key })
+            const task = snapshot.tasks?.[0], notification = snapshot.notifications?.[0]
+            if (snapshot.tasks?.length === 1 && snapshot.notifications?.length === 1 && task.status === 'completed' && task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'artifact' && notification.submissionId === task.id && notification.status === 'error' && notification.attempts === 1) savedErrorOutbox.resolve(snapshot)
+          } catch (error) { savedErrorOutbox.reject(error) }
+        }, error => { taskWrites.push({ phase: 'original-strict-put-failure', sequence, key, error: errorEvidence(error) }) })
+      } catch (error) { savedErrorOutbox.reject(error) }
+    }
+    return pending
+  }
   let endKey: unknown
   const append = backend.appendOwnedBatch!.bind(backend)
   backend.appendOwnedBatch = async (...args) => {
@@ -98,14 +124,11 @@ async function main() {
   try {
     await service.submit(id, 'Spawn exactly one original bounded child fixture.', new AbortController().signal)
     const assembly = service.liveAssembly(id)!
-    let taskDoc: any
-    const deadline = Date.now() + 15000
-    for (;;) {
-      taskDoc = await coordinator.getDocument(taskDocKey(id))
-      if (taskDoc?.tasks?.[0]?.result?.kind === 'retained' && taskDoc?.notifications?.[0]?.status === 'error' && assembly.session.events.some(event => event.type === 'subagent/end')) break
-      if (Date.now() > deadline) throw new Error('Original old writer did not settle a retained end + error outbox: ' + JSON.stringify(taskDoc))
-      await new Promise(resolve => setTimeout(resolve, 20))
-    }
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    const [taskDoc] = await Promise.race([
+      Promise.all([savedErrorOutbox.promise, endCommitted.promise]),
+      new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('Original old writer did not save a retained task + error outbox and commit its end: ' + JSON.stringify(lastSavedDocument))), 15000) }),
+    ]).finally(() => clearTimeout(deadline))
     const task = taskDoc.tasks[0]
     assert.equal(taskDoc.tasks.length, 1); assert.equal(taskDoc.notifications.length, 1)
     assert.equal(task.status, 'completed'); assert.equal(task.result.envelope.retention.kind, 'artifact')
@@ -127,17 +150,19 @@ async function main() {
     await writeFile(join(root, 'original-readback.json'), readback)
     await coordinator.flush(id)
     await json('original-task-document.json', taskDoc)
+    await json('original-task-write-observations-before-close.json', taskWrites)
     await json('original-parent-events.json', assembly.session.events)
     await json('original-pages.json', pages)
     await json('original-provider-requests.json', providerRequests)
     await json('producer-observation.json', { nonce, predecessor: 'c76a56011e16057030c2fa7106d358b1eac99657', id, taskId: task.id, childSessionId: task.childSessionId, revision: task.result.revision, ref: task.result.envelope.retention.ref, expectedBytes: expectedBytes.length, expectedDigest: digest(expectedBytes), readbackDigest: digest(readback), pageCount: pages.length, counters, outbox: taskDoc.notifications, location: await contextWorkspaceLocation(root, sessions) })
-  } catch (error) { primary = error; await json('primary-failure.json', { error: errorEvidence(error), counters }); throw error }
+  } catch (error) { primary = error; await json('primary-failure.json', { error: errorEvidence(error), counters }); await json('original-task-write-observations-before-close.json', taskWrites); throw error }
   finally {
     for (const [name, close] of [['service', () => service.close()], ['coordinator', () => coordinator.close()]] as const) {
       try { await close(); cleanup.push({ name, outcome: 'closed' }) } catch (error) { cleanup.push({ name, outcome: 'failed', error: errorEvidence(error) }) }
     }
     await json('original-native-batches.json', batches); await json('deliberately-unissued-notifications.json', rejected)
     await json('original-notification-gates.json', gates)
+    await json('original-task-write-observations.json', taskWrites)
     await json('cleanup.json', { primary: primary ? String(primary) : null, outcomes: cleanup, counters })
     provider.closeAllConnections(); await new Promise<void>((resolve, reject) => provider.close(error => error ? reject(error) : resolve()))
     if (cleanup.some((entry: any) => entry.outcome === 'failed')) {
