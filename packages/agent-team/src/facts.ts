@@ -80,19 +80,30 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
             let settlementFailure: Failure = { occurred: false };
             let ackFact: CapturedSettlementFact<ProducerFactOutcome> | undefined;
             let ackAttempted = false;
+            let ackSettlement: Promise<void> | undefined;
             const finishNoAck = () => { admission.finish(); transactions.delete(queueEvents); };
-            const settleAck = async () => {
-                if (ackInstalled) return;
-                try {
-                    await installAck(async () => {
-                        ackFact ??= source!.delivery.capture(ack);
-                        const fact = ackFact;
-                        const retry = ackAttempted;
-                        ackAttempted = true;
-                        committedFactSeqs(await (retry ? fact.reconcile() : fact.admit()));
-                    }, () => { ackInstalled = true; });
-                    settlementFailure = { occurred: false };
-                } catch (error) { settlementFailure = { occurred: true, error }; throw error; }
+            const settleAck = (): Promise<void> => {
+                // Concurrent drains join this record's same lane installation,
+                // including its receipt and observer outcome. Never enqueue a
+                // second installer while the first one is awaiting reconciliation.
+                if (ackSettlement) return ackSettlement;
+                if (ackInstalled) return Promise.resolve();
+                const attempt = (async () => {
+                    try {
+                        await installAck(async () => {
+                            ackFact ??= source!.delivery.capture(ack);
+                            const fact = ackFact;
+                            const retry = ackAttempted;
+                            ackAttempted = true;
+                            committedFactSeqs(await (retry ? fact.reconcile() : fact.admit()));
+                        }, () => { ackInstalled = true; });
+                        settlementFailure = { occurred: false };
+                    } catch (error) { settlementFailure = { occurred: true, error }; throw error; }
+                })();
+                ackSettlement = attempt;
+                const release = () => { if (ackSettlement === attempt) ackSettlement = undefined; };
+                void attempt.then(release, release);
+                return attempt;
             };
             const record: Message = {
                 kind: 'message', queueEvents,

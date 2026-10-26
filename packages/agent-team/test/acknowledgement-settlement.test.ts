@@ -438,6 +438,57 @@ it('settles a failed original queue without dispatch, then permits a separate ex
   } finally { await f.coordinator.close().catch(() => {}) }
 })
 
+for (const overlap of ['two transaction drains', 'transaction drain and source close'] as const) {
+  for (const originalError of [undefined, null]) {
+    it(`joins ${overlap} on the original unknown ack while preserving caller rejection ${String(originalError)}`, async () => {
+      const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+      let calls = 0, writes = 0, installs = 0, observers = 0, ackKey: BatchKey | undefined
+      const f = await fixture(async () => { calls++; return { kind: 'consumed', via: 'target', sendFailure: { occurred: true, error: originalError } } })
+      const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+      const reconciliationKeys: BatchKey[] = []
+      f.backend.appendOwnedBatch = async (...args) => {
+        writes++
+        const outcome = await append(...args)
+        if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'team/message/delivered')) { ackKey = args[3].key; return { kind: 'unknown', key: ackKey } }
+        return outcome
+      }
+      f.backend.reconcileOwnedBatch = async (...args) => {
+        reconciliationKeys.push(args[3].key)
+        entered.resolve()
+        await release.promise
+        return reconcile(...args)
+      }
+      const add = f.state.delivered.add
+      f.state.delivered.add = function (messageId) { installs++; return add.call(this, messageId) }
+      try {
+        const sending = f.send()
+        const rejection = await sending.then(() => ({ occurred: false }), error => ({ occurred: true, error }))
+        expect(rejection).toEqual({ occurred: true, error: originalError })
+        expect(f.state.delivered.size).toBe(0)
+        const originalCapture = f.captures.find(capture => capture.kind === 'delivery')!.fact
+        f.lead.onCommit = () => { observers++ }
+        // Both initial lane drains must be scheduled before either acknowledgement
+        // installer runs; the held real backend reconciliation forces the overlap.
+        const outcomes = Promise.allSettled([f.tx.drain(), overlap === 'two transaction drains' ? f.tx.drain() : f.lead.close()])
+        await entered.promise
+        await new Promise<void>(resolve => setImmediate(resolve))
+        expect([installs, observers, calls, writes]).toEqual([0, 0, 1, 2])
+        release.resolve()
+        expect(await outcomes).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }])
+        expect([installs, observers, calls, writes, f.actionCount()]).toEqual([1, 1, 1, 2, 2])
+        expect(reconciliationKeys).toEqual([ackKey])
+        const ackCaptures = f.captures.filter(capture => capture.kind === 'delivery')
+        expect(ackCaptures).toHaveLength(1)
+        expect(ackCaptures[0]!.fact).toBe(originalCapture)
+        expect(f.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(1)
+        expect(await sending.then(() => ({ occurred: false }), error => ({ occurred: true, error }))).toEqual(rejection)
+        await f.lead.close()
+        console.info('concurrent-ack-drain-evidence', JSON.stringify({ overlap, originalError: originalError === undefined ? { type: 'undefined' } : { type: 'null' }, root: f.root, ackKey, reconciliationKeys, installs, observers, calls, writes, actions: f.actionCount(), captureCount: f.captures.filter(capture => capture.kind === 'delivery').length }))
+      } finally { release.resolve(); f.state.delivered.add = add; await f.coordinator.close().catch(() => {}) }
+    })
+  }
+}
+
 it('releases an authoritative never-issued queue with its native refusal and accepts later optional work', async () => {
   let calls = 0
   const f = await fixture(async () => { calls++; return queued() })
