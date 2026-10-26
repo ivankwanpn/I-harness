@@ -1,5 +1,5 @@
 import type { SessionView } from '../managed/types.ts'
-import { types } from 'node:util'
+import { captureSelectedData } from '../serialization/bounded-json.ts'
 import type { HistoryItem } from './history/types.ts'
 import type { SeedArtifact, SeedItem, SeedOrigin, SeedOriginAddress, SeedOmission, SeedResult } from './seed-types.ts'
 import { canonicalJsonData } from '../serialization/json-data.ts'
@@ -9,35 +9,6 @@ import { renderConversationItems } from './render-items.ts'
 import { eventArchive } from './archive.ts'
 import { copyConversationData } from './render.ts'
 import type { selectSeedHistory } from './seed-selection.ts'
-
-/** Validate descriptors while capturing their data once. All later codec and
- * digest traversals read this owned copy, never the selected source graph. */
-function captureSelectedData(input: unknown): unknown {
-  let result: unknown
-  const ancestors = new Set<object>()
-  type Task = { value: unknown; put(value: unknown): void } | { leave: object }
-  const tasks: Task[] = [{ value: input, put: value => { result = value } }]
-  while (tasks.length) {
-    const task = tasks.pop()!
-    if ('leave' in task) { ancestors.delete(task.leave); continue }
-    const value = task.value
-    if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value)) { task.put(value); continue }
-    if (!value || typeof value !== 'object' || types.isProxy(value) || ancestors.has(value)) seedInvalid()
-    const array = Array.isArray(value), prototype = Object.getPrototypeOf(value)
-    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) seedInvalid()
-    const descriptors = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(descriptors)
-    if (keys.some(key => typeof key !== 'string') || array && keys.length !== value.length + 1) seedInvalid()
-    const copy: unknown[] | Record<string, unknown> = array ? [] : {}
-    task.put(copy); ancestors.add(value); tasks.push({ leave: value })
-    for (const key of (keys as string[]).reverse()) {
-      if (array && key === 'length') continue
-      const descriptor = descriptors[key]!
-      if (!descriptor.enumerable || !('value' in descriptor)) seedInvalid()
-      tasks.push({ value: descriptor.value, put: child => { Object.defineProperty(copy, key, { value: child, enumerable: true, writable: true, configurable: true }) } })
-    }
-  }
-  return result
-}
 
 /** One selected payload capture. Origin and dependency normalization subsequently
  * traverses these captured data only, never the source archive bodies again. */
