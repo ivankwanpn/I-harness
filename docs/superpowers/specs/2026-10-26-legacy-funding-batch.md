@@ -164,6 +164,8 @@ During the effect pass there is no intended payload reclamation: only exact pads
 
 ## 6. Drift boundary and root ruling
 
+LPF01 follow-on amendment: the separately approved `2026-10-26-linear-ledger-padding.md` specification explicitly supersedes the full-prefix-before-every-bounded-write requirement ONLY for canonical/rewrite padding. It retains exact entry/pre-sync/post-sync content validation, every-request native/link/size/currentness/issuance and all batch/grant gates, while allowing stated same-inode content drift to be detected after already-admitted remaining pad growth. Journal/slot/application remain unchanged. This amendment is prospective implementation work, not a rewrite of previous acceptance evidence or a performance claim.
+
 Two constant-space passes cannot retain every first-pass native snapshot for immediate per-row comparison. Root ratifies this tradeoff after exact connected phase/signature review and final baseline review; the following is binding:
 
 1. Fresh local native/phase/prefix checks protect each execution. A local invalid/foreign/revoked state or X>G stops before that entry's new mutator.
