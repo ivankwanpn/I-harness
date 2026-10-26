@@ -19,7 +19,7 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { holdTerminal?: boolean; holdTerminalUnknown?: boolean; expectStopDiagnostics?: boolean; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   const backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -32,9 +32,27 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     if (outcome.kind !== 'ready') throw new Error('Actual B2 fixture not ready: ' + JSON.stringify(outcome))
   } else await coordinator.create({ sessionId: 'parent', ...(options.compatibilityOrigin === 'delegated' ? { parentSession: 'delegator', origin: 'subagent' as const, subagentProtocolVersion: 1 as const, seedLength: 0 } : {}) })
   const originalDocument = await coordinator.openManagedDocument('parent')
+  // Retain references to actual original spawn settlement sources for explicit
+  // owner recovery controls. No source/received method is replaced.
+  const spawnSources: { taskId: string; source: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome> }[] = []
+  const beginAction = originalDocument.beginAction.bind(originalDocument)
+  originalDocument.beginAction = signal => {
+    const action = beginAction(signal), register = action.registerSettlementSource.bind(action), captureStart = action.captureSubagentStart.bind(action)
+    const sources: import('@i-harness/core-session').SettlementFacts<import('@i-harness/core-session').ProducerFactOutcome>[] = []
+    action.registerSettlementSource = (...args) => { const source = register(...args); sources.push(source); return source }
+    action.captureSubagentStart = (...args) => {
+      const captured = captureStart(...args)
+      if (sources.length !== 1) throw new Error('Actual spawn source identity is ambiguous')
+      spawnSources.push({ taskId: args[0].taskId, source: sources[0]! })
+      return captured
+    }
+    return action
+  }
   const output = createContextOutputService({ root: join(root, 'results'), workspaceId: 'd1a-fixture', config: { enabled: false } })
   const parentRequests: LLMRequest[] = []
   const warnings: string[] = [], expectedWarnings = new Set<string>()
+  for (const warning of options.expectedWarnings ?? []) expectedWarnings.add(warning)
+  if (options.rewindFsWrite) expectedWarnings.add(`[rewind] bound pre-M54 journal ${join(root, 'rewind-store', 'rewind', 'parent')} to workspace ${root} (no meta.json existed)`)
   if (options.holdTerminalUnknown) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: AggregateError: Original delivery sources require settlement`)
   if (options.holdReceiptUnknown || options.expectStopDiagnostics) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: FactRecoveryRequiredError: Managed facts require reconciliation`)
   if (options.expectStopDiagnostics) expectedWarnings.add('[i-harness] delivery Stop requires reconciliation: FactRecoveryRequiredError: Managed facts require reconciliation')
@@ -59,6 +77,10 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
   const parentStep = Promise.withResolvers<void>(), parentGate = Promise.withResolvers<void>()
   const openUnknown = Promise.withResolvers<void>()
   const terminalReconcile = Promise.withResolvers<void>()
+  const receiptReconcile = Promise.withResolvers<void>(), receiptReconcileGate = Promise.withResolvers<void>()
+  const taskSaveFailed = Promise.withResolvers<void>()
+  let allowTaskSave = !options.holdTaskSaveFailure
+  if (!options.holdReceiptReconcile) receiptReconcileGate.resolve()
   if (!options.holdParentStep) parentGate.resolve()
   if (!options.holdReceiptBeforeIssue) receiptGate.resolve()
   let consumedCount = 0
@@ -75,15 +97,31 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
   const terminalKeys: string[] = []
   const backendTrace: unknown[] = []
   const receiptKeys: string[] = []
+  const putDocument = backend.putDocument
+  backend.putDocument = async (key, data) => {
+    const snapshot = JSON.parse(JSON.stringify(data))
+    backendTrace.push({ phase: 'document-entered', key, at: Date.now(), data: snapshot })
+    try {
+      if (!allowTaskSave && key === 'task-parent' && (data as { tasks?: { result?: { kind: string } }[] }).tasks?.some(task => task.result?.kind === 'retained')) {
+        taskSaveFailed.resolve()
+        throw Object.assign(new Error('Controlled original task document save refused'), { code: 'EPERM' })
+      }
+      await putDocument(key, data)
+      backendTrace.push({ phase: 'document-returned', key, at: Date.now() })
+    } catch (error) {
+      backendTrace.push({ phase: 'document-failed', key, at: Date.now(), error: inspect(error, { depth: 8 }) })
+      throw error
+    }
+  }
   backend.appendOwnedBatch = async (...args) => {
     const events = decodeFactBatch(args[3].bytes).events
-    backendTrace.push({ phase: 'entered', key: args[3].key.batchId, events: events.map(e => ({ type: e.type, ...('op' in e ? { op: e.op } : {}) })) })
+    backendTrace.push({ phase: 'entered', sessionId: args[0], key: args[3].key.batchId, at: Date.now(), events: events.map(e => ({ type: e.type, ...('op' in e ? { op: e.op } : {}) })) })
     if (events.some(e => e.type === 'agent/delivery-received')) { receiptPrepared.resolve(); await receiptGate.promise }
     if (args[0] === 'parent' && events.some(e => e.type === 'subagent/end')) {
       heldTerminal = true; terminal.resolve(); await terminalGate.promise
     }
     const outcome = await append(...args)
-    backendTrace.push({ phase: 'returned', key: args[3].key.batchId, kind: outcome.kind })
+    backendTrace.push({ phase: 'returned', sessionId: args[0], key: args[3].key.batchId, at: Date.now(), kind: outcome.kind })
     if (options.holdTerminalUnknown && args[0] === 'parent' && events.some(e => e.type === 'subagent/end')) {
       heldTerminalKey = args[3].key; terminalKeys.push(heldTerminalKey.batchId)
       return { kind: 'unknown', key: heldTerminalKey }
@@ -106,6 +144,7 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     if (args[3].key.batchId === heldOpenKey?.batchId && !allowOpen) return { kind: 'unknown', key: heldOpenKey }
     if (args[3].key.batchId === heldReceiptKey?.batchId) {
       receiptKeys.push(args[3].key.batchId)
+      receiptReconcile.resolve(); await receiptReconcileGate.promise
       if (!allowReceipt) return { kind: 'unknown', key: heldReceiptKey }
     }
     return reconcile(...args)
@@ -119,6 +158,7 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
   const parent = controlledModel(async function* (request) {
     parentRequests.push(request)
     if (parentRequests.length === 1) {
+      if (options.rewindFsWrite) yield { type: 'tool_call', call: { id: 'original-fs-write', name: 'write', args: { path: 'greet.txt', text: 'goodbye' } } }
       for (let i = 0; i < (options.spawnCount ?? 1); i++) yield { type: 'tool_call', call: { id: 'original-spawn-' + i, name: 'spawn_agent', args: { task_name: 'original' + i, agent_type: 'probe', message: 'return original result', fork_turns: 'none' } } }
     }
     else {
@@ -139,6 +179,8 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     yield { type: 'end' }
   })
   const mount = () => createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
+    rewindStoreRoot: options.rewindFsWrite ? join(root, 'rewind-store') : undefined,
+    extensionsFor: options.extensionsFor,
     telemetry,
     model: parent, modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access', codeMode: { mode: 'off' }, contextWindow: 100000,
     pluginAgents: [{ name: 'probe', description: 'delivery fixture', systemPrompt: 'Return the original result', tools: [] }],
@@ -154,8 +196,9 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     await writeFile(join(process.env.IH_DELIVERY_EVIDENCE_ROOT, `${label}.json`), JSON.stringify({ root, launches, heldTerminal, terminalKeys, receiptKeys, backendTrace, warnings, telemetryEvents, pending: assembly?.inbox.pending(), deliveryPending: readDeliveries(view).pending(), requests: parentRequests.map(r => r.messages), events: (await backend.read('parent')).events, failure: inspect(failure, { depth: 8 }) }, null, 2))
   }
   return {
-    get service() { return service }, backend, get coordinator() { return coordinator }, parentRequests,
+    root, output, get service() { return service }, backend, get coordinator() { return coordinator }, parentRequests,
     launchCount: () => launches,
+    settleOriginalSpawnSources: async () => { for (const original of spawnSources) await original.source.close() },
     async start() {
       if (options.compatibilityOrigin === 'unknown') {
         await (await service.assemblyFor('parent')).agent.run('run an ordinary child', new AbortController().signal)
@@ -177,6 +220,10 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     waitForTerminalCommitted: () => terminalCommitted.promise,
     waitForConsumed: () => consumed.promise,
     waitForReceiptUnknown: () => receiptUnknown.promise,
+    waitForTaskSaveFailed: () => taskSaveFailed.promise,
+    releaseTaskSave: () => { allowTaskSave = true },
+    waitForReceiptReconcile: () => receiptReconcile.promise,
+    releaseReceiptReconcile: () => receiptReconcileGate.resolve(),
     waitForReceiptPrepared: () => receiptPrepared.promise,
     waitForParentStep: () => parentStep.promise,
     waitForOpenUnknown: () => openUnknown.promise,
@@ -201,7 +248,7 @@ export async function createDeliveryFixture(options: { holdTerminal?: boolean; h
     },
     async close() {
       if (closed) return
-      childGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true
+      childGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []
       off()
       try {

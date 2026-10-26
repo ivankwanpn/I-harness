@@ -75,7 +75,7 @@ it('an unknown admitted id is not swallowed as an already-claimed delivery hint'
   } finally { await service.close(); await coordinator.close() }
 })
 
-it.each(['invalid', 'conflict', 'unsupported', 'retired', 'out-of-scope', 'unclassified'] as const)('blocked %s observation has zero automatic retry timers', async reason => {
+it.each(['invalid', 'conflict', 'unsupported', 'retired', 'out-of-scope', 'explicit-absence-retry', 'unclassified'] as const)('blocked %s observation has zero automatic retry timers', async reason => {
   vi.useFakeTimers()
   let attempts = 0
   const drain = createDeliveryDrain({ current: () => true, reconcile: async () => { attempts++; throw new RecipientDeliveryRecoveryError({ kind: 'blocked', reason, debt: 'retained' }) }, pending: () => [], schedule: () => false, report() {} })

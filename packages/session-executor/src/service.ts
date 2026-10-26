@@ -684,7 +684,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             if (cleanup) {
               extensionCleanups.set(sessionId, cleanup)
             }
-          } catch (error) { await assembly.dispose(); mountingAssemblies.delete(sessionId); throw error }
+          } catch (error) {
+            revokeSession(sessionId)
+            try { await assembly.dispose() }
+            catch (cleanup) { throw new AggregateError([error, cleanup], "Assembly extension mount and cleanup failed", { cause: error }) }
+            mountingAssemblies.delete(sessionId)
+            throw error
+          }
         }
         if (closed || closing.has(sessionId)) {
           await assembly.dispose()

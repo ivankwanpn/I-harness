@@ -1,4 +1,3 @@
-import { appendStandalone as append } from "./helpers.ts"
 // M42 G1 integration: assembly-wired rewind — a scripted turn runs a REAL fs
 // write tool, the event chain (user/message → tool call/result → turn/end)
 // drives the recorder, and the durable point lands in the rewind store; then
@@ -16,6 +15,10 @@ import { RewindService } from "@i-harness/rewind"
 import { rmWorkspaceSync } from "./helpers.ts"
 import { RewindStore } from "@i-harness/rewind"
 import { createSessionAssembly } from "../src/assembly.ts"
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { decodeFactBatch } from '@i-harness/core-session'
+import { withRewindFacts } from '../src/lifecycle/rewind-facts.ts'
 
 const utf8 = (s: string) => new TextEncoder().encode(s)
 const H = (s: string) => createHash("sha256").update(utf8(s)).digest("hex")
@@ -43,10 +46,15 @@ describe("assembly rewind wiring", () => {
     const storeRoot = mkdtempSync(join(tmpdir(), "i-harness-rewind-store-"))
     cleanup.push(workspace, storeRoot)
     await writeFile(join(workspace, "greet.txt"), "hello")
+    const backend = createJsonlBackend(join(workspace, 'sessions')), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+    await coordinator.create({ sessionId: 'r1' })
 
     const assembly = await createSessionAssembly({
       workspace,
       sessionId: "r1",
+      coordinator,
+      modelPolicy: 'test-mock',
+      contextWindow: 100000,
       rewindStoreRoot: storeRoot,
       // one scripted turn: write greet.txt → final assistant message
       model: createMockClient([
@@ -74,16 +82,28 @@ describe("assembly rewind wiring", () => {
       })
 
       // the tool RESULT carried the pre-image ref (the log is the channel)
-      const toolRes = assembly.session.events.find((e) => e.type === "tool/result") as {
-        output: { preImageRef?: string; isNewFile?: boolean }
-      }
-      expect(toolRes.output.preImageRef).toBe(H("hello"))
-      expect(toolRes.output.isNewFile).toBe(false)
+      const toolRes = assembly.session.events.find((e) => e.type === "tool/result")!
+      if (toolRes.type !== 'tool/result' || toolRes.envelope?.retention.kind !== 'inline') throw new Error('Expected actual inline fs result')
+      const output = toolRes.envelope.retention.value as { preImageRef?: string; isNewFile?: boolean }
+      expect(output.preImageRef).toBe(H("hello"))
+      expect(output.isNewFile).toBe(false)
 
       // rewind through the engine: restore file + append the rewind/point
       // event + truncate the journal
       const service = new RewindService({ store, workspace })
-      const result = await service.execute(0, "all", { appendEvent: (ev) => append(assembly.session, ev) })
+      const release = Promise.withResolvers<void>(), appendBatch = backend.appendOwnedBatch!
+      let closeEntered = false
+      backend.appendOwnedBatch = async (...args) => {
+        if (decodeFactBatch(args[3].bytes).events.some(e => e.type === 'agent/delivery-generation' && e.op === 'close' && e.reason === 'rewind')) { closeEntered = true; await release.promise }
+        return appendBatch(...args)
+      }
+      const executing = withRewindFacts(assembly.factOwner, appendEvent => service.execute(0, "all", { appendEvent }))
+      try {
+        await waitFor(async () => closeEntered)
+        expect(await readFile(join(workspace, 'greet.txt'), 'utf8')).toBe('goodbye')
+        expect(await store.readPoints()).toHaveLength(1)
+      } finally { release.resolve() }
+      const result = await executing
       expect(result.truncated).toBe(true)
       expect(result.errors).toEqual([])
       expect(await readFile(join(workspace, "greet.txt"), "utf-8")).toBe("hello")
@@ -92,7 +112,7 @@ describe("assembly rewind wiring", () => {
       expect(rewindEv.fileOps).toEqual([{ path: "greet.txt", op: "restore" }])
       expect(await store.readPoints()).toEqual([])
     } finally {
-      await assembly.dispose()
+      try { await assembly.dispose() } finally { await coordinator.close() }
     }
   }, 60_000)
 
@@ -275,8 +295,9 @@ describe("assembly rewind wiring", () => {
       expect(warn.mock.calls.some(([msg]) => String(msg).includes("is bound to workspace"))).toBe(true)
       await assembly.agent.run("write it")
       // no pre-image sink: the tool result carries no rewind ref...
-      const toolRes = assembly.session.events.find((e) => e.type === "tool/result") as { output: { preImageRef?: string } }
-      expect(toolRes.output.preImageRef).toBeUndefined()
+      const toolRes = assembly.session.events.find((e) => e.type === "tool/result")!
+      if (toolRes.type !== 'tool/result' || toolRes.envelope?.retention.kind !== 'inline') throw new Error('Expected actual inline fs result')
+      expect((toolRes.envelope.retention.value as { preImageRef?: string }).preImageRef).toBeUndefined()
       // ...no durability warning was logged for the fs write...
       expect(warn.mock.calls.some(([msg]) => String(msg).includes("pending-turn persistence failed"))).toBe(false)
       // ...and the foreign journal never grew
