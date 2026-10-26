@@ -17,7 +17,7 @@
 - ROOT INCIDENT RULE: no pnpm run/exec/test/type shortcuts, autorelink, install, dependency repair or package-manager subprocess. Invoke the existing RESOLVED Node+Vitest/TS files directly, one package-CWD command at a time, maxWorkers2/minWorkers1; record resolved paths/hashes/CWD/env/exit. Setup/import failure is not an intended RED and authorizes no relinking. No broad reruns without evidence.
 - Read-only resolution example for existing MAIN dependency runtime (future dispatch may supply equivalent verified absolute paths); these are variables for direct executables, not command wrappers:
 ```powershell
-$pcNode = (Get-Command node -CommandType Application).Source
+$pcNode = (Get-Command node -CommandType Application | Select-Object -First 1).Source
 $pcVitest = Join-Path (Get-Item 'D:/I-harness-main/node_modules/vitest').ResolveLinkTarget($true).FullName 'vitest.mjs'
 $pcTsc = Join-Path (Get-Item 'D:/I-harness-main/node_modules/typescript').ResolveLinkTarget($true).FullName 'bin/tsc'
 ```
@@ -155,3 +155,5 @@ Remaining root decision is dispatch sequencing only: name accepted F1 READY-fix/
 ## Root dispatch rulings
 
 The inherited touch/valueJson/fault transport correction is accepted in design by passive-code-state-candidate-fix-review-20261027.md, preserving the earlier finding. This is one connected repair with staged evidence, not separate helper completion claims. Root reserves CURRENT for the pure/core/raw-wrapper stages while HOST completes F1. Stage3 narrow bootstrap.ts:checkBirth rebase requires accepted FC12 original-owner fix; managed-document.ts remains excluded. Stage6 original fixture/controller/full-host wiring requires reviewed F1 handoff. Ask root for concrete signature/owner mismatches, not the user. Do not invent an alternate host or weaken a positive test to pass a gated stage.
+
+2026-10-27 staged release: after coherent Stage2 V1/context and pure inherited transport, the same CURRENT writer may continue Stage3 CORE types/codec/digest/reconstruction. The actual V2 manifest/window connection remains explicit pending work until then. Persistence bootstrap/controller and the original public fixture still require coherent F1 handoff. Scoped FC12 approval alone did not make its F1-dependent test fixture independent; an attempted partial MAIN integration was reverted with the exact setup/API failures retained. No temporary wire fields or fake host may bridge this dependency.
