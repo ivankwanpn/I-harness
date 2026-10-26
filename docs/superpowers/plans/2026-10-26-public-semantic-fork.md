@@ -63,6 +63,8 @@ This one task includes checkpoints A–D and the full matrix/inventory below. Re
 
 ### Checkpoint A — Public contract/controller and persistence consumer
 
+Root execution rulings FC04–06: the original semantic-fork-baseline projection must pass actual backend `child.meta` as the view header once B2 creates a semantic seed; preserve independent summary/tail equality and absence of consumed proof body, and assert genuine seed/completion. Other demonstrated public fork old raw-count/error-class oracles may move to actual semantic header/records and new typed outcome reasons, preserving independent message/image/rewind/lineage/title and traversal-before-effects checks. Never replace them with generic throws/unsupported positives. Preserve original failures separately. B2 retained-request resume can issue incomplete work, so passive guards must reject new source-derived issuance while retaining real target/dependency reconciliation; actual READY adoption remains positive. Genuine warm continuation alone uses the original witness/current source authority. No backend reimplementation or fake success guard.
+
 **Consumes:** spec§2–5 exact existing B2 and new DTO/host signatures. **Produces:** real twoarg standalone caller through capture-gated B2 plus public operation/error/retry contract. This checkpoint is not whole F1 acceptance.
 
 - [ ] Record original `session-persistence/test/semantic-fork-baseline.test.ts` causal RED on current real entry. Keep summary+tail equality and no CONSUMED-PROOF-ONLY body assertion. Preserve invalid setup/raw outputs separately; do not redirect test to helper.

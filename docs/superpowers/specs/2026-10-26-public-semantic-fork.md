@@ -128,6 +128,8 @@ Durable recovery is scoped to the **unchanged complete operation and target name
 
 Controller records `captureAttempted` before its actual B2 callback export, retaining source-only witness even on B1 refusal; never resets on absent/not-issued. Truly pre-reservation/pre-callback failures can remain uncaptured and first-capture later under same prepared intent if actual strict state permits. Reserved-but-zero-export is not that permission. Process loss after reservation but before payload can permanently leave original payload-required. Process-restart/Windows optional-directory limitation is inherited from accepted B2, not redesigned or strengthened.
 
+FC06 actual B2 routing: `resumeSemanticTarget` is not intrinsically source-passive when that coordinator retains its owned request; its original run can issue incomplete publication/seed/completion work. The controller's passive handoff therefore supplies a source-currentness guard that refuses new source-derived issuance, while forwarding the real target preparation/dependency reconciliation and target-currentness capabilities. Genuine original READY adoption/confirmation, including the original owner's permitted header upgrade, remains available without source work. Only a later genuine warm handoff under the original unchanged source witness and actual new-work policy permits new continuation issuance. Do not weaken B2, invent a permission flag or reclassify outstanding debt as absence.
+
 ## 5. Public controller and exact host lifetime
 
 ```ts
