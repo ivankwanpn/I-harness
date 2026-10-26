@@ -45,7 +45,13 @@ async function semanticFixture(version: 1 | 2) {
   const root = await mkdtemp(join(tmpdir(), 'ih-query-semantic-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'source' })
-  await coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'INHERITED_CONVERSATION_MARKER' },
+  const image = { mediaType: 'image/png' as const, dataBase64: Buffer.from('MEDIA_TRANSPORT_SECRET').toString('base64'), name: 'VISIBLE_IMAGE_MARKER', width: 2, height: 3 }
+  await coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'INHERITED_CONVERSATION_MARKER', images: [image] },
+    { type: 'step/start' },
+    { type: 'tool/call', callId: 'inherited-call', name: 'INHERITED_TOOL_NAME', args: { path: 'INHERITED_ARGUMENT_MARKER', image: { url: 'https://MEDIA_URL_SECRET.invalid', dataBase64: image.dataBase64 }, audioUrl: 'AUDIO_TRANSPORT_SECRET' } },
+    { type: 'assistant/message', text: 'INHERITED_ASSISTANT_MARKER', thinkingBlocks: [{ type: 'thinking', thinking: 'PRIVATE_THINKING_MARKER', signature: 'PRIVATE_SIGNATURE_MARKER' }], providerContinuation: { kind: 'openai-compatible', reasoningContent: 'PRIVATE_NATIVE_MARKER' } },
+    { type: 'tool/result', callId: 'inherited-call', name: 'INHERITED_TOOL_NAME', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'INHERITED_RESULT_MARKER', media: [], retention: { kind: 'unavailable', reason: 'quota' } } },
+    { type: 'step/end' },
     { type: 'code/store', version: 1, cellId: 'cell', sessionId: 'source', writes: [['privateStore', 'PASSIVE_STORE_ONLY_MARKER']] },
     { type: 'code/cell', cellId: 'cell', sessionId: 'source', state: 'completed' }, { type: 'turn/end' }])
   const document = await coordinator.openManagedDocument('source'), session = document.view, events = session.events, count = events.length
@@ -101,7 +107,12 @@ it.each([1, 2] as const)('searches actual V%s inherited conversation seed text i
     expect(await query.search('INHERITED_CONVERSATION_MARKER', { sessionId: 'target' })).toEqual([
       expect.objectContaining({ sessionId: 'target', seq: 1, eventType: 'conversation/seed-group', snippet: expect.stringContaining('INHERITED_CONVERSATION_MARKER') }),
     ])
-    expect(await query.search('PASSIVE_STORE_ONLY_MARKER', { sessionId: 'target' })).toEqual([])
+    for (const [marker, seq] of [['INHERITED_ASSISTANT_MARKER', 2], ['INHERITED_TOOL_NAME', 2], ['INHERITED_ARGUMENT_MARKER', 2], ['INHERITED_RESULT_MARKER', 2], ['VISIBLE_IMAGE_MARKER', 1]] as const) {
+      expect(await query.search(marker, { sessionId: 'target' })).toEqual([expect.objectContaining({ sessionId: 'target', seq, eventType: 'conversation/seed-group', snippet: expect.stringContaining(marker) })])
+    }
+    for (const hidden of ['PASSIVE_STORE_ONLY_MARKER', 'PRIVATE_THINKING_MARKER', 'PRIVATE_SIGNATURE_MARKER', 'PRIVATE_NATIVE_MARKER', 'MEDIA_URL_SECRET', 'AUDIO_TRANSPORT_SECRET', Buffer.from('MEDIA_TRANSPORT_SECRET').toString('base64'), 'TUVESUFf']) {
+      expect(await query.search(hidden, { sessionId: 'target' })).toEqual([])
+    }
     for (const [name, bytes] of f.files) expect(await readFile(join(f.root, name))).toEqual(bytes)
   } finally { closeSessionQueries(); await f.coordinator.close() }
 })
