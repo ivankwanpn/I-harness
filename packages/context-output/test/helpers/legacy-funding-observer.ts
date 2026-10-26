@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import { probe, observeFs, observeHash, observeSql } from './legacy-performance-probe.ts'
 const details = vi.hoisted(() => ({ slots: [] as { base: string; tupleKind: string }[], spaces: [] as { phase: string; growth: number }[],
+  recovery: undefined as undefined | (() => void),
   afterRename: undefined as undefined | ((from: string, to: string) => void),
   open: undefined as undefined | ((handle: import('node:fs/promises').FileHandle, path: string, flags: unknown) => void),
   batch: undefined as undefined | ((store: import('../../src/store.ts').ContextStore, args: Parameters<import('../../src/store.ts').ContextStore['fundLegacyBatch']>, invoke: () => Promise<void>) => Promise<void>) }))
@@ -81,6 +82,11 @@ import { DatabaseSync } from 'node:sqlite'
 import { ContextStore } from '../../src/store.ts'
 import { LegacyIndexLifecycle } from '../../src/legacy/index-lifecycle.ts'
 import { OwnerLedger } from '../../src/legacy/owner-ledger.ts'
+
+vi.mock('../../src/legacy/funding-batch.ts', async original => {
+  const native = await original<typeof import('../../src/legacy/funding-batch.ts')>()
+  return { ...native, recoveryIssued() { native.recoveryIssued(); details.recovery?.() } }
+})
 
 const exec = DatabaseSync.prototype.exec
 vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function(this: DatabaseSync, sql) { const result = exec.call(this, sql); observeSql(sql); return result })

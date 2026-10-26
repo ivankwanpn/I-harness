@@ -301,6 +301,7 @@ export class OwnerLedger {
     const handle = await open(path, 'r+')
     await withFundingFile(handle, this.retire, async () => {
       current(); let offset = 0
+      requireOne(await handle.stat({ bigint: true })); current()
       const before = await snapshotFundingFile(this.root, path, current, this.retire)
       if (!same(before, file)) throw Error('Legacy funding journal prefix drift')
       const original = Buffer.alloc(JOURNAL_CAPACITY)
@@ -312,12 +313,15 @@ export class OwnerLedger {
         let position = 0
         while (position < actual.length) { const r = await handle.read(actual, position, actual.length - position, position); current(); if (!r.bytesRead) throw Error('Owner journal short read'); position += r.bytesRead }
         if (!actual.equals(expected)) throw Error('Legacy funding journal prefix drift')
+        requireOne(await handle.stat({ bigint: true })); current()
+        batch.owner.issued(batch.allocation, 'journal', 0)
         const result = await handle.write(wanted, offset, wanted.length - offset, offset); current()
         if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
         offset = sum(offset, result.bytesWritten)
       }
       await assertFundingFile(this.root, path, handle, file, JOURNAL_CAPACITY, current)
       if ((await fundingHash(handle, JOURNAL_CAPACITY, current)).digest('hex') !== createHash('sha256').update(wanted).digest('hex')) throw Error('Legacy funding journal prefix drift')
+      requireOne(await handle.stat({ bigint: true })); current()
       batch.owner.issued(batch.allocation, 'journal', 0)
       await handle.sync(); current()
       const readback = Buffer.alloc(JOURNAL_CAPACITY); let position = 0
@@ -338,6 +342,7 @@ export class OwnerLedger {
       const old = await this.read(previous)
       if (!same(old.identity, intent.prior) || old.capacity !== intent.capacity) throw Error('Foreign predecessor')
       await independent(previous)
+      recoveryIssued()
       await rename(previous, rewrite)
     }
     if (!await exists(rewrite) || await identities(path, rewrite) || (await lstat(rewrite)).size < actual.capacity) throw Error('Owner reserve unavailable')

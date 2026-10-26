@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest'
 import { withFundingObservation, lastFundingReceipt, fundingHooks } from './helpers/legacy-funding-observer.ts'
 import { probe } from './helpers/legacy-performance-probe.ts'
-import { mkdtemp, mkdir, readFile, readdir, stat, writeFile, rename, unlink, link, symlink } from 'node:fs/promises'
-import { renameSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtemp, mkdir, readFile, readdir, stat, writeFile, rename, unlink, link, symlink, truncate } from 'node:fs/promises'
+import { renameSync, readFileSync, writeFileSync, linkSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { physicalBytes } from '../src/artifact/quota.ts'
@@ -115,10 +115,11 @@ cases.forEach(({ name, distinct, observations }) => it(`aggregate-funding ${name
 }, 120000))
 
 type Fixture = Awaited<ReturnType<typeof legacyFixture>>
+type ControlState = { restore: (() => void)[]; expectedClose?: unknown; batchFailure?: unknown; unavailableInventory?: boolean; evidence?: Record<string, unknown> }
 function includesFailure(actual: unknown, wanted: unknown): boolean { return actual === wanted || actual instanceof AggregateError && actual.errors.some(error => includesFailure(error, wanted)) }
-function control(name: string, work: (f: Fixture, directory: string, state: { restore: (() => void)[]; expectedClose?: unknown; batchFailure?: unknown; unavailableInventory?: boolean }) => Promise<void>, options: Parameters<typeof legacyFixture>[0] = {}) {
+function control(name: string, work: (f: Fixture, directory: string, state: ControlState) => Promise<void>, options: Parameters<typeof legacyFixture>[0] = {}) {
   it(name, async () => {
-    const failures: unknown[] = [], state: { restore: (() => void)[]; expectedClose?: unknown; batchFailure?: unknown; unavailableInventory?: boolean } = { restore: [] }, record: Record<string, unknown> = { name }
+    const failures: unknown[] = [], state: ControlState = { restore: [] }, record: Record<string, unknown> = { name }
     let fixture: Fixture | undefined
     const receipts = process.env.IH_FUNDING_RECEIPTS ?? join(tmpdir(), 'ih-funding-receipts')
     try {
@@ -129,9 +130,9 @@ function control(name: string, work: (f: Fixture, directory: string, state: { re
       try { record.afterBytes = await physicalBytes(directory) } catch (failure) { record.afterInventoryFailure = String(failure); if (!state.unavailableInventory) throw failure; expect(String(failure)).toMatch(/Artifact path unavailable/) }
     } catch (failure) { failures.push(failure); record.failure = String(failure) }
     finally {
-      fundingHooks.open = undefined; fundingHooks.batch = undefined; fundingHooks.afterRename = undefined
+      fundingHooks.open = undefined; fundingHooks.batch = undefined; fundingHooks.afterRename = undefined; fundingHooks.recovery = undefined
       for (const restore of state.restore.reverse()) restore()
-      record.observer = lastFundingReceipt; record.batchFailure = state.batchFailure instanceof Error ? { message: String(state.batchFailure), stack: state.batchFailure.stack, errors: state.batchFailure instanceof AggregateError ? state.batchFailure.errors.map(String) : [] } : String(state.batchFailure)
+      record.evidence = state.evidence; record.observer = lastFundingReceipt; record.batchFailure = state.batchFailure instanceof Error ? { message: String(state.batchFailure), stack: state.batchFailure.stack, errors: state.batchFailure instanceof AggregateError ? state.batchFailure.errors.map(String) : [] } : String(state.batchFailure)
       if (fixture) {
         for (const [name, close] of [['service', () => fixture!.service().close()], ['broker', () => fixture!.broker().close()], ['coordinator', () => fixture!.coordinator().close()]] as const) {
           try { await close(); record[name + 'Close'] = 'original close resolved' } catch (failure) { record[name + 'CloseFailure'] = String(failure); if (!state.expectedClose || !includesFailure(failure, state.expectedClose)) failures.push(failure) }
@@ -502,6 +503,146 @@ control('funding-ledger-phase committed-next-original-recovery-before-admission'
     expect(JSON.parse(await readFile(path.replace(/\.json$/, '.intent.json'), 'utf8'))).toMatchObject({ kind: 'legacy-owner-idle' })
   }
   expect((await withFundingObservation(() => f.run())).value.kind).toBe('ready'); expect(recovered).toBe(true)
+})
+
+for (const delta of [-1, 0]) control('funding-fix-r4 retained-layout-store-' + (delta ? 'one-below' : 'exact-fit'), async (f, directory, state) => {
+  fundingHooks.batch = async (store, args, invoke) => {
+    const root = args[4], guard = args[6], operation = join(directory, 'legacy-fork-v1', recordHash('binding', root.binding.invocation))
+    // Obtain exact original tuple/application bytes from the real funding path;
+    // then retain genuine prefixes on the same native inodes, before this proof.
+    await invoke()
+    const rootBase = join(operation, 'revoke'), expiry = expiryBase(directory, commitment(f.visible)), path = join(directory, 'owners', f.visible.id + '.json'), rewrite = path.replace(/\.json$/, '.rewrite'), journal = path.replace(/\.json$/, '.intent.json')
+    const app = Buffer.from(JSON.stringify(appliedFor(root))), final = join(operation, 'applied.json'), pending = final + '.' + createHash('sha256').update(app).digest('hex') + '.pending'
+    const prior = await readLedger(path), capacity = prior.capacity
+    await truncate(rootBase + '.0', 7); await truncate(expiry + '.1', 5)
+    await truncate(path, capacity - 3); await truncate(rewrite, capacity - 7); await truncate(pending, 11)
+    const fixed = await readFile(journal), idleBytes = Buffer.from(JSON.stringify({ version: 1, kind: 'legacy-owner-idle' }))
+    await writeFile(journal, Buffer.concat([idleBytes, Buffer.alloc(fixed.length - idleBytes.length, 32)]))
+    const canonicalInfo = await stat(path, { bigint: true }), rewriteInfo = await stat(rewrite, { bigint: true })
+    expect(canonicalInfo.ino).not.toBe(rewriteInfo.ino); expect(canonicalInfo.nlink).toBe(1n); expect(rewriteInfo.nlink).toBe(1n)
+    const retained = new Map<string, Buffer>()
+    for (const name of [rootBase + '.0', rootBase + '.1', expiry + '.0', expiry + '.1', path, rewrite, journal, pending]) retained.set(name, await readFile(name))
+    const phases: { key: string; growth: number }[] = [], ledger = new OwnerLedger(directory, store.retireLegacyFile)
+    const add = (description: { key: string; additionalBytes: number }) => { phases.push({ key: description.key, growth: description.additionalBytes }) }
+    add(await describeSlotFunding(directory, rootBase, revokedTuple(root), guard, store.retireLegacyFile))
+    for (const ref of f.selectedRefs) {
+      const tuple = commitment(ref), ownerPath = join(directory, 'owners', ref.id + '.json'), owners = (await readLedger(ownerPath, store.retireLegacyFile)).owners
+      add(await describeSlotFunding(directory, expiryBase(directory, tuple), expiredTuple('workspace', tuple), guard, store.retireLegacyFile))
+      add(await ledger.prepareTransferFunding(ownerPath, new Set([...owners, 'target']), 'original', guard))
+    }
+    add(await describeApplicationFunding(directory, final, app, guard, store.retireLegacyFile))
+    const growth = phases.reduce((total, phase) => total + phase.growth, 0)
+    // Independent missing-byte arithmetic from actual retained file lengths.
+    const missing = slotCapacity(revokedTuple(root)) - 7 + slotCapacity(expiredTuple('workspace', commitment(f.visible))) - 5 + 3 + 7 + app.length - 11
+    expect(growth).toBe(missing); expect(growth).toBeGreaterThan(0)
+    const measured = await store.diskBytes(); expect(measured).toBe(await physicalBytes(directory)); args[3] = measured + growth + delta
+    const inventories: number[] = [], diskBytes = store.diskBytes.bind(store), enter = LegacyFundingBatchOwner.prototype.enter
+    let entries = 0
+    store.diskBytes = async (...input) => { const actual = await diskBytes(...input); inventories.push(actual); return actual }
+    LegacyFundingBatchOwner.prototype.enter = function(...input) { const allocation = enter.apply(this, input); entries++; return allocation }
+    state.evidence = { measuredT0: measured, growth, missing, quota: args[3], phases, inventories, retained: [...retained].map(([name, bytes]) => ({ name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })) }
+    try {
+      try { await invoke() } catch (failure) { state.batchFailure = failure; if (!delta) throw failure }
+      expect(inventories[0]).toBe(measured)
+      if (delta) {
+        expect(state.batchFailure).toMatchObject({ code: 'ARTIFACT_QUOTA', message: 'Artifact disk quota exceeded' }); expect(entries).toBe(0)
+        expect(await physicalBytes(directory)).toBe(measured)
+        for (const [name, bytes] of retained) expect(await readFile(name)).toEqual(bytes)
+      } else {
+        expect(inventories).toEqual([measured, measured + growth]); expect(entries).toBe(8)
+        expect(await physicalBytes(directory)).toBe(args[3]); expect(await readFile(pending)).toEqual(app)
+        expect(await readSlots(directory, rootBase, revokedTuple(root))).toBe('live'); expect(await readSlots(directory, expiry, expiredTuple('workspace', commitment(f.visible)))).toBe('live')
+        expect((await stat(path)).size).toBe(capacity); expect((await stat(rewrite)).size).toBe(capacity); expect((await stat(journal)).size).toBe(fixed.length)
+      }
+      await denied(f, directory) // Store-boundary proof precedes public grants/publication.
+      Object.assign(state.evidence, { entries, physicalAfter: await physicalBytes(directory) })
+      if (delta) throw state.batchFailure
+    } finally { store.diskBytes = diskBytes; LegacyFundingBatchOwner.prototype.enter = enter }
+  }
+  const result = await withFundingObservation(() => f.run())
+  expect(result.value.kind).toBe(delta ? 'blocked' : 'ready')
+  if (delta) await denied(f, directory)
+})
+
+control('funding-fix-r1 idle-journal-outside-hardlink-after-read-intent', async (f, directory, state) => {
+  const path = join(directory, 'owners', f.visible.id + '.json'), journal = path.replace(/\.json$/, '.intent.json'), outside = join(f.root, 'outside-journal')
+  let armed = false, linked = false, writes = 0, originalBytes!: Buffer
+  const fund = OwnerLedger.prototype.fundInBatch
+  OwnerLedger.prototype.fundInBatch = async function(...args) { if (args[2] === path) armed = true; try { return await fund.apply(this, args) } finally { armed = false } }
+  state.restore.push(() => { OwnerLedger.prototype.fundInBatch = fund })
+  fundingHooks.batch = async (store, args, invoke) => {
+    const prior = await readLedger(path), ledger = new OwnerLedger(directory, store.retireLegacyFile)
+    await ledger.fund(path, prior.owners, args[3], args[6], 'original')
+    originalBytes = await readFile(journal); expect(JSON.parse(originalBytes.toString())).toMatchObject({ kind: 'legacy-owner-idle' })
+    fundingHooks.open = (handle, opened, flags) => {
+      // transferFunding has finished readIntent and is now reading canonical;
+      // its later journal snapshot will truthfully observe this new nlink=2.
+      if (armed && !linked && opened === path && flags === 'r') { linkSync(journal, outside); linked = true }
+      if (opened !== journal || flags !== 'r+') return
+      const write = handle.write.bind(handle); handle.write = ((...input: Parameters<typeof write>) => { writes++; return Reflect.apply(write, handle, input) }) as typeof handle.write
+    }
+    try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure }
+  }
+  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked')
+  state.evidence = { outside, linked, writes, originalDigest: createHash('sha256').update(originalBytes).digest('hex'), outsideDigest: createHash('sha256').update(await readFile(outside)).digest('hex') }
+  expect(linked).toBe(true); expect(writes).toBe(0); expect(await readFile(outside)).toEqual(originalBytes)
+  expect(String(state.batchFailure)).toMatch(/Unexpected owner file aliases or unreliable identity/); await denied(f, directory)
+})
+
+for (const invalidate of [false, true]) control('funding-fix-r2 journal-partial-write-' + (invalidate ? 'invalidation' : 'live-issuance'), async (f, directory, state) => {
+  const path = join(directory, 'owners', f.visible.id + '.intent.json'), cause = Error('journal continuation invalidated before native request'), missing = Error('journal native write omitted original live issuance')
+  const issued = LegacyFundingBatchOwner.prototype.issued
+  let permit = false, writes = 0, checks = 0, active = false, retained!: Buffer
+  LegacyFundingBatchOwner.prototype.issued = function(...args) {
+    issued.apply(this, args)
+    if (args[1] === 'journal' && args[2] === 0) { if (invalidate && writes === 1) throw cause; checks++; permit = true }
+  }
+  state.restore.push(() => { LegacyFundingBatchOwner.prototype.issued = issued })
+  fundingHooks.batch = async (_store, _args, invoke) => { active = true; try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure } finally { active = false } }
+  fundingHooks.open = (handle, opened, flags) => {
+    if (!active || opened !== path || flags !== 'r+') return
+    const write = handle.write.bind(handle)
+    handle.write = (async (...input: Parameters<typeof write>) => {
+      if (!permit) throw missing
+      permit = false; writes++
+      const [bytes, offset, length, position] = input as unknown as [Uint8Array, number, number, number]
+      const result = await write(bytes, offset, Math.min(7, length), position)
+      if (writes === 1) retained = readFileSync(path)
+      return result
+    }) as typeof handle.write
+  }
+  const result = await withFundingObservation(() => f.run())
+  state.evidence = { writes, checks, retainedDigest: retained && createHash('sha256').update(retained).digest('hex'), primaryIsCause: includesFailure(state.batchFailure, cause), primaryIsMissingIssuance: includesFailure(state.batchFailure, missing) }
+  if (invalidate) {
+    expect(includesFailure(state.batchFailure, cause)).toBe(true); expect(result.value.kind).toBe('blocked'); expect(writes).toBe(1); expect(await readFile(path)).toEqual(retained); await denied(f, directory)
+  } else { expect(result.value.kind).toBe('ready'); expect(writes).toBeGreaterThan(1); expect(checks).toBeGreaterThanOrEqual(writes) }
+})
+
+for (const cut of ['invalidate', 'rename-reject'] as const) control('funding-fix-r3 committed-predecessor-' + cut, async (f, directory, state) => {
+  const path = join(directory, 'owners', f.visible.id + '.json'), previous = path.replace(/\.json$/, '.previous'), rewrite = path.replace(/\.json$/, '.rewrite')
+  const first = Error('committed-next canonical rename response lost'), cause = Error('committed predecessor ' + cut)
+  let invalid = false, renames = 0, marked = false, previousBytes!: Buffer
+  fundingHooks.batch = async (store, args, invoke) => {
+    await invoke()
+    const ledger = new OwnerLedger(directory, store.retireLegacyFile), prior = await readLedger(path), next = new Set([...prior.owners, 'target'])
+    fundingHooks.afterRename = (from, to) => { if (from === rewrite && to === path) throw first }
+    let failure: unknown; try { await ledger.replace(path, next, 'original', args[6]) } catch (error) { failure = error }
+    expect(failure).toBe(first); fundingHooks.afterRename = undefined; previousBytes = await readFile(previous)
+    const guard = args[6]; args[6] = () => { guard(); if (invalid) throw cause }
+    fundingHooks.open = (handle, opened, flags) => {
+      if (cut !== 'invalidate' || opened !== previous || flags !== 'r') return
+      const close = handle.close.bind(handle); handle.close = async () => { await close(); invalid = true }
+    }
+    fundingHooks.recovery = () => { marked = true }
+    fundingHooks.afterRename = (from, to) => { if (from === previous && to === rewrite) { renames++; if (cut === 'rename-reject') throw cause } }
+    try { await invoke() } catch (error) { state.batchFailure = error; throw error }
+  }
+  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked'); expect(includesFailure(state.batchFailure, cause)).toBe(true)
+  state.evidence = { invalid, renames, marked, previousBytesDigest: createHash('sha256').update(previousBytes).digest('hex'), primaryIsCause: includesFailure(state.batchFailure, cause) }
+  if (cut === 'invalidate') { expect(invalid).toBe(true); expect(renames).toBe(0); expect(await readFile(previous)).toEqual(previousBytes); await expect(stat(rewrite)).rejects.toMatchObject({ code: 'ENOENT' }) }
+  else { expect(renames).toBe(1); expect(marked).toBe(true); expect(await readFile(rewrite)).toEqual(previousBytes); await expect(stat(previous)).rejects.toMatchObject({ code: 'ENOENT' }) }
+  expect((await readLedger(path)).owners).toEqual(new Set(['creator', 'source', 'target']))
+  expect(JSON.parse(await readFile(path.replace(/\.json$/, '.intent.json'), 'utf8'))).toMatchObject({ kind: 'legacy-owner-rewrite' })
 })
 
 for (const kind of ['root', 'expiry']) control('funding-revoked effect-pass-' + kind, async (f, directory, state) => {
