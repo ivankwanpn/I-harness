@@ -3,6 +3,7 @@ import type { Session } from '../src/events/types.ts'
 import { replayLegacyCodeStore, replayPassiveCodeStore, capturePassiveCodeStore, type PassiveCodeStoreV1, type OwnedPassiveCandidates } from '../src/projection/passive-code-store.ts'
 import { prunePassiveCodeStore } from '../src/projection/passive-code-store/prune.ts'
 import { decodeStoreValueJson, json, MAX_STORE_BYTES } from '../src/serialization/bounded-json.ts'
+import { expandInheritedCodeStore } from '../src/projection/passive-code-store/project.ts'
 
 const tape = (rows: PassiveCodeStoreV1['rows'], ends: number[], extra: Partial<PassiveCodeStoreV1> = {}): PassiveCodeStoreV1 => ({
   version: 1, units: 2, keys: ['x', 'y'], values: [{ valueJson: '1' }, { valueJson: '2' }], rows,
@@ -76,4 +77,39 @@ it('captures only selected final bodies, preserves earlier outcomes and classifi
   const fault = capturePassiveCodeStore(candidates)!
   expect(replayPassiveCodeStore(fault, fault.groups[0]!)).toEqual({ kind: 'limit-exceeded' })
   expect(fault.values).toEqual([])
+})
+it('roundtrips inherited touches and exact JSON without obsolete bodies or insertion-order drift', () => {
+  const inherited = tape([{ kind: 'touch', unit: 0, key: 0 }, { kind: 'put', unit: 0, key: 1, value: 1 },
+    { kind: 'put', unit: 0, key: 0, value: 0 }, { kind: 'eligible', unit: 0, value: true }], [4], { units: 1 })
+  const first = capturePassiveCodeStore(expandInheritedCodeStore(inherited))!
+  const second = capturePassiveCodeStore(expandInheritedCodeStore(first))!
+  expect(second).toEqual(first)
+  expect(second.rows[0]).toEqual({ kind: 'touch', unit: 0, key: 0 })
+  expect(replayPassiveCodeStore(second, second.latest)).toEqual({ kind: 'value', entries: [['x', 1], ['y', 2]] })
+})
+it('roundtrips inherited equal-end fault aliases while ordinary empty alone is omitted', () => {
+  const inherited: PassiveCodeStoreV1 = { version: 1, units: 0, keys: [], values: [], rows: [], cuts: [{ end: 0, overLimit: true }, { end: 0 }], latest: 1, groups: [0], completed: [] }
+  const first = capturePassiveCodeStore(expandInheritedCodeStore(inherited))!
+  const second = capturePassiveCodeStore(expandInheritedCodeStore(first))!
+  expect(second).toEqual(inherited)
+  expect(replayPassiveCodeStore(second, Math.min(second.groups[0]!, second.latest))).toEqual({ kind: 'limit-exceeded' })
+  expect(capturePassiveCodeStore(expandInheritedCodeStore({ ...inherited, groups: [], cuts: [{ end: 0 }], latest: 0 }))).toBeUndefined()
+})
+it('refuses an unclassifiable new local write after a pruned fault rather than guessing an outcome', () => {
+  const inherited: PassiveCodeStoreV1 = { version: 1, units: 0, keys: [], values: [], rows: [], cuts: [{ end: 0, overLimit: true }], latest: 0, groups: [0], completed: [] }
+  const expanded = expandInheritedCodeStore(inherited)
+  const changed: OwnedPassiveCandidates = { ...expanded, units: 1, rows: [{ kind: 'put', unit: 0, key: 'x', slot: 0 }, { kind: 'eligible', unit: 0, value: true }],
+    slots: [{ kind: 'local-descriptor', slot: 0, eventIndex: 5, entryIndex: 0, value: 0 }], cuts: [...expanded.cuts, { end: 2, knowledge: { kind: 'unclassified' } }], latest: 1 }
+  // That same wire fault can hide either {x:huge,y:1} or {z:huge,y:1}.
+  // The later x=0 yields different quotas, so no complete outcome is available.
+  expect(() => capturePassiveCodeStore(changed)).toThrow('Invalid semantic seed')
+  const unchanged: OwnedPassiveCandidates = { ...expanded, cuts: [...expanded.cuts, { end: 0, knowledge: { kind: 'unclassified' } }], latest: 1 }
+  const captured = capturePassiveCodeStore(unchanged)!
+  expect(replayPassiveCodeStore(captured, captured.latest)).toEqual({ kind: 'limit-exceeded' })
+})
+it('ignores unaddressable candidate bodies but validates all addressable ordinary final values', () => {
+  const source: OwnedPassiveCandidates = { units: 1, rows: [{ kind: 'put', unit: 0, key: 'x', slot: 0 }, { kind: 'eligible', unit: 0, value: true }, { kind: 'eligible', unit: 0, value: false }],
+    slots: [{ kind: 'local-descriptor', slot: 0, eventIndex: 0, entryIndex: 0, value: NaN }], cuts: [{ end: 2, knowledge: { kind: 'unclassified' } }, { end: 3, knowledge: { kind: 'unclassified' } }], latest: 1, groups: [], completed: [] }
+  expect(capturePassiveCodeStore(source)).toBeUndefined()
+  expect(() => capturePassiveCodeStore({ ...source, groups: [0] })).toThrow('Invalid semantic seed')
 })

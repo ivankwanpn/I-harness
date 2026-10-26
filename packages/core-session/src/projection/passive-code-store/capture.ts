@@ -7,6 +7,7 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
   const selected = new Set<number>(), cuts: PassiveCodeStoreV1['cuts'][number][] = []
   const captured = new Map<number, { value: unknown; valueJson: string }>()
   const slots = new Map(candidates.slots.map(slot => [slot.slot, slot]))
+  const addressable = new Set([candidates.latest, ...candidates.completed.map(entry => entry.cut), ...candidates.groups])
   const body = (slot: number) => {
     let result = captured.get(slot)
     if (!result) {
@@ -20,14 +21,23 @@ export function capturePassiveCodeStore(candidates: OwnedPassiveCandidates): Pas
     }
     return result
   }
-  for (const cut of candidates.cuts) {
+  for (const [cutId, cut] of candidates.cuts.entries()) {
+    if (!addressable.has(cutId)) { cuts.push({ end: cut.end }); continue }
     const final = new Map<string, number>()
-    for (const position of eligibleRows(candidates.rows, cut.end).qualified) {
+    const qualified = eligibleRows(candidates.rows, cut.end).qualified
+    for (const position of qualified) {
       const row = candidates.rows[position]!
       if (row.kind === 'touch') { if (!final.has(row.key)) final.set(row.key, -1) }
       if (row.kind === 'put') final.set(row.key, position)
     }
-    const priorFault = cut.knowledge.kind !== 'unclassified' && cut.knowledge.outcome === 'limit-exceeded'
+    const inheritedBase = candidates.inherited?.toCandidate.filter(entry => entry.candidateCut <= cutId).sort((a, b) => b.candidateCut - a.candidateCut)[0]
+    const unknownFaultBase = cut.knowledge.kind === 'unclassified' && inheritedBase !== undefined &&
+      candidates.inherited!.data.cuts[inheritedBase.oldCut]?.overLimit === true
+    if (unknownFaultBase && qualified.some(position => {
+      const row = candidates.rows[position]!
+      return row.kind === 'put' && slots.get(row.slot)?.kind === 'local-descriptor'
+    })) throw new TypeError('Invalid semantic seed')
+    const priorFault = cut.knowledge.kind !== 'unclassified' && cut.knowledge.outcome === 'limit-exceeded' || unknownFaultBase
     if (priorFault) { cuts.push({ end: cut.end, overLimit: true }); continue }
     if ([...final.values()].some(position => position < 0)) throw new TypeError('Invalid semantic seed')
     const entries = [...final].map(([key, position]) => { const row = candidates.rows[position]!; if (row.kind !== 'put') throw new TypeError('Invalid semantic seed'); return [key, body(row.slot).value] })

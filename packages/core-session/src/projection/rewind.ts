@@ -11,6 +11,26 @@ export interface RewindCut {
   cutFrom: number // first hidden seq (inclusive) — the rewind anchor
   markerSeq: number // the rewind/point event's own seq (exclusive bound)
 }
+export interface OriginalWindow extends RewindCut { markerIndex: number; startRank: number; endRank: number }
+function originalPoints(session: Session) {
+  const result: (RewindCut & { markerIndex: number })[] = []
+  for (const [markerIndex, event] of session.events.entries()) {
+    if (event.type !== 'rewind/point' || typeof event.seq !== 'number' || typeof event.anchorSeq !== 'number' || event.anchorSeq >= event.seq) continue
+    result.push({ cutFrom: event.anchorSeq, markerSeq: event.seq, markerIndex })
+  }
+  return result
+}
+export function originalRewindWindows(session: Session): OriginalWindow[] {
+  const points = originalPoints(session)
+  if (!points.length) return []
+  const seqs = session.events.flatMap(event => typeof event.seq === 'number' && !Number.isNaN(event.seq) ? [event.seq] : []).sort((a, b) => a - b)
+  const rank = (boundary: number) => {
+    let first = 0, last = seqs.length
+    while (first < last) { const middle = first + Math.floor((last - first) / 2); if (seqs[middle]! < boundary) first = middle + 1; else last = middle }
+    return first
+  }
+  return points.map(point => ({ ...point, startRank: rank(point.cutFrom), endRank: rank(point.markerSeq) }))
+}
 
 /**
  * The resolved, NON-OVERLAPPING rewind cut windows of a session, in log
@@ -32,13 +52,7 @@ export interface RewindCut {
  */
 export function rewindCuts(session: Session): RewindCut[] {
   const resolved: RewindCut[] = []
-  for (const ev of session.events) {
-    if (ev.type !== "rewind/point") continue
-    // defensive (Ruling 7): malformed persisted logs bypass append validation
-    if (typeof ev.seq !== "number" || typeof ev.anchorSeq !== "number") continue
-    if (ev.anchorSeq >= ev.seq) continue // empty window — nothing to hide
-    meldRewindCut(resolved, ev.anchorSeq, ev.seq)
-  }
+  for (const window of originalPoints(session)) meldRewindCut(resolved, window.cutFrom, window.markerSeq)
   return resolved
 }
 

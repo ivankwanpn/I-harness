@@ -26,6 +26,10 @@ export function validateSemanticSourceMetadata(event: SessionEventView): void {
     for (const key of keys as string[]) {
       if (array && key === 'length') continue
       const field = fields[key]!
+      // Only this typed event payload is deferred. Ownership and eligibility at
+      // all retained cuts decide whether its version/entry descriptors matter.
+      // Nested objects with similarly named fields keep ordinary validation.
+      if (value === event && fields.type?.value === 'code/store' && ['version', 'writes'].includes(key)) continue
       if (['text', 'content', 'args', 'output', 'thinkingBlocks', 'providerContinuation'].includes(key)
         || key === 'value' && fields.kind?.value === 'inline'
         || key === 'preview' && fields.retention) continue

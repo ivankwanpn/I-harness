@@ -6,6 +6,9 @@ import { exchangeCompletion } from './unit-state.ts'
 import type { HistoryItem } from './history/types.ts'
 import type { SeedSelection, SeedRefusal, SeedOmission, TurnExtent } from './seed-types.ts'
 import { seedHash } from './seed-digest.ts'
+import { historyFact } from './history/facts.ts'
+import { originalRewindWindows } from '../projection/rewind.ts'
+import type { SelectionSource } from './passive-seed-context.ts'
 
 export type SemanticTurnBoundary = { last: number; localCutSeq?: number }
 /** Closure precedes omission: interleaved complete siblings cannot escape an
@@ -14,9 +17,14 @@ export function seedSourceIntervals(keys: readonly (readonly string[])[], comple
   return closeSourceIntervals(keys).map(interval => ({ ...interval, complete: complete.slice(interval.first, interval.last + 1).every(Boolean) }))
 }
 function sourceTurns(view: SessionView) {
-  const facts = view.events.map((event, index) => ({ index, type: event.type, seq: event.seq,
-    ...(event.type === 'conversation/seed-manifest' ? { seedTurns: event.turns } : {}) }))
+  const facts = view.events.map((event, index) => historyFact(event, index))
   return historyTurns({ length: facts.length, get: index => facts[index]! })
+}
+/** One structural source for conversation selection and passive capture. */
+export function buildSelectionSource(view: SessionView): SelectionSource {
+  const index = createSemanticSourceConversationIndex(view.events, view.formatVersion, view.header)
+  return { view, coordinates: view.events.map((event, index) => ({ index, seq: event.seq ?? index })),
+    turns: sourceTurns(view), history: index.history(), originalWindows: originalRewindWindows(view) }
 }
 function validSelection(selection: SeedSelection): boolean {
   if (!selection || typeof selection !== 'object') return false
@@ -26,9 +34,8 @@ function validSelection(selection: SeedSelection): boolean {
   return ['none', 'all'].includes(kind as string) ? keys.length === 1 : kind === 'last-turns' ? keys.length === 2 && Number.isSafeInteger(descriptors.count?.value) && descriptors.count!.value > 0
     : kind === 'completed' && keys.every(key => ['kind', 'atSeq'].includes(key as string)) && (!descriptors.atSeq || Number.isSafeInteger(descriptors.atSeq.value) && descriptors.atSeq.value >= 0)
 }
-export function resolveSeedBoundary(view: SessionView, selection: SeedSelection): { kind: 'resolved'; boundary: SemanticTurnBoundary } | { kind: 'refused'; reason: SeedRefusal } {
+export function resolveSeedBoundary(view: SessionView, selection: SeedSelection, turns = sourceTurns(view)): { kind: 'resolved'; boundary: SemanticTurnBoundary } | { kind: 'refused'; reason: SeedRefusal } {
   if (!validSelection(selection) || selection.kind === 'none') return { kind: 'refused', reason: 'invalid-selection' }
-  const turns = sourceTurns(view)
   if (turns.ambiguous) return { kind: 'refused', reason: 'ambiguous-boundary' }
   if (selection.kind !== 'completed') return { kind: 'resolved', boundary: { last: turns.total } }
   if (selection.atSeq !== undefined) {
@@ -40,22 +47,24 @@ export function resolveSeedBoundary(view: SessionView, selection: SeedSelection)
       return turns.completed.some(([first, last]) => extent.last >= first && extent.last <= last) ? { kind: 'resolved', boundary: { last: extent.last } } : { kind: 'refused', reason: 'no-completed-boundary' }
     }
   }
-  const completed = turns.ends.find(end => selection.atSeq !== undefined && end.seq >= selection.atSeq!) ?? turns.ends.at(-1)
+  const inRange = selection.atSeq !== undefined && view.events.some(event => event.seq !== undefined && event.seq >= selection.atSeq!)
+  const completed = inRange ? turns.ends.find(end => end.seq >= selection.atSeq!) : turns.ends.at(-1)
   if (completed) return { kind: 'resolved', boundary: { last: completed.turn, localCutSeq: turns.starts.find(start => start.seq > completed.seq)?.seq } }
+  if (inRange && turns.starts.some(start => start.seq <= selection.atSeq!)) return { kind: 'refused', reason: 'no-completed-boundary' }
   const inherited = turns.completed.at(-1)?.[1]
   return inherited === undefined ? { kind: 'refused', reason: 'no-completed-boundary' } : { kind: 'resolved', boundary: { last: inherited } }
 }
 
 /** Select descriptors before payload rendering. Input observations may be split
  * from an unfinished physical unit only when their own evidence is input-only. */
-export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSelection, { kind: 'none' }>) {
+export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSelection, { kind: 'none' }>, built?: SelectionSource) {
   if (!validSelection(selection)) return { kind: 'refused' as const, reason: 'invalid-selection' as const }
-  const index = createSemanticSourceConversationIndex(view.events, view.formatVersion, view.header)
-  const resolved = resolveSeedBoundary(view, selection)
+  const source = built ?? buildSelectionSource(view)
+  const resolved = resolveSeedBoundary(view, selection, source.turns)
   if (resolved.kind === 'refused') return resolved
-  const history = index.history(), source = sourceTurns(view), last = resolved.boundary.last
-  const first = selection.kind === 'last-turns' ? Math.max(1, source.total - selection.count + 1) : 1
-  const includeUnframed = selection.kind !== 'last-turns' || selection.count >= source.total
+  const history = source.history, turns = source.turns, last = resolved.boundary.last
+  const first = selection.kind === 'last-turns' ? Math.max(1, turns.total - selection.count + 1) : 1
+  const includeUnframed = selection.kind !== 'last-turns' || selection.count >= turns.total
   const rebase = (extent: TurnExtent): TurnExtent => extent.kind === 'unframed' ? extent : { kind: 'framed', first: extent.first - first + 1, last: extent.last - first + 1 }
   const extentSelection = (extent: TurnExtent) => extent.kind === 'unframed' ? includeUnframed ? 'inside' : 'outside'
     : extent.last < first || extent.first > last ? 'outside' : extent.first < first || extent.last > last ? 'straddling' : 'inside'
@@ -125,5 +134,5 @@ export function selectSeedHistory(view: SessionView, selection: Exclude<SeedSele
     if (selected === 'inside') inheritedOmissions.push({ ordinal, omission: { ...omission, extent: rebase(omission.extent) } })
   }
   return { kind: 'selected' as const, groups, omissions: retainedOmissions, omittedInputs: retainedInputOmissions, inheritedOmissions, rebase,
-    turns: { total: Math.max(0, last - first + 1), completed: turnIntervals(source.completed.filter(([start, end]) => end >= first && start <= last).map(([start, end]) => [Math.max(first, start) - first + 1, Math.min(last, end) - first + 1])), unframedPrefix: includeUnframed && source.unframedPrefix }, diagnostics: history.diagnostics }
+    turns: { total: Math.max(0, last - first + 1), completed: turnIntervals(turns.completed.filter(([start, end]) => end >= first && start <= last).map(([start, end]) => [Math.max(first, start) - first + 1, Math.min(last, end) - first + 1])), unframedPrefix: includeUnframed && turns.unframedPrefix }, diagnostics: history.diagnostics }
 }
