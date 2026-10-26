@@ -352,6 +352,8 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  onExecutionSurfaceChanged?(listener: () => void): () => void
+  executionSurfaceState?(): "available" | "unavailable" | "retired"
   settleRuntimeContextPublications(): Promise<void>
   reconcileExecutionAuthority(): Promise<void>
   /** An unavailable owner is reported without claiming backend probe results. */
@@ -1175,6 +1177,20 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let disposing = false
   const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
+  let executionSurfaceRetired = false
+  let offCodeModeSurface: (() => void) | undefined
+  const executionSurfaceListeners = new Set<() => void>()
+  const executionSurfaceChanged = () => {
+    for (const listener of [...executionSurfaceListeners]) {
+      try { listener() } catch { /* Passive consumers cannot fail an owner. */ }
+    }
+  }
+  const retireExecutionSurface = () => {
+    if (executionSurfaceRetired) return
+    executionSurfaceRetired = true
+    offCodeModeSurface?.(); offCodeModeSurface = undefined
+    executionSurfaceChanged()
+  }
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
@@ -1537,6 +1553,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session, factOwner, sessionId: opts.sessionId, config: codeMode,
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
     })
+    offCodeModeSurface = codeModeMount?.onSurfaceChanged?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
     await codeModeMount?.ready?.()
     const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
     let overheadOverride = opts.compact?.overheadTokens
@@ -1617,7 +1634,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session,
       factOwner, managedDocument, metadataFacts,
       async recordSandboxMode(mode) { committedFactSeqs(await policyFacts().admit({ type: 'sandbox/mode', mode })) },
-      revokeNewWork() { managedDocument?.revokeNewWork() },
+      revokeNewWork() { retireExecutionSurface(); managedDocument?.revokeNewWork() },
+      onExecutionSurfaceChanged(listener) { executionSurfaceListeners.add(listener); return () => { executionSurfaceListeners.delete(listener) } },
+      executionSurfaceState: () => executionSurfaceRetired ? 'retired'
+        : !codeModeMount ? 'available'
+        : !codeModeMount.onSurfaceChanged || !codeModeMount.surfaceState ? 'unavailable' : codeModeMount.surfaceState(),
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
       selectedModel: () => currentModel,
@@ -1758,6 +1779,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
+    retireExecutionSurface()
     managedDocument?.revokeNewWork()
     disposing = true
     childObservation?.dispose()

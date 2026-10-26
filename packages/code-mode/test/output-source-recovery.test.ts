@@ -68,3 +68,98 @@ it('keeps a same-cell accepted backlog on its original source while recovery for
     await facts.optional({ type: 'code/cell', cellId: 'next', state: 'started' })
   } finally { blocked = false; await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
 })
+
+it('mirrors a transient original hold until that source closes and isolates passive observation', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-hold-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  let blocked = true, preparations = 0, observeRelease = false, emptyButHeld = false
+  const states: string[] = []
+  const facts = createCodeModeEventFacts(document, async () => {}, () => {
+    states.push(facts.observationState())
+    if (observeRelease && facts.observationState() === 'unavailable') {
+      try { facts.assertObserved(); emptyButHeld = true } catch { /* Still pending; no readiness certificate. */ }
+    }
+    throw new Error('observer failure')
+  })
+  try {
+    await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
+    await expect(facts.requiredPrepared('original', async () => {
+      preparations++
+      if (blocked) throw new Error('Original preparation unavailable')
+      return { type: 'code/output', cellId: 'original', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'not-dispatched' }, preview: '', media: [], retention: { kind: 'unavailable', reason: 'quota' } } }
+    })).rejects.toThrow()
+    const before = preparations
+    expect(facts.observationState?.()).toBe('unavailable')
+    facts.assertHeld()
+    expect(facts.observationState?.()).toBe('unavailable')
+    expect(preparations).toBe(before)
+    blocked = false; observeRelease = true
+    await facts.refresh()
+    expect(emptyButHeld).toBe(true)
+    expect(facts.observationState?.()).toBe('available')
+    expect(states.at(-1)).toBe('available')
+    facts.requireRecovery()
+    await facts.required({ type: 'code/cell', cellId: 'original', state: 'completed' })
+    expect(facts.observationState?.()).toBe('unavailable')
+    const closing = facts.close()
+    expect(facts.observationState?.()).toBe('retired')
+    await closing
+  } finally { blocked = false; await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
+it('keeps installation faults unavailable through original failed close', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-install-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const facts = createCodeModeEventFacts(document, async () => {})
+  try {
+    await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
+    await expect(facts.required({ type: 'code/cell', cellId: 'original', state: 'completed' }, () => { throw new Error('local installation failed') })).rejects.toThrow()
+    expect(facts.observationState?.()).toBe('unavailable')
+    facts.assertHeld()
+    expect(facts.observationState?.()).toBe('unavailable')
+    await expect(facts.close()).rejects.toThrow()
+    expect(facts.observationState?.()).toBe('retired')
+  } finally { await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
+it('registers pending before preparation awaits and reports installation before final availability', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-pending-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), states: string[] = []
+  const facts = createCodeModeEventFacts(document, async () => {}, () => states.push(facts.observationState()))
+  let installed: string | undefined
+  try {
+    await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
+    const storing = facts.requiredPrepared('original', async () => {
+      entered.resolve(); await release.promise
+      return { type: 'code/output', cellId: 'original', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'not-dispatched' }, preview: '', media: [], retention: { kind: 'unavailable', reason: 'quota' } } }
+    }, () => { installed = facts.observationState() })
+    expect(facts.observationState?.()).toBe('unavailable')
+    await entered.promise
+    expect(facts.observationState?.()).toBe('unavailable')
+    release.resolve(); await storing
+    expect(installed).toBe('unavailable')
+    expect(facts.observationState?.()).toBe('available')
+    expect(states.at(-1)).toBe('available')
+  } finally { release.resolve(); await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+})
+
+it('keeps cancellation bookkeeping unavailable until the original callback returns', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-cancel-'))
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
+  const facts = createCodeModeEventFacts(document, async () => {})
+  let cancelledState: string | undefined
+  try {
+    await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
+    const store = facts.store({ type: 'code/store', version: 1, cellId: 'original', writes: [['discard', 7]] }, () => {}, () => { cancelledState = facts.observationState() })
+    facts.stopOptional()
+    await store
+    expect(cancelledState).toBe('unavailable')
+    expect(facts.observationState?.()).toBe('available')
+    expect(document.view.events.filter(event => event.type === 'code/store')).toEqual([])
+  } finally { await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
+})

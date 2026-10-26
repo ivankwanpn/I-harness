@@ -179,6 +179,7 @@ interface SessionSubmitOptions {
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
 export interface SessionService {
+  onExecutionSurfaceLifecycle?(listener: (event: { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }) => void, options?: { includeExisting?: boolean }): () => void
   compact(sessionId: string, instructions?: string, signal?: AbortSignal): Promise<import('@i-harness/compaction').CompactionResult>
   /** Update plugin-owned capabilities without replacing sessions or agents. */
   refreshExtensions(): Promise<void>
@@ -278,6 +279,33 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
+  type SurfaceLifecycle = { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }
+  const surfaceListeners = new Set<(event: SurfaceLifecycle) => void>()
+  const retiredSurfaces = new WeakSet<SessionAssembly>()
+  const surfaceSubscriptions = new Map<SessionAssembly, () => void>()
+  const ownsSurface = (id: string, assembly: SessionAssembly) => (assemblies.get(id) ?? mountingAssemblies.get(id)) === assembly
+  const surfaceKind = (id: string, assembly: SessionAssembly): 'published' | 'retiring' =>
+    closed || closing.has(id) || failedClose.has(id) || retiredSurfaces.has(assembly) || assembly.executionSurfaceState?.() === 'retired' ? 'retiring' : 'published'
+  const deliverSurface = (listener: (event: SurfaceLifecycle) => void, event: SurfaceLifecycle) => {
+    try { listener(event) } catch { /* Lifecycle observers cannot fail publication or cleanup. */ }
+  }
+  const notifySurface = (event: SurfaceLifecycle) => {
+    for (const listener of [...surfaceListeners]) {
+      if (event.kind !== 'removed' && !ownsSurface(event.sessionId, event.assembly)) break
+      // A preceding consumer may synchronously revoke/remove this identity.
+      if (event.kind === 'published' && surfaceKind(event.sessionId, event.assembly) !== 'published') break
+      deliverSurface(listener, event)
+    }
+  }
+  const retireSurface = (sessionId: string, assembly: SessionAssembly) => {
+    if (!ownsSurface(sessionId, assembly) || retiredSurfaces.has(assembly)) return
+    retiredSurfaces.add(assembly)
+    notifySurface({ sessionId, assembly, kind: 'retiring' })
+  }
+  const removeSurface = (sessionId: string, assembly: SessionAssembly) => {
+    surfaceSubscriptions.get(assembly)?.(); surfaceSubscriptions.delete(assembly)
+    notifySurface({ sessionId, assembly, kind: 'removed' })
+  }
   const executionListeners = new Set<(state: SessionExecutionState) => void>()
   const executionSubscriptions = new Map<string, () => void>()
   let executionRevision = 0
@@ -678,6 +706,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) await assembly.recordSandboxMode(currentSandbox)
         writableSessions.set(sessionId, assembly.session)
         mountingAssemblies.set(sessionId, assembly)
+        surfaceSubscriptions.set(assembly, assembly.onExecutionSurfaceChanged?.(() => {
+          if (assembly.executionSurfaceState?.() === 'retired') retireSurface(sessionId, assembly)
+        }) ?? (() => {}))
         if (extensions?.mount) {
           try {
             const cleanup = await extensions.mount(assembly)
@@ -689,18 +720,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             try { await assembly.dispose() }
             catch (cleanup) { throw new AggregateError([error, cleanup], "Assembly extension mount and cleanup failed", { cause: error }) }
             mountingAssemblies.delete(sessionId)
+            removeSurface(sessionId, assembly)
             throw error
           }
         }
         if (closed || closing.has(sessionId)) {
           await assembly.dispose()
           mountingAssemblies.delete(sessionId)
+          removeSurface(sessionId, assembly)
           throw new Error(closed ? "session service closed" : `session closing: ${sessionId}`)
         }
         if (opts.extensionsFor) {
           const dispose = assembly.dispose.bind(assembly)
           let disposing: Promise<void> | undefined
           assembly.dispose = () => {
+            assembly.revokeNewWork()
             if (disposing) return disposing
             const pending = (async () => {
               await extensionRefreshes.get(sessionId)?.catch(() => undefined)
@@ -767,6 +801,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
         // registers its answerer per ctx; a double attach would register twice).
+        if (surfaceKind(sessionId, assembly) === 'retiring') {
+          assembly.revokeNewWork(); retireSurface(sessionId, assembly)
+        } else notifySurface({ sessionId, assembly, kind: 'published' })
         for (const hook of [...hooks]) hook(assembly)
         // Recovery admission needs the exact published parent and its lane.
         // Waking schedules through submit without awaiting that turn here.
@@ -1079,7 +1116,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const assembly = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
     if (assembly) receivedInputsFor(assembly.factOwner, sessionId).delivery.revoke()
     opts.coordinator?.revokeManagedDocumentNewWork(sessionId)
-    ;(assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId))?.revokeNewWork()
+    if (assembly) { assembly.revokeNewWork(); retireSurface(sessionId, assembly) }
     for (const row of queues.get(sessionId)?.byId.values() ?? []) row.controller.abort()
   }
   let closeAttempt: Promise<void> | undefined
@@ -1118,6 +1155,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       try {
         await handle.dispose()
         assemblies.delete(id); mountingAssemblies.delete(id); writableSessions.delete(id); inputInboxes.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
+        removeSurface(id, handle)
       } catch (error) { failedClose.add(id); failures.push(error) }
     }
     for (const id of writableSessions.keys()) {
@@ -1167,6 +1205,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       failedClose.delete(sessionId)
       assemblies.delete(sessionId)
       mountingAssemblies.delete(sessionId)
+      if (handle) removeSurface(sessionId, handle)
       writableSessions.delete(sessionId)
       inputInboxes.delete(sessionId)
       lanes.delete(sessionId)
@@ -1267,6 +1306,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
       } catch (error) { hooks.delete(hook); throw error }
       return () => { hooks.delete(hook) }
+    },
+    onExecutionSurfaceLifecycle: (listener, options) => {
+      surfaceListeners.add(listener)
+      if (options?.includeExisting) {
+        for (const [sessionId, assembly] of ownedAssemblies()) {
+          if (!surfaceListeners.has(listener) || !ownsSurface(sessionId, assembly)) continue
+          if (assemblies.get(sessionId) !== assembly && surfaceKind(sessionId, assembly) !== 'retiring') continue
+          deliverSurface(listener, { sessionId, assembly, kind: surfaceKind(sessionId, assembly) })
+        }
+      }
+      return () => { surfaceListeners.delete(listener) }
     },
     reconcileExecutionAuthority: async (ids) => {
       await Promise.all([...ownedAssemblies()].filter(([id]) => !ids || ids.includes(id)).map(([, assembly]) => assembly.reconcileExecutionAuthority()))

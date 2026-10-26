@@ -24,8 +24,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const factOwner = codeModeFactOwner(options)
   const nondurable = isNondurableSession(options.session)
   if (!["off", "mixed", "only"].includes(mode)) throw new Error("Invalid Code Mode mode")
+  let disposed = false, closed = false, disposing: Promise<void> | undefined
+  let initialized = false, localTransitions = 0, installationFailed = false
+  const surfaceListeners = new Set<() => void>()
+  const surfaceChanged = () => { for (const listener of [...surfaceListeners]) { try { listener() } catch { /* Isolate consumers from publication. */ } } }
   const broker = createCodeModeBroker(ctx, tools, options)
-  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() })
+  const facts = createCodeModeEventFacts(factOwner, async () => { await runtime.drainRetainedObservations?.(); await runtime.cancel('Code Mode source drained'); await broker.dispose() }, surfaceChanged)
   const publishOutput = createCodeOutputPublisher(facts, options.retainText)
   const refreshObservation = async () => { await facts.refresh(); await runtime.drainRetainedObservations?.() }
   const liveCells = new Set<string>()
@@ -34,7 +38,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     if (event.state === "started" || event.state === "running") open.set(event.cellId, event.parentCallId)
     else open.delete(event.cellId)
   }
-  const ready = Promise.all([...open].map(([cellId, parentCallId]) => facts.required({ type: "code/cell", cellId, sessionId: options.sessionId, parentCallId, state: "interrupted", error: "Code Mode execution was interrupted; restart does not restore its continuation" }))).then(() => {})
+  const ready = Promise.all([...open].map(([cellId, parentCallId]) => facts.required({ type: "code/cell", cellId, sessionId: options.sessionId, parentCallId, state: "interrupted", error: "Code Mode execution was interrupted; restart does not restore its continuation" }))).then(() => { initialized = true; surfaceChanged() })
   void ready.catch(() => {})
   const runtime = createCodeModeRuntime({
     config: options.config,
@@ -44,35 +48,50 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     invoke: call => broker.invoke(call),
     restoreStore: origin => replayCodeModeStore(options.session, options.sessionId ?? origin.sessionId),
     async commitStore({ cellId, origin, writes, signal, committed, cancelled, retainOutcome }) {
-      if (signal.aborted) throw new Error("Code Mode store commit aborted")
-      if (!nondurable) retainOutcome?.()
-      await facts.store({ type: "code/store", version: 1, cellId, sessionId: options.sessionId ?? origin.sessionId, writes }, () => { if (!nondurable) committed?.() }, () => cancelled?.())
-      if (nondurable) { await options.flush?.(); if (signal.aborted) throw new Error('Code Mode store commit aborted'); committed?.() }
+      localTransitions++; surfaceChanged()
+      try {
+        if (signal.aborted) throw new Error("Code Mode store commit aborted")
+        if (!nondurable) retainOutcome?.()
+        await facts.store({ type: "code/store", version: 1, cellId, sessionId: options.sessionId ?? origin.sessionId, writes }, () => { if (!nondurable) committed?.() }, () => cancelled?.())
+        if (nondurable) {
+          try { await options.flush?.(); if (signal.aborted) throw new Error('Code Mode store commit aborted'); committed?.() }
+          catch (error) { installationFailed = true; throw error }
+        }
+      } finally { localTransitions--; surfaceChanged() }
     },
     async onEvent(event) {
-      if (event.type === "started") {
-        try {
-          await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
-          broker.startCell(event.cellId); liveCells.add(event.cellId)
-        } catch (error) {
-          await facts.required({ type: 'code/cell', cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted', error: 'Code Mode admission did not complete' })
-          throw error
+      // Admission remains unavailable through the entire handler, including
+      // the gap between the optional receipt and actual broker installation.
+      localTransitions++; surfaceChanged()
+      try {
+        if (event.type === "started") {
+          try {
+            await facts.optional({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source }, event.origin.abortSignal)
+            try { broker.startCell(event.cellId); liveCells.add(event.cellId) }
+            catch (error) { installationFailed = true; throw error }
+            surfaceChanged()
+          } catch (error) {
+            await facts.required({ type: 'code/cell', cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: 'interrupted', error: 'Code Mode admission did not complete' })
+            throw error
+          }
+        } else if (event.type === "output") {
+          if (!nondurable) event.retainOutcome?.()
+          await publishOutput(event)
         }
-      } else if (event.type === "output") {
-        if (!nondurable) event.retainOutcome?.()
-        await publishOutput(event)
-      }
-      else {
-        const committed = () => { liveCells.delete(event.cellId); broker.retireCell(event.cellId); event.committed?.() }
-        if (!nondurable) event.retainOutcome?.()
-        await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}) }, () => {
-          if (!nondurable) committed()
-        })
-        if (nondurable) { if (event.status === 'completed') await options.flush?.(); committed() }
-      }
+        else {
+          const committed = () => { liveCells.delete(event.cellId); broker.retireCell(event.cellId); event.committed?.(); surfaceChanged() }
+          if (!nondurable) event.retainOutcome?.()
+          await facts.required({ type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}) }, () => {
+            if (!nondurable) committed()
+          })
+          if (nondurable) {
+            try { if (event.status === 'completed') await options.flush?.(); committed() }
+            catch (error) { installationFailed = true; throw error }
+          }
+        }
+      } finally { localTransitions--; surfaceChanged() }
     },
   })
-  let disposed = false, closed = false, disposing: Promise<void> | undefined
   const execTool: Tool = {
     name: "code_exec", description: "Execute isolated JavaScript to compose the session's tools.", isReadOnly: true,
     inputSchema: { type: "object", properties: { code: { type: "string" }, yield_time_ms: { type: "integer", minimum: 0, maximum: 60_000 }, max_output_tokens: { type: "integer", minimum: 0, maximum: 4096 } }, required: ["code"], additionalProperties: false },
@@ -110,6 +129,8 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   }
   return {
     ready: () => ready,
+    onSurfaceChanged(listener) { surfaceListeners.add(listener); return () => { surfaceListeners.delete(listener) } },
+    surfaceState: () => disposed ? 'retired' : !initialized || localTransitions || installationFailed ? 'unavailable' : facts.observationState(),
     schemas() {
       if (disposed || mode === "off") return tools.schemas()
       const execDescription = codeModeDescription(tools, mode)
@@ -126,7 +147,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     async dispose() {
       if (closed) return
       if (disposing) return disposing
-      disposed = true
+      if (!disposed) { disposed = true; surfaceChanged() }
       facts.stopOptional()
       const pending = (async () => {
         const errors: unknown[] = []

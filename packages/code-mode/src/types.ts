@@ -81,6 +81,15 @@ export interface CodeModeRuntime {
   /** Trusted owner drain for an already captured observation; no guest work. */
   drainRetainedObservations?(): Promise<void>
 }
-export interface CodeModeMount { ready?(): Promise<void>; schemas(): ToolSchema[]; liveCells?(): { id: string; status: "running" }[]; terminateCell?(cellId: string): Promise<void>; cancel(reason?: string): Promise<void>; dispose(): Promise<void> }
+export interface CodeModeMount {
+  ready?(): Promise<void>
+  onSurfaceChanged?(listener: () => void): () => void
+  surfaceState?(): "available" | "unavailable" | "retired"
+  schemas(): ToolSchema[]
+  liveCells?(): { id: string; status: "running" }[]
+  terminateCell?(cellId: string): Promise<void>
+  cancel(reason?: string): Promise<void>
+  dispose(): Promise<void>
+}
 export interface CodeModeMountOptions { session: Session; factOwner?: FactOwner; sessionId?: string; config?: CodeModeConfig; retainText?: CodeModeRuntimeOptions['retainText']; flush?(): Promise<void>; maxParallel?: number }
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount
