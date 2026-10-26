@@ -6,7 +6,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { managedResultRefs, semanticSeedResultRefs, rewindCuts } from '@i-harness/core-session'
 import { createSessionService, createDurableSessionLoader, type SessionServiceOptions } from '@i-harness/session-executor'
 import { createSdkServer } from '@i-harness/sdk/server'
-import type { RpcMessage } from '@i-harness/sdk'
+import { RpcError, type RpcMessage } from '@i-harness/sdk'
 import { createProjectScopeBroker } from '../../src/project-scope.ts'
 import { createNativeContextRuntime } from '../../src/context-runtime.ts'
 import { createSessionManagement } from '../../src/session-management.ts'
@@ -46,6 +46,7 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
   const call = async (method: string, params: unknown = {}) => {
     const id = ++serial; await router.handleLine(JSON.stringify({ jsonrpc: '2.0', id, method, params }))
     const frame = frames.findLast(frame => 'id' in frame && frame.id === id)
+    if (frame && 'id' in frame && 'error' in frame) throw new RpcError(frame.error.code, frame.error.message, frame.error.data)
     if (!frame || !('id' in frame) || !('result' in frame)) throw new Error(JSON.stringify(frame))
     return frame.result
   }

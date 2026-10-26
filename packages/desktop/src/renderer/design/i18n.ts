@@ -187,6 +187,7 @@ const english = {
   "移除本機專案": "Remove local project", "確認移除專案": "Remove project", "僅移除專案分組，資料夾和會話會保留。": "Remove the project grouping. Folders and conversations are retained.",
   "未分類資料夾": "Unassigned folders", "專案操作 {name}": "Actions for project {name}", "收合專案 {name}": "Collapse project {name}", "展開專案 {name}": "Expand project {name}",
   "選擇工作區": "Select workspace", "會話操作": "Conversation actions", "更多會話操作 {title}": "More actions for {title}", "釘選會話": "Pin conversation", "取消釘選": "Unpin",
+  "建立另一個分支": "Fork another conversation",
   "標記為未讀": "Mark unread", "標記為已讀": "Mark read", "未讀": "Unread", "已釘選": "Pinned", "複製會話 ID": "Copy conversation ID", "開啟工作區資料夾": "Open workspace folder", "管理已封存會話": "Manage archived conversations",
   "來源檔案內容": "Source file contents", "尚未儲存": "Unsaved", "儲存檔案": "Save file", "檔案已儲存": "File saved",
   "檔案已在外部變更，編輯內容已保留。請重新讀取後合併變更。": "The file changed externally. Your edits are retained. Reload and merge the changes.",
