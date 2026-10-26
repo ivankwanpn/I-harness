@@ -12,7 +12,11 @@ import { registerExec, registerRetainedOutput } from '@i-harness/exec'
 import { installNativeContextOutput } from '../src/context-output.ts'
 import { createCodeTextRetention } from '../src/lifecycle/code-text-retention.ts'
 import type { CodeModeTextRetention } from '@i-harness/code-mode'
-import type { ManagedArtifactRef } from '@i-harness/core-session'
+import type { ManagedArtifactRef, ResultDependencyCatalog, ExecFrameCursor } from '@i-harness/core-session'
+import { controlledModel } from './controlled-model.ts'
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { acquireAssemblyResultStore } from '../src/lifecycle/result-store.ts'
 
 const cleanup: Array<()=>Promise<void>>=[]
 afterEach(async()=>{for(const dispose of cleanup.splice(0).reverse()) await dispose()})
@@ -73,15 +77,70 @@ it('retains complete emitted Code Mode text behind the bounded observation',asyn
 })
 
 it('captures full real shell stdout and stderr before shell preview loss',async()=>{
-  const {service}=await setup()
   const base=resolve('build/native-shell-tests');await mkdir(base,{recursive:true})
   const workspace=await mkdtemp(join(base,'shell-'));cleanup.push(()=>rm(workspace,{recursive:true,force:true}))
-  const assembly=await createSessionAssembly({workspace,sessionId:'s',modelPolicy:'test-mock',sandbox:'danger-full-access',approveAll:true,contextOutput:service,shellRetention:{maxBytes:1024}})
+  const coordinator=createSessionCoordinator(createJsonlBackend(join(workspace,'sessions')),{lock:{enabled:true}})
+  cleanup.push(()=>coordinator.close());await coordinator.create({sessionId:'s'})
+  const settings=join(workspace,'settings.json');await writeFile(settings,JSON.stringify({contextSubsystems:{contextOutput:{enabled:true}}}))
+  const lease=await acquireAssemblyResultStore({workspace,coordinator,sessionId:'s',contextOutputSettingsPath:settings})
+  cleanup.push(()=>lease.release())
+  const service=lease.service;if(!service)throw new Error('Actual automatic result store unavailable')
+  const command=`node -e "process.stdout.write('a'.repeat(40000)+'MIDDLE_STDOUT'+'b'.repeat(40000));process.stderr.write('c'.repeat(40000)+'MIDDLE_STDERR'+'d'.repeat(40000));process.exitCode=7"`
+  let modelCalls=0
+  const assembly=await createSessionAssembly({workspace,coordinator,sessionId:'s',modelPolicy:'test-mock',sandbox:'danger-full-access',approveAll:true,contextOutput:service,contextOutputSourceFor:lease.sourceFor,contextOutputLegacyReadObservation:lease.withLegacyReadObservation,shellRetention:{maxBytes:1024},
+    model:controlledModel(async function*(){
+      if(++modelCalls===1)yield{type:'tool_call',call:{id:'actual-shell',name:resolveShell().name,args:{command}}}
+      else yield{type:'text/chunk',text:'captured'}
+      yield{type:'end'}
+    })})
   cleanup.push(()=>assembly.dispose())
-  const result=await assembly.tools.execute({name:resolveShell().name,args:{command:`node -e "process.stdout.write('a'.repeat(40000)+'MIDDLE_STDOUT'+'b'.repeat(40000));process.stderr.write('c'.repeat(40000)+'MIDDLE_STDERR'+'d'.repeat(40000));process.exitCode=7"`}})
-  expect(result.output).toMatchObject({exitCode:7,contextRef:{complete:true}})
-  expect((await service.search({sessionId:'s'},{query:'MIDDLE_STDOUT'})).hits).toHaveLength(1)
-  expect((await service.search({sessionId:'s'},{query:'MIDDLE_STDERR'})).hits).toHaveLength(1)
+  const native=assembly.ctx.services.get<import('@i-harness/exec').ExecService>('exec/service')!
+  const launches=vi.spyOn(native,'run')
+  await assembly.agent.run('capture actual shell output once')
+  expect(modelCalls).toBe(2);expect(launches).toHaveBeenCalledTimes(1)
+  const result=assembly.session.events.find(event=>event.type==='tool/result'&&event.callId==='actual-shell')
+  if(result?.type!=='tool/result'||!result.envelope)throw new Error('Actual shell result envelope missing')
+  if(result.envelope.retention.kind!=='inline')throw new Error('Actual bounded shell result observation unavailable')
+  expect(result.envelope.retention.value).toMatchObject({exitCode:7})
+  // The shipping assembly retains native frames through actual managed
+  // dependency membership; BASE already disables its legacy capture cascade.
+  const dependencies=result.envelope?.dependencies
+  expect(dependencies).toMatchObject({kind:'artifact-set',count:1})
+  if(dependencies?.kind!=='artifact-set')throw new Error('Actual native dependency catalog unavailable')
+  let offset=0,encoded=''
+  for(;;){
+    const page=await service.readResult({sessionId:'s'},{ref:dependencies.ref,offset,maxBytes:4096})
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
+    if(page.data.kind!=='text')throw new Error('Actual catalog is not JSON text')
+    encoded+=page.data.text
+    if(page.eof)break
+    offset=page.nextOffset!
+  }
+  const catalog=JSON.parse(encoded) as ResultDependencyCatalog
+  expect(catalog).toMatchObject({version:1,kind:'result-dependencies'})
+  expect(catalog.entries).toHaveLength(dependencies.count)
+  const member=catalog.entries[0]!
+  if(member.retention.kind!=='artifact')throw new Error('Actual native member unavailable')
+  expect(member.retention.ref).toMatchObject({codec:'exec-frames-v1',completeness:'complete'})
+  const chunks:{stdout:Buffer[];stderr:Buffer[]}={stdout:[],stderr:[]},bytes={stdout:0,stderr:0}
+  const frameBytes=new Map<string,number>()
+  let cursor:ExecFrameCursor|undefined
+  for(;;){
+    const page=await service.readExecResult({sessionId:'s'},{ref:member.retention.ref,viaCatalog:dependencies.ref,...(cursor?{cursor}:{}),maxBytes:4096})
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
+    for(const frame of page.frames){
+      const key=frame.channel+':'+frame.frame
+      expect(frame.offset).toBe(frameBytes.get(key)??0)
+      const value=Buffer.from(frame.data,'base64');chunks[frame.channel].push(value);bytes[frame.channel]+=value.length
+      frameBytes.set(key,(frameBytes.get(key)??0)+value.length)
+    }
+    if(page.eof)break
+    if(!page.nextCursor)throw new Error('Actual native member cursor missing')
+    cursor=page.nextCursor
+  }
+  expect(bytes).toEqual({stdout:80013,stderr:80013})
+  expect(Buffer.concat(chunks.stdout).toString()).toBe('a'.repeat(40000)+'MIDDLE_STDOUT'+'b'.repeat(40000))
+  expect(Buffer.concat(chunks.stderr).toString()).toBe('c'.repeat(40000)+'MIDDLE_STDERR'+'d'.repeat(40000))
 },15000)
 
 it('reads registered actual exec spill bytes but never follows forged returned paths',async()=>{
