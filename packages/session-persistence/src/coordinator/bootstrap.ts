@@ -226,14 +226,28 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       try{
         await previous;assertCurrent()
         const state=await read(invocation);assertCurrent()
+        // Cached observation changes no original namespace/publication fence.
+        // In particular, usable READY bytes cannot erase a foreign sibling or
+        // an unfinished/conflicting original existing-empty publication.
+        if(state.foreign)return{kind:'refused',reason:'conflict'}
+        if(state.captureReservation){
+          if(!sameBootstrapData(state.captureReservation.request.invocation,invocation))return{kind:'refused',reason:'conflict'}
+          return blocked(candidate,'payload-required')
+        }
+        if(state.meta?.semanticSeed&&(state.meta.sessionId!==invocation.targetSessionId||state.meta.createdAt!==invocation.createdAt
+          ||state.meta.semanticSeed.operationId!==invocation.operationId||state.meta.semanticSeed.requestDigest!==invocation.requestDigest))return{kind:'refused',reason:'conflict'}
+        let stage:BootstrapHeaderStage|undefined
+        if(state.stageBytes){try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{return{kind:'refused',reason:'cached-unprepared'}}}
+        if(stage&&!sameBootstrapData(stage.invocation,invocation))return{kind:'refused',reason:'conflict'}
+        if(stage){candidate.bootstrap!.stage=stage;candidate.bootstrap!.manifestDigest=manifest(stage)}
+        const publication=publicationStatus(state,stage)
+        if(publication==='conflict')return{kind:'refused',reason:'conflict'}
+        if(publication==='unknown')return blocked(candidate,stage?'unknown':'payload-required')
         if(state.kind==='unavailable')return blocked(candidate)
-        if(!state.meta?.semanticSeed||!state.stageBytes||!state.events||!state.prefix||!readyState(state))return{kind:'refused',reason:'cached-unprepared'}
-        let stage:BootstrapHeaderStage
-        try{stage=parseBootstrapHeaderStage(state.stageBytes)}catch{return{kind:'refused',reason:'cached-unprepared'}}
-        if(!sameBootstrapData(stage.invocation,invocation)||state.meta.sessionId!==invocation.targetSessionId||state.meta.createdAt!==invocation.createdAt)return{kind:'refused',reason:'conflict'}
+        if(!state.meta?.semanticSeed||!stage||!state.events||!state.prefix||!readyState(state))return{kind:'refused',reason:'cached-unprepared'}
+        if(state.meta.sessionId!==invocation.targetSessionId||state.meta.createdAt!==invocation.createdAt)return{kind:'refused',reason:'conflict'}
         if(!sameBootstrapData(cached.prefix,state.prefix)||cached.view.formatVersion!==state.meta.formatVersion
           ||['semanticSeed','seedLength','parentSession','origin','delegationDepth','subagentProtocolVersion'].some(key=>!sameBootstrapData((cached.view.header as any)?.[key],(state.meta as any)[key])))return{kind:'refused',reason:'wrong-view'}
-        candidate.bootstrap!.stage=stage;candidate.bootstrap!.manifestDigest=manifest(stage)
         checkBirth(stage,state);assertCurrent()
         return await adopt(candidate,state,guards,cached)
       }catch(error){
