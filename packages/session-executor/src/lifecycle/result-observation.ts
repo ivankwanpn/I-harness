@@ -48,13 +48,15 @@ export function createResultObservationScope(): ResultObservationScope {
   }
 }
 
-export async function discoverResultLineage(coordinator: Pick<SessionCoordinator, 'profile'>, sessionId: string): Promise<string[]> {
+export async function discoverResultLineage(coordinator: Pick<SessionCoordinator, 'profile'>, sessionId: string, assertCurrent: () => void = () => {}): Promise<string[]> {
   const ids: string[] = []
   let cursor = sessionId
   for (;;) {
+    assertCurrent()
     if (ids.includes(cursor) || ids.length >= 64) throw new Error('Result source lineage unavailable')
     ids.push(cursor)
     const { meta } = await coordinator.profile(cursor)
+    assertCurrent()
     if (meta.archived) throw new Error('Result source archived')
     // Fork READY sidecars are owned by that target, independent of ancestors.
     if (!meta.parentSession || !['subagent','team'].includes(meta.origin ?? '')) return ids
@@ -92,7 +94,7 @@ export function legacyObservationFor(source: ResultSourceObservation): LegacyRea
     localVisible: c => predicate(() => local.has(commitmentKey(c))), anchorVisible: (anchor, extent) => predicate(() => visibility.anchorVisible(anchor, extent)) }
 }
 export function createLegacyReadObservationRunner(options: {
-  coordinator: SessionCoordinator; observations: ResultObservationScope
+  coordinator: Pick<SessionCoordinator, 'profile'|'openManagedDocument'|'withExistingSessionBindingObservation'>; observations: ResultObservationScope
   resolveSource(sessionId: string): Promise<(observation: ExistingSessionBindingObservation, ids: readonly string[]) => NonNullable<ContextCapture['source']>>
   assertHostCurrent(): void
   withBindingObservation?<T>(ids: readonly string[], observation: ExistingSessionBindingObservation, use: () => Promise<T>): Promise<T>
@@ -102,7 +104,7 @@ export function createLegacyReadObservationRunner(options: {
     if (access.signal?.aborted || !options.coordinator.withExistingSessionBindingObservation) throw new Error('Legacy read observation unavailable')
     const document = await options.coordinator.openManagedDocument(access.sessionId)
     document.assertReady(); options.assertHostCurrent()
-    const ids = await discoverResultLineage(options.coordinator, access.sessionId)
+    const ids = await discoverResultLineage(options.coordinator, access.sessionId, () => { options.assertHostCurrent(); if (access.signal?.aborted) throw new Error('Legacy read cancelled') })
     const currentSource = await options.resolveSource(access.sessionId)
     options.assertHostCurrent()
     return options.coordinator.withExistingSessionBindingObservation({ sessionIds: ids, ...(access.signal ? { signal: access.signal } : {}) }, async observation => {

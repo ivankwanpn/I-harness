@@ -42,6 +42,12 @@ type Lifecycle = { assertOutside(): void; fence(): () => Promise<void> }
 const issued = new WeakMap<ForkSessionController, SessionCoordinator>()
 const lifecycle = new WeakMap<SessionCoordinator, Set<Lifecycle>>()
 const emptyClosureHosts = new WeakSet<ForkHost>()
+const hostCleanupOwners = new WeakMap<ForkHost, { coordinator: SessionCoordinator; lookup(error: unknown): ObservationCleanupHandle | undefined }>()
+/** Private actual-host lifecycle link. No RPC/data-shaped error can issue it. */
+export function associateForkHostCleanupOwner(coordinator: SessionCoordinator, host: ForkHost, lookup: (error: unknown) => ObservationCleanupHandle | undefined): void {
+  if (hostCleanupOwners.has(host)) throw new TypeError('Fork host cleanup owner already associated')
+  hostCleanupOwners.set(host, { coordinator, lookup })
+}
 /** Private restriction only: this cannot grant capture or result authority. */
 export function restrictForkHostToEmptyClosure(host: ForkHost): void { emptyClosureHosts.add(host) }
 export function assertForkControllerIssued(coordinator: SessionCoordinator, controller: ForkSessionController): void {
@@ -65,7 +71,8 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
     flights.add(promise); promise.then(() => flights.delete(promise), () => flights.delete(promise)); return promise
   }
   function retainCleanup(cause: unknown, holder?: Holder): ObservationCleanupHandle | undefined {
-    const handle = observationCleanupFor(coordinator, cause)
+    const owner = hostCleanupOwners.get(host)
+    const handle = observationCleanupFor(coordinator, cause) ?? (owner?.coordinator === coordinator ? owner.lookup(cause) : undefined)
     if (!handle) return undefined
     cleanupDebt.add(handle)
     if (holder) (holder.cleanupHandles ??= new Set()).add(handle)
