@@ -100,6 +100,26 @@ it.each([undefined, null])('failed constructor retains obtained originals, obser
   } finally { gate.resolve(); await f.close() }
 })
 
+it('a failed nondurable input alias cannot substitute another owner to trigger the original CF04 cleanup', async () => {
+  const f = await fixture(), originalInput = { ...f.input }, input = { ...f.input }
+  const replacementOwner = createNondurableFactOwner(f.child)
+  try {
+    seams.sectionFault = true; seams.closeFault = true; seams.fault = Error('retained original construction cleanup')
+    expect(() => f.host.create(input)).toThrow('retained original construction cleanup')
+    seams.sectionFault = false; await turn()
+    expect(seams.runtimes[0]).toMatchObject({ attempts: 1, closed: false })
+    input.factOwner = replacementOwner
+    expect(() => f.host.create(input)).toThrow()
+    await turn()
+    expect(seams.runtimes[0]).toMatchObject({ attempts: 1, closed: false })
+    expect(seams.runtimes).toHaveLength(1); expect(seams.managers[1]!.attempts).toBe(0)
+    seams.closeFault = false
+    expect(() => f.host.create(originalInput)).toThrow()
+    await turn(); expect(seams.runtimes[0]).toMatchObject({ attempts: 2, closed: true })
+    const replacement = f.host.create(originalInput); await replacement.close()
+  } finally { seams.closeFault = false; await f.close() }
+})
+
 it('captured constructor cleanup remains joined when successful completion removes its reserved slot', async () => {
   const f = await fixture(), gate = Promise.withResolvers<void>()
   try {

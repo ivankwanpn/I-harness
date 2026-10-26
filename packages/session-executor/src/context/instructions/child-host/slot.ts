@@ -1,5 +1,6 @@
 import type { SessionRequestContext } from '@i-harness/core-agent'
-import type { ChildInstructionContext, ChildInstructionContextInput } from '@i-harness/subagent'
+import type { FactOwner, SessionView } from '@i-harness/core-session'
+import type { ChildInstructionContext } from '@i-harness/subagent'
 import type { InstructionReadScope } from '@i-harness/fs'
 import type { InstructionTarget } from '@i-harness/instructions'
 import { createRuntimeContext, type RuntimeContextService } from '@i-harness/runtime-context'
@@ -40,7 +41,7 @@ export class InstructionSlot {
   private runtimeClosed = false
   private managerClosed = false
 
-  constructor(readonly input: ChildInstructionContextInput, private readonly owner: SlotOwner) {
+  constructor(readonly session: SessionView, readonly factOwner: FactOwner, private readonly lifetimeAvailable: () => boolean, private readonly owner: SlotOwner) {
     const context: SessionRequestContext = {
       reconcile: signal => {
         if (!this.available()) return observedRejection(unavailable())
@@ -62,7 +63,7 @@ export class InstructionSlot {
 
   available(): boolean { return !this.constructing && this.live() }
   private live(): boolean {
-    return !this.retired && this.owner.available() && this.owner.invoke(() => this.input.lifetime.available()) && !this.retired && this.owner.available()
+    return !this.retired && this.owner.available() && this.owner.invoke(this.lifetimeAvailable) && !this.retired && this.owner.available()
   }
   retire(): void { this.retired = true }
   get clean(): boolean { return !this.constructing && (!this.runtime || this.runtimeClosed) && (!this.manager || this.managerClosed) }
@@ -76,7 +77,7 @@ export class InstructionSlot {
   construct(options: Omit<ManagerOptions, 'available' | 'publish'>): ChildInstructionContext {
     try {
       if (!this.live()) throw unavailable()
-      this.runtime = createRuntimeContext(this.input.session, createRuntimeContextSource(this.input.factOwner))
+      this.runtime = createRuntimeContext(this.session, createRuntimeContextSource(this.factOwner))
       this.manager = createMainInstructionManager({ ...options,
         available: () => this.live(),
         publish: (signal, retain) => this.runtime!.render(signal, retain),

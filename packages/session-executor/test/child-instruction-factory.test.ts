@@ -121,3 +121,64 @@ it('rejects a mismatched borrowed root, root-as-child and immutable foreign view
     expect(seams.runtimes).toBe(0); await host.close()
   } finally { await f.close() }
 })
+
+it('captures the original input identities so later mutable aliases cannot strand an acknowledged original slot', async () => {
+  const f = await fixture(), input = { ...f.input }, other = createSession(), otherOwner = createNondurableFactOwner(other)
+  const create = vi.spyOn(f.environment.host, 'create'), action = vi.spyOn(f.factOwner, 'beginAction')
+  try {
+    const lease = f.host.create(input)
+    input.session = other; input.factOwner = otherOwner
+    expect(create).not.toHaveBeenCalled(); expect(action).not.toHaveBeenCalled()
+    await lease.close()
+    expect(seams.runtimeCloses).toBe(1); expect(seams.managerCloses).toBe(1)
+    const replacement = f.host.create(f.input)
+    expect(seams.runtimes).toBe(2); expect(create).not.toHaveBeenCalled(); expect(action).not.toHaveBeenCalled()
+    await replacement.close()
+  } finally { await f.close() }
+})
+
+it('captures original input before availability can redirect actual runtime publication to a different view and owner', async () => {
+  const f = await fixture(), other = createSession(), otherOwner = createNondurableFactOwner(other)
+  const input = { ...f.input, lifetime: { available() { input.session = other; input.factOwner = otherOwner; return true } } }
+  const create = vi.spyOn(f.environment.host, 'create'), originalAction = vi.spyOn(f.factOwner, 'beginAction'), otherAction = vi.spyOn(otherOwner, 'beginAction')
+  try {
+    const lease = f.host.create(input)
+    expect(create).not.toHaveBeenCalled(); expect(originalAction).not.toHaveBeenCalled(); expect(otherAction).not.toHaveBeenCalled()
+    expect(seams.runtimes).toBe(1)
+    await lease.requestContext.reconcile()
+    expect(f.child.events.findLast(event => event.type === 'runtime/context')).toMatchObject({ sections: [{ name: 'instructions', text: expect.stringContaining('FACTORY_CURRENT_RULE') }] })
+    expect(other.events).toEqual([]); expect(originalAction).toHaveBeenCalledTimes(1); expect(otherAction).not.toHaveBeenCalled()
+    await lease.close()
+    const replacement = f.host.create(f.input); await replacement.close()
+  } finally { await f.close() }
+})
+
+it.each(['method', 'lifetime'] as const)('captures original lifetime method and receiver while %s substitution cannot replace its live predicate', async substitution => {
+  const f = await fixture(), lifetime = { live: true, available() { return this.live } }, input = { ...f.input, lifetime }
+  try {
+    const lease = f.host.create(input)
+    await lease.requestContext.reconcile()
+    if (substitution === 'method') lifetime.available = () => false
+    else input.lifetime = { live: false, available: () => false }
+    // Original function still runs with its original receiver and live state.
+    await expect(lease.requestContext.reconcile()).resolves.toBeUndefined()
+    lifetime.live = false
+    lifetime.available = () => true; input.lifetime = { live: true, available: () => true }
+    expect(lease.requestContext.capture()).toBeUndefined()
+    await expect(lease.requestContext.reconcile()).rejects.toMatchObject({ code: 'CONTEXT_INPUT_STALE' })
+    lifetime.live = true; await lease.requestContext.reconcile()
+    await lease.close()
+  } finally { await f.close() }
+})
+
+it('a lifetime capability getter reentering host close cannot allocate after the retirement fence', async () => {
+  const f = await fixture(); let local: Promise<void> | undefined, predicateCalls = 0
+  try {
+    const lifetime = { get available() { local = f.host.close(); return () => { predicateCalls++; return true } } }
+    expect(() => f.host.create({ ...f.input, lifetime })).toThrow()
+    await expect(local).rejects.toThrow(/reentrant/i)
+    expect(predicateCalls).toBe(0)
+    expect(seams.runtimes).toBe(0)
+    await expect(f.host.close()).resolves.toBeUndefined()
+  } finally { await f.close() }
+})

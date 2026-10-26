@@ -42,21 +42,28 @@ export function createChildInstructionHost(options: {
       flights.add(flight)
       void flight.work.then(() => { flights.delete(flight) }, () => { flights.delete(flight) })
     },
-    remove(slot) { if (slots.get(slot.input.session) === slot) { slots.delete(slot.input.session); owned.delete(slot) } },
+    remove(slot) { if (slots.get(slot.session) === slot) { slots.delete(slot.session); owned.delete(slot) } },
   }
   const create: ChildInstructionContextFactory = input => {
     if (constructing || invoking() || retired) throw unavailable()
     constructing = true
     try {
-      if (input.factOwner.view !== input.session || input.session === rootSession
-        || (!isNondurableSession(input.session) && !isManagedFactOwner(input.session, input.factOwner))) throw new TypeError('Exact original child instruction owner required')
-      const previous = slots.get(input.session)
+      // Caller aliases are mutable. Capture each original capability once and
+      // fence getter reentry before any subsequent capture or resource work.
+      const capture = <T>(read: () => T): T => { const value = read(); if (retired) throw unavailable(); return value }
+      const session = capture(() => input.session), factOwner = capture(() => input.factOwner)
+      const lifetime = capture(() => input.lifetime), lifetimeAvailable = capture(() => lifetime.available)
+      const ownerView = capture(() => factOwner.view)
+      if (ownerView !== session || session === rootSession
+        || (!isNondurableSession(session) && !isManagedFactOwner(session, factOwner))) throw new TypeError('Exact original child instruction owner required')
+      if (retired) throw unavailable()
+      const previous = slots.get(session)
       if (previous) {
-        if (previous.input.factOwner === input.factOwner) previous.retryConstructionCleanup()
+        if (previous.factOwner === factOwner) previous.retryConstructionCleanup()
         throw unavailable()
       }
-      const slot = new InstructionSlot(input, owner)
-      slots.set(input.session, slot); owned.add(slot)
+      const slot = new InstructionSlot(session, factOwner, () => Reflect.apply(lifetimeAvailable, lifetime, []), owner)
+      slots.set(session, slot); owned.add(slot)
       return slot.construct(managerOptions)
     } finally { constructing = false }
   }
