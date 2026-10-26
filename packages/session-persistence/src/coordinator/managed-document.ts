@@ -2,8 +2,8 @@ import { createDeliveryControl } from '../../../core-session/src/managed/deliver
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
-import { captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, type SessionView } from '@i-harness/core-session';
-import type { BackendFactOutcome, ManagedDocument, HeldFactOwner } from './fact-types.ts';
+import { captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, } from '@i-harness/core-session';
+import type { BackendFactOutcome, ManagedDocument } from './fact-types.ts';
 import type { Ownership } from './ownership.ts';
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts';
 import { createFactCapacity } from './fact-capacity.ts';
@@ -49,19 +49,6 @@ type Pending = {
     cleanupReported?: boolean;
     installationFailure?: { error: unknown };
 };
-export interface ManagedReadyObservation {
-    readonly document: ManagedDocument; readonly held: HeldFactOwner;
-    readonly view: SessionView; readonly events: SessionView['events']; readonly eventCount: number;
-    readonly prefix: Readonly<JournalPrefix>;
-    assertCurrent(): void;
-}
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation }>();
-/** Private original-factory observation. No caller-shaped document/owner can issue it. */
-export function captureManagedReadyObservation(document: ManagedDocument, ownership: Ownership): ManagedReadyObservation {
-    const original = readyOwners.get(document);
-    if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
-    return original.capture();
-}
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
 export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }): ManagedDocument & {
@@ -484,15 +471,5 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     });
     state.bindOwner(document);
-    readyOwners.set(document, { ownership, capture() {
-        const view = state.view, events = view.events, eventCount = events.length, originalPrefix = prefix, header = view.header;
-        const assertCurrent = () => {
-            if (!bootstrapReady || pending || quarantined || document.view !== view || state.view !== view || view.events !== events || events.length !== eventCount
-                || view.header !== header || prefix !== originalPrefix || prefix.eventCount !== eventCount) throw new FactRecoveryRequiredError();
-            assertAuthorized(rootAuthorization);
-        };
-        assertCurrent();
-        return Object.freeze({ document, held, view, events, eventCount, prefix: Object.freeze({ ...originalPrefix }), assertCurrent });
-    } });
     return document;
 }
