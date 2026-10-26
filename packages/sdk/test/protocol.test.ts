@@ -22,6 +22,7 @@ import { HarnessClient } from "../src/client.ts"
 import { RpcError } from '../src/protocol.ts'
 import { SdkRunError } from '../src/client.ts'
 import { validationCollector } from '@i-harness/llm-seam'
+import { createBootstrapRequestIntent, readForkRequestCore, ForkOperationError, type ForkOperation } from '@i-harness/session-persistence'
 
 it('RPC and run errors retain only sanitized validation reports', () => {
   const check = validationCollector('openai-responses'); check.issue('binding', 'model', 'binding')
@@ -31,6 +32,60 @@ it('RPC and run errors retain only sanitized validation reports', () => {
     expect(JSON.stringify(error.modelFailure)).not.toContain('private raw')
   }
   expect(new RpcError(-32603, '', { modelFailure: { code: 'INVALID_ARGUMENT', reason: 'schema', validation: { ...report, constructor: 'private' } } }).modelFailure?.validation).toBeUndefined()
+})
+
+describe('public fork operation client over actual line transport', () => {
+  it('does not treat a malformed string capability as fork permission', async () => {
+    const readable = new PassThrough(), writable = new PassThrough(), server = new JsonRpcLineTransport(writable, readable), client = new HarnessClient(readable, writable)
+    const methods: string[] = []
+    server.onMessage(message => {
+      if (!isRpcRequest(message)) return
+      methods.push(message.method)
+      server.send(makeSuccess(message.id, message.method === 'initialize'
+        ? { name: 'unit-wire', version: '1', protocolVersion: 3, capabilities: { 'session-fork-bootstrap': '1' } }
+        : { kind: 'unavailable', reason: 'unavailable' }))
+    })
+    try {
+      await client.initialize()
+      expect(await client.prepareForkSession({ version: 1, sourceSessionId: 'source' })).toEqual({ kind: 'unavailable', reason: 'unsupported' })
+      expect(methods).toEqual(['initialize'])
+    } finally { server.close(); await client.close() }
+  })
+  it('joins one send and retains its operation across safe host failure and passive retry', async () => {
+    const readable = new PassThrough(), writable = new PassThrough(), server = new JsonRpcLineTransport(writable, readable), client = new HarnessClient(readable, writable)
+    const core = readForkRequestCore({ version: 1, kind: 'session-fork-core', sourceSessionId: 'source', selection: { kind: 'completed' }, sourceCapture: 'first-authorized-capture', metadata: {} })
+    const intent = createBootstrapRequestIntent(core, { kind: 'unmanaged' })
+    const prepared = { version: 1 as const, kind: 'session-fork-prepared' as const, core, requestIntent: intent.intent, requestDigest: intent.requestDigest }
+    const sent: { method: string; operation: unknown }[] = []
+    server.onMessage(message => {
+      if (!isRpcRequest(message)) return
+      if (message.method === 'initialize') server.send(makeSuccess(message.id, { name: 'unit-wire', version: '1', protocolVersion: 3, capabilities: { 'session-fork-bootstrap': ['1'] } }))
+      else if (message.method === 'session/fork/prepare') server.send(makeSuccess(message.id, { kind: 'prepared', prepared }))
+      else {
+        const operation = (message.params as { operation: typeof prepared & { invocation: { targetSessionId: string } } }).operation
+        sent.push({ method: message.method, operation })
+        if (message.method === 'session/fork/begin') server.send(makeFailure(message.id, INTERNAL_ERROR, 'Fork host unavailable', { version: 1, kind: 'session-fork-error', operation, capture: 'unknown', reason: 'host-unavailable' }))
+        else server.send(makeSuccess(message.id, { version: 1, kind: 'adopted', operation, capture: 'captured', sessionId: operation.invocation.targetSessionId, seedLength: 0,
+          receipt: { version: 1, invocation: operation.invocation, manifestDigest: 'a'.repeat(64), seedLength: 0, dependencyClosureDigest: 'b'.repeat(64) } }))
+      }
+    })
+    try {
+      await client.initialize()
+      const result = await client.prepareForkSession({ version: 1, sourceSessionId: 'source' })
+      if (result.kind !== 'prepared') throw new Error('Unit prepared reply rejected')
+      const attempt = client.createForkAttempt(result.prepared)
+      const first = attempt.run(), duplicate = attempt.run()
+      expect(first).toBe(duplicate)
+      const error = await first.catch(error => error)
+      expect(error).toBeInstanceOf(ForkOperationError); expect(error.operation).toBe(attempt.operation)
+      expect(await duplicate.catch(error => error)).toBe(error)
+      expect(sent.map(value => value.method)).toEqual(['session/fork/begin'])
+      expect((await attempt.run()).kind).toBe('adopted')
+      expect(attempt.lastOutcome?.kind).toBe('adopted')
+      expect(sent.map(value => value.method)).toEqual(['session/fork/begin','session/fork/retry'])
+      expect(sent[0]!.operation).toEqual(sent[1]!.operation)
+    } finally { server.close(); await client.close() }
+  })
 })
 
 describe("frame encoding", () => {
@@ -313,6 +368,8 @@ describe("HarnessClient session lifecycle and model helpers", () => {
     const rl = createInterface({ input: clientWrite })
     const seen: Array<{ method: string; params: unknown }> = []
     let selection: { provider: string; model: string; reasoningEffort?: string } | undefined
+    const forkCore=readForkRequestCore({version:1,kind:'session-fork-core',sourceSessionId:'s2',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{}})
+    const forkIntent=createBootstrapRequestIntent(forkCore,{kind:'unmanaged'})
 
     rl.on("line", (line) => {
       const msg = decodeFrame(line)
@@ -326,7 +383,7 @@ describe("HarnessClient session lifecycle and model helpers", () => {
             protocolVersion: 3,
             capabilities: {
               "session-create": ["1"],
-              "session-fork": ["1"],
+              "session-fork-bootstrap": ["1"],
               "session-model": ["1"],
             },
           })))
@@ -334,9 +391,15 @@ describe("HarnessClient session lifecycle and model helpers", () => {
         case "session/create":
           clientRead.write(encodeFrame(makeSuccess(msg.id, { sessionId: "s2" })))
           break
-        case "session/fork":
-          clientRead.write(encodeFrame(makeSuccess(msg.id, { sessionId: "s3" })))
+        case "session/fork/prepare":
+          clientRead.write(encodeFrame(makeSuccess(msg.id,{kind:'prepared',prepared:{version:1,kind:'session-fork-prepared',core:forkCore,requestIntent:forkIntent.intent,requestDigest:forkIntent.requestDigest}})))
           break
+        case "session/fork/begin": {
+          const operation=(msg.params as {operation:ForkOperation}).operation
+          clientRead.write(encodeFrame(makeSuccess(msg.id,{version:1,kind:'ready',operation,capture:'captured',sessionId:operation.invocation.targetSessionId,seedLength:3,
+            receipt:{version:1,invocation:operation.invocation,seedLength:3,manifestDigest:'a'.repeat(64),dependencyClosureDigest:'b'.repeat(64)}})))
+          break
+        }
         case "session/model/state":
           clientRead.write(encodeFrame(makeSuccess(msg.id, selection === undefined
             ? { status: "unconfigured", reason: "No model configured" }
@@ -359,10 +422,11 @@ describe("HarnessClient session lifecycle and model helpers", () => {
     try {
       const info = await client.initialize()
       expect(info.capabilities["session-create"]).toEqual(["1"])
-      expect(info.capabilities["session-fork"]).toEqual(["1"])
+      expect(info.capabilities["session-fork-bootstrap"]).toEqual(["1"])
       expect(info.capabilities["session-model"]).toEqual(["1"])
       await expect(client.createSession()).resolves.toEqual({ sessionId: "s2" })
-      await expect(client.forkSession("s2")).resolves.toEqual({ sessionId: "s3" })
+      const forked=await client.forkSession('s2')
+      expect(forked).toMatchObject({kind:'ready',capture:'captured',seedLength:3,sessionId:forked.operation.invocation.targetSessionId,receipt:{invocation:forked.operation.invocation,seedLength:3}})
       await expect(client.modelState("s1")).resolves.toEqual({
         status: "unconfigured",
         reason: "No model configured",
@@ -385,7 +449,8 @@ describe("HarnessClient session lifecycle and model helpers", () => {
       expect(seen).toEqual([
         { method: "initialize", params: {} },
         { method: "session/create", params: {} },
-        { method: "session/fork", params: { sessionId: "s2" } },
+        { method: 'session/fork/prepare', params: {version:1,sourceSessionId:'s2',selection:{kind:'completed'},metadata:{}} },
+        { method: 'session/fork/begin', params: {operation:forked.operation} },
         { method: "session/model/state", params: { sessionId: "s1" } },
         {
           method: "session/model/set",

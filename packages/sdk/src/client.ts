@@ -1,4 +1,7 @@
 import { readSessionContextState } from "@i-harness/core-session"
+import { randomUUID } from 'node:crypto'
+import { createForkOperation, readForkOperation, readForkPrepareRequest, readForkPrepareResult, readForkOutcome, readForkHostErrorData, ForkOperationError, ForkPreparationError,
+  type ForkClientAttempt, type ForkOperation, type ForkOutcome, type ForkPrepared, type ForkPrepareRequest, type ForkPrepareResult, type ForkSuccess } from './fork.ts'
 // M27 R-C4: SDK client — low-level JSON-RPC exchange over an NDJSON line
 // transport (in-process or a spawned `i-harness sdk` subprocess) plus the
 // high-level run(session) surface. Zero new dependencies (node:child_process
@@ -207,8 +210,73 @@ export class HarnessClient {
     return await this.request("session/create", {}) as SessionIdResult
   }
 
-  async forkSession(sessionId: string): Promise<SessionIdResult> {
-    return await this.request("session/fork", { sessionId }) as SessionIdResult
+  async prepareForkSession(input: ForkPrepareRequest): Promise<ForkPrepareResult> {
+    const request = readForkPrepareRequest(input)
+    if (!this.hasForkCapability()) return { kind: 'unavailable', reason: 'unsupported' }
+    let reply: unknown
+    try { reply = await this.request('session/fork/prepare', request) }
+    catch (cause) { throw new ForkPreparationError('transport', undefined, { cause }) }
+    try { return readForkPrepareResult(reply) }
+    catch (cause) { throw new ForkPreparationError('protocol', undefined, { cause }) }
+  }
+
+  createForkAttempt(input: ForkPrepared): ForkClientAttempt {
+    const prepared = readForkPrepareResult({ kind: 'prepared', prepared: input })
+    if (prepared.kind !== 'prepared') throw new TypeError('Invalid prepared fork')
+    const operation = createForkOperation(prepared.prepared, { operationId: randomUUID(), targetSessionId: randomUUID(), createdAt: new Date().toISOString() })
+    let dispatched = false, flight: Promise<ForkOutcome> | undefined, lastOutcome: ForkOutcome | undefined
+    const client = this
+    return Object.freeze({ operation, get lastOutcome() { return lastOutcome }, run() {
+      if (flight) return flight
+      if (!client.hasForkCapability()) {
+        return Promise.resolve(lastOutcome = readForkOutcome({ version: 1, kind: 'not-issued', operation, capture: dispatched ? 'unknown' : 'uncaptured', reason: 'unsupported' }, operation))
+      }
+      const mode = dispatched ? 'retry' : 'begin'
+      dispatched = true
+      const pending = client.executeForkOperation(operation, mode).then(outcome => { lastOutcome = outcome; return outcome }, error => {
+        if (error instanceof ForkOperationError && error.hostError?.lastOutcome) lastOutcome = error.hostError.lastOutcome
+        throw error
+      })
+      flight = pending
+      pending.then(() => { if (flight === pending) flight = undefined }, () => { if (flight === pending) flight = undefined })
+      return pending
+    } })
+  }
+
+  retryForkSession(input: ForkOperation): Promise<ForkOutcome> {
+    return this.executeForkOperation(readForkOperation(input), 'retry')
+  }
+
+  private hasForkCapability(): boolean {
+    const versions = this.serverInfo?.capabilities?.['session-fork-bootstrap']
+    return Array.isArray(versions) && versions.includes('1')
+  }
+
+  private async executeForkOperation(operation: ForkOperation, mode: 'begin'|'retry'): Promise<ForkOutcome> {
+    if (!this.hasForkCapability()) return readForkOutcome({ version: 1, kind: 'not-issued', operation, capture: 'unknown', reason: 'unsupported' }, operation)
+    let reply: unknown
+    try { reply = await this.request('session/fork/' + mode, { operation }) }
+    catch (cause) {
+      if (cause instanceof RpcError) {
+        let data
+        try { data = readForkHostErrorData(cause.data, operation) }
+        catch { throw new ForkOperationError(operation, 'protocol', { cause }) }
+        throw new ForkOperationError(operation, data.reason === 'cleanup-incomplete' ? 'cleanup' : 'host', { cause, hostError: data })
+      }
+      throw new ForkOperationError(operation, 'transport', { cause })
+    }
+    try { return readForkOutcome(reply, operation) }
+    catch (cause) { throw new ForkOperationError(operation, 'protocol', { cause }) }
+  }
+
+  async forkSession(sessionId: string, options: { atSeq?: number; title?: string; workspaceId?: string } = {}): Promise<ForkSuccess> {
+    const prepared = await this.prepareForkSession({ version: 1, sourceSessionId: sessionId,
+      selection: { kind: 'completed', ...(options.atSeq === undefined ? {} : { atSeq: options.atSeq }) },
+      metadata: { ...(options.title === undefined ? {} : { title: options.title }), ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }) } })
+    if (prepared.kind !== 'prepared') throw new ForkPreparationError('unavailable', prepared)
+    const attempt = this.createForkAttempt(prepared.prepared), outcome = await attempt.run()
+    if (outcome.kind !== 'ready' && outcome.kind !== 'adopted') throw new ForkOperationError(attempt.operation, 'outcome', { outcome })
+    return outcome
   }
 
   async modelState(sessionId: string): Promise<SessionModelState> {
@@ -438,8 +506,8 @@ export class HarnessSession {
     return this.client.status(this.sessionId)
   }
 
-  fork(): Promise<SessionIdResult> {
-    return this.client.forkSession(this.sessionId)
+  fork(options?: { atSeq?: number; title?: string; workspaceId?: string }): Promise<ForkSuccess> {
+    return this.client.forkSession(this.sessionId, options)
   }
 
   modelState(): Promise<SessionModelState> {

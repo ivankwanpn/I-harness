@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./context": "./src/context.ts",
+    "./fork": "./src/fork.ts",
     "./server": "./src/server.ts"
   },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
