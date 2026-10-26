@@ -34,7 +34,7 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
+import { createContextOutputTools, type ContextOutputService, type ContextCapture, type LegacyReadObservationRunner } from "@i-harness/context-output"
 import { installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
 import { createCodeTextRetention } from "./lifecycle/code-text-retention.ts"
 import { createTaskResultRetention } from './lifecycle/task-result-retention.ts'
@@ -224,6 +224,7 @@ export interface AssemblyOptions {
   contextOutput?: ContextOutputService
   contextOutputSettingsPath?: string
   contextOutputSourceFor?: (sessionId: string) => Promise<ContextCapture['source']>
+  contextOutputLegacyReadObservation?: LegacyReadObservationRunner
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
   compact?: CompactionRequest
@@ -561,7 +562,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   const model = createStableModelClient(() => currentModel)
   const resultStore = await acquireAssemblyResultStore(opts)
-  opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}) }
+  opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}), ...(resultStore.withLegacyReadObservation ? { contextOutputLegacyReadObservation: resultStore.withLegacyReadObservation } : {}) }
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId) })
 
@@ -947,7 +948,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
   for (const tool of opts.additionalTools ?? []) tools.register(tool)
-  if(opts.contextOutput) for(const tool of createContextOutputTools(opts.contextOutput)) tools.register(tool)
+  if(opts.contextOutput) for(const tool of createContextOutputTools(opts.contextOutput, opts.contextOutputLegacyReadObservation ? { withLegacyReadObservation: opts.contextOutputLegacyReadObservation } : undefined)) tools.register(tool)
 
   // ── session: coordinator mirror (write-behind) ─────────────────────────────
   // `session` itself is created at the top of the function — the sandbox policy

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
-import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, createContextOutputService, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService } from '@i-harness/context-output'
+import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, createContextOutputService, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService, type LegacyReadObservationRunner } from '@i-harness/context-output'
 import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
+import { createResultObservationScope, createLegacyReadObservationRunner, type ResultObservationScope } from './result-observation.ts'
 
 export interface ResultReadScope { projectId?: string; scope?: { id: string; roots: string[] }; revision: string }
 export type ResultReadScopeResolver = (sessionId: string) => Promise<(() => ResultReadScope) | undefined>
@@ -17,12 +18,14 @@ interface StoreEntry {
   service: ContextOutputService; registrations: Set<Registration>; users: number
   retirement?: { complete: boolean; flight?: Promise<void>; failure?: unknown }
   sourceFor(sessionId: string): Promise<ContextCapture['source']>; observeDeletion(coordinator: SessionCoordinator): void; stopObserving(): void
+  observations: ResultObservationScope
 }
 const stores = new Map<string, Promise<StoreEntry>>()
 
 export interface ResultStoreOptions {
   workspace: string; coordinator?: SessionCoordinator; sessionId?: string
   contextOutput?: ContextOutputService; contextOutputSourceFor?(sessionId: string): Promise<ContextCapture['source']>
+  contextOutputLegacyReadObservation?: LegacyReadObservationRunner
   contextOutputSettingsPath?: string
   resultReadScopeFor?: ResultReadScopeResolver
   projectContext?: Registration['projectContext']; executionCallerAvailable?: Registration['available']
@@ -32,8 +35,8 @@ export function acquireResultReadStore(options: ResultStoreOptions & { readCalle
   return acquireResultStore({ ...options, projectContext: undefined, executionCallerAvailable: options.readCallerAvailable }, 'reader', readScope)
 }
 async function acquireResultStore(options: ResultStoreOptions, mode: Registration['mode'], readScope?: () => ResultReadScope) {
-  if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, release: async () => {} }
-  if (!options.coordinator?.storageRoot || !options.sessionId) return { service: undefined, sourceFor: undefined, release: async () => {} }
+  if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, withLegacyReadObservation: options.contextOutputLegacyReadObservation, observations: undefined, release: async () => {} }
+  if (!options.coordinator?.storageRoot || !options.sessionId) return { service: undefined, sourceFor: undefined, withLegacyReadObservation: undefined, observations: undefined, release: async () => {} }
   const location = await contextWorkspaceLocation(options.workspace, options.coordinator.storageRoot)
   const key = JSON.stringify([contextPathKey(location.serviceRoot), location.workspaceKey])
   for (;;) {
@@ -41,14 +44,19 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
   let config: Awaited<ReturnType<typeof loadContextOutputConfiguration>> | undefined
   if (mode === 'producer' || !pending) {
     try { config = await loadContextOutputConfiguration(location.workspaceKey, options.contextOutputSettingsPath) }
-    catch { return { service: undefined, sourceFor: undefined, release: async () => {} } }
+    catch { return { service: undefined, sourceFor: undefined, withLegacyReadObservation: undefined, observations: undefined, release: async () => {} } }
     pending = stores.get(key)
   }
   if (!pending) {
     pending = Promise.resolve().then(() => {
       const registrations = new Set<Registration>()
+      const observations = createResultObservationScope()
       const deletionListeners = new Set<(documents: readonly string[]) => Promise<void>>(), deletionSources = new Map<SessionCoordinator, () => void>()
       async function sourceFor(sessionId: string): Promise<NonNullable<ContextCapture['source']>> {
+        const observed = observations.current(sessionId)
+        if (observed) {
+          observed.assertCurrent(); return observed.source
+        }
         const candidates = [...registrations]
         const coordinator = candidates.at(-1)?.coordinator
         if (!coordinator) throw new Error('Result source owner unavailable')
@@ -90,21 +98,29 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         if (scope) selected.lastScopeId = scope.id
         return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
       }
-      const service = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config,
+      const service = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
         documentDeletions: listener => { deletionListeners.add(listener); return () => { deletionListeners.delete(listener) } },
         authorizeResult: async (access, metadata) => {
           try {
             if (metadata.workspaceId !== location.workspaceKey || !metadata.owner.source || (await sourceFor(access.sessionId)).sourceId !== metadata.owner.source.sourceId) return false
             if (!metadata.visibleVia && access.sessionId === metadata.owner.sessionId) return true
+            const observed = observations.current(access.sessionId)
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
-            const snapshot = (await coordinator.snapshot(access.sessionId)).session, cuts = rewindCuts(snapshot)
+            const snapshot = observed?.view ?? (await coordinator.snapshot(access.sessionId)).session, cuts = rewindCuts(snapshot)
+            observed?.assertCurrent()
             const expected = metadata.visibleVia ?? metadata.ref
             return semanticSeedResultRefs(snapshot).some(ref => sameManagedArtifactRef(ref, expected)) || snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
               && managedResultRefs(event).some(ref => sameManagedArtifactRef(ref, expected)))
           } catch { return false }
+        },
+        authorize: async (access, ref) => {
+          if (!ref.source) return access.sessionId === ref.sessionId
+          const source = await sourceFor(access.sessionId)
+          observations.current(access.sessionId)?.assertCurrent()
+          return ref.workspaceId === location.workspaceKey && source.sourceId === ref.source.sourceId
         } })
-      const entry: StoreEntry = { service, registrations, users: 0, sourceFor,
+      const entry: StoreEntry = { service, registrations, users: 0, sourceFor, observations,
         observeDeletion(coordinator) {
           if (deletionSources.has(coordinator) || !coordinator.onDocumentDeleted) return
           deletionSources.set(coordinator, coordinator.onDocumentDeleted(async (id, manifest) => { for (const listener of deletionListeners) await listener([id, ...manifest.documents]) }))
@@ -155,7 +171,43 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
     // configure an active writer or initialize the optional legacy index.
     entry.observeDeletion(options.coordinator)
     if (mode === 'producer' && JSON.stringify(entry.service.status().config) !== JSON.stringify(config)) await entry.service.configure(config!)
-    return { service: entry.service, sourceFor, release }
+    const withLegacyReadObservation = createLegacyReadObservationRunner({ coordinator: options.coordinator, observations: entry.observations,
+      assertHostCurrent() { if (released || entry.retirement || registration.available?.() === false) throw new Error('Legacy result host unavailable') },
+      async resolveSource(sessionId) {
+        const getter = readScope ?? await options.resultReadScopeFor?.(sessionId), initial = getter?.()
+        return (observed, ids) => {
+          observed.assertCurrent()
+          const candidates = [...entry.registrations]
+          const direct = candidates.findLast(owner => owner.sessionId === sessionId && owner.mode === 'reader' && owner.readScope)
+          const scopeGetter = getter ?? direct?.readScope
+          const current = scopeGetter?.()
+          if (initial && current?.revision !== initial.revision) throw new Error('Legacy result read scope changed')
+          let projectId: string | undefined, bindingSeen = false, selected: Registration | undefined, reader: Registration | undefined
+          for (const id of ids) {
+            const meta = observed.metadata(id)
+            if (meta.archived) throw new Error('Legacy result source archived')
+            selected ??= candidates.findLast(owner => owner.sessionId === id && owner.mode === 'producer')
+            reader ??= candidates.findLast(owner => owner.sessionId === id && owner.mode === 'reader')
+            if (bindingSeen) continue
+            const binding = observed.binding(id)
+            if (binding.kind === 'absent') continue
+            const value = binding.value
+            if (!value || typeof value !== 'object' || Array.isArray(value) || (value as { version?: unknown }).version !== 1 || Object.keys(value).some(key => !['version','projectId'].includes(key))) throw new Error('Legacy result binding unavailable')
+            const parsed = (value as { projectId?: unknown }).projectId
+            if (parsed !== undefined && typeof parsed !== 'string') throw new Error('Legacy result binding unavailable')
+            projectId = parsed; bindingSeen = true
+          }
+          selected ??= reader
+          if (!selected || selected.available?.() === false) throw new Error('Legacy result owner unavailable')
+          const scope = current?.scope ?? selected.projectContext?.()
+          if (projectId && scope?.id !== projectId || current?.projectId && current.scope?.id !== current.projectId || !scope && selected.lastScopeId) throw new Error('Legacy result project scope unavailable')
+          if (scope) selected.lastScopeId = scope.id
+          observed.assertCurrent()
+          return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
+        }
+      },
+    })
+    return { service: entry.service, sourceFor, withLegacyReadObservation, observations: entry.observations, release }
   } catch (cause) {
     try { await release() }
     catch (cleanupCause) {

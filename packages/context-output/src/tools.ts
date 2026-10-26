@@ -4,6 +4,8 @@ import { identity } from './config.ts'
 import type { ContextAccess, ContextOutputService } from './types.ts'
 import { validManagedArtifactRef } from '@i-harness/core-session'
 import { readManagedResultPage, type ResultPageQuery } from './result-page.ts'
+import type { LegacyReadObservation } from './legacy/fork-types.ts'
+export type LegacyReadObservationRunner = <T>(access: ContextAccess, use: (observation: LegacyReadObservation) => Promise<T>) => Promise<T>
 
 const managedRefSchema = { type: 'object', properties: {
   version: { enum: [1] }, id: { type: 'string' }, revision: { type: 'string' }, codec: { enum: ['json-utf8-v1', 'text-utf8-v1', 'exec-frames-v1'] },
@@ -22,7 +24,7 @@ function argumentsObject(args: unknown, keys: readonly string[]): Record<string,
   return value
 }
 
-export function createContextOutputTools(service: ContextOutputService): Tool[] {
+export function createContextOutputTools(service: ContextOutputService, options?: { withLegacyReadObservation: LegacyReadObservationRunner }): Tool[] {
   const shared = { exposure: 'deferred' as const, isReadOnly: true, isConcurrencySafe: true }
   return [
     {
@@ -37,7 +39,8 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
       async execute(args, exec) {
         const access = caller(exec)
         const query = argumentsObject(args, ['query', 'refIds', 'limit', 'maxBytes'])
-        return service.search(access, query as unknown as Parameters<ContextOutputService['search']>[1])
+        const search = query as unknown as Parameters<ContextOutputService['search']>[1]
+        return options ? options.withLegacyReadObservation(access, observation => service.searchLegacyObserved(access, search, observation)) : service.search(access, search)
       },
     },
     {
@@ -66,7 +69,8 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
           return readManagedResultPage(service, access, adapted as ResultPageQuery)
         }
         if (typeof query.refId !== 'string' || 'viaCatalog' in query) return { kind: 'unavailable', reason: 'range' }
-        return service.read(access, query as unknown as Parameters<ContextOutputService['read']>[1])
+        const read = query as unknown as Parameters<ContextOutputService['read']>[1]
+        return options ? options.withLegacyReadObservation(access, observation => service.readLegacyObserved(access, read, observation)) : service.read(access, read)
       },
     },
     {
