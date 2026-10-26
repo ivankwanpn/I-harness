@@ -1,15 +1,21 @@
 import { readdir, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { CURRENT_FORMAT_VERSION, readFactJournal, validJournalMetadata, validateConversationHistory, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, readFactJournal, validJournalMetadata, validateConversationHistory, validateSubagentHeader, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
 import { observeFailed, type HeaderMeta, type SnapshotRow } from "./contracts.ts"
 
 // Read-only mirrors of the JSONL format; source bytes are never repaired.
+function isManagedFormat(formatVersion: number): boolean {
+  return Number.isInteger(formatVersion) && formatVersion >= 6 && formatVersion <= CURRENT_FORMAT_VERSION
+}
+
 function parseHeader(line: string): HeaderMeta {
   const h = JSON.parse(line) as Record<string, unknown>
   if (typeof h.formatVersion !== "number") throw new Error("invalid session header: missing formatVersion")
   if (typeof h.sessionId !== "string") throw new Error("invalid session header: missing sessionId")
   if (h.formatVersion > CURRENT_FORMAT_VERSION) throw new Error(`format version ${h.formatVersion} is newer than this build (upgrade the harness)`)
-  if ([6, 7, 8, 9, 10].includes(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid managed journal metadata')
+  if (isManagedFormat(h.formatVersion) && !validJournalMetadata(h.journal)) throw new Error('invalid managed journal metadata')
+  validateSubagentHeader(h)
+  const scope = h as SessionHeader
   return {
     formatVersion: h.formatVersion,
     sessionId: h.sessionId,
@@ -18,7 +24,9 @@ function parseHeader(line: string): HeaderMeta {
     ...(typeof h.seedLength === "number" ? { seedLength: h.seedLength } : {}),
     ...(typeof h.delegationDepth === "number" ? { delegationDepth: h.delegationDepth } : {}),
     ...(typeof h.origin === "string" ? { origin: h.origin } : {}),
-    ...([6, 7, 8, 9, 10].includes(h.formatVersion) ? { journal: h.journal as import('@i-harness/core-session').JournalMetadata } : {}),
+    ...(Object.hasOwn(h, 'semanticSeed') ? { semanticSeed: scope.semanticSeed } : {}),
+    ...(Object.hasOwn(h, 'subagentProtocolVersion') ? { subagentProtocolVersion: scope.subagentProtocolVersion } : {}),
+    ...(isManagedFormat(h.formatVersion) ? { journal: scope.journal } : {}),
   }
 }
 
@@ -31,7 +39,7 @@ export function parseLinePrefix(input: string | Uint8Array): { header: HeaderMet
   const lines = text.split("\n")
   if (lines.length === 0 || lines[0]!.trim() === "") throw new Error("empty session file")
   const header = parseHeader(lines[0]!)
-  if ([6, 7, 8, 9, 10].includes(header.formatVersion)) {
+  if (isManagedFormat(header.formatVersion)) {
     const end = bytes.indexOf(0x0a)
     if (end < 0) throw new Error('incomplete managed session header')
     const journal = readFactJournal(bytes.subarray(end + 1), header.journal!, header.formatVersion, header)

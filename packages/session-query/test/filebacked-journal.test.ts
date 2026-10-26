@@ -1,11 +1,138 @@
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, writeFile, stat, utimes } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, writeFile, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
+import { encodeFactBatch, decodeFactBatch, legacyPrefixDigest, CURRENT_FORMAT_VERSION, exportConversationSeed } from '@i-harness/core-session'
 import { createFileBackedSessionQuery, closeSessionQueries } from '../src/index.ts'
 import { parseLinePrefix } from '../src/file-backed/inspection.ts'
+import { createSessionCoordinator, compileSemanticSeed, type BootstrapRequest } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+
+it('searches an actual current coordinator append as logical facts without changing source bytes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-query-current-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  try {
+    await coordinator.create({ sessionId: 'current' })
+    await coordinator.append('current', [{ type: 'user/message', text: 'CURRENT_COORDINATOR_MARKER' }])
+    const { session: snapshot } = await coordinator.load('current')
+    expect(snapshot.events).toEqual([expect.objectContaining({ type: 'user/message', seq: 0, text: 'CURRENT_COORDINATOR_MARKER' })])
+    const path = join(root, 'current.jsonl'), before = await readFile(path)
+    expect(JSON.parse(before.subarray(0, before.indexOf(10)).toString()).formatVersion).toBe(13)
+    const query = createFileBackedSessionQuery({ storeRoot: root })
+    expect(await query.search('CURRENT_COORDINATOR_MARKER')).toEqual([expect.objectContaining({ sessionId: 'current', seq: 0, eventType: 'user/message' })])
+    expect(parseLinePrefix(before).events).toEqual(snapshot.events)
+    expect(Buffer.from(parseLinePrefix(before).contentBytes!)).toEqual(before)
+    expect(await readFile(path)).toEqual(before)
+  } finally { closeSessionQueries(); await coordinator.close() }
+})
+
+it.each([11, 12, 13])('decodes literal supported format%s frames as searchable logical facts', async formatVersion => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-query-supported-')), path = join(root, 's.jsonl'), journal = metadata()
+  const facts = [{ type: 'user/message' as const, seq: 0, text: 'SUPPORTED_FORMAT_MARKER' }]
+  const frame = encodeFactBatch('supported', journal.legacyPrefixDigest, facts)
+  const raw = Buffer.concat([Buffer.from(JSON.stringify({ formatVersion, sessionId: 's', journal }) + '\n'), frame.bytes])
+  await writeFile(path, raw)
+  try {
+    expect(parseLinePrefix(raw).events).toEqual(facts)
+    expect(Buffer.from(parseLinePrefix(raw).contentBytes!)).toEqual(raw)
+    expect(await createFileBackedSessionQuery({ storeRoot: root }).search('SUPPORTED_FORMAT_MARKER')).toEqual([expect.objectContaining({ seq: 0, eventType: 'user/message' })])
+    expect(await readFile(path)).toEqual(raw)
+  } finally { closeSessionQueries() }
+})
+
+async function semanticFixture(version: 1 | 2) {
+  const root = await mkdtemp(join(tmpdir(), 'ih-query-semantic-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  await coordinator.create({ sessionId: 'source' })
+  await coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'INHERITED_CONVERSATION_MARKER' },
+    { type: 'code/store', version: 1, cellId: 'cell', sessionId: 'source', writes: [['privateStore', 'PASSIVE_STORE_ONLY_MARKER']] },
+    { type: 'code/cell', cellId: 'cell', sessionId: 'source', state: 'completed' }, { type: 'turn/end' }])
+  const document = await coordinator.openManagedDocument('source'), session = document.view, events = session.events, count = events.length
+  const owner = { kind: 'held-public-fork' as const, sourceSessionId: 'source', view: session, factOwner: document, assertCurrent() {
+    document.assertReady()
+    if (document.view !== session || session.events !== events || events.length !== count) throw new Error('Source changed')
+  } }
+  const exported = version === 1
+    ? exportConversationSeed(session, { kind: 'session', sessionId: 'source' }, { kind: 'completed' })
+    : exportConversationSeed(session, { kind: 'session', sessionId: 'source' }, { kind: 'completed' }, { kind: 'public-completed-passive', owner })
+  if (exported.kind !== 'seed') throw new Error('Actual source seed export refused')
+  expect(exported.seed.version).toBe(version)
+  const request: BootstrapRequest = {
+    invocation: { version: 1 as const, operationId: 'query-bootstrap', targetSessionId: 'target', createdAt: '2026-10-27T00:00:00.000Z', requestDigest: 'a'.repeat(64) },
+    target: { kind: 'new' as const }, metadata: { title: 'query semantic target' }, lineage: { origin: 'fork', parentSession: 'source' }, seed: compileSemanticSeed(exported),
+  }
+  const never = async (): Promise<never> => { throw new Error('No artifact dependencies in this actual seed') }
+  const result = await coordinator.bootstrapSemanticTarget(request, { assertCurrent() {}, dependencies: { confirm: never, reconcile: never } })
+  expect(result.kind).toBe('ready')
+  const snapshot = (await coordinator.load('target')).session
+  const files = new Map<string, Buffer>()
+  for (const name of await readdir(root)) if (name.endsWith('.jsonl') || name.endsWith('.stage')) files.set(name, await readFile(join(root, name)))
+  return { root, coordinator, snapshot, files, raw: files.get('target.jsonl')! }
+}
+
+it.each([1, 2] as const)('preserves actual V%s B2 header scope, logical facts and all source/stage bytes', async version => {
+  const f = await semanticFixture(version)
+  try {
+    const header = JSON.parse(f.raw.subarray(0, f.raw.indexOf(10)).toString()), decoded = parseLinePrefix(f.raw)
+    expect(header.semanticSeed.version).toBe(version)
+    expect(header.seedLength).toBeGreaterThan(0)
+    expect(decoded.header).toMatchObject({ semanticSeed: header.semanticSeed, parentSession: 'source', seedLength: header.seedLength, origin: 'fork', createdAt: '2026-10-27T00:00:00.000Z' })
+    expect(decoded.events).toEqual(f.snapshot.events)
+    expect(decoded.events.at(-1)).toMatchObject({ type: 'session/bootstrap' })
+    expect(Buffer.from(decoded.contentBytes!)).toEqual(f.raw)
+    const body = f.raw.subarray(f.raw.indexOf(10) + 1), seedEnd = body.indexOf(10) + 1
+    for (const incomplete of [f.raw.subarray(0, f.raw.indexOf(10) + 1), f.raw.subarray(0, f.raw.indexOf(10) + 1 + seedEnd)]) {
+      expect(() => parseLinePrefix(incomplete)).toThrowError(expect.objectContaining({ code: 'SESSION_BOOTSTRAP_INCOMPLETE' }))
+    }
+    const wrongScope = Buffer.concat([Buffer.from(JSON.stringify({ ...header, seedLength: header.seedLength + 1 }) + '\n'), body])
+    expect(() => parseLinePrefix(wrongScope)).toThrow()
+    const query = createFileBackedSessionQuery({ storeRoot: f.root })
+    await query.search('unmatched')
+    expect(await query.lineage('target', { direction: 'ancestors' })).toEqual(expect.arrayContaining([expect.objectContaining({ sessionId: 'source' })]))
+    for (const [name, bytes] of f.files) expect(await readFile(join(f.root, name))).toEqual(bytes)
+  } finally { closeSessionQueries(); await f.coordinator.close() }
+})
+
+it.each([1, 2] as const)('searches actual V%s inherited conversation seed text in its target', async version => {
+  const f = await semanticFixture(version)
+  try {
+    const query = createFileBackedSessionQuery({ storeRoot: f.root })
+    expect(await query.search('INHERITED_CONVERSATION_MARKER', { sessionId: 'target' })).toEqual([
+      expect.objectContaining({ sessionId: 'target', seq: 1, eventType: 'conversation/seed-group', snippet: expect.stringContaining('INHERITED_CONVERSATION_MARKER') }),
+    ])
+    expect(await query.search('PASSIVE_STORE_ONLY_MARKER', { sessionId: 'target' })).toEqual([])
+    for (const [name, bytes] of f.files) expect(await readFile(join(f.root, name))).toEqual(bytes)
+  } finally { closeSessionQueries(); await f.coordinator.close() }
+})
+
+it.each(['metadata', 'missing-journal', 'semantic-header', 'protocol', 'frame', 'delivery', 'future'] as const)('refuses current %s corruption instead of serving indexed rows or changing bytes', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-query-current-refusal-')), path = join(root, 's.jsonl'), journal = metadata()
+  const frame = encodeFactBatch('current-refusal', journal.legacyPrefixDigest, [{ type: 'user/message', seq: 0, text: 'CURRENT_ORIGINAL_MARKER' }])
+  const header = { formatVersion: 13, sessionId: 's', origin: 'subagent', subagentProtocolVersion: 1, journal }
+  const original = Buffer.concat([Buffer.from(JSON.stringify(header) + '\n'), frame.bytes])
+  await writeFile(path, original)
+  try {
+    const query = createFileBackedSessionQuery({ storeRoot: root })
+    expect(parseLinePrefix(original).header.subagentProtocolVersion).toBe(1)
+    expect(await query.search('CURRENT_ORIGINAL_MARKER')).toHaveLength(1)
+    const prior = await stat(path)
+    const changedHeader = mode === 'metadata' ? { ...header, journal: { ...journal, legacyPrefixDigest: '0'.repeat(64) } }
+      : mode === 'missing-journal' ? { ...header, journal: undefined }
+        : mode === 'semantic-header' ? { ...header, semanticSeed: { version: 2, codec: 'semantic-seed-v2' } }
+          : mode === 'protocol' ? { ...header, origin: 'fork' }
+            : mode === 'future' ? { ...header, formatVersion: CURRENT_FORMAT_VERSION + 1 } : header
+    const changedFrame = mode === 'frame' ? Buffer.from(frame.bytes.toString().replace('CURRENT_ORIGINAL_MARKER', 'CURRENT_CORRUPT__MARKER'))
+      : mode === 'delivery' ? encodeFactBatch('invalid-delivery', journal.legacyPrefixDigest, [{ type: 'agent/delivery-generation', version: 1, op: 'open', recipientSessionId: 'foreign', generationId: 'g', originInputSeq: 100, seq: 0 }]).bytes : frame.bytes
+    const changed = Buffer.concat([Buffer.from(JSON.stringify(changedHeader) + '\n'), changedFrame])
+    await writeFile(path, changed)
+    await utimes(path, prior.atime, new Date(prior.mtimeMs + 1000))
+    expect(() => parseLinePrefix(changed)).toThrow()
+    await expect(query.search('CURRENT_ORIGINAL_MARKER')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })
+    await expect(query.search('CURRENT_ORIGINAL_MARKER')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })
+    expect(await readFile(path)).toEqual(changed)
+  } finally { closeSessionQueries() }
+})
 
 it('reads actual format7 replacement history as structural searchable records without writing the file', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f2-query-')), path = join(root, 's.jsonl'), journal = metadata()
@@ -59,7 +186,7 @@ it('reads closed format9 observations and own soft state through the actual file
   }finally{closeSessionQueries()}
 })
 
-it('indexes only complete verified format6 groups and fingerprints the exact observed byte prefix without repairing a torn tail', async () => {
+it.each([6, 11, 12, 13])('indexes only complete verified format%s groups and fingerprints the exact observed byte prefix without repairing a torn tail', async formatVersion => {
   const root = await mkdtemp(join(tmpdir(), 'ih-f1-query-frames-')), path = join(root, 's.jsonl')
   const journal = metadata()
   const first = encodeFactBatch('first', journal.legacyPrefixDigest, [
@@ -69,7 +196,7 @@ it('indexes only complete verified format6 groups and fingerprints the exact obs
   const second = encodeFactBatch('second', decodeFactBatch(first.bytes).prefixDigest, [
     { type: 'turn/start', seq: 2 }, { type: 'user/message', seq: 3, text: 'SECOND_GROUP' }, { type: 'turn/end', seq: 4 },
   ])
-  const header = Buffer.from(JSON.stringify({ formatVersion: 6, sessionId: 's', createdAt: '2026-10-17T00:00:00Z', journal }) + '\n')
+  const header = Buffer.from(JSON.stringify({ formatVersion, sessionId: 's', createdAt: '2026-10-17T00:00:00Z', journal }) + '\n')
   const prefix = Buffer.concat([header, first.bytes]), torn = Buffer.concat([prefix, second.bytes.subarray(0, second.bytes.length - 2)])
   await writeFile(path, torn)
   const query = createFileBackedSessionQuery({ storeRoot: root })
@@ -90,11 +217,11 @@ it('indexes only complete verified format6 groups and fingerprints the exact obs
   } finally { closeSessionQueries() }
 })
 
-it('keeps exact inherited non-ASCII CRLF bytes in the structural format6 fingerprint', async () => {
+it.each([6, 11, 12, 13])('keeps exact inherited non-ASCII CRLF bytes in the structural format%s fingerprint', async formatVersion => {
   const legacy = Buffer.from(' { "type":"user/message", "seq":0, "text":"旧記録 中文😀" }\r\n')
   const journal = { ...metadata(), legacyBodyBytes: legacy.length, legacyEventCount: 1, legacyPrefixDigest: legacyPrefixDigest(1, legacy) }
   const frame = encodeFactBatch('after-legacy', journal.legacyPrefixDigest, [{ type: 'assistant/message', seq: 1, text: 'actual framed answer' }])
-  const bytes = Buffer.concat([Buffer.from(JSON.stringify({ formatVersion: 6, sessionId: 's', journal }) + '\n'), legacy, frame.bytes])
+  const bytes = Buffer.concat([Buffer.from(JSON.stringify({ formatVersion, sessionId: 's', journal }) + '\n'), legacy, frame.bytes])
   const decoded = parseLinePrefix(bytes)
   expect(decoded.events).toEqual([{ type: 'user/message', seq: 0, text: '旧記録 中文😀' }, { type: 'assistant/message', seq: 1, text: 'actual framed answer' }])
   expect(Buffer.from(decoded.contentBytes!)).toEqual(bytes)

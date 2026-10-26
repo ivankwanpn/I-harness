@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { describe, expect, it } from 'vitest'
-import { encodeFactBatch, legacyPrefixDigest, type ResultEnvelope, type SessionEvent } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, encodeFactBatch, legacyPrefixDigest, type ResultEnvelope, type SessionEvent } from '@i-harness/core-session'
 import { closeSessionQueries, createFileBackedSessionQuery } from '../src/index.ts'
 
 const ref = { version: 1, id: 'ctxv1_' + 'a'.repeat(64), revision: 'b'.repeat(64), codec: 'json-utf8-v1', encodedBytes: 500, contentDigest: 'c'.repeat(64), completeness: 'source-limited' } as const
@@ -114,8 +114,8 @@ describe('retained results through actual framed JSONL and file-backed FTS', () 
     } finally { invalid.cleanup() }
   })
 
-  it('refuses literal future source format11 without rewriting the file', async () => {
-    const bytes = framed(11, facts(artifact)), store = fixture(bytes)
+  it('refuses a literal source newer than the current supported format without rewriting the file', async () => {
+    const bytes = framed(CURRENT_FORMAT_VERSION + 1, facts(artifact)), store = fixture(bytes)
     try {
       const query = createFileBackedSessionQuery({ storeRoot: store.dir })
       await expect(query.search('REQUEST_MARKER')).rejects.toMatchObject({ code: 'SESSION_QUERY_OBSERVE_FAILED' })

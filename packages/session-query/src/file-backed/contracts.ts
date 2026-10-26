@@ -1,3 +1,5 @@
+import type { SessionHeader } from '@i-harness/core-session'
+
 export type SessionQueryErrorCode =
   | "SESSION_QUERY_OBSERVE_FAILED" // scan/read/decode of the SOURCE failed — never serve stale rows
   | "SESSION_QUERY_INDEX_FOREIGN"  // the index file belongs to another application/newer version — refuse, never touch
@@ -37,15 +39,10 @@ export interface FileBackedQueryOptions {
   onInspect?: (sessionId: string, outcome: InspectOutcome) => void
 }
 
-export interface HeaderMeta {
+export interface HeaderMeta extends SessionHeader {
   formatVersion: number
   sessionId: string
   createdAt: string
-  parentSession?: string
-  seedLength?: number
-  delegationDepth?: number
-  origin?: string
-  journal?: import('@i-harness/core-session').JournalMetadata
 }
 
 export interface IndexedRow {
