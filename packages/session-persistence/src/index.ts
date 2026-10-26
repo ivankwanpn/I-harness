@@ -6,6 +6,10 @@ import { createLoads } from "./coordinator/load.ts"
 import { createLifecycle } from "./coordinator/lifecycle.ts"
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
+import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
+export * from './fork-contract.ts'
+export { createForkSessionController, ForkAdmissionError, ForkTargetPolicyDeniedError } from './fork-controller.ts'
+export type { ForkSessionController, ForkHost, ForkExecutionControl, ForkSourceWitness, ForkHandoffMode, ForkHandoff } from './fork-controller.ts'
 export { compileSemanticSeed } from './semantic-seed.ts'
 export type { CompiledSemanticSeed } from './semantic-seed.ts'
 export type { BootstrapInvocation, BootstrapPhase, BootstrapResumeToken, BootstrapCallerMetadata, BootstrapLineage, BootstrapTarget, BootstrapInitial, BootstrapRequest, BootstrapDependencyRequest, BootstrapDependencyOutcome, BootstrapDependencyPort, BootstrapGuards, BootstrapReceipt, BootstrapOutcome, BootstrapInspection, BootstrapHeaderStage, BootstrapHeaderOperation, HeaderOutcome, BootstrapReadState, BootstrapFrame, BootstrapBackend } from './coordinator/bootstrap-types.ts'
@@ -32,6 +36,7 @@ export { remapConversationSeed, SessionForkUnavailableError } from "./seed.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
   forkSession,
+  retryForkSession,
   materializeMissingImageAdmissions,
   remapSeedEvent,
   type ForkSessionOptions,
@@ -60,7 +65,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     const admission = observations.beginRetirement(id)
     try { await admission.join(); return await run() } finally { admission.finish() }
   }
-  return {
+  const coordinator: SessionCoordinator = {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
     bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
     resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
@@ -102,10 +107,12 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     flush: mutations.flush,
     async close() {
       managed.assertOutsideCapture()
+      assertOutsideForkController(coordinator)
       const join = observations.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
+      const joinFork = closeForkControllerAdmission(coordinator)
       const errors: unknown[] = []
-      const joined=await Promise.allSettled([join(),joinCapture(),managed.close()])
+      const joined=await Promise.allSettled([join(),joinCapture(),joinFork().then(() => managed.close())])
       for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
       // Dependent original leases survive unresolved observation/managed work.
       if (errors.length === 0) await lifecycle.close()
@@ -121,6 +128,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     adoptOwnership: mutations.adoptOwnership,
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
+  return coordinator
 }
 
 export { ownedContextReadiness } from "./context-readiness.ts"

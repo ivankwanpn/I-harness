@@ -6,7 +6,7 @@ import { append, createSession, deriveMessages } from '@i-harness/core-session'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionCoordinator, forkSession } from '../src/index.ts'
 
-// This is intentionally RED until the connected fork consumer moves to B2.
+// FC04: semantic records require the actual persisted readiness header.
 it('fork archives only the current summary and typed tail, without consumed proof bodies', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-semantic-fork-'))
   const backend = createJsonlBackend(root)
@@ -36,7 +36,11 @@ it('fork archives only the current summary and typed tail, without consumed proo
     const forked = await forkSession(coordinator, 'parent')
     if (!('sessionId' in forked)) throw new Error('fork did not return a ready target')
     const child = await backend.read(forked.sessionId)
-    expect(deriveMessages({ formatVersion: child.version, events: child.events }).map(message => message.content)).toEqual(['summary twelve', 'tail', 'tail answer'])
+    if (!child.meta) throw new Error('missing actual child metadata')
+    expect(deriveMessages({ formatVersion: child.version, events: child.events, header: child.meta }).map(message => message.content)).toEqual(['summary twelve', 'tail', 'tail answer'])
+    expect(child.events[0]).toMatchObject({ type: 'conversation/seed-manifest', seq: 0 })
+    expect(child.events.at(-1)).toMatchObject({ type: 'session/bootstrap', seedLength: forked.seedLength, operationId: forked.operation.invocation.operationId })
+    expect(child.meta.semanticSeed).toMatchObject({ operationId: forked.operation.invocation.operationId, seedLength: forked.seedLength })
     expect(JSON.stringify(child.events)).not.toContain('CONSUMED-PROOF-ONLY')
   } finally {
     await coordinator.close()

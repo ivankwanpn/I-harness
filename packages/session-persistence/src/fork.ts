@@ -1,4 +1,8 @@
-import { CURRENT_FORMAT_VERSION, committedFactSeqs, rewindCuts, isContextEventType, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, rewindCuts, isContextEventType, type SessionEvent, type SessionEventView } from "@i-harness/core-session"
+import { randomUUID } from 'node:crypto'
+import { createForkSessionController, assertForkControllerIssued, type ForkSessionController } from './fork-controller.ts'
+import { createInlineForkHost } from './fork-inline-host.ts'
+import { createForkOperation, readForkPrepareRequest, ForkOperationError, ForkPreparationError, type ForkOperation, type ForkSuccess, type ForkOutcome, type ForkPrepareResult } from './fork-contract.ts'
 import { remapConversationSeed, SessionForkUnavailableError } from "./seed.ts"
 export { materializeMissingImageAdmissions, remapSeedEvent, SessionForkUnavailableError } from "./seed.ts"
 import type { SessionCoordinator } from "./index.ts"
@@ -8,45 +12,50 @@ export interface ForkSessionOptions {
   atSeq?: number
   title?: string
   workspaceId?: string
+  controller?: ForkSessionController
 }
-
-interface ForkSessionResult {
-  sessionId: string
-  seedLength: number
-  title?: string
+const defaults = new WeakMap<SessionCoordinator, ForkSessionController>()
+function controllerFor(coordinator: SessionCoordinator, supplied?: ForkSessionController): ForkSessionController {
+  if (supplied) { assertForkControllerIssued(coordinator, supplied); return supplied }
+  let controller = defaults.get(coordinator)
+  if (!controller) { controller = createForkSessionController(coordinator, createInlineForkHost(coordinator)); defaults.set(coordinator, controller) }
+  return controller
+}
+async function requireSuccess(controller: ForkSessionController, operation: ForkOperation, mode: 'begin'|'retry'): Promise<ForkSuccess> {
+  let outcome: ForkOutcome
+  try { outcome = await controller.execute({ operation, mode }) }
+  catch (cause) {
+    if (cause instanceof ForkOperationError) throw new ForkOperationError(operation, cause.kind, { cause: cause.cause, outcome: cause.outcome, hostError: cause.hostError })
+    throw new ForkOperationError(operation, 'host', { cause })
+  }
+  if (outcome.kind !== 'ready' && outcome.kind !== 'adopted') throw new ForkOperationError(operation, 'outcome', { outcome })
+  return outcome
 }
 
 export async function forkSession(
   coordinator: SessionCoordinator,
   sourceSessionId: string,
   options: ForkSessionOptions = {},
-): Promise<ForkSessionResult> {
+): Promise<ForkSuccess> {
   if (options.atSeq !== undefined
     && (!Number.isInteger(options.atSeq) || options.atSeq < 0)) {
     throw new TypeError("atSeq must be a non-negative integer")
   }
 
-  const profile = await coordinator.profile(sourceSessionId)
-  const source = await coordinator.openManagedDocument(sourceSessionId)
-  source.assertReady()
-  const session = source.view
-  const prefix = completedTurnPrefix(session.events, sourceSessionId, options.atSeq, session.formatVersion, session.header)
-  const title = options.title ?? profile.meta.title
-  const workspaceId = options.workspaceId ?? profile.meta.workspaceId
-  const { id } = await coordinator.create({
-    ...(title !== undefined ? { title } : {}),
-    ...(workspaceId !== undefined ? { workspaceId } : {}),
-    ...(profile.meta.modelSelection !== undefined ? { modelSelection: { ...profile.meta.modelSelection } } : {}),
-    parentSession: sourceSessionId,
-    seedLength: prefix.length,
-  })
-  const target = await coordinator.openManagedDocument(id)
-  if (prefix.length > 0) committedFactSeqs(await target.importSeed(prefix))
-  return {
-    sessionId: id,
-    seedLength: prefix.length,
-    ...(title !== undefined ? { title } : {}),
-  }
+  const controller = controllerFor(coordinator, options.controller)
+  const request = readForkPrepareRequest({ version: 1, sourceSessionId,
+    selection: { kind: 'completed', ...(options.atSeq === undefined ? {} : { atSeq: options.atSeq }) },
+    metadata: { ...(options.title === undefined ? {} : { title: options.title }), ...(options.workspaceId === undefined ? {} : { workspaceId: options.workspaceId }) } })
+  let result: ForkPrepareResult
+  try { result = await controller.prepare(request) }
+  catch (cause) { throw new ForkPreparationError('unavailable', undefined, { cause }) }
+  if (result.kind !== 'prepared') throw new ForkPreparationError('unavailable', result)
+  const operation = createForkOperation(result.prepared, { operationId: randomUUID(), targetSessionId: randomUUID(), createdAt: new Date().toISOString() })
+  return requireSuccess(controller, operation, 'begin')
+}
+
+export function retryForkSession(coordinator: SessionCoordinator, operation: ForkOperation, options: { controller?: ForkSessionController } = {}): Promise<ForkSuccess> {
+  return requireSuccess(controllerFor(coordinator, options.controller), operation, 'retry')
 }
 
 export function completedTurnPrefix(
