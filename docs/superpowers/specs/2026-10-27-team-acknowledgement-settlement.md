@@ -58,6 +58,7 @@ No created Team ack exists when delivery has not returned a scoped consumed disp
 | ensureResident throws at `:58` | queued/no-target-call with exact sendFailure; this message's audit has not started; preserve any rebuild-owned cleanup separately |
 | Parent/child recordDelivery fails (`:23-24,63-64`) | queued/target-owned; existing return-false/send-status preserved; target document's original inbox source owns capture/key |
 | ParentNotify admission fails temporarily (`:30-38`) | queued/target-owned; its actual received-input owner decides whether capture/debt exists; no Team ack; preserve existing false behavior |
+| Parent wake throws inside the old caught-false boundary after admission | queued/target-owned, no new public rejection/ack; original admitted input remains target-owned. Only the actual admit call's trusted Stop may classify parent-stop, never a wake-thrown lookalike. |
 | Actual ParentNotificationStoppedError from that parentNotify call | consumed/parent-stop only after target audit acknowledgement; existing Stop consumption semantics |
 | Parent branch finishes, or child audit acknowledged and followup scheduled/quiet (`:41-42,62-84`) | consumed/target |
 
