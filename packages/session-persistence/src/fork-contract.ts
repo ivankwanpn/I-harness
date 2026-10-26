@@ -139,8 +139,10 @@ export function readForkHostErrorData(input: unknown, expectedOperation: ForkOpe
   const operation = readForkOperation(r.operation)
   if (r.version !== 1 || r.kind !== 'session-fork-error' || !same(operation, readForkOperation(expectedOperation))
     || !['uncaptured','captured','unknown'].includes(r.capture) || !['host-unavailable','cleanup-incomplete','internal'].includes(r.reason)) invalid()
+  const lastOutcome = r.lastOutcome === undefined ? undefined : readForkOutcome(r.lastOutcome, operation)
+  if (lastOutcome?.capture === 'captured' && r.capture !== 'captured') invalid()
   return Object.freeze({ version: 1, kind: 'session-fork-error', operation, capture: r.capture, reason: r.reason,
-    ...(r.lastOutcome === undefined ? {} : { lastOutcome: readForkOutcome(r.lastOutcome, operation) }) })
+    ...(lastOutcome === undefined ? {} : { lastOutcome }) })
 }
 export class ForkOperationError extends Error {
   readonly operation: ForkOperation

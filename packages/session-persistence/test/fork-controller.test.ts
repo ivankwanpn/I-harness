@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
@@ -10,6 +10,7 @@ import { createInlineForkHost } from '../src/fork-inline-host.ts'
 import { createForkOperation, ForkOperationError } from '../src/fork-contract.ts'
 import { observationCleanupFor } from '../src/coordinator/binding-observation.ts'
 import { createContextOutputService } from '../../context-output/src/index.ts'
+import { bootstrapPaths } from '../../session-persistence-jsonl/src/backend/bootstrap-header.ts'
 
 vi.mock('@i-harness/fs-lock', async original => {
   const actual = await original<typeof import('@i-harness/fs-lock')>()
@@ -401,7 +402,7 @@ it('settles retained preparation cleanup before a new execute or explicit prepar
     fault = true
     expect(await controller.prepare({ version: 1, sourceSessionId: 'source' }).catch(error => error)).toBeInstanceOf(AggregateError)
     const execution = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
-    expect(execution).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', capture: 'uncaptured' } })
+    expect(execution).toMatchObject({ kind: 'cleanup', hostError: { reason: 'cleanup-incomplete', capture: 'unknown' } })
     expect(await f.c.inspectBootstrapCapture!({ invocation: op.invocation, core: op.prepared.core, requestIntent: op.prepared.requestIntent })).toEqual({ kind: 'absent' })
     fault = false
     expect((await controller.prepare({ version: 1, sourceSessionId: 'source' })).kind).toBe('prepared')
@@ -428,6 +429,84 @@ it('close attempts every independent original preparation cleanup and retains on
     handles[1]!.fault = false; await controller.close()
     expect(handles.map(value => [value.raw.held, value.attempts])).toEqual([[false, 2], [false, 3]])
   } finally { for (const value of handles) value.fault = false; await f.close() }
+})
+it('cold target conflict carries unknown capture evidence without source admission', async () => {
+  const f = await fixture()
+  try {
+    const original = await forkSession(f.c, 'source')
+    const changed = createForkOperation(original.operation.prepared, { targetSessionId: original.sessionId, createdAt: original.operation.invocation.createdAt, operationId: 'different-operation' })
+    const host = createInlineForkHost(f.c), handoff = vi.spyOn(host, 'withHandoff'), controller = controllerApi.createForkSessionController(f.c, host)
+    expect(await controller.execute({ operation: changed, mode: 'retry' })).toMatchObject({ kind: 'refused', reason: 'conflict', capture: 'unknown' })
+    expect(handoff).not.toHaveBeenCalled()
+  } finally { await f.close() }
+})
+it('unavailable cold inspection never asserts uncaptured or invokes source work', async () => {
+  const f = await fixture()
+  try {
+    const host = createInlineForkHost(f.c), handoff = vi.spyOn(host, 'withHandoff'), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    f.c.inspectBootstrapCapture = vi.fn(f.c.inspectBootstrapCapture!).mockResolvedValue({ kind: 'unavailable' })
+    const error = await controller.execute({ operation: op, mode: 'retry' }).catch(error => error)
+    expect(error).toMatchObject({ name: 'ForkOperationError', hostError: { capture: 'unknown', reason: 'host-unavailable' } })
+    expect(handoff).not.toHaveBeenCalled()
+  } finally { await f.close() }
+})
+it('a passive host failure after a real reserved indication keeps unknown evidence', async () => {
+  const f = await fixture()
+  try {
+    const first = controllerApi.createForkSessionController(f.c, createInlineForkHost(f.c)), op = await operation(first)
+    const reserve = f.backend.prepareBootstrapCapture!.bind(f.backend)
+    f.backend.prepareBootstrapCapture = async (...args) => { const result = await reserve(...args); if (result.kind === 'committed-new') throw undefined; return result }
+    await first.execute({ operation: op, mode: 'begin' }).catch(() => {})
+    const host = createInlineForkHost(f.c), cold = controllerApi.createForkSessionController(f.c, host)
+    host.withHandoff = async () => { throw new Error('actual passive host unavailable') }
+    const error = await cold.execute({ operation: op, mode: 'retry' }).catch(error => error)
+    expect(error).toMatchObject({ name: 'ForkOperationError', hostError: { capture: 'unknown' } })
+  } finally { await f.close() }
+})
+it('a previously observed real reservation never becomes first capture after later namespace loss', async () => {
+  const f = await fixture()
+  let issuer: ReturnType<typeof createSessionCoordinator> | undefined
+  try {
+    const host = createInlineForkHost(f.c), handoff = host.withHandoff.bind(host), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    await f.c.releaseOwnership('source')
+    const backend = createJsonlBackend(f.root), reserve = backend.prepareBootstrapCapture!.bind(backend)
+    backend.prepareBootstrapCapture = async (...args) => { const result = await reserve(...args); if (result.kind === 'committed-new') throw undefined; return result }
+    issuer = createSessionCoordinator(backend, { lock: { enabled: true } })
+    const issued = controllerApi.createForkSessionController(issuer, createInlineForkHost(issuer))
+    await issued.execute({ operation: op, mode: 'begin' }).catch(() => {})
+    await issuer.close(); issuer = undefined
+    const request = { invocation: op.invocation, core: op.prepared.core, requestIntent: op.prepared.requestIntent }
+    expect((await f.c.inspectBootstrapCapture!(request)).kind).toBe('reserved')
+    host.withHandoff = async () => { throw new Error('passive host temporarily unavailable before B2') }
+    await controller.execute({ operation: op, mode: 'retry' }).catch(() => {})
+    // Controlled external loss of this test's exact minted reservation file.
+    // No backend format/owner is replaced; both routing facts are genuine IO.
+    await unlink(bootstrapPaths(join(f.root, 'target.jsonl'), op.invocation).stage)
+    expect((await f.c.inspectBootstrapCapture!(request)).kind).toBe('absent')
+    host.withHandoff = handoff
+    let sourceGates = 0
+    const result = await controller.execute({ operation: op, mode: 'retry' }, { async withNewWork() { sourceGates++; throw new controllerApi.ForkAdmissionError('busy') } })
+    console.info(JSON.stringify({ control: 'FC08 known reservation then actual namespace absence', sourceGates, result: result.kind }))
+    expect(sourceGates).toBe(0)
+    expect(result.kind).toBe('blocked')
+  } finally { await issuer?.close(); await f.close() }
+})
+it('inspection ambiguity alone permits first capture after later genuine strict absence', async () => {
+  const f = await fixture()
+  try {
+    const host = createInlineForkHost(f.c), controller = controllerApi.createForkSessionController(f.c, host), op = await operation(controller)
+    const nativeInspection = f.c.inspectBootstrapCapture!
+    f.c.inspectBootstrapCapture = vi.fn(nativeInspection).mockResolvedValueOnce({ kind: 'unavailable' })
+    const error = await controller.execute({ operation: op, mode: 'begin' }).catch(error => error)
+    expect(error).toMatchObject({ hostError: { capture: 'unknown' } })
+    f.c.inspectBootstrapCapture = nativeInspection
+    await f.c.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'after unavailable' }, { type: 'turn/end' }])
+    let newWork = 0
+    const result = await controller.execute({ operation: op, mode: 'retry' }, { async withNewWork(_source, _operation, use) { newWork++; return use() } })
+    expect(result).toMatchObject({ kind: 'ready', operation: op, capture: 'captured' })
+    expect(newWork).toBe(1)
+    expect(JSON.stringify((await f.backend.read('target')).events)).toContain('after unavailable')
+  } finally { await f.close() }
 })
 it.each(['managed', 'legacy', 'seed'] as const)('standalone refuses actual typed %s source before a new target header', async kind => {
   const f = await fixture(), service = createContextOutputService({ root: join(f.root, 'results'), workspaceId: 'workspace', config: { enabled: true } })

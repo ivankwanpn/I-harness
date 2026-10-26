@@ -37,7 +37,7 @@ export class ForkTargetPolicyDeniedError extends Error {
 class ForkSelectionError extends Error {
   constructor(readonly reason: ForkRefusal) { super('Fork selection ' + reason) }
 }
-type Holder = { operation: ForkOperation; flight?: Promise<ForkOutcome>; source?: ForkSourceWitness; attempted: boolean; enteredB2: boolean; retired: boolean; abort: AbortController; lastOutcome?: ForkOutcome; cleanupHandles?: Set<ObservationCleanupHandle> }
+type Holder = { operation: ForkOperation; flight?: Promise<ForkOutcome>; source?: ForkSourceWitness; attempted: boolean; enteredB2: boolean; retired: boolean; abort: AbortController; lastOutcome?: ForkOutcome; cleanupHandles?: Set<ObservationCleanupHandle>; provedAbsent?: boolean; observedReservation?: boolean }
 type Lifecycle = { assertOutside(): void; fence(): () => Promise<void> }
 const issued = new WeakMap<ForkSessionController, SessionCoordinator>()
 const lifecycle = new WeakMap<SessionCoordinator, Set<Lifecycle>>()
@@ -93,7 +93,10 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
       for (const holder of operations.values()) holder.source = undefined
     }
   }
-  function captureState(holder: Holder): ForkCaptureState { return holder.lastOutcome?.capture === 'captured' ? 'captured' : holder.attempted || holder.enteredB2 ? 'unknown' : 'uncaptured' }
+  function captureState(holder: Holder): ForkCaptureState {
+    if (holder.lastOutcome?.capture === 'captured') return 'captured'
+    return holder.provedAbsent && !holder.observedReservation && !holder.attempted && !holder.enteredB2 && !holder.cleanupHandles?.size && !preparationDebt.size ? 'uncaptured' : 'unknown'
+  }
   function outcome(holder: Holder, kind: 'not-issued'|'refused', reason: string): ForkOutcome {
     return readForkOutcome({ version: 1, kind, operation: holder.operation, capture: captureState(holder), reason }, holder.operation)
   }
@@ -172,6 +175,9 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
     }
   }
   async function execute(holder: Holder, supplied: ForkExecutionControl): Promise<ForkOutcome> {
+    // Presentation evidence starts conservative on every admitted request. It
+    // does not determine capture/warm routing or create a durable spent fence.
+    holder.provedAbsent = false
     host.assertAvailable()
     const prerequisites = new Set([...preparationDebt, ...holder.cleanupHandles ?? []])
     try { await settleCleanup(prerequisites) }
@@ -179,10 +185,12 @@ export function createForkSessionController(coordinator: SessionCoordinator, hos
     if (!coordinator.inspectBootstrapCapture || !coordinator.bootstrapSemanticTargetWithCapture) return holder.lastOutcome = outcome(holder, 'not-issued', 'unsupported')
     const capture = captureBootstrapCaptureRequest({ invocation: holder.operation.invocation, core: holder.operation.prepared.core, requestIntent: holder.operation.prepared.requestIntent })
     const inspection = await coordinator.inspectBootstrapCapture(capture)
+    holder.provedAbsent = inspection.kind === 'absent'
+    if (inspection.kind === 'reserved' || inspection.kind === 'materialized') holder.observedReservation = true
     if (inspection.kind === 'conflict') return holder.lastOutcome = outcome(holder, 'refused', 'conflict')
     if (inspection.kind === 'unavailable') throw hostFault(holder, new ForkAdmissionError('unavailable'))
     const control: ForkExecutionControl = { ...supplied, signal: AbortSignal.any([admission.signal, holder.abort.signal, ...(supplied.signal ? [supplied.signal] : [])]) }
-    if (inspection.kind !== 'absent' || holder.attempted || holder.enteredB2) {
+    if (inspection.kind !== 'absent' || holder.observedReservation || holder.attempted || holder.enteredB2) {
       const routing = await coordinator.inspectBootstrap(capture.invocation)
       const passive = await handoff(holder, { kind: 'passive' }, {})
       if (passive.owner.kind === 'ready' || passive.owner.kind === 'already-ready') return qualify(holder, passive.owner)

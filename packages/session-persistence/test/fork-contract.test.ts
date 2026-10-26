@@ -29,3 +29,12 @@ it('binds success and blocked tokens to the complete original operation', () => 
   expect(() => contract.readForkOutcome({ ...outcome, title: 'changed' }, operation)).toThrow()
   expect(() => contract.readForkOutcome({ ...outcome, receipt: { ...outcome.receipt, invocation: { ...operation.invocation, targetSessionId: 'other' } } }, operation)).toThrow()
 })
+it('rejects host capture evidence contradicting an independently known captured outcome', () => {
+  const operation = contract.createForkOperation(prepared(), { operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-26T00:00:00.000Z' })
+  const lastOutcome = { version: 1, kind: 'adopted', operation, capture: 'captured', sessionId: 'target', seedLength: 3, title: 'original',
+    receipt: { version: 1, invocation: operation.invocation, seedLength: 3, manifestDigest: 'a'.repeat(64), dependencyClosureDigest: 'b'.repeat(64) } }
+  const error = { version: 1, kind: 'session-fork-error', operation, capture: 'captured', reason: 'internal', lastOutcome }
+  expect(contract.readForkHostErrorData(error, operation)).toEqual(error)
+  for (const capture of ['unknown','uncaptured']) expect(() => contract.readForkHostErrorData({ ...error, capture }, operation)).toThrow()
+  expect(contract.readForkHostErrorData({ ...error, capture: 'unknown', lastOutcome: { version: 1, kind: 'not-issued', operation, capture: 'unknown', reason: 'unavailable' } }, operation).capture).toBe('unknown')
+})
