@@ -15,16 +15,18 @@ import { createConversationVisibility } from '../../src/session-visibility.ts'
 import { createGatewayForkHost } from '../../src/fork-session.ts'
 import { createDesktopRouter, createGatewayWrite } from '../../src/router.ts'
 import type { DesktopHandlers } from '../../src/types.ts'
+import { createConversationResultReader } from '../../src/result-reader.ts'
 
 /** Actual Gateway owners and route; only provider/backend leaves are controlled. */
-export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
-  await mkdir(workspace)
+export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string) {
+  const root = existingRoot ?? await mkdtemp(join(tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
+  await mkdir(workspace, { recursive: true })
   const coordinator = createSessionCoordinator(createJsonlBackend(sessions), { lock: { enabled: true } }), fence = createSessionManagementFence()
-  await coordinator.create({ sessionId: 'source' }); await coordinator.create({ sessionId: 'other' })
+  if (!existingRoot) { await coordinator.create({ sessionId: 'source' }); await coordinator.create({ sessionId: 'other' }) }
   const projects = createProjectScopeBroker(coordinator, workspace)
   const project = { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace }
-  await projects.configure(project); await projects.bind('source', 'p'); await projects.bind('other', 'p')
+  await projects.configure(project)
+  if (!existingRoot) { await projects.bind('source', 'p'); await projects.bind('other', 'p') }
   const runtime = await createNativeContextRuntime({ workspace, storageRoot: join(root, 'native'), coordinator,
     projectFor: projects.nativeScopeFor, resultReadScopeFor: projects.resultReadScopeFor, withBindingObservation: projects.withBindingObservation,
     prepareBootstrapInheritance: projects.prepareBootstrapInheritance,
@@ -36,7 +38,9 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
   const management = createSessionManagement(coordinator, service, createConversationVisibility(coordinator), { fence, projectFor: projects.projectFor })
   const host = createGatewayForkHost({ workspace, coordinator, projects, nativeContext: runtime }), controller = createForkSessionController(coordinator, host)
   const handlers: DesktopHandlers = { sessions: management, projects }, frames: RpcMessage[] = [], send = (frame: RpcMessage) => { frames.push(frame) }
-  const base = createSdkServer(service, { coordinator, onWrite: createGatewayWrite(send, handlers), prepareForkSession: input => controller.prepare(input), executeForkSession: (input, control) => controller.execute(input, control) })
+  const base = createSdkServer(service, { coordinator, onWrite: createGatewayWrite(send, handlers),
+    readResultPage: createConversationResultReader(coordinator, service, createConversationVisibility(coordinator), fence), supportsResultDependencyMembership: true,
+    prepareForkSession: input => controller.prepare(input), executeForkSession: (input, control) => controller.execute(input, control) })
   const router = createDesktopRouter(base, send, handlers)
   let serial = 0
   const call = async (method: string, params: unknown = {}) => {
