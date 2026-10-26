@@ -927,4 +927,3 @@ for (const primitive of ['canonical', 'rewrite'] as const) control('funding-line
   expect(lastFundingReceipt!.observation.activeIO).toBe(0); expect(lastFundingReceipt!.observation.activeHandles).toBe(0); await denied(f, directory)
   state.evidence = { primitive, written, closes, primary: includesFailure(state.batchFailure, primary), closeFailure: includesFailure(state.batchFailure, closeFailure), inventoryFailure: includesFailure(state.batchFailure, inventoryFailure), retainedDigest: createHash('sha256').update(retained).digest('hex') }
 }, { distinct: 1 })
-
