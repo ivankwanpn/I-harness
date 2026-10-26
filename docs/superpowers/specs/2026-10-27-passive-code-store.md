@@ -169,3 +169,7 @@ The core/B2/restore lane may first qualify actual same-owner primitives. Whole i
 ## 8. New-code module boundaries
 
 Keep projection/passive-code-store.ts a thin stable facade. Put cohesive private types, legacy replay, tape replay, capture and pruning in projection/passive-code-store/{types,legacy,replay,capture,prune}.ts. These modules implement the same interfaces above, with one selection/rewind owner and no duplicate history walker. The bounded JSON encoder and passive selection context keep their named owners. This is new-code organization, not resumption of deferred general file decomposition.
+
+## 9. PC07 bounded persistence handoff
+
+Root verified that checkBirth is byte-equivalent after LF normalization between accepted9d0c1a34 and independently reviewed FC12 fixd8b807e2 (SHA2569190f1f90c6a0cd287c045d0d388ad11f3feef3dc2c68d39212b089d2e58509c); semantic-seed.ts and bootstrap-header.ts are unchanged between those sources. The F1 writer confirmed its current copies match and released these codec/reconstruction slices. This closes the former Stage3 source-owner gate only: CURRENT may change semantic-seed.ts, bootstrap-header.ts and bootstrap.ts:checkBirth plus its necessary import. It must not copy, replace or edit FC12 cache/run/lifetime/managed-document logic or its F1-dependent fixture. Root composes the frozen FC12 and codec deltas serially and qualifies both on the eventual integrated source. Scoped FC12 approval is not a claim that it has landed in MAIN. Stage6 full-host/controller/original public-positive handoff remains gated.
