@@ -41,8 +41,12 @@ async function source(coordinator: SessionCoordinator) {
 }
 it('publishes V2 through original B2 once, cold resumes original bytes and keeps header/stage/frame layout', async () => {
   const { coordinator, root } = await setup(), document = await source(coordinator), request = captureRequest(); let captures = 0
-  const outcome = await coordinator.bootstrapSemanticTargetWithCapture!(request, guards, async () => { captures++; return payload(document) })
-  expect(outcome.kind).toBe('ready'); expect(captures).toBe(1)
+  const lostResponse = async () => {
+    const outcome = await coordinator.bootstrapSemanticTargetWithCapture!(request, guards, async () => { captures++; return payload(document) })
+    expect(outcome.kind).toBe('ready')
+    throw Error('READY caller response lost')
+  }
+  await expect(lostResponse()).rejects.toThrow('READY caller response lost'); expect(captures).toBe(1)
   const before = await readFile(join(root, 'target.jsonl')), names = await readdir(root), stageName = names.find(name => name.startsWith('target.jsonl.bootstrap-') && name.endsWith('.stage'))!
   const stage = await readFile(join(root, stageName)), lines = before.toString().trimEnd().split('\n').map(line => JSON.parse(line)), header = lines[0]
   expect(header.formatVersion).toBe(13); expect(header.semanticSeed).toMatchObject({ version: 2, codec: 'semantic-seed-v2', seedLength: 2, groupCount: 1 })
