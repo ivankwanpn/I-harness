@@ -1,10 +1,32 @@
 import type { TeamEvent } from "./types.ts";
 import { applyTeamEvent, createFoldState, type TeamFoldState } from "./fold.ts";
+import { isDeepStrictEqual } from 'node:util';
+export type Queued = Extract<TeamEvent, { type: 'team/message/queued' }>;
+export type Ack = Extract<TeamEvent, { type: 'team/message/delivered' }>;
+export type Failure = { occurred: false } | { occurred: true; error: unknown };
+export type DeliveryOutcome = { kind: 'consumed'; via: 'target' | 'parent-stop'; sendFailure: Failure }
+    | { kind: 'queued'; via: 'no-target-call' | 'bridge-false' | 'target-owned'; sendFailure: Failure };
+export type MailboxResult = { messageId: string; status: 'accepted' | 'queued' };
+export type QueueGuard = (clone: TeamFoldState) => void;
+export type DeliveryRequest = { queued: Queued; mode: 'enqueue' | 'existing'; guard: QueueGuard; deliver: () => Promise<DeliveryOutcome> };
+export type InstallAck = (write: () => Promise<void>, markInstalled: () => void) => Promise<void>;
+export interface MessageObligation {
+    readonly queueEvents: readonly [Queued];
+    queue(): Promise<void>;
+    queueInstalled(): void;
+    start(deliver: () => Promise<DeliveryOutcome>): Promise<MailboxResult>;
+    settle(): Promise<void>;
+}
 export interface TeamLead {
     commit(events: readonly TeamEvent[]): Promise<void>;
     onCommit?(): void;
+    reserveMessage?(queued: Queued, mode: 'enqueue' | 'existing', installAck: InstallAck): MessageObligation;
+    findMessage?(queued: Queued): MessageObligation | undefined;
+    settleMessages?(): Promise<void>;
+    messageFailed?(record: MessageObligation, error: unknown): void;
 }
 export interface TeamTransaction {
+    deliverMessage(request: DeliveryRequest): Promise<MailboxResult>;
     transact<T>(fn: (state: TeamFoldState) => {
         events?: TeamEvent[];
         result: T;
@@ -41,7 +63,25 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
     let chain: Promise<unknown> = Promise.resolve();
     let shared: TeamFoldState | undefined = state;
     let pending: readonly TeamEvent[] | undefined;
+    let pendingMessage: MessageObligation | undefined;
+    const serial = <T>(work: () => Promise<T>): Promise<T> => {
+        const next = chain.then(work);
+        chain = next.catch(() => {});
+        return next;
+    };
     const settle = async () => {
+        if (pendingMessage) {
+            const record = pendingMessage;
+            try { await record.queue(); }
+            catch (error) {
+                if ((error as { teamQueueNotIssued?: boolean })?.teamQueueNotIssued) pendingMessage = undefined;
+                throw error;
+            }
+            for (const event of record.queueEvents) applyTeamEvent(shared!, event);
+            record.queueInstalled();
+            pendingMessage = undefined;
+            lead.onCommit?.();
+        }
         if (!pending)
             return;
         const events = pending;
@@ -62,22 +102,57 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
     };
     return {
         async drain() {
-            await chain;
             try {
-                await settle();
+                await serial(settle);
             }
             catch (error) {
                 if ((error as {
                     code?: string;
-                })?.code !== 'FACT_CANCELLED')
+                })?.code !== 'FACT_CANCELLED' && !(error as { teamQueueNotIssued?: boolean })?.teamQueueNotIssued)
                     throw error;
             }
+            // Drivers can enter the ack lane. Never join them from within it.
+            await lead.settleMessages?.();
+            await serial(settle);
+        },
+        async deliverMessage(request) {
+            if (!lead.reserveMessage) throw Object.assign(new Error('Team lead does not own message settlement'), { code: 'FACT_OWNER_UNSUPPORTED' });
+            let reserved: MessageObligation | undefined;
+            const record = await serial(async () => {
+                // Exact original work joins before admission, capacity or delivered checks.
+                const existing = lead.findMessage?.(request.queued);
+                if (existing) return existing;
+                await settle();
+                if (!shared) shared = createFoldState();
+                const sameId = [...shared.queued.values()].flat().find(message => message.id === request.queued.message.id);
+                if (sameId && !isDeepStrictEqual(sameId, request.queued.message)) throw new Error('Team message tuple mismatch');
+                if (sameId && shared.delivered.has(sameId.id)) return undefined;
+                const snapshot = cloneState(shared);
+                request.guard(snapshot);
+                if (request.mode === 'enqueue') applyTeamEvent(snapshot, request.queued);
+                const obligation = lead.reserveMessage!(request.queued, request.mode, (write, markInstalled) => serial(async () => {
+                    const original = obligation.queueEvents[0];
+                    const ack: Ack = { type: 'team/message/delivered', version: 1, teamId: original.teamId, messageId: original.message.id, targetId: original.message.targetId };
+                    applyTeamEvent(cloneState(shared!), ack);
+                    await write();
+                    applyTeamEvent(shared!, ack);
+                    markInstalled();
+                    lead.onCommit?.();
+                }));
+                reserved = obligation;
+                if (request.mode === 'enqueue') {
+                    pendingMessage = obligation;
+                    await settle();
+                } else obligation.queueInstalled();
+                return obligation;
+            }).catch(error => { if (reserved) lead.messageFailed?.(reserved, error); throw error; });
+            return record ? record.start(request.deliver) : { messageId: request.queued.message.id, status: 'accepted' };
         },
         transact<T>(fn: (state: TeamFoldState) => {
             events?: TeamEvent[];
             result: T;
         }): Promise<T> {
-            const next = chain.then(async () => {
+            return serial(async () => {
                 await settle();
                 if (!shared)
                     shared = createFoldState();
@@ -98,8 +173,6 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
                 }
                 return out.result;
             });
-            chain = next.catch(() => { }); // a throw commits nothing new; chain survives
-            return next;
         },
     };
 }

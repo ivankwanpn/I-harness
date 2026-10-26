@@ -6,29 +6,38 @@
 // would mask mutation/double-apply bugs.
 import { describe, expect, it } from "vitest"
 import { createMailbox, createFoldState, createTeamTransact } from "../src/index.ts"
-import type { TeamCaller, TeamEvent, MailboxDeps, TeamFoldState } from "../src/index.ts"
+import type { TeamCaller, TeamEvent, MailboxDeps } from "../src/index.ts"
+import { createSession, createNondurableFactOwner } from '@i-harness/core-session'
+import { createTeamFacts } from '../src/facts.ts'
 
 const LEAD: TeamCaller = { id: "lead-1", name: "lead", role: "lead" }
 const HELPER: TeamCaller = { id: "child-1", name: "helper", role: "teammate" }
 
-function makeMailbox(overrides?: Partial<MailboxDeps> & { state?: TeamFoldState }) {
+function makeMailbox(overrides?: Omit<Partial<MailboxDeps>, 'deliver'> & { deliver?: (...args: Parameters<MailboxDeps['deliver']>) => Promise<boolean> }) {
   const events: TeamEvent[] = []
   const state = overrides?.state ?? createFoldState()
   if (!overrides?.state) {
     // baseline folded state: the target member exists (as after spawn/activate)
     state.members.set("helper", { id: "child-1", name: "helper", description: "d", provider: "spawn", context: "fresh", phase: "active" })
   }
-  const lead = { commit: async (candidate: readonly TeamEvent[]) => { events.push(...candidate) } }
+  const session = createSession()
+  const lead = createTeamFacts(createNondurableFactOwner(session), () => tx.drain(), () => {
+    events.splice(0, events.length, ...session.events.filter((event): event is TeamEvent => event.type.startsWith('team/')))
+  })
+  const tx = createTeamTransact(lead, state)
+  const { deliver = async () => true, ...options } = overrides ?? {}
   const mailbox = createMailbox({
     teamId: "lead-1",
     state,
     // REAL transact over the shared seeded state — never a mock.
-    transact: createTeamTransact(lead, state),
-    deliver: async (_targetId: string, _messageId: string, _content: string, _delivery: "quiet" | "wakeup", _signal?: AbortSignal) => true,
+    transact: tx,
+    deliver: async (...args) => await deliver(...args)
+      ? { kind: 'consumed', via: 'target', sendFailure: { occurred: false } }
+      : { kind: 'queued', via: 'bridge-false', sendFailure: { occurred: false } },
     memberStatus: (_id: string) => "idle" as const,
     maxPendingMessagesPerMember: 64,
     maxMessageBytes: 65_536,
-    ...overrides,
+    ...options,
   })
   return { mailbox, state, events }
 }

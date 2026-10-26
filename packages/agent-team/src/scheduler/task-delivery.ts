@@ -1,9 +1,10 @@
 import { createTeamDeliveryFacts, teamFactOwner } from '../facts.ts'
-import { driveFollowups, isParentNotificationStopped, type FollowupDeps, type ChildAgentEntry, type JobRegistry } from "@i-harness/subagent"
+import { driveFollowups, ParentNotificationStoppedError, type FollowupDeps, type ChildAgentEntry, type JobRegistry } from "@i-harness/subagent"
 import type { TeamDeps, TeamSubagentDeps } from "../scheduler.ts"
 import type { TeamFoldState } from "../fold.ts"
 import type { createActivity } from "../activity.ts"
 import { AgentPath } from "../agent-path.ts"
+import type { DeliveryOutcome } from '../transact.ts'
 
 // The target append/flush is the acknowledgement barrier. Preserve host reads
 // after awaits, notification receivers, and the shared serialized child drive.
@@ -17,32 +18,36 @@ export function createTaskDelivery(
   isUnmounted: () => boolean,
 ) {
   const recordDelivery=createTeamDeliveryFacts()
-  const realDeliver = async (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", _signal?: AbortSignal): Promise<boolean> => {
+  const queued = (via: 'no-target-call' | 'bridge-false' | 'target-owned', sendFailure: DeliveryOutcome['sendFailure'] = { occurred: false }): DeliveryOutcome => ({ kind: 'queued', via, sendFailure })
+  const consumed = (via: 'target' | 'parent-stop' = 'target', sendFailure: DeliveryOutcome['sendFailure'] = { occurred: false }): DeliveryOutcome => ({ kind: 'consumed', via, sendFailure })
+  const realDeliver = async (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", _signal?: AbortSignal): Promise<DeliveryOutcome> => {
     if (targetId === teamId) {
       if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) {
         try { await recordDelivery(teamFactOwner(deps.parentSession,deps.factOwner), { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }) }
-        catch { return false }
+        catch { return queued('target-owned') }
       }
       if (deps.parentNotify) {
-        const queued = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)
-        const sender = queued?.senderName ?? "teammate"
+        const message = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)
+        const sender = message?.senderName ?? "teammate"
         try {
           await deps.parentNotify.admit({
             sessionId: sub.childSessions?.parentSessionId ?? teamId, text: `Team message <${messageId}> from <${sender}>:\n${content}`, description: `Team message from ${sender}`,
-            display: queued?.display ?? { kind: "team-message", title: `Team message from ${sender}`, body: queued?.content ?? content },
+            display: message?.display ?? { kind: "team-message", title: `Team message from ${sender}`, body: message?.content ?? content },
           })
-          if (!isUnmounted()) deps.parentNotify.wake(sub.childSessions?.parentSessionId ?? teamId)
         } catch (error) {
           // Explicit Stop/disposal keeps the durable inbox audit but consumes
           // this notification so restart cannot silently reawaken the Lead.
-          return isParentNotificationStopped(error)
+          return error instanceof ParentNotificationStoppedError ? consumed('parent-stop') : queued('target-owned')
         }
+        try { if (!isUnmounted()) deps.parentNotify.wake(sub.childSessions?.parentSessionId ?? teamId) }
+        catch { return queued('target-owned') }
       }
-      activity.notify()
-      return true
+      try { activity.notify() }
+      catch (error) { return consumed('target', { occurred: true, error }) }
+      return consumed()
     }
     const member = [...state.members.values()].find((m) => m.id === targetId)
-    if (!member) return false
+    if (!member) return queued('no-target-call')
     const entry = sub.table.get(AgentPath.parse(`lead/${member.name}`).toString())
     // No live child (or a dead one): return false so the mailbox keeps the
     // message queued — recoverRoot re-delivers once the child is alive again
@@ -52,19 +57,22 @@ export function createTaskDelivery(
     // Agent registry. With the rebuild seam injected, rebuild the resident
     // agent FIRST and proceed only on success; without the seam keep the
     // conservative message-stays-queued behavior.
-    if (!entry) return false
+    if (!entry) return queued('no-target-call')
     if (entry.status === "error") {
-      if (!sub.ensureResident) return false
-      const ok = await sub.ensureResident(entry)
-      if (!ok) return false
+      if (!sub.ensureResident) return queued('no-target-call')
+      let ok: boolean
+      try { ok = await sub.ensureResident(entry) }
+      catch (error) { return queued('no-target-call', { occurred: true, error }) }
+      if (!ok) return queued('no-target-call')
     }
-    if (entry.status === "killed") return false
+    if (entry.status === "killed") return queued('no-target-call')
     if(!entry.session.events.some(event=>event.type==='subagent/inbox'&&event.messageId===messageId)){
       try { await recordDelivery(teamFactOwner(entry.session,entry.factOwner), { type: "subagent/inbox", messageId, message: content, provenance: { kind: "child-report", authority: "observation", scope: "turn", producer: "team.delivery" } }) }
-      catch { return false }
-      entry.mailbox.push(content)
+      catch { return queued('target-owned') }
+      try { entry.mailbox.push(content) }
+      catch (error) { return consumed('target', { occurred: true, error }) }
     }
-    if (delivery === "wakeup" && entry.sessionId) {
+    try { if (delivery === "wakeup" && entry.sessionId) {
       // Wake: drive the serialized followup chain (shared with subagent via
       // the exported driveFollowups, M19 Ruling 28 — NOT a duplicate vendor)
       // — only AFTER the append above, so the message is durably in the
@@ -80,8 +88,8 @@ export function createTaskDelivery(
       // (waiting→running→waiting); a wait_agent waiter must wake on that
       // edge even though no team event is appended.
       void chain.then(() => activity.notify()).catch(() => {})
-    }
-    return true
+    } } catch (error) { return consumed('target', { occurred: true, error }) }
+    return consumed()
   }
   return realDeliver
 }

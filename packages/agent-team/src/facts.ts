@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { committedFactSeqs, createNondurableFactOwner, isManagedFactOwner, isNondurableSession, type CapturedActionFact, type CapturedSettlementFact, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SessionEvent, type SessionView } from '@i-harness/core-session';
 import type { TeamEvent } from './types.ts';
+import { isDeepStrictEqual } from 'node:util';
+import type { Ack, Failure, InstallAck, MailboxResult, MessageObligation, Queued } from './transact.ts';
 export function teamFactOwner(view: SessionView, supplied?: FactOwner): FactOwner {
     const owner = supplied ?? (isNondurableSession(view) ? createNondurableFactOwner(view) : undefined);
     if (!owner || owner.view !== view || !isNondurableSession(view) && !isManagedFactOwner(view, owner))
@@ -8,24 +10,42 @@ export function teamFactOwner(view: SessionView, supplied?: FactOwner): FactOwne
     return owner;
 }
 /** Tool cancellation context is scheduling data, never a write capability. */
-export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promise<void>, committed: () => void) {
+export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promise<void>, committed: () => void, retainFactsCleanup?: (close: () => Promise<void>) => void) {
     const signals = new AsyncLocalStorage<{
         signal?: AbortSignal;
     }>();
-    const transactions = new Map<readonly TeamEvent[], {
+    type Transaction = {
+        kind: 'transaction';
         action: ManagedAction<ProducerFactOutcome>;
         fact: CapturedActionFact<ProducerFactOutcome>;
-    }>();
-    const action = owner.beginAction(), source = action.registerSettlementSource(drainTransactions);
+    };
+    type Message = MessageObligation & { kind: 'message'; failed(error: unknown): void };
+    const transactions = new Map<readonly TeamEvent[], Transaction | Message>();
+    let retired = false;
+    const action = owner.beginAction();
+    let source: ReturnType<typeof action.registerSettlementSource> | undefined;
+    const close = async () => { retired = true; action.finish(); await source?.close(); };
+    retainFactsCleanup?.(close);
+    try { source = action.registerSettlementSource(drainTransactions); }
+    catch (error) { action.finish(); throw error; }
     action.finish();
+    const assertOpen = () => { if (retired) throw Object.assign(new Error('Team message admission is closed'), { code: 'FACT_CLOSED' }); };
+    const findMessage = (queued: Queued) => {
+        for (const record of transactions.values()) {
+            if (record.kind !== 'message' || record.queueEvents[0].message.id !== queued.message.id) continue;
+            if (!isDeepStrictEqual(record.queueEvents[0], queued)) throw new Error('Team message tuple mismatch');
+            return record;
+        }
+    };
     return {
         run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> { return signals.run({ signal }, work); },
         async commit(events: readonly TeamEvent[]) {
             let pending = transactions.get(events);
+            if (pending?.kind === 'message') throw new Error('Message queue is not a generic transaction');
             const existing = !!pending;
             if (!pending) {
                 const action = owner.beginAction(signals.getStore()?.signal);
-                pending = { action, fact: action.captureTeamTransaction(events) };
+                pending = { kind: 'transaction', action, fact: action.captureTeamTransaction(events) };
                 transactions.set(events, pending);
             }
             const outcome = await (existing ? pending.fact.reconcile() : pending.fact.admit());
@@ -38,8 +58,120 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
             pending.action.finish();
             transactions.delete(events);
         },
+        findMessage,
+        reserveMessage(queued: Queued, mode: 'enqueue' | 'existing', installAck: InstallAck): MessageObligation {
+            const existing = findMessage(queued);
+            if (existing) return existing;
+            assertOpen();
+            // Clone and freeze the fixed tuple before asynchronous admission.
+            const freeze = <T>(value: T): T => {
+                if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
+                return value;
+            };
+            const original = freeze(structuredClone(queued));
+            const queueEvents = Object.freeze([original]) as readonly [Queued];
+            const ack: Ack = Object.freeze({ type: 'team/message/delivered', version: 1, teamId: original.teamId, messageId: original.message.id, targetId: original.message.targetId });
+            const admission = owner.beginAction(signals.getStore()?.signal);
+            let queueFact: CapturedActionFact<ProducerFactOutcome> | undefined;
+            let queueAttempted = false, installed = mode === 'existing', neverIssued = false;
+            let driver: Promise<MailboxResult> | undefined, driverDone: Promise<void> | undefined;
+            let consumedKnown = false, consumed = false, ackInstalled = false;
+            let sendFailure: Failure = { occurred: false }, errorDelivered = false;
+            let settlementFailure: Failure = { occurred: false };
+            let ackFact: CapturedSettlementFact<ProducerFactOutcome> | undefined;
+            let ackAttempted = false;
+            const finishNoAck = () => { admission.finish(); transactions.delete(queueEvents); };
+            const settleAck = async () => {
+                if (ackInstalled) return;
+                try {
+                    await installAck(async () => {
+                        ackFact ??= source!.delivery.capture(ack);
+                        const fact = ackFact;
+                        const retry = ackAttempted;
+                        ackAttempted = true;
+                        committedFactSeqs(await (retry ? fact.reconcile() : fact.admit()));
+                    }, () => { ackInstalled = true; });
+                    settlementFailure = { occurred: false };
+                } catch (error) { settlementFailure = { occurred: true, error }; throw error; }
+            };
+            const record: Message = {
+                kind: 'message', queueEvents,
+                async queue() {
+                    if (installed) return;
+                    if (neverIssued && sendFailure.occurred) throw sendFailure.error;
+                    const retry = queueAttempted;
+                    queueAttempted = true;
+                    const outcome = await (retry ? queueFact!.reconcile() : queueFact!.admit());
+                    if (outcome.kind === 'not-issued') {
+                        neverIssued = true;
+                        finishNoAck();
+                        // Preserve the native refusal while telling the lane to release its slot.
+                        try { committedFactSeqs(outcome); }
+                        catch (error) {
+                            sendFailure = { occurred: true, error };
+                            errorDelivered = true;
+                            throw Object.assign(error as Error, { teamQueueNotIssued: true });
+                        }
+                    }
+                    committedFactSeqs(outcome);
+                },
+                queueInstalled() { installed = true; },
+                failed(error) { sendFailure = { occurred: true, error }; errorDelivered = true; },
+                start(deliver) {
+                    if (driver) return driver;
+                    if (errorDelivered && sendFailure.occurred) return Promise.reject(sendFailure.error);
+                    const done = Promise.withResolvers<void>();
+                    driverDone = done.promise;
+                    driver = (async () => {
+                        try {
+                            // No await may separate the original action guard from dispatch.
+                            assertOpen(); admission.assertOpen(); admission.finish();
+                            const outcome = await deliver();
+                            consumedKnown = true;
+                            consumed = outcome.kind === 'consumed';
+                            sendFailure = outcome.sendFailure;
+                            if (consumed) {
+                                try { await settleAck(); }
+                                catch (error) { if (!sendFailure.occurred) throw error; }
+                            } else finishNoAck();
+                            if (sendFailure.occurred) { errorDelivered = true; throw sendFailure.error; }
+                            return { messageId: original.message.id, status: consumed ? 'accepted' as const : 'queued' as const };
+                        } catch (error) {
+                            if (!consumedKnown) { consumedKnown = true; consumed = false; finishNoAck(); }
+                            if (!sendFailure.occurred) sendFailure = { occurred: true, error };
+                            errorDelivered = true;
+                            throw error;
+                        } finally { done.resolve(); }
+                    })();
+                    return driver;
+                },
+                async settle() {
+                    await driverDone;
+                    if (!consumedKnown) {
+                        // Receipt recovery of a failed send cannot dispatch its unreached callback.
+                        if (!installed && !neverIssued) throw new Error('Message queue installation needs recovery');
+                        consumedKnown = true; consumed = false; finishNoAck();
+                    }
+                    if (consumed && !ackInstalled) await settleAck();
+                    // Historic caller failure is separate from current receipt/install debt.
+                    if (!ackInstalled && settlementFailure.occurred) throw settlementFailure.error;
+                },
+            };
+            transactions.set(queueEvents, record);
+            try { if (mode === 'enqueue') queueFact = admission.captureTeamTransaction(queueEvents); }
+            catch (error) { finishNoAck(); throw error; }
+            return record;
+        },
+        async settleMessages() {
+            for (const record of [...transactions.values()]) if (record.kind === 'message') await record.settle();
+        },
+        messageFailed(record: MessageObligation, error: unknown) {
+            const original = transactions.get(record.queueEvents);
+            if (original?.kind === 'message') original.failed(error);
+        },
+        retire() { retired = true; },
         onCommit: committed,
-        close: () => source.close(),
+        close,
     };
 }
 /** A queued message retains the same target capture until acknowledgement. */

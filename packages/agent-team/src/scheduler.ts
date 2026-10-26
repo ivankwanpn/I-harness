@@ -163,7 +163,14 @@ export async function mountAgentTeams(
     const memberStatus = deps.memberStatus ?? realMemberStatus
 
     const realDeliver = createTaskDelivery(teamId, state, deps, sub, teamJobs, activity, () => unmounted)
-    const deliver = deps.deliver ?? realDeliver
+    // Boolean overrides confer only their returned disposition; rejection keeps
+    // its original value and grants no Team acknowledgement authority.
+    const booleanDeliver = deps.deliver
+    const deliver: typeof realDeliver = booleanDeliver
+      ? async (...args) => await booleanDeliver(...args)
+        ? { kind: 'consumed', via: 'target', sendFailure: { occurred: false } }
+        : { kind: 'queued', via: 'bridge-false', sendFailure: { occurred: false } }
+      : realDeliver
 
     // ---- build the domain ----
     const roster = createRoster({
