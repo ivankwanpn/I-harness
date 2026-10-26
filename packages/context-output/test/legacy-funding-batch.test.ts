@@ -130,7 +130,7 @@ function control(name: string, work: (f: Fixture, directory: string, state: Cont
       try { record.afterBytes = await physicalBytes(directory) } catch (failure) { record.afterInventoryFailure = String(failure); if (!state.unavailableInventory) throw failure; expect(String(failure)).toMatch(/Artifact path unavailable/) }
     } catch (failure) { failures.push(failure); record.failure = String(failure) }
     finally {
-      fundingHooks.open = undefined; fundingHooks.batch = undefined; fundingHooks.afterRename = undefined; fundingHooks.recovery = undefined
+      fundingHooks.open = undefined; fundingHooks.batch = undefined; fundingHooks.afterRename = undefined; fundingHooks.recovery = undefined; fundingHooks.hash = undefined; fundingHooks.nativeStat = undefined
       for (const restore of state.restore.reverse()) restore()
       record.evidence = state.evidence; record.observer = lastFundingReceipt; record.batchFailure = state.batchFailure instanceof Error ? { message: String(state.batchFailure), stack: state.batchFailure.stack, errors: state.batchFailure instanceof AggregateError ? state.batchFailure.errors.map(String) : [] } : String(state.batchFailure)
       if (fixture) {
@@ -427,12 +427,14 @@ control('funding-next-writer retained-partial-and-fresh-managed-quota', async (f
 })
 
 for (const kind of ['slot', 'canonical', 'application']) control('funding-drift same-handle-repeated-prefix-' + kind, async (f, directory, state) => {
-  let writes = 0, changed = '', retained: Buffer | undefined
+  let writes = 0, changed = '', retained: Buffer | undefined, later = 0, syncs = 0
   traceFailure(state)
   fundingHooks.open = (handle, path, flags) => {
     if (flags !== 'r+' && flags !== 'wx+') return
+    if (kind === 'canonical' && writes && path.endsWith(f.visible.id + '.rewrite')) later++
     if (!(kind === 'slot' ? path.endsWith('revoke.0') : kind === 'canonical' ? path.endsWith(f.visible.id + '.json') : /applied\.json\.[a-f0-9]+\.pending$/.test(path))) return
     const write = handle.write.bind(handle)
+    if (kind === 'canonical') { const sync = handle.sync.bind(handle); handle.sync = async () => { syncs++; await sync() } }
     handle.write = (async (...args: Parameters<typeof write>) => {
       writes++; const [bytes, offset, length, position] = args as unknown as [Uint8Array, number, number, number]
       const result = await write(bytes, offset, Math.min(1, length), position)
@@ -440,7 +442,13 @@ for (const kind of ['slot', 'canonical', 'application']) control('funding-drift 
       return result
     }) as typeof handle.write
   }
-  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked'); expect(writes).toBe(1); expect(await readFile(changed)).toEqual(retained); expect(String(state.batchFailure)).toMatch(/prefix drift|staging conflict|disposition funding conflict/); await denied(f, directory)
+  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked')
+  // LPF01 permits the remaining eight already-admitted canonical bytes before
+  // final content refusal. Slot/application still refuse their next request.
+  expect(writes).toBe(kind === 'canonical' ? 9 : 1)
+  expect(await readFile(changed)).toEqual(kind === 'canonical' ? Buffer.concat([retained!, Buffer.alloc(8, 32)]) : retained)
+  if (kind === 'canonical') { expect(syncs).toBe(0); expect(later).toBe(0) }
+  expect(String(state.batchFailure)).toMatch(/prefix drift|staging conflict|disposition funding conflict/); await denied(f, directory)
 })
 control('funding-drift zero-growth-journal-prefix-before-overwrite', async (f, directory, state) => {
   let changed = '', writes = 0, retained: Buffer | undefined
@@ -663,3 +671,260 @@ control('funding-stop abort-after-original-acquisition', async (f, directory) =>
   fundingHooks.open = (_handle, path, flags) => { if (path.endsWith('revoke.0') && flags === 'wx+') { acquired = true; controller.abort() } }
   const result = await withFundingObservation(() => f.run(false, capture => { capture.signal = controller.signal })); expect(acquired).toBe(true); expect(result.value.kind).toBe('blocked'); expect(result.observation.activeIO).toBe(0); expect(result.observation.activeHandles).toBe(0); await denied(f, directory)
 })
+
+// LPF02: Store adds one real target owner (nine bytes in this fixture).
+// Large canonical files contain genuine trailing JSON whitespace; rewrite is
+// an independent original reserve with no retained bytes. No extra owners.
+async function preparedPad(f: Fixture, directory: string, store: ContextStore, args: Parameters<ContextStore['fundLegacyBatch']>, capacity: number) {
+  const path = join(directory, 'owners', f.visible.id + '.json'), owners = (await readLedger(path)).owners
+  const ledger = new OwnerLedger(directory, store.retireLegacyFile)
+  await ledger.fund(path, owners, args[3], args[6], 'pad-setup')
+  const original = await readFile(path)
+  if (capacity > 1024) await writeFile(path, Buffer.concat([original, Buffer.alloc(capacity - original.length, 32)]))
+  const rewrite = path.replace(/\.json$/, '.rewrite'); await truncate(rewrite, 0)
+  return { path, rewrite, owners, original: await readFile(path) }
+}
+for (const [capacity, continuation] of [[32768, 8192], [65536, 8192], [29, 1], [29, 7]] as const) control('funding-linear cost-' + capacity + '-' + continuation, async (f, directory, state) => {
+  type Pad = { primitive: string; initial: number; hashes: number[]; hashBytes: number; reads: number; snapshotBytes: number; writes: number; requested: number; acknowledged: number; stats: number; pathStats: number; guards: number; syncs: number; closes: number; issuance: number; allocations: number; inHash: boolean; lastStats: number; lastPathStats: number; lastGuards: number; permit: boolean; requests: { position: number; requested: number; acknowledged: number; nativeChecks: number; pathChecks: number; guardChecks: number }[] }
+  const pads: Pad[] = [], handles = new WeakMap<import('node:fs/promises').FileHandle, Pad>(), inventories: number[] = [], entries: Parameters<LegacyFundingBatchOwner['enter']>[1][] = []
+  let prepared!: Awaited<ReturnType<typeof preparedPad>>, described: unknown, effected: unknown, x = 0, active: Pad | undefined
+  const run = LegacyFundingBatchOwner.prototype.run, enter = LegacyFundingBatchOwner.prototype.enter, issued = LegacyFundingBatchOwner.prototype.issued, allocation = LegacyFundingBatchOwner.prototype.assertAllocation
+  LegacyFundingBatchOwner.prototype.run = function(context, describe, allocate) {
+    return run.call(this, context, async () => { const value = await describe(); described = value; return value }, async scope => { const value = await allocate(scope); effected = value; return value })
+  }
+  LegacyFundingBatchOwner.prototype.enter = function(...input) { const token = enter.apply(this, input); entries.push(input[1]); x += input[1].additionalBytes; return token }
+  LegacyFundingBatchOwner.prototype.assertAllocation = function(...input) { allocation.apply(this, input); if (active) active.allocations++ }
+  LegacyFundingBatchOwner.prototype.issued = function(...input) { issued.apply(this, input); if (active && input[1] === active.primitive) { active.issuance++; active.permit = true } }
+  state.restore.push(() => { LegacyFundingBatchOwner.prototype.run = run; LegacyFundingBatchOwner.prototype.enter = enter; LegacyFundingBatchOwner.prototype.issued = issued; LegacyFundingBatchOwner.prototype.assertAllocation = allocation })
+  fundingHooks.batch = async (store, args, invoke) => {
+    prepared = await preparedPad(f, directory, store, args, capacity)
+    state.evidence = { capacity, continuation, pads, inventories, entries }
+    const guard = args[6]; args[6] = () => { guard(); if (active) active.guards++ }
+    fundingHooks.nativeStat = path => { if (active && path === (active.primitive === 'canonical' ? prepared.path : prepared.rewrite)) active.pathStats++ }
+    const disk = store.diskBytes.bind(store); store.diskBytes = async () => { const actual = await disk(); inventories.push(actual); return actual }
+    fundingHooks.hash = (handle, size, boundary) => { const pad = handles.get(handle); if (!pad) return; pad.inHash = boundary === 'start'; if (boundary === 'start') pad.hashes.push(size) }
+    fundingHooks.open = (handle, path, flags) => {
+      if (flags === 'r' && active && path === (active.primitive === 'canonical' ? prepared.path : prepared.rewrite)) {
+        const pad = active, read = handle.read.bind(handle)
+        handle.read = (async (...input: Parameters<typeof read>) => { const result = await Reflect.apply(read, handle, input); pad.snapshotBytes += result.bytesRead; return result }) as typeof handle.read
+      }
+      if (flags !== 'r+' || ![prepared.path, prepared.rewrite].includes(path)) return
+      const pad: Pad = { primitive: path === prepared.path ? 'canonical' : 'rewrite', initial: path === prepared.path ? prepared.original.length : 0, hashes: [], hashBytes: 0, reads: 0, snapshotBytes: 0, writes: 0, requested: 0, acknowledged: 0, stats: 0, pathStats: 0, guards: 0, syncs: 0, closes: 0, issuance: 0, allocations: 0, inHash: false, lastStats: 0, lastPathStats: 0, lastGuards: 0, permit: false, requests: [] }
+      pads.push(pad); handles.set(handle, pad); active = pad
+      const read = handle.read.bind(handle), write = handle.write.bind(handle), nativeStat = handle.stat.bind(handle), sync = handle.sync.bind(handle), close = handle.close.bind(handle)
+      handle.read = (async (...input: Parameters<typeof read>) => { const result = await Reflect.apply(read, handle, input); pad.reads += result.bytesRead; if (pad.inHash) pad.hashBytes += result.bytesRead; return result }) as typeof handle.read
+      handle.stat = (async (...input: Parameters<typeof nativeStat>) => { const result = await Reflect.apply(nativeStat, handle, input); pad.stats++; return result }) as typeof handle.stat
+      handle.write = (async (...input: Parameters<typeof write>) => {
+        expect(pad.permit).toBe(true); pad.permit = false
+        expect(pad.stats - pad.lastStats).toBeGreaterThanOrEqual(1)
+        expect(pad.pathStats - pad.lastPathStats).toBeGreaterThanOrEqual(1); expect(pad.guards - pad.lastGuards).toBeGreaterThan(0)
+        const [bytes, offset, length, position] = input as unknown as [Uint8Array, number, number, number]
+        expect(position).toBe(pad.initial + pad.acknowledged); expect(length).toBeLessThanOrEqual(8192)
+        const result = await write(bytes, offset, Math.min(continuation, length), position)
+        pad.requests.push({ position, requested: length, acknowledged: result.bytesWritten, nativeChecks: pad.stats - pad.lastStats, pathChecks: pad.pathStats - pad.lastPathStats, guardChecks: pad.guards - pad.lastGuards }); pad.lastStats = pad.stats; pad.lastPathStats = pad.pathStats; pad.lastGuards = pad.guards
+        pad.writes++; pad.requested += length; pad.acknowledged += result.bytesWritten; return result
+      }) as typeof handle.write
+      handle.sync = async () => { await sync(); pad.syncs++ }
+      handle.close = async () => { await close(); pad.closes++; if (active === pad) active = undefined }
+    }
+    try {
+      await invoke()
+      expect(described).toEqual(effected)
+      expect(inventories).toHaveLength(2)
+      const g = (described as { additionalBytes: number }).additionalBytes
+      expect(x).toBe(g); expect(inventories[1]).toBe(inventories[0]! + g)
+      expect(await physicalBytes(directory)).toBe(inventories[1])
+      expect(pads).toHaveLength(2)
+      for (const pad of pads) {
+        expect(pad.acknowledged).toBe(capacity - pad.initial)
+        expect(pad.hashes).toEqual([pad.initial, capacity, capacity])
+        expect(pad.hashBytes).toBe(pad.initial + 2 * capacity)
+        expect(pad.reads).toBe(pad.hashBytes)
+        expect(pad.snapshotBytes).toBe(pad.initial)
+        expect(pad.reads + pad.snapshotBytes).toBe(2 * pad.initial + 2 * capacity)
+        expect(pad.issuance).toBe(pad.writes + 1); expect(pad.allocations).toBeGreaterThanOrEqual(pad.issuance)
+        expect(pad.syncs).toBe(1); expect(pad.closes).toBe(1)
+      }
+      expect(await readFile(prepared.path)).toEqual(Buffer.concat([prepared.original, Buffer.alloc(capacity - prepared.original.length, 32)]))
+      expect(await readFile(prepared.rewrite)).toEqual(Buffer.alloc(capacity, 32))
+      expect((await readLedger(prepared.path)).owners).toEqual(prepared.owners)
+      const operation = join(directory, 'legacy-fork-v1', recordHash('binding', args[4].binding.invocation))
+      await expect(stat(join(operation, 'applied.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+      for (const ref of [f.hidden, f.future]) expect((await readLedger(join(directory, 'owners', ref.id + '.json'))).owners).toEqual(new Set(['creator', 'source']))
+      state.evidence = { capacity, continuation, pads, T0: inventories[0], G: g, X: x, T1: inventories[1], described, effected, entries }
+    } catch (failure) { state.batchFailure = failure; throw failure }
+    finally { fundingHooks.open = undefined; fundingHooks.hash = undefined; fundingHooks.nativeStat = undefined; store.diskBytes = disk }
+  }
+  const body = await readFile(join(directory, 'blobs', f.visible.id + '.txt'))
+  const result = await withFundingObservation(() => f.run()); expect(result.value.kind).toBe('ready')
+  expect(result.observation.activeIO).toBe(0); expect(result.observation.activeHandles).toBe(0)
+  expect((await readLedger(prepared.path)).owners).toEqual(new Set([...prepared.owners, 'target']))
+  expect(await readFile(join(directory, 'blobs', f.visible.id + '.txt'))).toEqual(body)
+  const observation = await f.observation()
+  expect((await f.service().readLegacyObserved({ sessionId: 'target' }, { refId: f.visible.id }, observation)).text).toBe(body.toString())
+  for (const ref of [f.hidden, f.future]) await expect(f.service().readLegacyObserved({ sessionId: 'target' }, { refId: ref.id }, observation)).rejects.toThrow()
+}, { distinct: 1 })
+
+
+for (const primitive of ['canonical', 'rewrite'] as const) for (const change of ['prefix', 'appended', 'pre-sync', 'post-sync', 'entry', 'no-growth'] as const) {
+  control('funding-linear content-' + primitive + '-' + change, async (f, directory, state) => {
+    const capacity = primitive === 'canonical' ? 29 : 32768
+    let path = '', original!: Buffer, atCut!: Buffer, expected!: Buffer, writes = 0, acknowledged = 0, syncs = 0, later = 0, scans = 0, mutated = false, initial = 0
+    const handles = new WeakSet<import('node:fs/promises').FileHandle>()
+    fundingHooks.batch = async (store, args, invoke) => {
+      const prepared = await preparedPad(f, directory, store, args, capacity)
+      path = primitive === 'canonical' ? prepared.path : prepared.rewrite
+      if (primitive === 'canonical') await writeFile(path, Buffer.concat([prepared.original, Buffer.alloc(change === 'entry' || change === 'no-growth' ? 9 : 1, 32)]))
+      else await writeFile(path, Buffer.alloc(change === 'no-growth' ? capacity : 7, 32))
+      original = await readFile(path); initial = original.length
+      const mutate = (position: number) => { atCut = readFileSync(path); atCut[position] = 9; writeFileSync(path, atCut); mutated = true }
+      fundingHooks.hash = (handle, _size, boundary) => {
+        if (boundary !== 'start' || !handles.has(handle)) return
+        scans++
+        if (scans === 2 && (change === 'pre-sync' || change === 'no-growth')) mutate(initial - 1)
+      }
+      fundingHooks.open = (handle, opened, flags) => {
+        if (flags !== 'r+') return
+        if (mutated && opened !== path && (opened.endsWith('.rewrite') || opened.endsWith('.intent.json'))) later++
+        if (opened !== path) return
+        handles.add(handle)
+        if (change === 'entry') mutate(initial - 1)
+        const write = handle.write.bind(handle), sync = handle.sync.bind(handle)
+        handle.write = (async (...input: Parameters<typeof write>) => {
+          const [bytes, offset, length, position] = input as unknown as [Uint8Array, number, number, number]
+          const result = await write(bytes, offset, Math.min(primitive === 'canonical' ? 1 : 8192, length), position)
+          writes++; acknowledged += result.bytesWritten
+          if (writes === 1 && (change === 'prefix' || change === 'appended')) mutate(change === 'prefix' ? initial - 1 : initial)
+          return result
+        }) as typeof handle.write
+        handle.sync = async () => { syncs++; await sync(); if (change === 'post-sync') mutate(initial - 1) }
+      }
+      try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure }
+    }
+    const outcome = await withFundingObservation(() => f.run())
+    expect(outcome.value.kind).toBe('blocked'); expect(mutated).toBe(true)
+    expect(String(state.batchFailure)).toMatch(/original prefix drift/)
+    expect(syncs).toBe(change === 'post-sync' ? 1 : 0); expect(later).toBe(0)
+    if (change === 'entry' || change === 'no-growth') { expect(writes).toBe(0); expected = atCut }
+    else {
+      expect(acknowledged).toBe(capacity - initial)
+      expected = Buffer.concat([original, Buffer.alloc(capacity - initial, 32)])
+      expected[change === 'appended' ? initial : initial - 1] = 9
+      if (change === 'prefix' || change === 'appended') expect(writes).toBe(primitive === 'canonical' ? 8 : 4)
+    }
+    expect(await readFile(path)).toEqual(expected)
+    if (change === 'prefix' || change === 'appended') expect(expected.subarray(atCut.length)).toEqual(Buffer.alloc(capacity - atCut.length, 32))
+    expect(outcome.observation.activeIO).toBe(0); expect(outcome.observation.activeHandles).toBe(0)
+    await denied(f, directory)
+    state.evidence = { primitive, change, capacity, initial, writes, acknowledged, scans, syncs, later, retainedBytes: expected.length, retainedDigest: createHash('sha256').update(expected).digest('hex'), cutBytes: atCut.length, remainingGrowthAfterCut: expected.length - atCut.length }
+  }, { distinct: 1 })
+}
+
+for (const primitive of ['canonical', 'rewrite'] as const) for (const change of ['inode', 'hardlink', 'shrink', 'extend', 'current', 'allocation'] as const) {
+  control('funding-linear native-' + primitive + '-' + change, async (f, directory, state) => {
+    const cause = Error('original currentness invalidated after native pad write'), outside = join(f.root, 'outside-' + primitive), capacity = primitive === 'canonical' ? 29 : 32768
+    let path = '', writes = 0, syncs = 0, invalid = false, retained!: Buffer, allocation!: FundingAllocation, actualOwner!: LegacyFundingBatchOwner, issued = 0
+    const enter = LegacyFundingBatchOwner.prototype.enter, issuance = LegacyFundingBatchOwner.prototype.issued
+    LegacyFundingBatchOwner.prototype.enter = function(...input) { const token = enter.apply(this, input); if (input[1].key === join(directory, 'owners', f.visible.id + '.json')) { allocation = token; actualOwner = this }; return token }
+    LegacyFundingBatchOwner.prototype.issued = function(...input) { issuance.apply(this, input); if (input[0] === allocation && input[1] === primitive) issued++ }
+    state.restore.push(() => { LegacyFundingBatchOwner.prototype.enter = enter; LegacyFundingBatchOwner.prototype.issued = issuance })
+    fundingHooks.batch = async (store, args, invoke) => {
+      const prepared = await preparedPad(f, directory, store, args, capacity); path = primitive === 'canonical' ? prepared.path : prepared.rewrite
+      const guard = args[6]; args[6] = () => { guard(); if (invalid) throw cause }
+      fundingHooks.open = (handle, opened, flags) => {
+        if (opened !== path || flags !== 'r+') return
+        const write = handle.write.bind(handle), sync = handle.sync.bind(handle)
+        handle.sync = async () => { syncs++; await sync() }
+        handle.write = (async (...input: Parameters<typeof write>) => {
+          const [bytes, offset, length, position] = input as unknown as [Uint8Array, number, number, number]
+          const result = await write(bytes, offset, Math.min(primitive === 'canonical' ? 1 : 8192, length), position); writes++
+          if (writes === 1) {
+            const bytesNow = readFileSync(path)
+            if (change === 'inode') { renameSync(path, outside); writeFileSync(path, bytesNow, { flag: 'wx' }) }
+            if (change === 'hardlink') linkSync(path, outside)
+            if (change === 'shrink') await truncate(path, bytesNow.length - 1)
+            if (change === 'extend') await writeFile(path, Buffer.concat([bytesNow, Buffer.from(' ')]))
+            if (change === 'current') invalid = true
+            if (change === 'allocation') actualOwner.finish(allocation)
+            retained = readFileSync(path)
+          }
+          return result
+        }) as typeof handle.write
+      }
+      try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure }
+    }
+    const outcome = await withFundingObservation(() => f.run())
+    expect(outcome.value.kind).toBe('blocked'); expect(writes).toBe(1); expect(syncs).toBe(0); expect(issued).toBe(1)
+    expect(await readFile(path)).toEqual(retained)
+    if (change === 'inode' || change === 'hardlink') expect(await readFile(outside)).toEqual(retained)
+    if (change === 'current') expect(includesFailure(state.batchFailure, cause)).toBe(true)
+    else expect(String(state.batchFailure)).toMatch(/native identity or size drift|allocation/)
+    await denied(f, directory)
+    expect(outcome.observation.activeIO).toBe(0); expect(outcome.observation.activeHandles).toBe(0)
+    state.evidence = { primitive, change, writes, syncs, issued, retainedBytes: retained.length, retainedDigest: createHash('sha256').update(retained).digest('hex') }
+  }, { distinct: 1 })
+}
+
+for (const primitive of ['canonical', 'rewrite'] as const) control('funding-linear zero-progress-' + primitive, async (f, directory, state) => {
+  let path = '', original!: Buffer, writes = 0, syncs = 0
+  fundingHooks.batch = async (store, args, invoke) => {
+    const prepared = await preparedPad(f, directory, store, args, 29); path = primitive === 'canonical' ? prepared.path : prepared.rewrite; original = await readFile(path)
+    fundingHooks.open = (handle, opened, flags) => {
+      if (opened !== path || flags !== 'r+') return
+      const write = handle.write.bind(handle), sync = handle.sync.bind(handle)
+      handle.write = (async (...input: Parameters<typeof write>) => { const [bytes, offset, , position] = input as unknown as [Uint8Array, number, number, number]; writes++; return write(bytes, offset, 0, position) }) as typeof handle.write
+      handle.sync = async () => { syncs++; await sync() }
+    }
+    try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure }
+  }
+  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked')
+  expect(writes).toBe(1); expect(syncs).toBe(0); expect(await readFile(path)).toEqual(original); expect(String(state.batchFailure)).toMatch(/no progress/); await denied(f, directory)
+}, { distinct: 1 })
+
+
+for (const primitive of ['canonical', 'rewrite'] as const) for (const change of ['inode', 'hardlink', 'size'] as const) control('funding-linear entry-native-' + primitive + '-' + change, async (f, directory, state) => {
+  const outside = join(f.root, 'entry-native-outside'); let path = '', writes = 0, retained!: Buffer, changed = false
+  fundingHooks.batch = async (store, args, invoke) => {
+    const prepared = await preparedPad(f, directory, store, args, 29); path = primitive === 'canonical' ? prepared.path : prepared.rewrite
+    fundingHooks.open = (handle, opened, flags) => {
+      if (opened !== path || flags !== 'r+') return
+      const original = readFileSync(path)
+      if (change === 'inode') { renameSync(path, outside); writeFileSync(path, original, { flag: 'wx' }) }
+      if (change === 'hardlink') linkSync(path, outside)
+      if (change === 'size') writeFileSync(path, Buffer.concat([original, Buffer.from(' ')]))
+      changed = true; retained = readFileSync(path)
+      const write = handle.write.bind(handle); handle.write = ((...input: Parameters<typeof write>) => { writes++; return Reflect.apply(write, handle, input) }) as typeof handle.write
+    }
+    try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure }
+  }
+  expect((await withFundingObservation(() => f.run())).value.kind).toBe('blocked'); expect(changed).toBe(true); expect(writes).toBe(0)
+  expect(String(state.batchFailure)).toMatch(/native identity or size drift|aliases or unreliable identity/)
+  expect(await readFile(path)).toEqual(retained)
+  if (change !== 'size') expect(await readFile(outside)).toEqual(retained)
+  await denied(f, directory)
+}, { distinct: 1 })
+
+for (const primitive of ['canonical', 'rewrite'] as const) control('funding-linear cleanup-' + primitive, async (f, directory, state) => {
+  const primary = Error('pad native write response lost'), closeFailure = Error('pad original close response lost'), inventoryFailure = Error('pad failure inventory unavailable')
+  state.expectedClose = closeFailure
+  let path = '', written = 0, closes = 0, retained!: Buffer
+  fundingHooks.batch = async (store, args, invoke) => {
+    const prepared = await preparedPad(f, directory, store, args, 29); path = primitive === 'canonical' ? prepared.path : prepared.rewrite
+    const disk = store.diskBytes.bind(store); let inventories = 0
+    store.diskBytes = async () => { if (++inventories === 2) throw inventoryFailure; return disk() }
+    fundingHooks.open = (handle, opened, flags) => {
+      if (opened !== path || flags !== 'r+') return
+      const write = handle.write.bind(handle), close = handle.close.bind(handle)
+      handle.write = (async (...input: Parameters<typeof write>) => { const [bytes, offset, length, position] = input as unknown as [Uint8Array, number, number, number]; const result = await write(bytes, offset, Math.min(7, length), position); written += result.bytesWritten; retained = readFileSync(path); throw primary }) as typeof handle.write
+      handle.close = async () => { await close(); closes++; throw closeFailure }
+    }
+    try { await invoke() } catch (failure) { state.batchFailure = failure; throw failure } finally { store.diskBytes = disk }
+  }
+  let rejection: unknown
+  try { await withFundingObservation(() => f.run()) } catch (failure) { rejection = failure }
+  for (const cause of [primary, closeFailure, inventoryFailure]) expect(includesFailure(state.batchFailure, cause)).toBe(true)
+  expect(includesFailure(rejection, closeFailure)).toBe(true); expect(written).toBe(7); expect(closes).toBe(1); expect(await readFile(path)).toEqual(retained)
+  expect(lastFundingReceipt!.observation.activeIO).toBe(0); expect(lastFundingReceipt!.observation.activeHandles).toBe(0); await denied(f, directory)
+  state.evidence = { primitive, written, closes, primary: includesFailure(state.batchFailure, primary), closeFailure: includesFailure(state.batchFailure, closeFailure), inventoryFailure: includesFailure(state.batchFailure, inventoryFailure), retainedDigest: createHash('sha256').update(retained).digest('hex') }
+}, { distinct: 1 })
+

@@ -2,6 +2,8 @@ import { vi } from 'vitest'
 import { probe, observeFs, observeHash, observeSql } from './legacy-performance-probe.ts'
 const details = vi.hoisted(() => ({ slots: [] as { base: string; tupleKind: string }[], spaces: [] as { phase: string; growth: number }[],
   recovery: undefined as undefined | (() => void),
+  hash: undefined as undefined | ((handle: import('node:fs/promises').FileHandle, size: number, boundary: 'start' | 'finish') => void),
+  nativeStat: undefined as undefined | ((path: string) => void),
   afterRename: undefined as undefined | ((from: string, to: string) => void),
   open: undefined as undefined | ((handle: import('node:fs/promises').FileHandle, path: string, flags: unknown) => void),
   batch: undefined as undefined | ((store: import('../../src/store.ts').ContextStore, args: Parameters<import('../../src/store.ts').ContextStore['fundLegacyBatch']>, invoke: () => Promise<void>) => Promise<void>) }))
@@ -16,7 +18,9 @@ vi.mock('../../src/artifact/quota.ts', async original => {
 
 vi.mock('node:fs/promises', async original => {
   const fs = observeFs(await original<typeof import('node:fs/promises')>())
-  return { ...fs, rename(...args: Parameters<typeof fs.rename>) {
+  return { ...fs, async lstat(...args: Parameters<typeof fs.lstat>) {
+    const result = await fs.lstat(...args); details.nativeStat?.(String(args[0])); return result
+  }, rename(...args: Parameters<typeof fs.rename>) {
     const pending = fs.rename(...args)
     if (!details.afterRename) return pending
     return pending.then(value => { details.afterRename?.(String(args[0]), String(args[1])); return value })
@@ -85,7 +89,12 @@ import { OwnerLedger } from '../../src/legacy/owner-ledger.ts'
 
 vi.mock('../../src/legacy/funding-batch.ts', async original => {
   const native = await original<typeof import('../../src/legacy/funding-batch.ts')>()
-  return { ...native, recoveryIssued() { native.recoveryIssued(); details.recovery?.() } }
+  return { ...native, recoveryIssued() { native.recoveryIssued(); details.recovery?.() },
+    async fundingHash(...args: Parameters<typeof native.fundingHash>) {
+      details.hash?.(args[0], args[1], 'start')
+      try { return await native.fundingHash(...args) }
+      finally { details.hash?.(args[0], args[1], 'finish') }
+    } }
 })
 
 const exec = DatabaseSync.prototype.exec

@@ -283,7 +283,10 @@ export class OwnerLedger {
       const spaces = Buffer.alloc(8192, 32)
       while (offset < capacity) {
         await assertFundingFile(this.root, path, handle, file, offset, current)
-        await checkPrefix(); batch.owner.issued(batch.allocation, primitive, peak)
+        // Canonical/rewrite retain exact entry and final hashes; only journal
+        // rechecks the growing prefix before each bounded append (LPF01).
+        if (primitive === 'journal') await checkPrefix()
+        batch.owner.issued(batch.allocation, primitive, peak)
         const length = Math.min(spaces.length, capacity - offset), result = await handle.write(spaces, 0, length, offset); current()
         if (result.bytesWritten <= 0) throw Error('Artifact write made no progress')
         expected.update(spaces.subarray(0, result.bytesWritten)); offset = sum(offset, result.bytesWritten)
