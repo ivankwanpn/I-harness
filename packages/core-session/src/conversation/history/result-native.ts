@@ -65,5 +65,11 @@ export function createNativeResultIndex(facts: readonly HistoryFact[], units: re
         ...(parent.consumption ? [parent.consumption.first, parent.consumption.latest] : [])],
       indices: [...new Set([fact.index, ...proof.map(value => value.index), ...parent.indices])], parent }
   }
-  return { prove, hasCall: (id: string | undefined) => get('code/call', id).some(branch) }
+  const hasCall = (id: string | undefined) => {
+    const native = get('code/call', id)
+    // Prefer a current ordinary producer over a competing rewound identity;
+    // otherwise retain historical native proof so the guard can exclude it.
+    return native.some(branch) || native.length > 0 && !get('tool/call', id).some(branch)
+  }
+  return { prove, hasCall }
 }

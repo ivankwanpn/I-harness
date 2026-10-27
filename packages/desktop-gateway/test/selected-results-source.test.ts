@@ -433,3 +433,18 @@ it('review I3 refuses a retained terminal job hidden without a complete consumpt
     expect(result.outcome).toEqual({ kind: 'refused', reason: 'unsupported-history' }); expect(result.rows).toEqual([])
   } finally { await fixture.close() }
 })
+it('review I1 round2 excludes a fresh legacy declaration whose sole recorded native producer was rewound', async () => {
+  const fixture = await setup()
+  try {
+    const outer = await accepted(fixture.document), produced = await native(fixture.document)
+    await recordFixture(fixture.document, { type: 'rewind/point', version: 1, anchorSeq: produced.call, targetTurn: 1, mode: 'conversation', fileOps: [] })
+    await recordFixture(fixture.document, { type: 'context/result-ref', ref: legacy('nested') })
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    const result = await inspect(fixture)
+    expect(result.outcome.kind).toBe('selected')
+    expect(result.rows).toHaveLength(1)
+    expect(result.rows[0]).toMatchObject({ protocol: 'managed', original: { seq: outer.result, event: 'tool/result' }, basis: { kind: 'selected-observation' } })
+    expect(result.classifications.filter(row => row.kind === 'excluded')).toEqual(Array.from({ length: 4 }, () => ({ kind: 'excluded', reason: 'rewound' })))
+    expect(result.classifications.at(-1)).toEqual({ kind: 'excluded', reason: 'rewound' })
+  } finally { await fixture.close() }
+})
