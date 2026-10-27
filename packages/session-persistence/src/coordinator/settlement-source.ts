@@ -1,4 +1,4 @@
-import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, validSoftTerminalDraft, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts } from '@i-harness/core-session'
+import { validSettlementEvent, validGenerationEvent, validInputPreparationEvent, validSoftTerminalDraft, type SettlementEventKind, type BatchKey, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type SettlementFacts, type SettlementCheckpointOwner } from '@i-harness/core-session'
 import { retainSettlementCapture } from './settlement-fact.ts'
 import { createSourceFacts } from './source-facts.ts'
 
@@ -11,25 +11,102 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
   status(group: CapturedFactGroup): FactOutcome | undefined
   quarantineCapture(): void
   holdRecovery(): void
+  releaseRecovery(): void
   onCloseRequested(): void
-}, released: () => void, reconcilePending?: () => Promise<void>): SettlementFacts {
+}, released: () => void, reconcilePending?: () => Promise<void>, checkpointOwner?: SettlementCheckpointOwner): SettlementFacts {
   let active = true, closing: Promise<void> | undefined
+  let holdEpoch = 0, heldRecovery = false, failed = false
+  const stickyErrors: unknown[] = []
+  let checkpointing: ReturnType<SettlementFacts['checkpoint']> | undefined
+  let stages = Promise.resolve()
+  const owner = checkpointOwner && {
+    readCut: checkpointOwner.readCut.bind(checkpointOwner),
+    settle: checkpointOwner.settle.bind(checkpointOwner),
+    isCurrent: checkpointOwner.isCurrent.bind(checkpointOwner),
+  }
+  const recoveryError = (errors: unknown[] = []) => Object.assign(new AggregateError(errors, 'Required source needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+  const stage = <T>(run: () => Promise<T>): Promise<T> => {
+    const pending = stages.then(run)
+    stages = pending.then(() => {}, () => {})
+    return pending
+  }
   const assertHeld = () => {
     operations.assertHeld()
     if (!active) throw Object.assign(new Error('Settlement source is closed'), { code: 'FACT_CLOSED' })
   }
-  const retained = { assertHeld, admit: operations.admitCaptured, reconcile: operations.reconcile, status: operations.status, quarantineCapture: operations.quarantineCapture }
+  const quarantineCapture = () => { failed = true; operations.quarantineCapture() }
+  const retained = { assertHeld, admit: operations.admitCaptured, reconcile: operations.reconcile, status: operations.status, quarantineCapture }
   const records = createSourceFacts(retained)
+  // Only short settlement stages hold this lane. In particular, a producer's
+  // lifecycle drain can wait for a seal while checkpoints continue to run.
+  const verify = async (retire?: () => void): ReturnType<SettlementFacts['checkpoint']> => {
+    if (!owner) throw Object.assign(new Error('No original checkpoint owner'), { code: 'FACT_OWNER_UNSUPPORTED' })
+    for (let pass = 0; pass < 2; pass++) {
+      assertHeld()
+      if (failed) throw recoveryError(stickyErrors)
+      const cut = owner.readCut(), revision = records.revision(), epoch = holdEpoch, snapshot = records.snapshot()
+      if (failed || cut.failed) throw recoveryError()
+      const ownerCurrent = () => { assertHeld(); return !failed && owner.isCurrent(cut) && holdEpoch === epoch }
+      const current = () => ownerCurrent() && records.revision() === revision
+      try {
+        if (reconcilePending) { await reconcilePending(); if (!current()) continue }
+        let progress
+        try { progress = await owner.settle() }
+        catch (error) { stickyErrors.push(error); quarantineCapture(); throw recoveryError(stickyErrors) }
+        if (!current()) continue
+        if (cut.failed || failed) throw recoveryError()
+        if (cut.pending === 0 && cut.recoveryPending === 0 && progress.kind === 'advanced') {
+          await records.drainSnapshot(snapshot, ownerCurrent)
+          if (!current()) continue
+        }
+        assertHeld()
+        if (!current()) continue
+        if (failed || cut.failed || cut.recoveryPending !== 0 || !records.empty())
+          throw recoveryError(progress.kind === 'blocked' ? [progress.reason] : [])
+        if (cut.pending > 0) {
+          if (retire) throw recoveryError(progress.kind === 'blocked' ? [progress.reason] : [])
+          if (!heldRecovery) throw recoveryError(progress.kind === 'blocked' ? [progress.reason] : [])
+          operations.releaseRecovery(); heldRecovery = false
+          return { kind: 'progress' }
+        }
+        if (progress.kind === 'blocked') throw recoveryError([progress.reason])
+        if (heldRecovery) { operations.releaseRecovery(); heldRecovery = false }
+        retire?.()
+        return { kind: 'settled' }
+      } catch (error) {
+        // Preserve falsey throws and the exact blocked reason, without retrying
+        // a failed registered callback inside this checkpoint.
+        if (error instanceof AggregateError && (error as AggregateError & { code?: string }).code === 'FACT_RECOVERY_REQUIRED') throw error
+        throw recoveryError([error])
+      }
+    }
+    throw recoveryError()
+  }
+  const checkpoint = () => {
+    assertHeld()
+    if (!owner) return Promise.reject(Object.assign(new Error('No original checkpoint owner'), { code: 'FACT_OWNER_UNSUPPORTED' }))
+    if (checkpointing) return checkpointing
+    const pending = stage(verify)
+    checkpointing = pending
+    void pending.then(() => { if (checkpointing === pending) checkpointing = undefined }, () => { if (checkpointing === pending) checkpointing = undefined })
+    return pending
+  }
   const capture = (kind: SettlementEventKind, event: unknown, group: FactGroupDraft) => {
     assertHeld()
     return validSettlementEvent(kind, event) ? records.capture(group)
       : records.retain(retainSettlementCapture({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' }, retained))
   }
   const close = () => {
-    operations.onCloseRequested()
     if (!active) return Promise.resolve()
     if (closing) return closing
-    const pending = (async () => {
+    const pending = Promise.resolve().then(async () => {
+      operations.onCloseRequested()
+      if (owner) {
+        await stage(verify)
+        try { await drain() } catch (error) { throw recoveryError([error]) }
+        await stage(() => verify(() => { active = false; released() }))
+        return
+      }
       const errors: unknown[] = []
       assertHeld()
       try { await reconcilePending?.(); assertHeld() } catch (error) { errors.push(error) }
@@ -42,7 +119,7 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
       if (errors.length) throw Object.assign(new AggregateError(errors, 'Required source drain needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
       active = false
       released()
-    })()
+    })
     closing = pending
     void pending.catch(() => { if (closing === pending) closing = undefined })
     return pending
@@ -68,8 +145,9 @@ export function createSettlementSource(drain: () => Promise<void>, operations: {
     } },
     assertHeld,
     close,
-    requireRecovery() { assertHeld(); operations.quarantineCapture() },
-    holdRecovery() { assertHeld(); operations.holdRecovery() },
+    checkpoint,
+    requireRecovery() { assertHeld(); quarantineCapture() },
+    holdRecovery() { assertHeld(); holdEpoch++; operations.holdRecovery(); heldRecovery = true },
     rewind: { capture: event => capture('rewind', event, { kind: 'legacy-compaction', events: [event] }) },
     retention: { capture: event => capture('retention', event, { kind: 'result-reference', event }) },
     tools: {

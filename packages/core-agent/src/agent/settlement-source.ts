@@ -30,6 +30,10 @@ export function trackSettlementSource(parent: SettlementFacts<ProducerFactOutcom
         inputPreparation: { capture(event) { assertOpen(); return captured(parent.inputPreparation.capture(event)); } },
         generation: { capture(event) { assertOpen(); return captured(parent.generation.capture(event)); } },
         assertHeld: assertOpen,
+        checkpoint() {
+            assertOpen();
+            return Promise.reject(Object.assign(new Error('Delegated settlement source has no original checkpoint owner'), { code: 'FACT_OWNER_UNSUPPORTED' }));
+        },
         retention: {
             capture(event) {
                 assertOpen();

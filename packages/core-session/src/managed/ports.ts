@@ -48,6 +48,15 @@ export interface FactPorts<Outcome = FactOutcome> {
   inputs: InputFacts<Outcome>; agent: AgentFacts<Outcome>; tools: ToolFacts<Outcome>; code: CodeFacts<Outcome>
   delivery: DeliveryFacts<Outcome>; metadata: MetadataFacts<Outcome>; compaction: LegacyCompactionFacts<Outcome>
 }
+export type SettlementOwnerCut = Readonly<{
+  revision: number; pending: number; recoveryPending: number; failed: boolean
+}>
+export type SettlementOwnerProgress = { kind: 'advanced' } | { kind: 'blocked'; reason: unknown }
+export interface SettlementCheckpointOwner {
+  readCut(): SettlementOwnerCut
+  settle(): Promise<SettlementOwnerProgress>
+  isCurrent(cut: SettlementOwnerCut): boolean
+}
 export interface SettlementFacts<Outcome = FactOutcome> {
   recovery: { capture(event: RecoverySettlementFact): CapturedSettlementFact<Outcome> }
   softReduction: { capture(event: import('../events/soft-reduction.ts').SoftReductionTerminalDraft): CapturedSettlementFact<Outcome> }
@@ -55,6 +64,7 @@ export interface SettlementFacts<Outcome = FactOutcome> {
   generation: { capture(event: Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>): CapturedSettlementFact<Outcome> }
   assertHeld(): void
   close(): Promise<void>
+  checkpoint(): Promise<{ kind: 'settled' } | { kind: 'progress' }>
   /** The registered real source retains an outcome it cannot finalize/capture.
    * This blocks new work without claiming an unknown journal issuance. */
   requireRecovery(): void
@@ -108,7 +118,7 @@ export interface ManagedAction<Outcome = FactOutcome> {
   assertOpen(): void
   stop(): void
   finish(): void
-  registerSettlementSource(drain: () => Promise<void>, reconcilePending?: () => Promise<void>): SettlementFacts<Outcome>
+  registerSettlementSource(drain: () => Promise<void>, reconcilePending?: () => Promise<void>, checkpointOwner?: SettlementCheckpointOwner): SettlementFacts<Outcome>
 }
 
 export type NondurableFactOutcome = { kind: "memory-committed"; durability: "nondurable"; seqs: readonly number[] } | Extract<FactOutcome, { kind: "not-issued" }>

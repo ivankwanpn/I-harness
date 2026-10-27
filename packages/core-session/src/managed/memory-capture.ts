@@ -4,8 +4,9 @@ import { captureFactGroup, resolveFactGroup, type FactGroupDraft } from './group
 import type { NondurableFactOutcome } from './ports.ts'
 
 /** Once-lowered standalone data. No receipt or durable authority is created. */
-export function captureMemoryFact(session: Session, draft: FactGroupDraft, assertHeld: () => void, retainInstalledOutcome = false) {
+export function captureMemoryFact(session: Session, draft: FactGroupDraft, assertHeld: () => void, retainInstalledOutcome = false, invalid?: () => void) {
   const capture = captureFactGroup(draft)
+  if (capture.kind !== 'captured') invalid?.()
   let result: Promise<NondurableFactOutcome> | undefined
   let installed: NondurableFactOutcome | undefined
   const commit = () => {

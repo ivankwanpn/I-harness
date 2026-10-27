@@ -362,7 +362,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     action.stopped = true;
                     actionControllers.delete(cancel);
                 },
-                registerSettlementSource(drain, reconcilePending) {
+                registerSettlementSource(drain, reconcilePending, checkpointOwner) {
                     assertAuthorized(authorization);
                     const required: Authorization = { action, required: true, assertSource: () => source.assertHeld() };
                     const source = createSettlementSource(drain, {
@@ -385,7 +385,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
                             }
                         },
-                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source) }, reconcilePending);
+                        releaseRecovery() { recoveryHolds.delete(source); capacity.releaseOptional(source) },
+                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source) }, reconcilePending, checkpointOwner);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
                     sourceDrains.set(source, { action, finished: () => finished, closeRequested: false });

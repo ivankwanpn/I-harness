@@ -5,6 +5,18 @@ import { assertSyntheticResult, createToolRegistry } from '@i-harness/core-tools
 import { trackSettlementSource } from '../src/agent/settlement-source.ts'
 import { createToolResultRetention } from '../../session-executor/src/lifecycle/result-retention.ts'
 
+it('refuses delegated checkpoint with its own lifetime and never forwards parent checkpoint authority', async () => {
+  const session = createSession(), action = createNondurableFactOwner(session).beginAction()
+  const cut = { revision: 0, pending: 0, recoveryPending: 0, failed: false }
+  const parent = action.registerSettlementSource(async () => {}, undefined, { readCut: () => cut, settle: async () => ({ kind: 'advanced' }), isCurrent: candidate => candidate === cut })
+  let checkpoints = 0
+  parent.checkpoint = async () => { checkpoints++; return { kind: 'settled' } }
+  const source = trackSettlementSource(parent, async () => {}, () => {})
+  await expect(source.checkpoint()).rejects.toMatchObject({ code: 'FACT_OWNER_UNSUPPORTED' }); expect(checkpoints).toBe(0)
+  await source.close(); expect(() => source.checkpoint()).toThrow(); expect(checkpoints).toBe(0)
+  await parent.close(); action.finish()
+})
+
 it('preserves the genuine memory parent/view binding through the actual tracked synthetic-result path', async () => {
   const session = createSession(), action = createNondurableFactOwner(session).beginAction()
   session.header = { sessionId: 'memory-id-is-not-storage-authority', createdAt: 'fixture' } as typeof session.header
