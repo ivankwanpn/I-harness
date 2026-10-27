@@ -64,7 +64,7 @@ it.each(['partial','foreign','complete'] as const)('cached existing-empty public
 it('cached READY preserves an actual original reservation-only payload-required fence',async()=>{
   const f=await fixture(),paths=bootstrapPaths(join(f.root,f.fork.sessionId+'.jsonl'),f.fork.operation.invocation),bytes=await readFile(paths.stage),stage=parseBootstrapHeaderStage(bytes)
   try{
-    if(!stage.captureReservation)throw new Error('Actual captured stage has no original reservation')
+    if(!stage.captureReservation||stage.captureReservation.kind!=='semantic-bootstrap-capture')throw new Error('Actual captured stage has no original reservation')
     await writeFile(paths.stage,encodeBootstrapCaptureReservation(stage.captureReservation))
     expect((await f.backend.readBootstrapState!(f.fork.operation.invocation)).captureReservation).toEqual(stage.captureReservation)
     expect(await resume(f.c,f.fork.operation)).toMatchObject({kind:'blocked',reason:'payload-required'})
@@ -113,8 +113,8 @@ it.each(['stage-missing', 'body-corrupt'] as const)('cached READY never replaces
 it.each(['append', 'revoke', 'metadata', 'metadata-aba'] as const)('cached original %s race never returns an old successful qualification', async mode => {
   const f = await fixture(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   try {
-    const read = f.backend.readBootstrapState!.bind(f.backend)
-    f.backend.readBootstrapState = async invocation => { const value = await read(invocation); entered.resolve(); await release.promise; return value }
+    const read = f.backend.bootstrapRoutes!.readState.bind(f.backend)
+    f.backend.bootstrapRoutes!.readState = async invocation => { const value = await read(invocation); entered.resolve(); await release.promise; return value }
     const recovering = resume(f.c, f.fork.operation).catch(error => error)
     await entered.promise
     let metadata: Promise<unknown> | undefined
@@ -163,8 +163,8 @@ it('unproved raw cached documents and active capture/payload calls retain cached
 it('coordinator retirement joins the original cached adoption and invalidates it before disposal',async()=>{
   const f=await fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
   try{
-    const read=f.backend.readBootstrapState!.bind(f.backend)
-    f.backend.readBootstrapState=async invocation=>{const state=await read(invocation);entered.resolve();await release.promise;return state}
+    const read=f.backend.bootstrapRoutes!.readState.bind(f.backend)
+    f.backend.bootstrapRoutes!.readState=async invocation=>{const state=await read(invocation);entered.resolve();await release.promise;return state}
     const recovering=resume(f.c,f.fork.operation).catch(error=>error)
     await entered.promise
     let closed=false;const closing=f.c.close().then(()=>{closed=true})

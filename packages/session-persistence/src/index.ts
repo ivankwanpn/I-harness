@@ -1,3 +1,5 @@
+export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage, validateChildCaptureStage } from './coordinator/bootstrap-route.ts'
+export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend, ResolvedBootstrapBirth } from './coordinator/bootstrap-route.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from "./coordinator/types.ts"
 import { createOwnership } from "./coordinator/ownership.ts"
 import { createMutations } from "./coordinator/mutations.ts"
@@ -79,9 +81,19 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
         return observations.withBootstrapCapture(request,guards,capture,managed.bootstrapSemanticTargetWithCapture)
       },
     }:{}),
-    inspectBootstrap: managed.inspectBootstrap,
+    ...(managed.childSupported()?{
+      inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
+      bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
+        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
+        return observations.withChildBootstrapCapture(request,guards,capture,managed.bootstrapChildTargetWithCapture)
+      },
+      resumeChildTarget(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,payload?:import('./coordinator/bootstrap-types.ts').BootstrapRequest){
+        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
+        return observations.withChildBootstrapResume(request,guards,payload,managed.resumeChildTarget)
+      },
+    }:{}),    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    async openManagedDocument(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
+    async openManagedDocument(sessionId) { managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
     revokeManagedDocumentNewWork: managed.revoke,
     closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
     ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),

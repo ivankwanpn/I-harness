@@ -6,6 +6,7 @@ import type { Mutations } from './mutations.ts'
 import { createManagedDocument } from './managed-document.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, type ManagedEntry } from './bootstrap.ts'
+import { captureBootstrapRoute } from './bootstrap-route.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
@@ -59,6 +60,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           ownership.assertHeld(id)
           const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{}))
           if(prefix.eventCount!==session.events.length)throw new Error('Managed recovery archive mismatch')
+          const birth=await backend.bootstrapRoutes?.resolveBirth?.(id)
+          if(birth)entry.route=captureBootstrapRoute(birth.route)
           return attach(id,entry,session,prefix)
         })
       })()

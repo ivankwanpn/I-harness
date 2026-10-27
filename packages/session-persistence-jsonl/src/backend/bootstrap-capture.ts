@@ -1,14 +1,11 @@
 import { open, readdir, rename, stat, type FileHandle } from 'node:fs/promises'
-import { basename, dirname } from 'node:path'
+import { basename } from 'node:path'
 import { canonicalJsonData } from '@i-harness/core-session'
-import { isHeldFactOwner, captureBootstrapCaptureRequest, parseBootstrapCaptureReservation, encodeBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
-import { bootstrapPaths } from './bootstrap-header.ts'
+import { isHeldFactOwner, parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
+import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
+export { bootstrapNamespace } from './bootstrap-stage.ts'
+import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
 
-/** Namespace discovery is deliberately broader than the owned deletion inventory. */
-export async function bootstrapNamespace(path: string): Promise<string[]> {
-  const prefix = basename(path) + '.bootstrap-'
-  return (await readdir(dirname(path))).filter(name => name.startsWith(prefix))
-}
 type Resource = { handle: FileHandle; error?: unknown; consumed?: boolean }
 type Ledger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<Resource>; settled: boolean; diagnostics: unknown[] }
 export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string) {
@@ -48,44 +45,31 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     if (!info.isDirectory()) throw new Error('Capture storage root unavailable')
     await readdir(rootPath)
   }
-  async function readBootstrapCapture(id: string, owner: HeldFactOwner, input: BootstrapCaptureRequest): Promise<BootstrapCaptureInspection> {
-    const request = captureBootstrapCaptureRequest(input)
-    if (id !== request.invocation.targetSessionId) throw new TypeError('Capture target mismatch')
-    return tracked(id, owner, async ledger => {
-      const guard = () => scope(id, owner), path = filePath(id), paths = bootstrapPaths(path, request.invocation)
+  function assertLookupCleanup(ledger:Ledger) {
+    if(!ledger.handles.size)return
+    const failed=[...ledger.handles].find(resource=>Object.hasOwn(resource,'error'))
+    if(failed)throw failed.error
+    throw new Error('Capture lookup cleanup unresolved')
+  }
+  async function readCapture(id:string,owner:HeldFactOwner,input:BootstrapCaptureRoute):Promise<OwnedCaptureInspection> {
+    const route=captureBootstrapCaptureRoute(input),request=route.request
+    if(id!==request.invocation.targetSessionId)throw new TypeError('Capture target mismatch')
+    return tracked<OwnedCaptureInspection>(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id)
       try {
-        guard(); await checkBootstrapCaptureRoot(); guard(); await assertNotDeleted('session', id); guard()
-        const siblings = await bootstrapNamespace(path); guard()
-        const known = new Set([basename(paths.stage), basename(paths.promote), basename(paths.publish)])
-        if (siblings.some(name => !/^[a-f0-9]{64}\.(stage|promote|publish)$/.test(name.slice((basename(path) + '.bootstrap-').length)))) return { kind: 'unavailable' }
-        if (siblings.some(name => !known.has(name))) return { kind: 'conflict' }
-        const stage = await bytes(ledger, paths.stage, 262144, guard), promote = await bytes(ledger, paths.promote, 262144, guard), publish = await bytes(ledger, paths.publish, 65536, guard)
-        // Presence of an ordinary target also fences an empty/foreign target.
-        let target = false
-        try { await stat(path); target = true } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-        guard(); await assertNotDeleted('session', id); await checkBootstrapCaptureRoot(); guard()
-        if (stage !== undefined) {
-          try {
-            const reservation = parseBootstrapCaptureReservation(stage)
-            if (canonicalJsonData(reservation.request) !== canonicalJsonData(request)) return { kind: 'conflict' }
-            if (target || publish !== undefined) return { kind: 'unavailable' }
-            if (promote !== undefined) { const full = parseBootstrapHeaderStage(promote); if (canonicalJsonData(full.captureReservation) !== canonicalJsonData(reservation)) return { kind: 'conflict' } }
-            return { kind: 'reserved', reservation }
-          } catch {
-            if(promote!==undefined)return {kind:'unavailable'}
-            try { const full = parseBootstrapHeaderStage(stage); return canonicalJsonData(full.invocation) === canonicalJsonData(request.invocation) && (!full.captureReservation || canonicalJsonData(full.captureReservation.request) === canonicalJsonData(request)) ? { kind: 'materialized' } : { kind: 'conflict' } } catch { return { kind: 'unavailable' } }
-          }
-        }
-        if (target || promote !== undefined || publish !== undefined) return { kind: 'unavailable' }
-        return { kind: 'absent' }
-      } catch (error) {
-        ledger.diagnostics.push(error)
-        // Resource cleanup errors cannot be converted to usable routing facts.
-        if (ledger.handles.size) throw error
-        return { kind: 'unavailable' }
-      }
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const selected=await lookupBootstrapStage(path,{kind:'route',route:route.protocol==='public'?{protocol:'public',invocation:request.invocation}:{protocol:'child-v1',request:route.request}}, {namespace:()=>bootstrapNamespace(path),read:(path,limit)=>bytes(ledger,path,limit,guard),assertCurrent:guard})
+        assertLookupCleanup(ledger)
+        let target=false;try{await stat(path);target=true}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
+        guard();await assertNotDeleted('session',id);await checkBootstrapCaptureRoot();guard()
+        if(selected.kind==='reserved')return target?{kind:'unavailable'}:canonicalJsonData(selected.reservation.request)===canonicalJsonData(request)?{kind:'reserved',reservation:selected.reservation} as OwnedCaptureInspection:{kind:'conflict'}
+        if(selected.kind==='full')return selected.stage.captureReservation&&canonicalJsonData(selected.stage.captureReservation.request)!==canonicalJsonData(request)?{kind:'conflict'}:{kind:'materialized'}
+        if(selected.kind==='absent')return target?{kind:'unavailable'}:{kind:'absent'}
+        return {kind:selected.kind}
+      }catch(error){ledger.diagnostics.push(error);if(ledger.handles.size)throw error;return{kind:'unavailable'}}
     })
   }
+  const readBootstrapCapture=(id:string,owner:HeldFactOwner,request:BootstrapCaptureRequest)=>readCapture(id,owner,{protocol:'public',request}) as Promise<BootstrapCaptureInspection>;
   async function writeExact(ledger: Ledger, path: string, expected: Uint8Array, owner: IssuingFactOwner, existing: Buffer | undefined, onIssue: () => void = () => {}) {
     const guard = () => scope(ledger.id, owner), before = () => { guard(); owner.beforeIssue(); onIssue() }
     if (existing && (existing.length > expected.length || !existing.equals(Buffer.from(expected.subarray(0, existing.length))))) throw new Error('BOOTSTRAP_CONFLICT')
@@ -98,17 +82,18 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
       if (!actual?.equals(Buffer.from(expected))) throw new Error('Capture readback mismatch')
     } finally { await close(ledger, resource) }
   }
-  async function prepareBootstrapCapture(id: string, owner: IssuingFactOwner, reservationBytes: Uint8Array): Promise<BootstrapCaptureReserveOutcome> {
-    const reservation = parseBootstrapCaptureReservation(reservationBytes)
+  async function reserveCapture(id: string, owner: IssuingFactOwner, input: BootstrapCaptureRoute, reservationBytes: Uint8Array): Promise<BootstrapCaptureReserveOutcome> {
+    const route=captureBootstrapCaptureRoute(input), reservation = parseOwnedCaptureReservation(reservationBytes)
+    if(canonicalJsonData(route.request)!==canonicalJsonData(reservation.request)||(route.protocol==='child-v1')!==(reservation.kind==='semantic-bootstrap-child-capture'))throw new TypeError('Reservation route mismatch')
     if (reservation.request.invocation.targetSessionId !== id) throw new TypeError('Capture target mismatch')
     return tracked(id, owner, async ledger => {
       let issued = false
       const guard = () => scope(id, owner)
       try {
         await checkBootstrapCaptureRoot(); await assertNotDeleted('session', id); guard()
-        const paths = bootstrapPaths(filePath(id), reservation.request.invocation)
+        const paths = bootstrapPathsForRoute(filePath(id), routeForReservation(reservation))
         // Recheck the complete namespace immediately before the exclusive issue.
-        const state = await readBootstrapCapture(id, owner, reservation.request)
+        const state = await readCapture(id, owner, route)
         if (state.kind === 'reserved') return { kind: 'present' }
         if (state.kind !== 'absent') return { kind: state.kind === 'conflict' || state.kind === 'materialized' ? 'conflict' : 'unknown' }
         await writeExact(ledger, paths.stage, reservationBytes, owner, undefined, () => { issued = true })
@@ -120,7 +105,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         ledger.diagnostics.push(error)
         const code = (error as NodeJS.ErrnoException).code
         if (!issued && (code === 'FACT_CANCELLED' || code === 'FACT_PRECONDITION_STALE')) return { kind: 'not-issued', reason: code === 'FACT_CANCELLED' ? 'cancelled' : 'stale-source' }
-        if (code === 'EEXIST') { const actual = await readBootstrapCapture(id, owner, reservation.request); return { kind: actual.kind === 'reserved' ? 'present' : actual.kind === 'conflict' ? 'conflict' : 'unknown' } }
+        if (code === 'EEXIST') { const actual = await readCapture(id, owner, route); return { kind: actual.kind === 'reserved' ? 'present' : actual.kind === 'conflict' ? 'conflict' : 'unknown' } }
         return { kind: 'unknown' }
       }
     })
@@ -128,15 +113,19 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
   async function prepareCapturedHeader(id: string, owner: IssuingFactOwner, operation: BootstrapHeaderOperation): Promise<HeaderOutcome> {
     const full = parseBootstrapHeaderStage(operation.stageBytes), reservation = full.captureReservation!
     return tracked(id, owner, async ledger => {
-      const path = filePath(id), paths = bootstrapPaths(path, operation.invocation), guard = () => scope(id, owner)
+      const path = filePath(id), paths = bootstrapPathsForRoute(path, routeForReservation(reservation)), guard = () => scope(id, owner)
       try {
         await checkBootstrapCaptureRoot(); await assertNotDeleted('session', id); guard()
+        const route=routeForReservation(reservation),selected=await lookupBootstrapStage(path,{kind:'route',route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        assertLookupCleanup(ledger)
+        if(selected.kind==='conflict')return{kind:'conflict'}
+        if(route.protocol==='child-v1'&&selected.kind!=='full'&&selected.kind!=='reserved')return{kind:'unknown'}
         const siblings = await bootstrapNamespace(path)
         if (siblings.some(name => name !== basename(paths.stage) && name !== basename(paths.promote))) return { kind: 'conflict' }
         const stage = await bytes(ledger, paths.stage, 262144, guard)
         if (!stage) return { kind: 'unknown' }
         if (!stage.equals(Buffer.from(operation.stageBytes))) {
-          if (!stage.equals(Buffer.from(encodeBootstrapCaptureReservation(reservation)))) return { kind: 'conflict' }
+          if (!stage.equals(Buffer.from(encodeOwnedCaptureReservation(reservation)))) return { kind: 'conflict' }
           const pending = await bytes(ledger, paths.promote, 262144, guard)
           await writeExact(ledger, paths.promote, operation.stageBytes, owner, pending)
           const original = await bytes(ledger, paths.stage, 262144, guard)
@@ -154,15 +143,19 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
   }
   async function reconcileCapturedHeader(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation):Promise<HeaderOutcome> {
     return tracked(id,owner,async ledger=>{
-      const path=filePath(id),paths=bootstrapPaths(path,operation.invocation),guard=()=>scope(id,owner)
+      const full=parseBootstrapHeaderStage(operation.stageBytes),path=filePath(id),paths=bootstrapPathsForRoute(path,routeForReservation(full.captureReservation!)),guard=()=>scope(id,owner)
       try {
         await checkBootstrapCaptureRoot();await assertNotDeleted('session',id);guard()
+        const route=routeForReservation(full.captureReservation!),selected=await lookupBootstrapStage(path,{kind:'route',route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        assertLookupCleanup(ledger)
+        if(selected.kind==='conflict')return{kind:'conflict'}
+        if(route.protocol==='child-v1'&&selected.kind!=='full'&&selected.kind!=='reserved')return{kind:'unknown'}
         const siblings=await bootstrapNamespace(path)
         if(siblings.some(name=>name!==basename(paths.stage)&&name!==basename(paths.promote)))return {kind:'conflict'}
         const stage=await bytes(ledger,paths.stage,262144,guard)
         if(!stage)return {kind:'unknown'}
         if(!stage.equals(Buffer.from(operation.stageBytes))) {
-          const reservation=parseBootstrapCaptureReservation(stage),expected=parseBootstrapHeaderStage(operation.stageBytes).captureReservation
+          const reservation=parseOwnedCaptureReservation(stage),expected=parseBootstrapHeaderStage(operation.stageBytes).captureReservation
           return {kind:canonicalJsonData(reservation)===canonicalJsonData(expected)?'unknown':'conflict'}
         }
         if(siblings.includes(basename(paths.promote)))return {kind:'unknown'}
@@ -189,5 +182,6 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     if (errors.length) throw new AggregateError(errors, 'Original capture IO cleanup unresolved')
     ledger.settled = true
   }
-  return { checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
+  const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
+  return { readCapture, reserveCapture, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }

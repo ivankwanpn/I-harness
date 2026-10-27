@@ -1,16 +1,15 @@
 import { open, readFile, readdir, rename, mkdir, type FileHandle } from 'node:fs/promises'
 import { basename, dirname } from 'node:path'
-import { createHash } from 'node:crypto'
-import { canonicalJsonData, type BootstrapInvocation } from '@i-harness/core-session'
+import { canonicalJsonData } from '@i-harness/core-session'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { isHeldFactOwner, parseBootstrapHeaderStage, parseBootstrapCaptureReservation, rawHeaderDigest, type HeldFactOwner, type BootstrapBackend, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
-import { bootstrapNamespace, createBootstrapCaptureBackend } from './bootstrap-capture.ts'
+import { createBootstrapCaptureBackend } from './bootstrap-capture.ts'
+import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
+export { bootstrapPaths } from './bootstrap-stage.ts'
+import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
+import { preserveBootstrapBirth } from './fact-journal.ts'
 
-export function bootstrapPaths(path: string, invocation: BootstrapInvocation) {
-  const key=createHash('sha256').update(canonicalJsonData(invocation)).digest('hex')
-  return {stage:`${path}.bootstrap-${key}.stage`,promote:`${path}.bootstrap-${key}.promote`,publish:`${path}.bootstrap-${key}.publish`}
-}
 export async function bootstrapArtifacts(path:string):Promise<string[]> {
   const prefix=basename(path)+'.bootstrap-'
   const names=await readdir(dirname(path)).catch((e:NodeJS.ErrnoException)=>{if(e.code==='ENOENT')return [];throw e})
@@ -47,7 +46,7 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> {
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {bootstrapRoutes:BootstrapRouteBackend} {
   const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath)
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
     scope(id,owner)
@@ -63,43 +62,53 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     try{scope(id,owner);await h.sync();scope(id,owner)}finally{await h.close().catch(()=>{})}
     return true
   }
+  async function readState(input:BootstrapRoute):Promise<BootstrapReadState> {
+    const route=captureBootstrapRoute(input),invocation=routeInvocation(route)
+    await assertNotDeleted('session',invocation.targetSessionId)
+    const path=filePath(invocation.targetSessionId),paths=bootstrapPathsForRoute(path,route)
+    let selected=await lookupBootstrapStage(path,{kind:'route',route},ordinaryStageIO(path))
+    const siblings=await bootstrapNamespace(path),stagePresent=siblings.includes(basename(paths.stage)),promotionPresent=siblings.includes(basename(paths.promote)),publicationPresent=siblings.includes(basename(paths.publish))
+    // Preserve the public reader's original publication diagnostics. Selection
+    // still validates the sole exact stage; publicationStatus owns its conflict
+    // disposition in B2. Header/birth and every child lookup remain strict.
+    if(route.protocol==='public'&&selected.kind==='conflict'&&publicationPresent&&!promotionPresent&&siblings.every(n=>n===basename(paths.stage)||n===basename(paths.publish))){
+      const io=ordinaryStageIO(path),publication=basename(paths.publish)
+      const proof=await lookupBootstrapStage(path,{kind:'route',route},{...io,namespace:async()=>(await io.namespace()).filter(n=>n!==publication),read:(p,limit)=>p===paths.publish?Promise.resolve(undefined):io.read(p,limit)})
+      if(proof.kind==='full')selected=proof
+    }
+    const retained={stagePresent,promotionPresent,publicationPresent,foreign:selected.kind==='conflict',...(selected.kind==='reserved'?{captureReservation:selected.reservation}:{}),...(selected.kind==='full'?{stageBytes:selected.exactBytes}:{})}
+    try {
+      if(selected.kind==='conflict'||selected.kind==='unavailable')return{kind:'unavailable',...retained}
+      const promotionBytes=promotionPresent?await bounded(paths.promote,262144):undefined,publicationBytes=publicationPresent?await bounded(paths.publish,65536):undefined
+      const artifacts={...retained,...(promotionBytes?{promotionBytes}:{}),...(publicationBytes?{publicationBytes}:{})}
+      const prefix=await headerPrefix(path)
+      if(!prefix)return selected.kind==='absent'?{kind:'absent'}:{kind:'present',...artifacts}
+      if(prefix.indexOf(10)<0)return{kind:'unavailable',...artifacts}
+      const raw=await optional(path);if(!raw)return{kind:'unavailable',...artifacts}
+      const end=raw.indexOf(10);if(end<0||end+1>65536)return{kind:'unavailable',...artifacts}
+      const rawHeader=raw.subarray(0,end+1).toString('utf8'),meta=parseHeader(rawHeader),journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+      return{kind:'present',...artifacts,rawHeader,meta,...journal}
+    }catch{return{kind:'unavailable',...retained}}
+  }
+  const bootstrapRoutes:BootstrapRouteBackend={readState,readCapture:capture.readCapture,reserveCapture:capture.reserveCapture,async resolveBirth(id){
+    await assertNotDeleted('session',id)
+    const path=filePath(id),raw=await optional(path);if(!raw)return
+    const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))
+    if(!meta.semanticSeed)return
+    const selected=await lookupBootstrapStage(path,{kind:'header',meta},ordinaryStageIO(path))
+    if(selected.kind!=='full')throw new TypeError('Unique bootstrap birth unavailable')
+    const journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+    await preserveBootstrapBirth(path,raw,meta,journal.events)
+    await assertNotDeleted('session',id)
+    return{route:selected.route,stage:selected.stage}
+  }}
   return {
     checkBootstrapCaptureRoot: capture.checkBootstrapCaptureRoot,
     readBootstrapCapture: capture.readBootstrapCapture,
     prepareBootstrapCapture: capture.prepareBootstrapCapture,
     settleBootstrapCaptureIO: capture.settleBootstrapCaptureIO,
-    async readBootstrapState(invocation) {
-      await assertNotDeleted('session',invocation.targetSessionId)
-      const path=filePath(invocation.targetSessionId), paths=bootstrapPaths(path,invocation)
-      const siblings=await bootstrapNamespace(path);let foreign=siblings.some(n=>n!==basename(paths.stage)&&n!==basename(paths.publish)&&n!==basename(paths.promote))
-      let stageBytes:Buffer|undefined, publicationBytes:Buffer|undefined, raw:Buffer|undefined
-      let stagePresent=siblings.includes(basename(paths.stage)), promotionPresent=siblings.includes(basename(paths.promote)), promotionBytes:Buffer|undefined, captureReservation:import('@i-harness/session-persistence').BootstrapCaptureReservation|undefined
-      let publicationPresent=siblings.includes(basename(paths.publish))
-      const retained=()=>({stagePresent,promotionPresent,...(promotionBytes?{promotionBytes}:{}),...(captureReservation?{captureReservation}:{}),...(stageBytes?{stageBytes}:{}),...(publicationBytes?{publicationBytes}:{}),publicationPresent,foreign})
-      try {
-        stageBytes=await bounded(paths.stage,262144)
-        stagePresent ||= stageBytes!==undefined
-        if(stageBytes!==undefined) {
-          try { captureReservation=parseBootstrapCaptureReservation(stageBytes);stageBytes=undefined }
-          catch { try { parseBootstrapHeaderStage(stageBytes!) } catch { stageBytes=undefined;return {kind:'unavailable',...retained()} } }
-        }
-        promotionBytes=await bounded(paths.promote,262144);promotionPresent ||= promotionBytes!==undefined
-        if(promotionPresent&&!captureReservation)foreign=true
-        publicationBytes=await bounded(paths.publish,65536)
-        publicationPresent ||= publicationBytes!==undefined
-        const prefix=await headerPrefix(path)
-        if(!prefix&&!stagePresent&&!promotionPresent&&!publicationPresent&&!foreign)return {kind:'absent'}
-        if(!prefix)return {kind:'present',...retained()}
-        if(prefix.indexOf(10)<0)return {kind:'unavailable',...retained()}
-        raw=await optional(path)
-        if(!raw)return {kind:'unavailable',...retained()}
-        const end=raw.indexOf(10)
-        if(end<0||end+1>65536)return {kind:'unavailable',...retained()}
-        const rawHeader=raw.subarray(0,end+1).toString('utf8'),meta=parseHeader(rawHeader)
-        const journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta)
-        return {kind:'present',...retained(),rawHeader,meta,...journal}
-      } catch { return {kind:'unavailable',...retained()} }
-    },
+    bootstrapRoutes,
+    readBootstrapState:(invocation)=>readState({protocol:'public',invocation}),
     async prepareBootstrapHeader(id,owner,operation) {
       check(id,owner,operation)
       if(parseBootstrapHeaderStage(operation.stageBytes).captureReservation)return capture.prepareCapturedHeader(id,owner,operation)

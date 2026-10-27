@@ -36,7 +36,13 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   async function assertPublicBootstrap(sessionId: string, creating = false) {
     const path = filePath(sessionId)
     const namespace=await bootstrapNamespace(path).catch((error:NodeJS.ErrnoException)=>{if(error.code==='ENOENT')return [];throw error})
-    if (!namespace.length) return
+    if (!namespace.length) {
+      if(creating)return
+      // A retained semantic header does not become an ordinary replacement
+      // merely because its sole birth stage is missing.
+      const header=await readHeader(path)
+      if(!header.semanticSeed)return
+    }
     const prefix=basename(path)+'.bootstrap-'
     if(namespace.some(name=>!(/^[a-f0-9]{64}\.(stage|publish|promote)$/.test(name.slice(prefix.length)))))throw Object.assign(new Error('Unknown bootstrap artifact requires its original owner'),{code:'SESSION_BOOTSTRAP_INCOMPLETE'})
     if (creating) throw Object.assign(new Error('Bootstrap reservation requires its original owner'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' })
@@ -48,7 +54,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     let boundary = end
     const frames = meta.semanticSeed.seedLength ? 2 : 1
     for (let index = 0; index < frames; index++) { boundary = raw.indexOf(10, boundary + 1); if (boundary < 0) throw Object.assign(new Error('bootstrap-incomplete'), { code: 'SESSION_BOOTSTRAP_INCOMPLETE' }) }
-    readFactJournal(raw.subarray(end + 1, boundary + 1), meta.journal!, meta.formatVersion, meta)
+    const birth=raw.subarray(0,boundary+1),decoded=readFactJournal(birth.subarray(end+1),meta.journal!,meta.formatVersion,meta)
+    await preserveBootstrapBirth(path,birth,meta,decoded.events)
   }
   const docPath = (key: string) => artifactPath(key, ".doc.jsonl")
   const tombPath = (kind: string, id: string) => artifactPath(`desktop-deleted-${kind}-${createHash("sha256").update(id).digest("hex")}`, ".tombstone")
@@ -239,7 +246,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       validateDeliveryFrame(events,header.formatVersion)
       if(events.some(event=>event.type.startsWith('agent/delivery-')))validateConversationHistory(events,header.formatVersion,header)
       validateSemanticBootstrapHistory(events, header.formatVersion, header)
-      if (header.semanticSeed && (await bootstrapArtifacts(path)).length) {
+      if (header.semanticSeed) {
         validateConversationHistory(events, header.formatVersion, header)
         const birth = await preserveBootstrapBirth(path, raw, header, events)
         const suffix = events.slice(birth.eventCount)

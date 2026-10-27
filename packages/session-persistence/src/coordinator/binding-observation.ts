@@ -1,3 +1,4 @@
+import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest } from './child-bootstrap-intent.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
@@ -87,11 +88,8 @@ export function createBindingObservations(
     catch { return { kind: 'refused', reason: 'manifest-invalid' } }
     return bootstrapMutation(captured, () => run(captured, capturedGuards, payload))
   }
-  async function withBootstrapCapture(request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>, run: (request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
-    let captured:BootstrapCaptureRequest,capturedGuards:BootstrapGuards
-    try {
-      captured=captureBootstrapCaptureRequest(request)
-      if(!guards||typeof guards!=='object'||utilTypes.isProxy(guards)||typeof capture!=='function'||utilTypes.isProxy(capture))throw new TypeError('Invalid capture arguments')
+  function captureHostGuards(guards:BootstrapGuards,originalPreparationReceiver=false):BootstrapGuards {
+      if(!guards||typeof guards!=='object'||utilTypes.isProxy(guards))throw new TypeError('Invalid capture arguments')
       // Capture host methods by descriptor, preserving their original receiver.
       // This stricter new entry does not alter predecessor generic guard reads.
       const data=(object:object,key:string):unknown=>{
@@ -104,12 +102,35 @@ export function createBindingObservations(
       const method=(object:object,key:string):Function=>{const value=data(object,key);if(typeof value!=='function'||utilTypes.isProxy(value))throw new TypeError('Invalid capture host method');return value}
       const assertCurrent=method(guards,'assertCurrent'),dependencies=data(guards,'dependencies'),signal=data(guards,'signal') as AbortSignal|undefined
       if(!dependencies||typeof dependencies!=='object'||utilTypes.isProxy(dependencies))throw new TypeError('Invalid capture dependencies')
-      const confirm=method(dependencies,'confirm'),reconcile=method(dependencies,'reconcile'),prepared=captureBootstrapGuards(guards)
+      const confirm=method(dependencies,'confirm'),reconcile=method(dependencies,'reconcile')
+      const port=Object.getOwnPropertyDescriptor(guards,'targetPreparation')
+      if(port?!('value'in port)||!port.enumerable:'targetPreparation'in guards)throw TypeError('Invalid target preparation')
+      const prepared=port?.value===undefined?undefined:captureBootstrapTargetPreparationPort(port.value)
+      const targetPreparation=prepared&&originalPreparationReceiver?Object.freeze({confirm(...args:Parameters<NonNullable<BootstrapGuards['targetPreparation']>['confirm']>){return Reflect.apply(prepared.confirm,port!.value,args)},reconcile(...args:Parameters<NonNullable<BootstrapGuards['targetPreparation']>['reconcile']>){return Reflect.apply(prepared.reconcile,port!.value,args)},assertTargetCurrent(){Reflect.apply(prepared.assertTargetCurrent,port!.value,[])}}):prepared
       if(signal!==undefined)Reflect.apply(signalAborted,signal,[])
-      capturedGuards={signal,assertCurrent(){Reflect.apply(assertCurrent,guards,[])},dependencies:{confirm(...args){return Reflect.apply(confirm,dependencies,args)},reconcile(...args){return Reflect.apply(reconcile,dependencies,args)}},targetPreparation:prepared.targetPreparation}
+      return {signal,assertCurrent(){Reflect.apply(assertCurrent,guards,[])},dependencies:{confirm(...args){return Reflect.apply(confirm,dependencies,args)},reconcile(...args){return Reflect.apply(reconcile,dependencies,args)}},targetPreparation}
+  }
+  async function withBootstrapCapture(request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>, run: (request: BootstrapCaptureRequest, guards: BootstrapGuards, capture: () => Promise<BootstrapRequest>) => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+    let captured:BootstrapCaptureRequest,capturedGuards:BootstrapGuards
+    try {
+      captured=captureBootstrapCaptureRequest(request)
+      if(typeof capture!=='function'||utilTypes.isProxy(capture))throw new TypeError('Invalid capture callback')
+      capturedGuards=captureHostGuards(guards)
     }
     catch{return {kind:'refused',reason:'manifest-invalid'}}
     return bootstrapMutation(captured.invocation,()=>run(captured,capturedGuards,capture))
+  }
+  async function withChildBootstrapCapture(request:ChildBootstrapCaptureRequest,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>,run:(request:ChildBootstrapCaptureRequest,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>)=>Promise<BootstrapOutcome>):Promise<BootstrapOutcome> {
+    if(!bootstrapSupported())return{kind:'not-issued',reason:'unsupported'}
+    let captured:ChildBootstrapCaptureRequest,capturedGuards:BootstrapGuards
+    try{captured=captureChildBootstrapCaptureRequest(request);if(typeof capture!=='function'||utilTypes.isProxy(capture))throw TypeError('Invalid child capture callback');capturedGuards=captureHostGuards(guards,true)}catch{return{kind:'refused',reason:'manifest-invalid'}}
+    return bootstrapMutation(captured.invocation,()=>run(captured,capturedGuards,capture))
+  }
+  async function withChildBootstrapResume(request:ChildBootstrapCaptureRequest,guards:BootstrapGuards,originalPayload:BootstrapRequest|undefined,run:(request:ChildBootstrapCaptureRequest,guards:BootstrapGuards,payload?:BootstrapRequest)=>Promise<BootstrapOutcome>):Promise<BootstrapOutcome> {
+    if(!bootstrapSupported())return{kind:'not-issued',reason:'unsupported'}
+    let captured:ChildBootstrapCaptureRequest,capturedGuards:BootstrapGuards,payload:BootstrapRequest|undefined
+    try{captured=captureChildBootstrapCaptureRequest(request);payload=originalPayload===undefined?undefined:captureBootstrapRequest(originalPayload);if(payload&&canonicalJsonData(payload.invocation)!==canonicalJsonData(captured.invocation))throw TypeError('Child payload invocation mismatch');capturedGuards=captureHostGuards(guards,true)}catch{return{kind:'refused',reason:'manifest-invalid'}}
+    return bootstrapMutation(captured.invocation,()=>run(captured,capturedGuards,payload))
   }
   function beginMutation(ids: readonly string[], keys: readonly string[], deleted = false) {
     return admitMutation(ids, keys, deleted, [])
@@ -305,7 +326,7 @@ export function createBindingObservations(
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture,
+  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>
