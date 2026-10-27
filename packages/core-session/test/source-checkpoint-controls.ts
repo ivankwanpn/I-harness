@@ -130,6 +130,17 @@ export function checkpointControls(fixture: () => Promise<CheckpointFixture>, co
     } finally { f.action.finish(); await f.cleanup(true) }
   })
 
+  it.each(['recovery', 'softReduction', 'inputPreparation', 'generation'] as const)('retains invalid %s captures as failed original obligations', async kind => {
+    const f = await fixture(), { owner } = ownerState(), source = f.action.registerSettlementSource(async () => {}, undefined, owner)
+    try {
+      const capture = source[kind].capture({ type: 'wrong' } as never)
+      expect(await capture.observe()).toMatchObject({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' })
+      await expect(source.checkpoint()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      await expect(source.close()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+      expect(() => f.assertOptional()).toThrow(); source.assertHeld()
+    } finally { f.action.finish(); await f.cleanup(true) }
+  })
+
   it.each(['prepare-only', 'capture', 'repeat-hold', 'seal'] as const)('invalidates both awaited owner cuts for %s and keeps the original hold', async mutation => {
     const f = await fixture(), { owner, state, work } = ownerState(); let calls = 0
     const source = f.action.registerSettlementSource(async () => {}, undefined, owner)

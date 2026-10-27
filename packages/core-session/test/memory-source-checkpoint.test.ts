@@ -34,15 +34,6 @@ it('consults shared sticky recovery in an already-registered received-input path
   expect(session.events).toHaveLength(before); action.finish()
 })
 
-it.each(['recovery', 'softReduction', 'inputPreparation', 'generation'] as const)('retains invalid %s captures as failed original obligations', async kind => {
-  const session = createSession(), action = createNondurableFactOwner(session).beginAction(), { owner } = ownerState()
-  const source = action.registerSettlementSource(async () => {}, undefined, owner)
-  const capture = source[kind].capture({ type: 'wrong' } as never)
-  expect(await capture.observe()).toMatchObject({ kind: 'not-issued', code: 'FACT_INVALID_GROUP' })
-  await expect(source.checkpoint()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-  expect(() => createNondurableFactOwner(session).beginAction()).toThrow(); action.finish()
-})
-
 it('does not memoize optional CodeStore hold refusal and installs that exact capture once after release', async () => {
   const session = createSession(), action = createNondurableFactOwner(session).beginAction(), { owner } = ownerState()
   const source = action.registerSettlementSource(async () => {}, undefined, owner)
