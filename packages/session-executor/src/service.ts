@@ -326,7 +326,71 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const notificationAdmissions = new Map<string, Promise<void>>()
   const notificationInputs = new Map<string, Set<string>>()
   const notificationControllers = new Map<string, Map<string, AbortController>>()
-  const notificationStops = new Set<Promise<void>>()
+  type NotificationStop = {
+    readonly inputId: string; readonly reason: 'parent stopped'
+    inFlight?: Promise<boolean>; succeeded?: Promise<boolean>; lastAttempt?: Promise<boolean>
+  }
+  type NotificationStopOwner = { readonly sessionId: string; readonly assembly: SessionAssembly; readonly stops: Map<string, NotificationStop> }
+  const notificationStops = new Map<SessionAssembly, NotificationStopOwner>()
+  const assemblyDisposals = new WeakMap<SessionAssembly, { acknowledged: boolean; inFlight?: Promise<void>; succeeded?: Promise<void> }>()
+  function releaseNotificationStops(assembly: SessionAssembly): void {
+    if (!assemblyDisposals.get(assembly)?.acknowledged) return
+    const owner = notificationStops.get(assembly)
+    if (!owner) return
+    for (const [inputId, stop] of owner.stops) if (stop.succeeded) owner.stops.delete(inputId)
+    if (!owner.stops.size) notificationStops.delete(assembly)
+  }
+  function stopNotification(id: string, assembly: SessionAssembly, inputId: string): Promise<boolean> {
+    let owner = notificationStops.get(assembly)
+    if (!owner) { owner = { sessionId: id, assembly, stops: new Map() }; notificationStops.set(assembly, owner) }
+    let stop = owner.stops.get(inputId)
+    if (!stop) { stop = { inputId, reason: 'parent stopped' }; owner.stops.set(inputId, stop) }
+    if (stop.inFlight || stop.succeeded) return (stop.inFlight ?? stop.succeeded)!
+    let attempt: Promise<boolean>
+    try { attempt = assembly.inbox.cancel(inputId, stop.reason) } catch (error) { attempt = Promise.reject(error) }
+    stop.inFlight = stop.lastAttempt = attempt
+    const record = stop
+    void attempt.then(() => {
+      record.succeeded = attempt
+      if (record.inFlight === attempt) record.inFlight = undefined
+      releaseNotificationStops(assembly)
+    }, () => { if (record.inFlight === attempt) record.inFlight = undefined })
+    return attempt
+  }
+  function startNotificationStops(sessionId?: string): Map<NotificationStop, Promise<boolean>> {
+    const attempts = new Map<NotificationStop, Promise<boolean>>()
+    for (const owner of notificationStops.values()) {
+      if (sessionId !== undefined && owner.sessionId !== sessionId) continue
+      for (const stop of owner.stops.values()) attempts.set(stop, stopNotification(owner.sessionId, owner.assembly, stop.inputId))
+    }
+    return attempts
+  }
+  async function joinNotificationStops(attempts: Map<NotificationStop, Promise<boolean>>, sessionId?: string): Promise<void> {
+    // Admissions have joined. Include their late records on their original
+    // attempt, retaining failures even after the live assembly was removed.
+    for (const owner of notificationStops.values()) {
+      if (sessionId !== undefined && owner.sessionId !== sessionId) continue
+      for (const stop of owner.stops.values()) if (!attempts.has(stop)) attempts.set(stop, stop.lastAttempt!)
+    }
+    const results = await Promise.allSettled(attempts.values())
+    const errors = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason)
+    if (errors.length) throw new AggregateError(errors, 'Parent notification Stop requires reconciliation')
+  }
+  function disposeOwnedAssembly(assembly: SessionAssembly): Promise<void> {
+    let row = assemblyDisposals.get(assembly)
+    if (!row) { row = { acknowledged: false }; assemblyDisposals.set(assembly, row) }
+    if (row.inFlight || row.succeeded) return (row.inFlight ?? row.succeeded)!
+    let attempt: Promise<void>
+    try { attempt = assembly.dispose() } catch (error) { attempt = Promise.reject(error) }
+    row.inFlight = attempt
+    const record = row
+    void attempt.then(() => {
+      record.acknowledged = true; record.succeeded = attempt
+      if (record.inFlight === attempt) record.inFlight = undefined
+      releaseNotificationStops(assembly)
+    }, () => { if (record.inFlight === attempt) record.inFlight = undefined })
+    return attempt
+  }
   const deliveryDrains = new Map<string, ReturnType<typeof createDeliveryDrain>>()
   const deliveryStops = new Map<string, { delivery: ReturnType<typeof receivedInputsFor>['delivery']; fenceId: string; settleSources?: () => Promise<void> }>()
   function requestDeliveryStop(id: string) {
@@ -342,15 +406,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     await request?.settleSources?.()
     return request?.delivery.closeReceipt(request.fenceId)
   }
-  function stopNotifications(id: string): void {
+  function stopNotifications(id: string, attempts?: Map<NotificationStop, Promise<boolean>>): void {
     cancelledParents.add(id)
     for (const controller of notificationControllers.get(id)?.values() ?? []) controller.abort()
     const assembly = assemblies.get(id)
     for (const input of assembly?.inbox.pending() ?? []) {
       if (input.intent !== "system" || !input.inputId.startsWith("parent-notify-")) continue
-      const job = assembly!.inbox.cancel(input.inputId, 'parent stopped').then(() => {})
-      notificationStops.add(job)
-      void job.catch(() => {}).finally(() => notificationStops.delete(job))
+      const job = stopNotification(id, assembly!, input.inputId)
+      attempts?.set(notificationStops.get(assembly!)!.stops.get(input.inputId)!, job)
     }
   }
   function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
@@ -384,7 +447,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             await assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", provenance: { kind: input.display && ["task", "team-message", "team-result"].includes(input.display.kind) ? "child-report" : "plugin", authority: "observation", scope: "turn", producer: "session.notification" }, synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
           }
           if (closed || closing.has(id) || cancelledParents.has(id)) {
-            await assembly.inbox.cancel(inputId, "parent stopped during admission")
+            await stopNotification(id, assembly, inputId)
             throw new ParentNotificationStoppedError()
           }
           let inputs = notificationInputs.get(id)
@@ -728,7 +791,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             }
           } catch (error) {
             revokeSession(sessionId)
-            try { await assembly.dispose() }
+            try { await disposeOwnedAssembly(assembly) }
             catch (cleanup) { throw new AggregateError([error, cleanup], "Assembly extension mount and cleanup failed", { cause: error }) }
             mountingAssemblies.delete(sessionId)
             removeSurface(sessionId, assembly)
@@ -736,7 +799,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           }
         }
         if (closed || closing.has(sessionId)) {
-          await assembly.dispose()
+          await disposeOwnedAssembly(assembly)
           mountingAssemblies.delete(sessionId)
           removeSurface(sessionId, assembly)
           throw new Error(closed ? "session service closed" : `session closing: ${sessionId}`)
@@ -1140,11 +1203,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size && !defaultInstructions) return
+    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && notificationStops.size === 0 && !resultReader.size && !defaultInstructions) return
     closed = true
+    const stopAttempts = startNotificationStops()
     defaultInstructions?.dispose()
     for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
-      revokeSession(id); stopNotifications(id)
+      revokeSession(id); stopNotifications(id, stopAttempts)
     }
     const [readerJoined] = await Promise.allSettled([
       resultReader.join(),
@@ -1154,7 +1218,6 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...modelBindings.values(),
       ...closing.values(),
       ...notificationAdmissions.values(),
-      ...notificationStops,
       ...[...deliveryDrains.values()].map(drain => drain.join()),
     ])
     executionListeners.clear()
@@ -1163,9 +1226,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
     const failures: unknown[] = readerJoined!.status === 'rejected' ? [readerJoined!.reason] : []
+    try { await joinNotificationStops(stopAttempts) } catch (error) { failures.push(error) }
     for (const [id, handle] of ownedAssemblies()) {
       try {
-        await handle.dispose()
+        await disposeOwnedAssembly(handle)
         assemblies.delete(id); mountingAssemblies.delete(id); writableSessions.delete(id); inputInboxes.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
         removeSurface(id, handle)
       } catch (error) { failedClose.add(id); failures.push(error) }
@@ -1197,9 +1261,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   function closeSession(sessionId: string): Promise<void> {
     revokeSession(sessionId)
-    stopNotifications(sessionId)
     const existing = closing.get(sessionId)
     if (existing !== undefined) return existing
+    const stopAttempts = startNotificationStops(sessionId)
+    const retainedStopOwner = [...notificationStops.values()].some(owner => owner.sessionId === sessionId)
+    stopNotifications(sessionId, stopAttempts)
     let pending!: Promise<void>
     pending = (async () => {
       let readerFailure: unknown
@@ -1212,20 +1278,30 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (writer !== undefined) await writer.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
-      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops, deliveryDrains.get(sessionId)?.join()])
+      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), deliveryDrains.get(sessionId)?.join()])
+      let stopFailure: unknown
+      try { await joinNotificationStops(stopAttempts, sessionId) } catch (error) { stopFailure = error }
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
       try {
-        if (handle) await handle.dispose()
+        if (handle) await disposeOwnedAssembly(handle)
         else if (build?.cleanup) await build.cleanup()
-        else await opts.coordinator?.closeManagedDocument(sessionId)
+        else if (!retainedStopOwner || writableSessions.has(sessionId)) await opts.coordinator?.closeManagedDocument(sessionId)
         if (build && creating.get(sessionId) === build) creating.delete(sessionId)
       }
       catch (error) {
         failedClose.add(sessionId)
-        if (readerFailure !== undefined) throw new AggregateError([readerFailure, error], 'Session process cleanup incomplete')
+        const failures: unknown[] = []
+        if (readerFailure !== undefined) failures.push(readerFailure)
+        if (stopFailure !== undefined) failures.push(stopFailure)
+        failures.push(error)
+        if (failures.length > 1) throw new AggregateError(failures, 'Session process cleanup incomplete')
         throw error
       }
-      if (readerFailure !== undefined) { failedClose.add(sessionId); throw readerFailure }
+      if (readerFailure !== undefined) {
+        failedClose.add(sessionId)
+        if (stopFailure !== undefined) throw new AggregateError([readerFailure, stopFailure], 'Session process cleanup incomplete')
+        throw readerFailure
+      }
       failedClose.delete(sessionId)
       assemblies.delete(sessionId)
       mountingAssemblies.delete(sessionId)
@@ -1239,6 +1315,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       executionSubscriptions.get(sessionId)?.()
       executionSubscriptions.delete(sessionId)
       notifyExecutionState(sessionId)
+      if (stopFailure !== undefined) throw stopFailure
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
     })

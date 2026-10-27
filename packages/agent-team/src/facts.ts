@@ -11,16 +11,15 @@ export function teamFactOwner(view: SessionView, supplied?: FactOwner): FactOwne
 }
 /** Tool cancellation context is scheduling data, never a write capability. */
 export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promise<void>, committed: () => void, retainFactsCleanup?: (close: () => Promise<void>) => void) {
-    const signals = new AsyncLocalStorage<{
-        signal?: AbortSignal;
-    }>();
+    const signals = new AsyncLocalStorage<Run>();
     type Transaction = {
         kind: 'transaction';
         action: ManagedAction<ProducerFactOutcome>;
         fact: CapturedActionFact<ProducerFactOutcome>;
+        attempted: boolean;
     };
     type Message = MessageObligation & { kind: 'message'; failed(error: unknown): void };
-    type Run = { kind: 'run'; done: Promise<void> };
+    type Run = { kind: 'run'; action: ManagedAction<ProducerFactOutcome>; active: boolean; done: Promise<void> };
     const transactions = new Map<readonly TeamEvent[], Transaction | Message | Run>();
     let retired = false;
     const action = owner.beginAction();
@@ -37,7 +36,7 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
     };
     try {
         retainFactsCleanup?.(close);
-        source = action.registerSettlementSource(() => initializing && transactions.size === 0 ? Promise.resolve() : drainTransactions());
+        source = action.registerSettlementSource(() => signals.exit(() => initializing && transactions.size === 0 ? Promise.resolve() : drainTransactions()));
         finishAction();
         initializing = false;
     } catch (error) {
@@ -49,6 +48,32 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
         throw error;
     }
     const assertOpen = () => { if (retired) throw Object.assign(new Error('Team message admission is closed'), { code: 'FACT_CLOSED' }); };
+    const currentRunSignal = () => {
+        const run = signals.getStore();
+        if (run) {
+            if (!run.active) throw Object.assign(new Error('Team operation has finished'), { code: 'FACT_CLOSED' });
+            run.action.assertOpen();
+        }
+        return run?.action.signal;
+    };
+    const beginCandidate = () => {
+        assertOpen();
+        const candidate = owner.beginAction(currentRunSignal());
+        let adopted = false, finished = false;
+        const abandon = () => { if (!adopted && !finished) { finished = true; candidate.finish(); } };
+        try { candidate.assertOpen(); } catch (error) { abandon(); throw error; }
+        return {
+            capture(events: readonly TeamEvent[]) {
+                if (adopted || finished) throw new Error('Team candidate already transferred or abandoned');
+                try {
+                    const fact = candidate.captureTeamTransaction(events);
+                    transactions.set(events, { kind: 'transaction', action: candidate, fact, attempted: false });
+                    adopted = true;
+                } catch (error) { abandon(); throw error; }
+            },
+            abandon,
+        };
+    };
     const findMessage = (queued: Queued) => {
         for (const record of transactions.values()) {
             if (record.kind !== 'message' || record.queueEvents[0].message.id !== queued.message.id) continue;
@@ -59,18 +84,25 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
     return {
         run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
             assertOpen();
+            const action = owner.beginAction(signal);
+            try { action.assertOpen(); } catch (error) { action.finish(); throw error; }
             // Retain accepted outer work before its first acquisition await.
             // The original caller still owns its result/error; cleanup joins a
             // resolving sentinel and never invokes the work a second time.
             const key: readonly TeamEvent[] = [], done = Promise.withResolvers<void>();
-            transactions.set(key, { kind: 'run', done: done.promise });
-            const release = () => { transactions.delete(key); done.resolve(); };
+            const run: Run = { kind: 'run', action, active: true, done: done.promise };
+            transactions.set(key, run);
+            const release = () => {
+                try { action.finish(); }
+                finally { run.active = false; transactions.delete(key); done.resolve(); }
+            };
             try {
-                const running = signals.run({ signal }, work);
-                void running.then(release, release);
-                return running;
+                const running = signals.run(run, work);
+                return running.then(value => { release(); return value; }, error => { release(); throw error; });
             } catch (error) { release(); throw error; }
         },
+        withoutRun<T>(work: () => T): T { return signals.exit(work); },
+        beginCandidate,
         async joinRuns(): Promise<void> {
             // Only the external retiring owner joins outer work. In particular,
             // the native source producer must not join an operation awaiting it.
@@ -80,13 +112,14 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
             let pending = transactions.get(events);
             if (pending?.kind === 'message') throw new Error('Message queue is not a generic transaction');
             if (pending?.kind === 'run') throw new Error('Team operation is not a generic transaction');
-            const existing = !!pending;
             if (!pending) {
-                const action = owner.beginAction(signals.getStore()?.signal);
-                pending = { kind: 'transaction', action, fact: action.captureTeamTransaction(events) };
-                transactions.set(events, pending);
+                const candidate = beginCandidate();
+                try { candidate.capture(events); } finally { candidate.abandon(); }
+                pending = transactions.get(events) as Transaction;
             }
-            const outcome = await (existing ? pending.fact.reconcile() : pending.fact.admit());
+            const attempted = pending.attempted;
+            pending.attempted = true;
+            const outcome = await (attempted ? pending.fact.reconcile() : pending.fact.admit());
             if (pending.action.signal.aborted && (outcome.kind === 'absent' || outcome.kind === 'not-issued')) {
                 pending.action.finish();
                 transactions.delete(events);
@@ -101,6 +134,7 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
             const existing = findMessage(queued);
             if (existing) return existing;
             assertOpen();
+            const signal = currentRunSignal();
             // Clone and freeze the fixed tuple before asynchronous admission.
             const freeze = <T>(value: T): T => {
                 if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
@@ -109,7 +143,8 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
             const original = freeze(structuredClone(queued));
             const queueEvents = Object.freeze([original]) as readonly [Queued];
             const ack: Ack = Object.freeze({ type: 'team/message/delivered', version: 1, teamId: original.teamId, messageId: original.message.id, targetId: original.message.targetId });
-            const admission = owner.beginAction(signals.getStore()?.signal);
+            const admission = owner.beginAction(signal);
+            try { admission.assertOpen(); } catch (error) { admission.finish(); throw error; }
             let queueFact: CapturedActionFact<ProducerFactOutcome> | undefined;
             let queueAttempted = false, installed = mode === 'existing', neverIssued = false;
             let driver: Promise<MailboxResult> | undefined, driverDone: Promise<void> | undefined;

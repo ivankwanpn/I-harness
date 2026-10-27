@@ -203,7 +203,7 @@ export async function mountAgentTeams(
       void attempt.then(clear, clear)
       return attempt
     },
-    async drainLeadMessages() { if (phase === 'open') await mailbox?.recoverRoot(teamId) },
+    async drainLeadMessages() { if (phase === 'open') await lead!.withoutRun(() => mailbox!.recoverRoot(teamId)) },
   }
   // Every failure path invokes this same shell; only acknowledged resource
   // cleanup releases its reservation.
@@ -211,7 +211,7 @@ export async function mountAgentTeams(
     deps.retainMount?.(handle)
     assertConstructing()
     const sub = deps.subagents
-    completions = createCompletionJobs(sub, state, cfg, isRetired, () => mailbox!, () => activity!)
+    completions = createCompletionJobs(sub, state, cfg, isRetired, () => mailbox!, () => activity!, work => lead!.withoutRun(work))
     const { teamJobs } = completions
     let teamToolNames: string[] = []
     // Teammate role tool surface (Minor 5): derived from the CREATED team tools
@@ -306,10 +306,10 @@ export async function mountAgentTeams(
     // ---- recovery (crash restore), BEFORE the tools are live ----
     // (a) reconcile stuck provisioning members (provisioning→active if the
     //     child session is durable, else failed) — CROSS-TASK CARRY (Ruling 11).
-    await roster.reconcileProvisioning()
+    await lead.withoutRun(() => roster.reconcileProvisioning())
     assertConstructing()
     // (b) replay queued−delivered messages to their targets (at-least-once).
-    await mailbox.recoverRoot()
+    await lead.withoutRun(() => mailbox!.recoverRoot())
     assertConstructing()
 
     // ---- register the tools ----

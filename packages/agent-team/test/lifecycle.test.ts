@@ -64,6 +64,136 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it('native revoke before the accepted real spawn reaches its first serial callback installs no candidate', async () => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    let spawns = 0, captures = 0
+    const begin = f.document.beginAction.bind(f.document)
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), capture = action.captureTeamTransaction.bind(action)
+      action.captureTeamTransaction = events => { captures++; return capture(events) }
+      return action
+    }
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
+      spawnChild: async () => { spawns++; return { path: 'lead/queued', jobId: 'queued', sessionId: 'queued' } },
+    }))
+    const pending = tools.get('spawn_teammate')!.execute({ name: 'queued', description: 'd', prompt: 'work' }, {})
+    f.document.revokeNewWork()
+    try {
+      await expect(pending).rejects.toMatchObject({ code: 'FACT_CLOSED' })
+      expect([spawns, captures]).toEqual([0, 0]); expect(f.document.view.events).toHaveLength(0)
+      await handle.unmount()
+    } finally { await handle.unmount(); await f.coordinator.close() }
+  })
+
+  it.each([false, true])('native recovery probe owns independent candidate admission (revoke=%s)', async revoke => {
+    const f = await ownedTeamFixture([{ type: 'team/member', version: 1, teamId: 'recover', member: {
+      id: 'recover-child', name: 'recover', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning', sessionId: 'recover-child',
+    } }])
+    const ctx = createContext(), tools = createToolRegistry(ctx), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    let captures = 0
+    const begin = f.document.beginAction.bind(f.document)
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), capture = action.captureTeamTransaction.bind(action)
+      action.captureTeamTransaction = events => { captures++; return capture(events) }
+      return action
+    }
+    const mounting = mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
+      childSessionIsDurable: async () => { entered.resolve(); await release.promise; return true },
+    }))
+    await entered.promise
+    if (revoke) f.document.revokeNewWork()
+    release.resolve()
+    const handle = await mounting
+    try {
+      expect(captures).toBe(revoke ? 0 : 1)
+      expect(f.document.view.events.filter(event => event.type === 'team/member').map(event => event.member.phase)).toEqual(revoke ? ['provisioning'] : ['provisioning', 'active'])
+      await handle.unmount()
+    } finally { release.resolve(); await handle.unmount(); await f.coordinator.close() }
+  })
+
+  it.each([false, true])('independent completion clears inherited Run context before retention/message work (origin still active=%s)', async active => {
+    const f = await ownedTeamFixture(), deps = makeDeps(), state = foldTeam([]).state
+    state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'spawn', context: 'fresh', phase: 'active' })
+    const actions: ReturnType<typeof f.document.beginAction>[] = [], begin = f.document.beginAction.bind(f.document)
+    f.document.beginAction = (...args) => { const action = begin(...args); actions.push(action); return action }
+    const lead = createTeamFacts(f.document, () => tx.drain(), () => {}), tx = createTeamTransact(lead, state)
+    let calls = 0
+    const mailbox = createMailbox({ teamId: 'completion-owner', state, transact: tx, memberStatus: () => 'idle',
+      deliver: async () => { calls++; return { kind: 'consumed', via: 'target', sendFailure: { occurred: false } } },
+    })
+    const { id } = deps.subagents.jobs.registerJob('root', 'subagent', 'helper')
+    const entry = { path: 'lead/helper', jobId: id, status: 'waiting' as const, session: createSession(), controller: new AbortController(), mailbox: [] }
+    deps.subagents.table.add(entry.path, entry)
+    const release = Promise.withResolvers<void>(), endOrigin = Promise.withResolvers<void>()
+    const completion = createCompletionJobs(deps.subagents, state, { maxMembers: 8, maxTasks: 256, maxPendingMessagesPerMember: 64, maxMessageBytes: 65_536, startupTimeoutMs: 10_000, waitMinMs: 10_000, waitMaxMs: 3_600_000, waitDefaultMs: 30_000 }, () => false, () => mailbox, () => ({ notify() {} }), work => lead.withoutRun(work))
+    let completing!: Promise<void>
+    const origin = lead.run(undefined, async () => {
+      completing = release.promise.then(async () => { completion.teamJobs.updateJob(id, { status: 'completed', output: 'original independent result' }); await completion.joinCompletions() })
+      if (active) await endOrigin.promise
+    })
+    try {
+      if (!active) await origin
+      release.resolve(); await completing
+      expect(calls).toBe(1)
+      expect(actions).toHaveLength(3) // native source, origin Run, independent message
+      expect(actions[2]).not.toBe(actions[1])
+      expect(f.document.view.events.map(event => event.type)).toEqual(['team/message/queued', 'team/message/delivered'])
+      endOrigin.resolve(); await origin
+      await lead.close()
+    } finally { release.resolve(); endOrigin.resolve(); await origin; await completing; await lead.close(); await f.coordinator.close() }
+  })
+
+  it.each([
+    ['list_members', {}],
+    ['team_task_create', { subject: 'valid task', description: 'd' }],
+    ['team_task_list', {}],
+    ['spawn_teammate', { name: 'late', description: 'd', prompt: 'work' }],
+  ] as const)('native revoke fences the retained real %s tool before its body', async (name, args) => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    let spawns = 0, deliveries = 0
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({ allowConcurrentTeams: true, parentSession: f.document.view, factOwner: f.document,
+      spawnChild: async () => { spawns++; return { path: 'lead/late', jobId: 'late', sessionId: 'late' } },
+      deliver: async () => { deliveries++; return true },
+    }))
+    const retained = tools.get(name)!
+    f.document.revokeNewWork()
+    try {
+      const result = await Promise.resolve().then(() => retained.execute(args, {})).catch(error => error)
+      expect(result).toMatchObject({ code: 'FACT_CLOSED' })
+      expect([spawns, deliveries]).toEqual([0, 0]); expect(f.document.view.events).toHaveLength(0)
+      await handle.unmount()
+    } finally { await handle.unmount().catch(() => {}); await f.coordinator.close().catch(() => {}) }
+  })
+
+  it.each(['success', 'failure'] as const)('native revoke during accepted child acquisition blocks the later %s candidate', async outcome => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const failure = new Error('original acquisition failed')
+    let childCloses = 0, captures = 0
+    const begin = f.document.beginAction.bind(f.document)
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), capture = action.captureTeamTransaction.bind(action)
+      action.captureTeamTransaction = events => { captures++; return capture(events) }
+      return action
+    }
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({ allowConcurrentTeams: true, parentSession: f.document.view, factOwner: f.document,
+      spawnChild: async () => { entered.resolve(); await release.promise; if (outcome === 'failure') throw failure; return { path: 'lead/held', jobId: 'held', sessionId: 'held' } },
+      childSessionHoldsPrompt: async () => true,
+      closeChild: async () => { childCloses++ },
+    }))
+    const pending = Promise.resolve(tools.get('spawn_teammate')!.execute({ name: 'held', description: 'd', prompt: 'work' }, {})).catch(error => error)
+    try {
+      await entered.promise; f.document.revokeNewWork(); release.resolve()
+      const result = await pending
+      if (outcome === 'failure') expect(result).toBe(failure)
+      else expect(result).toMatchObject({ code: 'FACT_CLOSED' })
+      expect(captures).toBe(1)
+      expect(f.document.view.events.filter(event => event.type === 'team/member').map(event => event.member.phase)).toEqual(['provisioning'])
+      expect(childCloses).toBe(outcome === 'failure' ? 1 : 0)
+      await handle.unmount()
+    } finally { release.resolve(); await pending; await handle.unmount().catch(() => {}); await f.coordinator.close().catch(() => {}) }
+  })
+
   it.each(['child-first', 'ack-first'] as const)('joins original accepted child acquisition before freezing cleanup membership (%s)', async order => {
     const f = await ownedTeamFixture([
       { type: 'team/member', version: 1, teamId: 'acquisition-team', member: { id: 'target-id', name: 'target', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
@@ -158,7 +288,9 @@ describe("mountAgentTeams lifecycle", () => {
       expect(deps.subagents.table.get('lead/late')).toBe(exactEntry)
       expect(cleanupSettled).toBe(false)
       releaseAck.resolve(); await sending
-      expect(await spawning).toMatchObject({ value: { member: { name: 'late' } } })
+      // The accepted acquisition is still joined and cleaned, but its later
+      // active candidate is new work and loses the retirement fence.
+      expect(await spawning).toMatchObject({ error: { code: 'FACT_CLOSED' } })
       await debtWork
       const failure = await closing
       expect(failure.errors.length).toBeGreaterThan(0)
@@ -222,7 +354,7 @@ describe("mountAgentTeams lifecycle", () => {
       await expect(spawning).rejects.toBe(error)
       await expect(handle.unmount()).resolves.toBeUndefined()
       expect(attempts).toBe(1)
-      expect(f.document.view.events.filter(event => event.type === 'team/member').map(event => event.member.phase)).toEqual(['provisioning', 'failed'])
+      expect(f.document.view.events.filter(event => event.type === 'team/member').map(event => event.member.phase)).toEqual(['provisioning'])
       expect(f.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(0)
     } finally { release.resolve(); await original; await first; await f.coordinator.close() }
   })

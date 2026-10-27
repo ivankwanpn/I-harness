@@ -18,6 +18,7 @@ export interface MessageObligation {
     settle(): Promise<void>;
 }
 export interface TeamLead {
+    beginCandidate?(): { capture(events: readonly TeamEvent[]): void; abandon(): void };
     commit(events: readonly TeamEvent[]): Promise<void>;
     onCommit?(): void;
     reserveMessage?(queued: Queued, mode: 'enqueue' | 'existing', installAck: InstallAck): MessageObligation;
@@ -154,24 +155,26 @@ export function createTeamTransact(lead: TeamLead, state?: TeamFoldState): TeamT
         }): Promise<T> {
             return serial(async () => {
                 await settle();
-                if (!shared)
-                    shared = createFoldState();
-                // fn runs against the throwaway clone, never the live state.
-                const snapshot = cloneState(shared);
-                const out = fn(snapshot);
-                if (out.events && out.events.length > 0) {
-                    // Validate every candidate in order (zod + invariants) against the
-                    // snapshot, which accumulates the candidates as they validate (so
-                    // [provisioning, active] chains correctly). A violation throws HERE,
-                    // before anything reaches the live state or the log.
-                    for (const e of out.events)
-                        applyTeamEvent(snapshot, e);
-                    // Keep the exact candidate through unknown. The next operation or
-                    // owning source drain settles it before invoking another pure fn.
-                    pending = out.events;
-                    await settle();
-                }
-                return out.result;
+                const candidate = lead.beginCandidate?.();
+                try {
+                    if (!shared)
+                        shared = createFoldState();
+                    // No await separates admission from the pure callback,
+                    // validation, original capture and pending installation.
+                    const snapshot = cloneState(shared);
+                    const out = fn(snapshot);
+                    if (out.events && out.events.length > 0) {
+                        // Validate all candidates against the throwaway clone.
+                        for (const e of out.events)
+                            applyTeamEvent(snapshot, e);
+                        // Keep the exact captured candidate through unknown;
+                        // the next operation/drain settles it without replay.
+                        candidate?.capture(out.events);
+                        pending = out.events;
+                        await settle();
+                    }
+                    return out.result;
+                } finally { candidate?.abandon(); }
             });
         },
     };

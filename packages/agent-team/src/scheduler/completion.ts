@@ -15,6 +15,7 @@ export function createCompletionJobs(
   isUnmounted: () => boolean,
   getMailbox: () => Pick<ReturnType<typeof createMailbox>, "sendMessage">,
   getActivity: () => Pick<ReturnType<typeof createActivity>, "notify">,
+  withoutRun: <T>(work: () => T) => T = work => work(),
 ) {
   const completionJobs = new Set<{ done: Promise<void>; failure: Failure; errorDelivered: boolean }>()
   let sealed = false
@@ -62,7 +63,7 @@ export function createCompletionJobs(
     const done = Promise.withResolvers<void>()
     const record: { done: Promise<void>; failure: Failure; errorDelivered: boolean } = { done: done.promise, failure: { occurred: false }, errorDelivered: false }
     completionJobs.add(record)
-    const job = (async () => {
+    const job = withoutRun(async () => {
       if (sub.reportPolicy) {
         sub.table.update(entry[0], entry[1], { retention: "pending", retentionError: undefined })
         const retention = await sub.retainResults?.() ?? "memory"
@@ -75,7 +76,7 @@ export function createCompletionJobs(
       return getMailbox().sendMessage({ id: member.id, name, role: "teammate" }, "lead", content, "quiet", undefined, {
         kind: "team-result", title: `${patch.status === "completed" ? "Team reply ended" : "Team reply error"}: ${name}`, body: displayBody,
       })
-    })()
+    })
     void (async () => {
       try { await job }
       catch (error) {
