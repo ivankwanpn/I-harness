@@ -2,6 +2,8 @@
 
 Requested assessment: how much remains and whether a version can be released before the complete integrated0.1.13 plan. This report assesses an early repair candidate; it does not claim a published build or a passing whole-release gate.
 
+Subsequent user direction: continue the original development plan, not release preparation or publication. The assessment below is historical; no version bump, tag, build/upload or candidate-scope reduction is being pursued now. The40 reachability rows remain a later integrated source-disposition gate; staged APIs must not be removed or baseline-exempted merely to accelerate an early release.
+
 ## Current source and existing release
 
 - Development MAIN is0309a75a918237727355200917f3e9a4d59a51be at this check, with CodeMode owner-lifetime Tasks1–5 accepted and resident activation/cleanupR1–R2 integrated. Required narrowed main scopes have passed: CodeMode183 and actual mounted3; resident subagent57, executor30 and Team87. These are separate, overlapping scopes, not an entire-release result.
