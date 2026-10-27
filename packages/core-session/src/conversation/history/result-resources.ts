@@ -147,7 +147,7 @@ export function createResultResourceLedger(context: CompletedPassiveContext) {
       const extent = context.source.turns.extents.get(fact.index)!
       for (const observation of fact.resultDeclarations ?? []) all.push({ fact, original: { kind: 'local', sessionId: context.owner.sourceSessionId, seq: fact.seq!, ...observation.address }, extent, protocol: 'managed', ref: observation.ref, use: observation.use, represented: ledger.represented.get(fact.index) })
       if (fact.legacyResult) all.push({ fact, original: { kind: 'local', sessionId: context.owner.sourceSessionId, seq: fact.seq!, event: 'context/result-ref', slot: 'ref' }, extent, protocol: 'legacy', ref: fact.legacyResult })
-      for (const [item, descriptor] of (fact.seedItems ?? []).entries()) for (const use of descriptor.resultUses) {
+      for (const [item, descriptor] of (context.source.view.events[0]?.type === 'conversation/seed-manifest' && context.source.view.events[0].version === 3 ? [] : fact.seedItems ?? []).entries()) for (const use of descriptor.resultUses) {
         const ref = manifest?.seedArtifacts?.[use.artifact]
         if (!ref) throw new TypeError('unsupported-history')
         all.push({ fact, original: { kind: 'seed-use', sessionId: context.owner.sourceSessionId, seq: fact.seq!, event: 'conversation/seed-group', item, result: use.result, slot: use.slot },

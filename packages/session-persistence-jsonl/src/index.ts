@@ -1,7 +1,7 @@
 import { lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import { basename, dirname, isAbsolute, posix, relative, resolve, sep, win32 } from "node:path"
-import { validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { validateDeliveryFrame, CURRENT_FORMAT_VERSION, isContextEventType, validContextEvent, validateConversationEventShape, validateConversationHistory, validateSemanticBootstrapHistory, validateSubagentHeader, legacyPrefixDigest, readFactJournal, encodeFactBatch, type SessionEvent } from "@i-harness/core-session"
 import type { PersistenceBackend, SessionMeta } from "@i-harness/session-persistence"
 import { serializeHeader, parseHeader, parseEventLines, hasTornTail, snapshotMetadataUpdate } from "./format.ts"
 import { replaceSessionFile, replaceRawSessionFile } from "./backend/session-io.ts"
@@ -113,6 +113,8 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     deletionReceipt,
 
     async create(sessionId: string, meta: SessionMeta): Promise<void> {
+      validateSubagentHeader(meta)
+      if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy create cannot install selected results')
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId, true)
       if (meta.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error("new session writers require current format; downgrade refused")

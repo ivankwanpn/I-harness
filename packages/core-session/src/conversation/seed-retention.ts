@@ -9,6 +9,7 @@ import { historyFact } from './history/facts.ts'
 import { historyTurns, turnIntervals } from './history/turns.ts'
 import { createSemanticSourceConversationIndex } from './validation.ts'
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
+import { seedLayout } from './seed-layout.ts'
 
 type Anchor = { kind: 'manifest'; seq: 0 } | { kind: 'seed-group'; manifestSeq: 0; ordinal: number }
 type Ref = Extract<SessionEvent, { type: 'context/result-ref' }>['ref']
@@ -54,7 +55,7 @@ export function createLegacyReadVisibility(view: SessionView): LegacyReadVisibil
         if (anchor.kind !== 'seed-group' || anchor.manifestSeq !== 0 || !Number.isSafeInteger(anchor.ordinal) || anchor.ordinal < 0 || extent.kind !== 'framed') return false
         const index = view.events.findIndex(event => event.type === 'conversation/seed-group' && event.manifestSeq === 0 && event.ordinal === anchor.ordinal)
         const event = view.events[index]
-        if (!event || event.type !== 'conversation/seed-group' || event.seq !== anchor.ordinal + 1 || !visibility.content(facts[index]!)
+        if (!event || event.type !== 'conversation/seed-group' || event.seq !== seedLayout(manifest).groupSeq(anchor.ordinal) || !visibility.content(facts[index]!)
           || event.group.extent.kind !== 'framed' || extent.first < event.group.extent.first || extent.last > event.group.extent.last) return false
         const extents: (readonly [number, number])[] = []
         for (const item of history.items) for (const recipe of item.recipes) {

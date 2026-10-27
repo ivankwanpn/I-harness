@@ -7,6 +7,7 @@ import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/se
 
 export function serializeHeader(meta: SessionMeta): string {
   validateSubagentHeader(meta)
+  if (meta.semanticSeed?.version === 3) throw new TypeError('Legacy header writer cannot install selected results')
   return JSON.stringify(meta)
 }
 

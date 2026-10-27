@@ -7,11 +7,13 @@ import { canonicalJsonData } from '../serialization/json-data.ts'
 import { seedHash } from './seed-digest.ts'
 import { resultAt } from './history/result-units.ts'
 import { iterateHeldInheritedResultMetadata } from './history/result-inherited.ts'
+import { createSeedOriginNormalizer, collectSelectedConversationOrigins, registerSelectedOriginPlan, mapResultOrigins, resultOriginAddresses } from './seed-origins.ts'
+import { inheritedResultMembership, extentOverlap } from './history/result-membership.ts'
+import { seedLayout } from './seed-layout.ts'
 
 // Explicit bounded metadata diagnostics. No payload is part of these budgets.
 export const SELECTED_RESULT_METADATA_LIMITS = Object.freeze({ rows: 10_000, bytes: 8_388_608, pageRows: 100, pageBytes: 65_536 })
-// Reserve the specified complete record overhead without emitting a journal
-// event or enabling any codec. Durable V3 compilation remains a later task.
+// Count the exact complete resource event, including its physical envelope.
 const pageBytes = (page: SelectedResultPageV1) => Buffer.byteLength(canonicalJsonData({ type: 'conversation/seed-results', version: 1,
   seq: 1 + page.ordinal, manifestSeq: 0, ordinal: page.ordinal, page }))
 function immutable<T>(value: T): T {
@@ -28,18 +30,42 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
     assertCurrent()
     if (!isOriginalCompletedPassiveContext(context) || context.kind !== 'completed-passive' || context.source.view !== context.owner.view || !isManagedFactOwner(context.owner.view, context.owner.factOwner)) return { kind: 'refused', reason: 'unsupported-history' }
     if (!isManagedResultSource(context.owner.view, context.owner.factOwner, context.owner.sourceSessionId)) return { kind: 'refused', reason: 'ambiguous' }
+    const originPlan = createSeedOriginNormalizer()
+    collectSelectedConversationOrigins(context, originPlan)
     const ledger = createResultResourceLedger(context), classifications: ResultClassification[] = [], inheritedRows = new Set<SelectedResultRow>()
+    type Manifest = Extract<typeof context.source.view.events[number], { type: 'conversation/seed-manifest' }>
+    const imported = new Map<object, Manifest>()
     let rows: SelectedResultRow[] = []
-    let bytes = 0
-    const record = (classification: ResultClassification, inheritedRow = false) => {
+    const record = (classification: ResultClassification, inheritedRow = false, domain?: Manifest) => {
       if (classification.kind === 'refused') return classification
       const snapshot = immutable(structuredClone(classification))
-      bytes += Buffer.byteLength(canonicalJsonData(snapshot))
-      if (classifications.length >= SELECTED_RESULT_METADATA_LIMITS.rows || bytes > SELECTED_RESULT_METADATA_LIMITS.bytes) return { kind: 'refused' as const, reason: 'metadata-limit' as const }
+      if (classifications.length >= SELECTED_RESULT_METADATA_LIMITS.rows) return { kind: 'refused' as const, reason: 'metadata-limit' as const }
       classifications.push(snapshot)
       if (snapshot.kind === 'included') {
         const row = immutable({ ...snapshot.row, ordinal: rows.length }) as SelectedResultRow
         rows.push(row); if (inheritedRow || row.original.kind === 'seed-use') inheritedRows.add(row)
+        if (domain) { imported.set(row, domain); imported.set(snapshot.row, domain) }
+      }
+    }
+    const manifest = context.source.view.events[0]
+    if (manifest?.type === 'conversation/seed-manifest' && manifest.version === 3) {
+      for (const { row, page } of inheritedResultMembership(context.source.facts)) {
+        assertCurrent()
+        const bound = ledger.extentGuard(row.extent) ?? ledger.inheritedCutGuard(row.extent)
+        if (bound) { const refusal = record(bound); if (refusal) return refusal; continue }
+        if (page.index >= ledger.upper) { const refusal = record({ kind: 'excluded', reason: 'future' }); if (refusal) return refusal; continue }
+        let omitted = false
+        const evidence = new Set(resultOriginAddresses(row).map(at => canonicalJsonData(at)))
+        for (const { omission } of context.selected.inheritedOmissions) {
+          if (!omission.source.some(at => evidence.has(canonicalJsonData(at)))) continue
+          const overlap = extentOverlap(context.selected.rebase(row.extent), omission.extent)
+          if (overlap === 'partial') return { kind: 'refused', reason: 'ambiguous' }
+          if (overlap === 'inside') omitted = true
+        }
+        if (omitted) { record({ kind: 'excluded', reason: 'omitted' }); continue }
+        const refusal = record({ kind: 'included', row: { ...row, extent: context.selected.rebase(row.extent),
+          basis: { kind: 'inherited', parentSeedDigest: manifest.digest, parentResultsDigest: manifest.results.digest, row: row.ordinal } } }, true, manifest)
+        if (refusal) return refusal
       }
     }
     // No consumer can obtain a prefix before all refusal/ambiguity guards pass.
@@ -51,7 +77,9 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
     for await (const value of iterateHeldInheritedResultMetadata(inherited, assertCurrent)) {
       const bound = ledger.extentGuard(value.extent) ?? ledger.inheritedCutGuard(value.extent)
       if (bound) { const refusal = record(bound); if (refusal) return refusal; continue }
-      const anchorIndex = value.anchor.kind === 'manifest' ? 0 : value.anchor.ordinal + 1
+      const sourceManifest = context.source.view.events[0]
+      if (sourceManifest?.type !== 'conversation/seed-manifest') return { kind: 'refused', reason: 'unsupported-history' }
+      const anchorIndex = value.anchor.kind === 'manifest' ? 0 : seedLayout(sourceManifest).groupSeq(value.anchor.ordinal)
       const anchor = context.source.facts[anchorIndex]
       if (!anchor || (value.anchor.kind === 'manifest' ? anchor.type !== 'conversation/seed-manifest' : anchor.type !== 'conversation/seed-group')) return { kind: 'refused', reason: 'unsupported-history' }
       if (anchorIndex >= ledger.upper) { const refusal = record({ kind: 'excluded', reason: 'future' }); if (refusal) return refusal; continue }
@@ -69,7 +97,22 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       if (refusal) return refusal
     }
     assertCurrent()
-    rows = [...rows.filter(row => inheritedRows.has(row)), ...rows.filter(row => !inheritedRows.has(row))].map((row, ordinal) => immutable({ ...row, ordinal }))
+    // Import historical address slots from their actual source manifest. Local
+    // zero is never passed here and remains the new held-source observation.
+    const drafts = new Map<object, SelectedResultRow | Omit<SelectedResultRow, 'ordinal'>>()
+    for (const value of [...rows, ...classifications.flatMap(c => c.kind === 'included' ? [c.row] : [])]) {
+      const domain = imported.get(value)
+      const draft = domain ? mapResultOrigins(structuredClone(value), slot => originPlan.origin(domain, slot)) : structuredClone(value)
+      drafts.set(value, draft)
+    }
+    originPlan.finalize(); assertCurrent()
+    const normalized = (value: typeof rows[number] | Omit<SelectedResultRow, 'ordinal'>) => {
+      const draft = drafts.get(value)!
+      return immutable(imported.has(value) ? mapResultOrigins(draft, originPlan.remap) : draft)
+    }
+    rows = [...rows.filter(row => inheritedRows.has(row)), ...rows.filter(row => !inheritedRows.has(row))].map((row, ordinal) => immutable({ ...normalized(row), ordinal }) as SelectedResultRow)
+    for (const [index, classification] of classifications.entries()) if (classification.kind === 'included') classifications[index] = immutable({ kind: 'included', row: normalized(classification.row) })
+    if (classifications.reduce((sum, value) => sum + Buffer.byteLength(canonicalJsonData(value)), 0) > SELECTED_RESULT_METADATA_LIMITS.bytes) return { kind: 'refused', reason: 'metadata-limit' }
     const pages: SelectedResultPageV1[] = []
     for (const row of rows) {
       let page = pages.at(-1)
@@ -80,6 +123,7 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       page.rows = [...page.rows, row]
       if (pageBytes(page) > SELECTED_RESULT_METADATA_LIMITS.pageBytes) return { kind: 'refused', reason: 'metadata-limit' }
     }
+    if (pages.reduce((sum, page) => sum + pageBytes(page), 0) > SELECTED_RESULT_METADATA_LIMITS.bytes) return { kind: 'refused', reason: 'metadata-limit' }
     immutable(pages)
     let previous = seedHash('ih.selected-results.start.v1', { version: 1, rows: rows.length, pages: pages.length })
     for (const page of pages) previous = seedHash('ih.selected-results.page.v1', { previous, page })
@@ -104,7 +148,9 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       },
     })
     assertCurrent()
-    return { kind: 'selected', results: Object.freeze({ summary, assertCurrent, pages: () => stream(pages), classifications: () => stream(classifications) }) }
+    const results = Object.freeze({ summary, assertCurrent, pages: () => stream(pages), classifications: () => stream(classifications) })
+    registerSelectedOriginPlan(results, context, originPlan)
+    return { kind: 'selected', results }
   } catch (cause) {
     return { kind: 'refused', reason: changed ? 'source-changed' : cause instanceof TypeError && cause.message === 'ambiguous' ? 'ambiguous' : 'unsupported-history' }
   }

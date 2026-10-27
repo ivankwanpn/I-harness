@@ -7,6 +7,7 @@ import { resultFactMetadata, type ResultFactMetadata } from './result-metadata.t
 /** Only structural metadata. No text, arguments, result/native/image bodies,
  * request attribution or receipts are retained by the history index. */
 export interface HistoryFact extends ResultFactMetadata {
+  readonly seedResults?: readonly import('../selected-results-types.ts').SelectedResultRow[]
   readonly seedArtifacts?: readonly import('../../results/types.ts').ManagedArtifactRef[]
   readonly seedArtifactIndices?: readonly number[]
   readonly seedTurns?: import('../seed-types.ts').SeedTurnDomain
@@ -41,6 +42,7 @@ export function historyFact(event: SessionEventView, index: number, inheritedBou
     case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryDependencies:[event.callSeq,event.startSeq]}
     case 'agent/delivery-received': return {...base,inputId:event.inputId,deliverySourceSeq:event.sourceSeq,deliveryDependencies:[event.sourceSeq,event.terminalSeq,event.seq!+1]}
     case 'conversation/seed-manifest': return { ...base, seedArtifacts: event.artifacts.map(artifact => ({ ...artifact.ref })), seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
+    case 'conversation/seed-results': return { ...base, seedExtent: { ...event.page.extent }, seedResults: structuredClone(event.page.rows) }
     case 'conversation/seed-group': return { ...base,
       seedArtifactIndices: event.group.items.flatMap(item => item.kind !== 'exchange' ? [] : item.results.flatMap(result => result.kind !== 'envelope' ? [] : [
         ...(result.sourceRetention.kind === 'artifact' ? [result.sourceRetention.artifact] : []),

@@ -42,7 +42,7 @@ export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: C
     }
     const before = (index: number): Upper => index < source.coordinates.length ? { kind: 'before-event', at: coordinate(index) } : { kind: 'archive-end', eventCount: source.coordinates.length }
     const requested = selection.atSeq === undefined ? undefined : owner.view.events[selection.atSeq]
-    const manifestIndex = owner.view.events.findIndex(event => event.type === 'conversation/seed-manifest' && event.version === 2)
+    const manifestIndex = owner.view.events.findIndex(event => event.type === 'conversation/seed-manifest' && (event.version === 2 || event.version === 3 && event.profile === 'public-completed'))
     const manifest = manifestIndex < 0 ? undefined : coordinate(manifestIndex)
     const inheritedLatest: InheritedLatest = manifest ? { kind: 'latest', manifest } : { kind: 'empty' }
     const local = source.turns.ends.find(end => end.turn === last)

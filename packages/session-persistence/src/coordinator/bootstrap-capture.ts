@@ -28,10 +28,14 @@ export function parseBootstrapCaptureReservation(bytes: Uint8Array): BootstrapCa
   return freezeJsonData(value) as BootstrapCaptureReservation
 }
 export function validateCaptureStage(reservation: BootstrapCaptureReservation, stage: BootstrapHeaderStage, records?: BootstrapRequest['seed']['records']) {
+  if (!stage.headerBytes && !records) throw new TypeError('Legacy public header required')
+  const seed = JSON.parse(stage.headerBytes || 'null')?.semanticSeed
+  // buildBootstrapHeader validates its captured records before header bytes exist.
+  if (stage.headerBytes && !(seed?.version === 1 && seed.codec === 'semantic-seed-v1' || seed?.version === 2 && seed.codec === 'semantic-seed-v2')) throw new TypeError('Legacy public seed required')
   const r = parseBootstrapCaptureReservation(encodeBootstrapCaptureReservation(reservation)), core = r.request.core
   if (!sameBootstrapData(r.request.invocation, stage.invocation) || stage.originalTarget.kind !== 'new' || !sameBootstrapData(core.metadata, stage.metadata) || stage.lineage.origin !== 'fork' || stage.lineage.parentSession !== core.sourceSessionId || stage.seed.sourceObservation.kind !== 'semantic' || stage.seed.seedLength < 1 || stage.initial) throw new TypeError('Capture stage binding mismatch')
   if (records) {
     const manifest = records[0]
-    if (manifest?.type !== 'conversation/seed-manifest' || manifest.origins[0]?.kind !== 'session' || manifest.origins[0].sessionId !== core.sourceSessionId || !sameBootstrapData(manifest.selection, core.selection)) throw new TypeError('Captured source selection mismatch')
+    if (manifest?.type !== 'conversation/seed-manifest' || !(manifest.version === 1 && manifest.codec === 'semantic-seed-v1' || manifest.version === 2 && manifest.codec === 'semantic-seed-v2') || manifest.origins[0]?.kind !== 'session' || manifest.origins[0].sessionId !== core.sourceSessionId || !sameBootstrapData(manifest.selection, core.selection)) throw new TypeError('Captured source selection mismatch')
   }
 }

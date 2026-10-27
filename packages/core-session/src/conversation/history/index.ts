@@ -6,6 +6,7 @@ import { canonicalJsonData } from '../../serialization/json-data.ts'
 import { historyFact, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { projectHistory, validateHistoricalReplacement } from './replacements.ts'
 import { freezeJsonData } from '../../managed/capture.ts'
+import { inheritedResultMembership } from './result-membership.ts'
 
 /** The existing validation owner's staged logical metadata. This registry is
  * structural only; it neither retains an event array nor renders payloads. */
@@ -17,20 +18,30 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
   const consumedSources = new Set<string>()
   const admissions = new Map<string, number | undefined>()
   let count = 0
+  function* iterateSelectedResultRefs() {
+    const branch = historyVisibility(facts.values()).branch
+    let manifest: HistoryFact | undefined
+    for (const fact of facts.values()) if (fact.type === 'conversation/seed-manifest') { manifest = fact; break }
+    if (!manifest || !branch(manifest)) return
+    const membership = inheritedResultMembership(() => facts.values())
+    let selected = membership.next() // validates every current inherited cut before the first yield
+    const seen = new Set<string>()
+    const unique = (ref: import('../../results/types.ts').ManagedArtifactRef) => { const key = canonicalJsonData(ref); if (seen.has(key)) return false; seen.add(key); return true }
+    for (const fact of facts.values()) if (branch(fact)) for (const ordinal of fact.seedArtifactIndices ?? []) {
+      const ref = manifest.seedArtifacts![ordinal]!
+      if (unique(ref)) yield { ...ref }
+    }
+    while (!selected.done) {
+      const row = selected.value.row
+      if (row.protocol === 'managed' && unique(row.ref)) yield { ...row.ref }
+      selected = membership.next()
+    }
+  }
   return {
     resultFacts: (): readonly HistoryFact[] => Object.freeze([...facts.values()]),
     history: (throughSeq?: number) => projectHistory({ length: count, get: position => facts.get(position)! }, throughSeq),
-    semanticSeedResultRefs() {
-      const branch = historyVisibility(facts.values()).branch
-      const manifest = [...facts.values()].find(fact => fact.type === 'conversation/seed-manifest')
-      if (!manifest || !branch(manifest)) return []
-      const refs = new Map<string, import('../../results/types.ts').ManagedArtifactRef>()
-      for (const fact of facts.values()) if (branch(fact)) for (const ordinal of fact.seedArtifactIndices ?? []) {
-        const ref = manifest.seedArtifacts![ordinal]!
-        refs.set(canonicalJsonData(ref), { ...ref })
-      }
-      return [...refs.values()]
-    },
+    iterateSelectedResultRefs,
+    semanticSeedResultRefs: () => [...iterateSelectedResultRefs()],
     dependencies: () => new Map([...dependencies].map(([seq, required]) => [seq, new Set(required)])),
     stage(read?: (index: number) => SessionEventView | undefined) {
       const nextFacts = new Map<number, HistoryFact>(), nextCounts = new Map<number, number>()

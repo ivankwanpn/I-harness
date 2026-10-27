@@ -176,7 +176,7 @@ describe.each(slots)('$name version ownership', ({ events }) => {
       const error = await coordinator.openManagedDocument('legacy').then(() => undefined, error => error)
       if (version === CURRENT_FORMAT_VERSION+1) {
         expect(error).toBeInstanceOf(SessionFormatUnsupportedError)
-        expect(error.message).toMatch(/format version 13.*newer/i)
+        expect(error.message).toMatch(new RegExp(`format version ${version}.*newer`, 'i'))
       } else {
         expect(error).toBeInstanceOf(TypeError)
         expect(error.message).toMatch(/^Invalid (result envelope|retained job result) or session format$/)

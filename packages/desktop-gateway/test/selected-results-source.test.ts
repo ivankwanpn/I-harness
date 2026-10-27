@@ -11,6 +11,11 @@ import type { HeldSelectedResults, ResultClassification } from '../../core-sessi
 import { recordFixture } from './managed-fixture.ts'
 import { createNativeConsumerOwners } from './helpers/native-consumer-fixture.ts'
 import { observationHash } from '../../core-session/test/fixtures/semantic-observation.ts'
+import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
+import { compileSelectedResultsSemanticSeed } from '../../session-persistence/src/semantic-seed.ts'
+import { codecWire } from '../../core-session/test/fixtures/selected-results.ts'
+import { createManagedSessionState } from '../../core-session/src/managed/view.ts'
+import type { FactOwner } from '../../core-session/src/managed/ports.ts'
 
 const ref = (digit = 'a'): ManagedArtifactRef => ({ version: 1, id: 'ctxv1_' + digit.repeat(64), revision: digit.repeat(64), codec: 'json-utf8-v1', encodedBytes: 12, contentDigest: digit.repeat(64), completeness: 'source-limited' })
 const envelope = (retained = ref(), catalog = false): ResultEnvelope => ({ version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: retained }, ...(catalog ? { dependencies: { kind: 'artifact-set' as const, ref: retained, count: 7 } } : {}) })
@@ -446,5 +451,45 @@ it('review I1 round2 excludes a fresh legacy declaration whose sole recorded nat
     expect(result.rows[0]).toMatchObject({ protocol: 'managed', original: { seq: outer.result, event: 'tool/result' }, basis: { kind: 'selected-observation' } })
     expect(result.classifications.filter(row => row.kind === 'excluded')).toEqual(Array.from({ length: 4 }, () => ({ kind: 'excluded', reason: 'rewound' })))
     expect(result.classifications.at(-1)).toEqual({ kind: 'excluded', reason: 'rewound' })
+  } finally { await fixture.close() }
+})
+
+it('Task2 captures a genuine held source once and preserves its historical result-only origins through a consumed metadata descendant', async () => {
+  const fixture = await setup()
+  try {
+    await accepted(fixture.document, 'outer', envelope(ref(), true))
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    const witness = createForkSourceWitness(fixture.document)
+    const first = await fixture.coordinator.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async observation => {
+      const assertCurrent = () => { observation.assertCurrent(); witness.assertUnchanged() }
+      const made = createCompletedPassiveContext({ kind: 'held-public-fork', sourceSessionId: 'source', view: fixture.document.view, factOwner: fixture.document, assertCurrent }, { kind: 'completed' })
+      if (made.kind !== 'ready') throw Error(made.reason)
+      return exportSelectedResultsConversationSeed(made.context, { assertCurrent, async *legacy() { assertCurrent() } })
+    })
+    expect(first.kind).toBe('seed'); if (first.kind !== 'seed') throw Error(first.kind === 'refused' ? first.reason : first.kind)
+    const wire = codecWire(first)
+    // Complete codec/read fixture only. This is no new persistence route,
+    // transferred recipient grant, or child memory bootstrap installation.
+    const reader = createManagedSessionState(wire, { sessionId: 'A' }), factOwner = {} as FactOwner
+    reader.bindOwner(factOwner)
+    const consumed = wire.records.filter((event: any) => event.type === 'conversation/seed-group').map((event: any) => event.seq)
+    reader.stage([{ type: 'compaction/reset', seq: wire.events.length, removedSeqs: consumed }]).install()
+    await fixture.coordinator.close()
+    const assertCurrent = () => {}, made = createCompletedPassiveContext({ kind: 'held-public-fork', sourceSessionId: 'A', view: reader.view, factOwner, assertCurrent }, { kind: 'completed' })
+    if (made.kind !== 'ready') throw Error(made.reason)
+    expect(made.context.selected.groups).toHaveLength(0)
+    const second = await exportSelectedResultsConversationSeed(made.context, { assertCurrent, async *legacy() {} })
+    expect(second.kind).toBe('seed'); if (second.kind !== 'seed') throw Error(second.kind === 'refused' ? second.reason : second.kind)
+    expect(second.seed.groups).toHaveLength(0); expect(second.seed.results.summary.rows).toBe(2)
+    expect(second.seed.origins).toEqual([{ kind: 'session', sessionId: 'A', revision: second.sourceObservationDigest }, { kind: 'session', sessionId: 'source', revision: first.sourceObservationDigest }])
+    for (const row of second.seed.results.pages.flatMap(page => page.rows)) {
+      expect(row.branchEvidence.every(at => at.origin === 1)).toBe(true)
+      expect(row.basis).toMatchObject({ kind: 'inherited', parentSeedDigest: first.digest, parentResultsDigest: first.seed.results.summary.digest, row: row.ordinal })
+    }
+    const compiled = compileSelectedResultsSemanticSeed(second)
+    expect(compiled.records).toEqual(codecWire(second).records)
+    console.log(JSON.stringify({ control: 'Task2 genuine held source to metadata descendant', source: first.sourceObservationDigest, firstSeed: first.digest,
+      firstResults: first.seed.results.summary, descendant: second.sourceObservationDigest, descendantSeed: second.digest, descendantResults: second.seed.results.summary,
+      groups: second.seed.groups.length, origins: second.seed.origins }))
   } finally { await fixture.close() }
 })

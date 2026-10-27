@@ -54,8 +54,9 @@ export function captureBootstrapRequest(value: BootstrapRequest): BootstrapReque
   if (!seed.records.length) compiled=compileSemanticSeed({kind:'none'})
   else {
     const [m,...groups]=seed.records
-    if (m?.type !== 'conversation/seed-manifest' || groups.some((g,i) => g.type !== 'conversation/seed-group' || g.seq !== i+1 || g.ordinal !== i || g.manifestSeq !== 0)) bad()
+    if (m?.type !== 'conversation/seed-manifest' || !(m.version === 1 && m.codec === 'semantic-seed-v1' || m.version === 2 && m.codec === 'semantic-seed-v2') || groups.some((g,i) => g.type !== 'conversation/seed-group' || g.seq !== i+1 || g.ordinal !== i || g.manifestSeq !== 0)) bad()
     const semantic=validateSemanticSeed(semanticSeedBodyFromRecords(seed.records))
+    if (semantic.version !== 1 && semantic.version !== 2) throw new TypeError('Legacy bootstrap request required')
     if (seed.sourceObservation.kind !== 'semantic') bad()
     compiled=compileSemanticSeed({kind:'seed',seed:semantic,digest:seed.digest,sourceObservationDigest:(seed.sourceObservation as {kind:"semantic";digest:string}).digest})
   }
@@ -122,6 +123,7 @@ export function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderSta
   if (!['none','semantic'].includes(value.seed.sourceObservation.kind) || value.seed.sourceObservation.kind==='semantic' && !digest(value.seed.sourceObservation.digest)) bad()
   if (value.initial) { fields(value.initial,['inputId','digest','startedAt','expiresAt']); if (!id(value.initial.inputId)||!digest(value.initial.digest)||!count(value.initial.startedAt)||!count(value.initial.expiresAt)||value.initial.expiresAt<=value.initial.startedAt) bad() }
   const header=JSON.parse(value.headerBytes) as SessionMeta, s=header.semanticSeed
+  if (!s || !(s.version === 1 && s.codec === 'semantic-seed-v1' || s.version === 2 && s.codec === 'semantic-seed-v2')) bad()
   validateSubagentHeader(header)
   if (!s || ![11,12,13].includes(header.formatVersion) || header.journal?.version!==1 || header.journal.legacyBodyBytes!==0 || header.journal.legacyEventCount!==0 || header.journal.separatorBytes!==0 || header.journal.legacyPrefixDigest!==legacyPrefixDigest(0,new Uint8Array())
     || header.sessionId!==value.invocation.targetSessionId || header.createdAt!==value.invocation.createdAt || s.operationId!==value.invocation.operationId || s.requestDigest!==value.invocation.requestDigest

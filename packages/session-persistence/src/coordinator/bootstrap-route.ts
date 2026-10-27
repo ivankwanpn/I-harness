@@ -39,6 +39,7 @@ export function parseOwnedCaptureReservation(bytes:Uint8Array):OwnedCaptureReser
  return value?.kind==='semantic-bootstrap-child-capture'?parseChildBootstrapReservation(bytes):parseBootstrapCaptureReservation(bytes)
 }
 export function validateChildCaptureStage(reservation:import('./child-bootstrap-intent.ts').ChildBootstrapReservation,stage:BootstrapHeaderStage,records?:BootstrapRequest['seed']['records']):void {
+ if(!stage.headerBytes&&!records)throw new TypeError('Legacy child header required')
  const r=parseChildBootstrapReservation(encodeChildBootstrapReservation(reservation)),core=r.request.core
  const initial=core.initial,{parentSessionId:_,...tuple}=initial
  if(!sameBootstrapData(stage.captureReservation,r)||!sameBootstrapData(r.request.invocation,stage.invocation)||stage.originalTarget.kind!=='new'||!sameBootstrapData(core.metadata,stage.metadata)||!sameBootstrapData(core.lineage,stage.lineage)||!sameBootstrapData(tuple,stage.initial))throw new TypeError('Child stage binding mismatch')
@@ -47,7 +48,7 @@ export function validateChildCaptureStage(reservation:import('./child-bootstrap-
  }else {
   if(stage.seed.sourceObservation.kind!=='semantic'||stage.seed.seedLength<1)throw new TypeError('Child semantic source required')
   if(records){const m=records[0];if(m?.type!=='conversation/seed-manifest'||m.version!==1||!sameBootstrapData(m.selection,core.history.selection)||!('source' in core.history)||m.origins[0]?.kind!==core.history.source.kind||core.history.source.kind==='session'&&(m.origins[0]?.kind!=='session'||m.origins[0].sessionId!==core.history.source.sessionId))throw new TypeError('Child source selection mismatch')}
-  const meta=JSON.parse(stage.headerBytes||'null');if(meta?.semanticSeed?.version===2)throw new TypeError('Child V1 seed required')
+  const meta=JSON.parse(stage.headerBytes||'null');if(stage.headerBytes&&meta?.semanticSeed?.version!==1)throw new TypeError('Child V1 seed required')
  }
 }
-export function validateOwnedCaptureStage(reservation:OwnedCaptureReservation,stage:BootstrapHeaderStage,records?:BootstrapRequest['seed']['records']):void {if(reservation.kind==='semantic-bootstrap-child-capture')validateChildCaptureStage(reservation,stage,records);else validateCaptureStage(reservation,stage,records)}
+export function validateOwnedCaptureStage(reservation:OwnedCaptureReservation,stage:BootstrapHeaderStage,records?:BootstrapRequest['seed']['records']):void {if(reservation.kind==='semantic-bootstrap-child-capture')validateChildCaptureStage(reservation,stage,records);else if(reservation.kind==='semantic-bootstrap-capture')validateCaptureStage(reservation,stage,records);else throw new TypeError('Unknown capture reservation')}

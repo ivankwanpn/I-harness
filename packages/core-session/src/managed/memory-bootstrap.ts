@@ -4,11 +4,14 @@ import { managedSessions, managedFactOwners, conversationIndexes, appendHooks, s
 import { createBootstrapConversationIndex, createConversationIndex } from '../conversation/validation.ts'
 import { captureLegacyFact } from './capture.ts'
 import { hasNondurableFactOwner } from './nondurable.ts'
+import { validateSubagentHeader } from '../events/header.ts'
 
 export interface MemoryBootstrapReceipt { kind: 'memory-ready'; seedLength: number; initial?: { inputId: string; seq: number; startedAt: number; expiresAt: number } }
 /** A single synchronous standalone installation, over the existing index owner.
  * No partial target is observable and this produces no durable FactReceipt. */
 export function bootstrapMemorySession(session: Session, header: SessionHeader, recordsWithCompletion: readonly SessionEventView[], current: () => boolean): MemoryBootstrapReceipt {
+  validateSubagentHeader(header)
+  if (header.semanticSeed?.version !== 1 && header.semanticSeed?.version !== 2) throw new TypeError('Legacy memory bootstrap seed required')
   const installable = () => {
     const fields = Object.getOwnPropertyDescriptors(session), events = fields.events, header = fields.header
     if (managedSessions.has(session) || managedFactOwners.has(session) || hasNondurableFactOwner(session) || conversationIndexes.has(session)

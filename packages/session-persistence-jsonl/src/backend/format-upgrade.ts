@@ -22,6 +22,7 @@ export async function upgradeFactJournal(path: string, expected: number): Promis
     old = parseHeader(header.subarray(0, end).toString('utf8'))
     rawHeader = JSON.parse(header.subarray(0, end).toString('utf8'))
   } finally { await source.close() }
+  if (old.semanticSeed?.version === 3) throw new TypeError('Legacy upgrade cannot handle selected results')
   if (old.formatVersion === CURRENT_FORMAT_VERSION) return old
   if (old.formatVersion !== expected || !Number.isSafeInteger(expected) || expected < 1 || expected >= CURRENT_FORMAT_VERSION) throw new TypeError('Unexpected journal upgrade')
   // The old physical profile must accept its own body before a header can

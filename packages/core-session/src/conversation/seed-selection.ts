@@ -43,7 +43,7 @@ export function resolveSeedBoundary(view: SessionView, selection: SeedSelection,
   if (selection.kind !== 'completed') return { kind: 'resolved', boundary: { last: turns.total } }
   if (selection.atSeq !== undefined) {
     const record = view.events.find(event => event.seq === selection.atSeq)
-    if (record?.type === 'conversation/seed-manifest') return { kind: 'refused', reason: 'ambiguous-boundary' }
+    if (record?.type === 'conversation/seed-manifest' || record?.type === 'conversation/seed-results') return { kind: 'refused', reason: 'ambiguous-boundary' }
     if (record?.type === 'conversation/seed-group') {
       const extent = record.group.extent
       if (extent.kind !== 'framed' || extent.first !== extent.last) return { kind: 'refused', reason: 'ambiguous-boundary' }

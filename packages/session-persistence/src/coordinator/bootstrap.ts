@@ -88,6 +88,7 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.seed.seedLength&&first?.type==='conversation/seed-manifest') {
     if(stage.seed.sourceObservation.kind!=='semantic')throw new Error('Bootstrap source binding conflict')
     const seed=semanticSeedFromRecords(meta.semanticSeed!,state.events!.slice(0,stage.seed.seedLength))
+    if(seed.version!==1&&seed.version!==2)throw new TypeError('Legacy bootstrap birth required')
     const compiled=compileSemanticSeed({kind:'seed',seed,digest:stage.seed.digest,sourceObservationDigest:stage.seed.sourceObservation.digest})
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')

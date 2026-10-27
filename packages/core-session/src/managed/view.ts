@@ -14,6 +14,10 @@ export function isManagedResultSource(view: SessionView, owner: object, sessionI
 /** Existing owned structural index, shared by held semantic/result selection. */
 export function readOwnedSelectionMetadata(view: SessionView) {
   const index = originalIndexes.get(view)
+  const seed = view.header?.semanticSeed
+  // Staging metadata is not a completed selected-result source. Fall back to
+  // the strict source reader, which refuses until completion/initial exists.
+  if (seed?.version === 3 && index && index.eventCount < seed.seedLength + 1 + (seed.initialInputId === undefined ? 0 : 1)) return undefined
   return index && { facts: index.resultFacts(), history: index.history() }
 }
 /** Only immutable views constructed here have an original committed read link.
