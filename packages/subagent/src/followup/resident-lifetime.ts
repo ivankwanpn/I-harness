@@ -7,6 +7,7 @@ export interface RetainedResidentResource {
   readonly kind: 'generation' | 'resident'
   retire(): void
   close(): Promise<void>
+  readonly generationCleanup?: Promise<void>
   settleResults?(): Promise<void>
   rawNext?: Promise<void>
 }
@@ -26,6 +27,36 @@ class ResidentLifetime {
   readonly records = new Set<RetainedResidentResource>()
   private readonly results = new WeakMap<NonNullable<ChildAgentEntry['resultCapture']>, () => Promise<unknown>>()
   private flight?: Promise<void>
+  private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>> }
+  /** Keep rejected generation joins alive through every alias participating
+   * in one external close. A later explicit close gets a fresh attempt. */
+  beginCleanupAttempt(): () => void {
+    if (!this.cleanupAttempt) {
+      const generations = new Map<RetainedResidentResource, Promise<void>>()
+      // A normal finally may already own the flight before a direct entry
+      // disposer starts. Snapshot that admission without starting new work.
+      for (const record of this.records) {
+        const original = record.generationCleanup
+        if (record.kind === 'generation' && original) generations.set(record, original)
+      }
+      this.cleanupAttempt = { borrowers: 0, generations }
+    }
+    const attempt = this.cleanupAttempt
+    attempt.borrowers++
+    let finished = false
+    return () => {
+      if (finished) return
+      finished = true
+      if (--attempt.borrowers === 0 && this.cleanupAttempt === attempt) this.cleanupAttempt = undefined
+    }
+  }
+  joinGenerationCleanup(record: RetainedResidentResource, close: () => Promise<void>): Promise<void> {
+    const attempt = this.cleanupAttempt
+    if (!attempt) return close()
+    let original = attempt.generations.get(record)
+    if (!original) { original = close(); attempt.generations.set(record, original) }
+    return original
+  }
   retain(record: RetainedResidentResource): void {
     if (this.retired) throw Object.assign(new Error('Resident owner retired'), { code: 'FACT_CLOSED' })
     this.records.add(record)
@@ -56,7 +87,8 @@ class ResidentLifetime {
     if (this.flight) return this.flight
     const attempt = Promise.withResolvers<void>()
     this.flight = attempt.promise
-    void attempt.promise.then(() => { this.flight = undefined }, () => { this.flight = undefined })
+    const finishCleanup = this.beginCleanupAttempt()
+    void attempt.promise.then(() => { this.flight = undefined; finishCleanup() }, () => { this.flight = undefined; finishCleanup() })
     void invokeOriginal(this, async () => {
       const records = [...this.records]
       const results = await Promise.allSettled(records.map(record => record.close()))
@@ -103,7 +135,13 @@ export class ResidentPreparation implements RetainedResidentResource {
   private revokeDocument?: () => void
   private readonly activationCurrent?: () => boolean
   private readonly sessionId: string | undefined
-  readonly dispose = (): Promise<void> => { this.retire(); return this.close() }
+  readonly dispose = (): Promise<void> => {
+    const finishCleanup = residentOwnerFor(this.deps).beginCleanupAttempt()
+    this.retire()
+    const closing = this.close().finally(finishCleanup)
+    void closing.catch(() => {})
+    return closing
+  }
   readonly unmount = (): Promise<void> => this.dispose()
   constructor(readonly deps: SubagentToolDeps, readonly entry: ChildAgentEntry) {
     this.view = entry.session; this.factOwner = entry.factOwner
@@ -148,7 +186,8 @@ export class ResidentPreparation implements RetainedResidentResource {
     const attempt = Promise.withResolvers<void>()
     this.flight = attempt.promise
     this.cleanup = attempt.promise
-    void attempt.promise.then(() => { this.flight = undefined }, () => { this.flight = undefined })
+    const finishCleanup = residentOwnerFor(this.deps).beginCleanupAttempt()
+    void attempt.promise.then(() => { this.flight = undefined; finishCleanup() }, () => { this.flight = undefined; finishCleanup() })
     void invokeOriginal(this, async () => {
       await this.setupExit.promise
       const failures: unknown[] = []

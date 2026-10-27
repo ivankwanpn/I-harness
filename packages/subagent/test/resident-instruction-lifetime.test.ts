@@ -22,6 +22,8 @@ import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/
 import type { AgentGenerationLifecycle } from '@i-harness/core-agent'
 import type { ManagedAction, ProducerFactOutcome } from '@i-harness/core-session'
 import { createResultCapture } from '../../output-retention/src/index.ts'
+import { registerCodeMode } from '@i-harness/code-mode'
+import { controlledModel } from '../../session-executor/test/controlled-model.ts'
 
 async function harness(control: {
   lifecycle?(value: AgentGenerationLifecycle): AgentGenerationLifecycle
@@ -29,6 +31,7 @@ async function harness(control: {
   mount?: import('@i-harness/code-mode').CodeModeFactory
   resident?: boolean
   results?: import('../src/task/result.ts').TaskResultStore
+  model?: import('@i-harness/llm-seam').ModelClient
 } = {}) {
   observations.executions = []
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'own-'))
@@ -43,7 +46,7 @@ async function harness(control: {
   ctx.scope.mount = (...args) => { const child = mount(...args), unmount = child.scope.unmount.bind(child.scope)
     child.scope.unmount = (...unmountArgs) => { unmounted.push(child); return unmount(...unmountArgs) }; return child }
   tools.register({ name: 'read', description: 'fixture read', inputSchema: {}, execute: async () => ({}) })
-  const sub = registerSubagent(ctx, tools, { parentSession: parent.view, factOwner: parent, parentModel: createMockClient([]), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), exec: registerExec(ctx),
+  const sub = registerSubagent(ctx, tools, { parentSession: parent.view, factOwner: parent, parentModel: control.model ?? createMockClient([]), resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), exec: registerExec(ctx),
     results: control.results,
     persist: { coordinator, stateId: 'parent', parentSessionId: 'parent' }, codeModeFactory: control.mount,
     generationFactoryFor: (owner, id) => action => {
@@ -309,4 +312,81 @@ it('retries the same original entry disposer after failure rather than adopting 
     fail = false; await f.sub.dispose()
     expect([originalCalls, replacementCalls]).toEqual([2, 0])
   } finally { fail = false; f.entry.dispose = original; await f.close() }
+})
+
+it.each(['prior-failure', 'normal-finally-overlap', 'entry-alias-overlap'].flatMap(mode => [undefined, null, false, 0, ''].map(failure => ({ mode, failure }))))('shares one rejected generation cleanup through held resident cancellation ($mode, $failure)', async ({ mode, failure }) => {
+  const cancelEntered = Promise.withResolvers<void>(), releaseCancel = Promise.withResolvers<void>()
+  const generationEntered = Promise.withResolvers<void>(), releaseGeneration = Promise.withResolvers<void>(), rejected = Promise.withResolvers<void>()
+  let fail = true, closes = 0, drains = 0, finishes = 0, cancels = 0, disposes = 0, requests = 0
+  let originalAction: ManagedAction<ProducerFactOutcome> | undefined
+  let originalLifecycle: AgentGenerationLifecycle | undefined
+  let childContext: import('@i-harness/core-plugin').PluginContext | undefined
+  const f = await harness({ resident: true,
+    model: controlledModel(async function* () { requests++; yield { type: 'text/chunk', text: 'original resident result' }; yield { type: 'end' } }),
+    action(action) { if (originalAction) return; originalAction = action; const finish = action.finish.bind(action); action.finish = () => { finishes++; finish() } },
+    lifecycle(lifecycle) {
+      if (originalLifecycle) return lifecycle
+      originalLifecycle = lifecycle
+      const open = lifecycle.open.bind(lifecycle), drain = lifecycle.drain.bind(lifecycle)
+      lifecycle.open = async (...args) => {
+        const generation = await open(...args), close = generation.close.bind(generation)
+        generation.close = async (...closeArgs) => {
+          // Physical acceptance owns its own disposition. Inject the failure
+          // only at the driver's subsequent original cleanup boundary.
+          if (closeArgs[0] === 'accepted') { await close(...closeArgs); return }
+          closes++; generationEntered.resolve()
+          if (mode !== 'prior-failure' && closes === 1) await releaseGeneration.promise
+          if (fail) { if (closes === (mode === 'prior-failure' ? 2 : 1)) rejected.resolve(); throw failure }
+          await close(...closeArgs)
+        }
+        return generation
+      }
+      lifecycle.drain = async () => { drains++; await drain() }
+      return lifecycle
+    },
+    mount(ctx, registry, options) {
+      childContext = ctx
+      const mount = registerCodeMode(ctx, registry, { ...options, config: { mode: 'mixed' } }), cancel = mount.cancel.bind(mount), dispose = mount.dispose.bind(mount)
+      mount.cancel = async (...args) => { cancels++; cancelEntered.resolve(); await releaseCancel.promise; await cancel(...args) }
+      mount.dispose = async () => { disposes++; await dispose() }
+      return mount
+    },
+  })
+  const closeDocument = vi.spyOn(f.document, 'close')
+  const driving = f.drive(), driveOutcome = driving.then(() => ({ occurred: false }), value => ({ occurred: true, value }))
+  let ownerOutcome: Promise<{ occurred: boolean; value?: unknown }> | undefined
+  try {
+    await generationEntered.promise
+    expect(f.sub.agents.get('child')).toBeDefined(); expect(f.entry.dispose).toBeDefined(); expect(requests).toBe(1)
+    const execution = observations.executions[0]!
+    expect(execution.rawNext).toBe(driving); await execution.bodyExit.promise
+    if (mode === 'prior-failure') expect(await driveOutcome).toEqual({ occurred: true, value: failure })
+    const closing = mode === 'entry-alias-overlap' ? f.entry.dispose!() : f.sub.dispose()
+    ownerOutcome = closing.then(() => ({ occurred: false }), value => ({ occurred: true, value }))
+    await cancelEntered.promise
+    if (mode !== 'prior-failure') releaseGeneration.resolve()
+    await rejected.promise
+    expect(await driveOutcome).toEqual({ occurred: true, value: failure })
+    // Let both rejection observers clear their per-record current flights.
+    await Promise.resolve(); await Promise.resolve()
+    const failedCalls = mode === 'prior-failure' ? 2 : 1
+    expect([closes, drains, finishes]).toEqual([failedCalls, 0, 0])
+    fail = false; releaseCancel.resolve()
+    const outcome = await ownerOutcome
+    expect(outcome.occurred).toBe(true)
+    const leaves = (value: unknown): unknown[] => value instanceof AggregateError ? value.errors.flatMap(leaves) : [value]
+    expect(leaves(outcome.value).some(value => Object.is(value, failure))).toBe(true)
+    expect([closes, drains, finishes]).toEqual([failedCalls, 0, 0])
+    expect([cancels, disposes]).toEqual([1, 1])
+    expect(closeDocument).not.toHaveBeenCalled(); expect(f.unmounted).not.toContain(childContext)
+    await f.sub.dispose()
+    expect([closes, drains, finishes]).toEqual([failedCalls + 1, 1, 1])
+    expect([cancels, disposes]).toEqual([1, 1])
+    expect(closeDocument).toHaveBeenCalledTimes(1); expect(f.unmounted.filter(ctx => ctx === childContext)).toHaveLength(1)
+    await f.sub.dispose()
+    expect([closes, drains, finishes]).toEqual([failedCalls + 1, 1, 1])
+    console.info('resident-rejected-attempt-evidence', JSON.stringify({ mode, failure: { type: failure === null ? 'null' : typeof failure, value: failure }, root: f.root,
+      owner: Object.getOwnPropertyDescriptor(originalAction!, 'owner')?.value, inbox: execution.input.messageId, sameRawNext: execution.rawNext === driving,
+      failedAttemptCloseCalls: failedCalls, recoveredCounts: { closes, drains, finishes, cancels, disposes }, documentCloses: closeDocument.mock.calls.length }))
+  } finally { fail = false; releaseGeneration.resolve(); releaseCancel.resolve(); await driveOutcome; await ownerOutcome; await f.close() }
 })

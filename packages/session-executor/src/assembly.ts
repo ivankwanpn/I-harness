@@ -1187,6 +1187,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const mountCloses = new Map<object, () => Promise<void>>()
   const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
+  let cancelRootCodeMode: CodeModeMount['cancel'] | undefined
+  let disposeRootCodeMode: CodeModeMount['dispose'] | undefined
   let executionSurfaceRetired = false
   let constructionComplete = false
   const residentActivation = opts.residentActivation ?? createResidentActivation(() => constructionComplete && !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false)
@@ -1571,6 +1573,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session, factOwner, sessionId: opts.sessionId, config: codeMode,
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
     })
+    cancelRootCodeMode = codeModeMount?.cancel.bind(codeModeMount)
+    disposeRootCodeMode = codeModeMount?.dispose.bind(codeModeMount)
     offCodeModeSurface = codeModeMount?.onSurfaceChanged?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
     await codeModeMount?.ready?.()
     const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
@@ -1830,10 +1834,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
     for (const result of await Promise.allSettled(draining)) if (result.status === 'rejected') processCleanupFailures.push(result.reason)
     if (!cleanupDone.has('code-mode')) {
-      await phase('code-cancel', () => codeModeMount?.cancel('Session assembly disposed'))
+      await phase('code-cancel', () => cancelRootCodeMode?.('Session assembly disposed'))
       // Native dispose is the complete producer barrier even after a separate
       // cancellation occurrence. Once it acknowledges, do not replay either.
-      await phase('code-mode', () => codeModeMount?.dispose())
+      await phase('code-mode', () => disposeRootCodeMode?.())
     }
     await phase('subagents', () => disposeSubagents?.())
     if (!cleanupDone.has('plugins')) {

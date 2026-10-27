@@ -325,7 +325,8 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     if (disposeFlight) return disposeFlight
     const attempt = Promise.withResolvers<void>()
     disposeFlight = attempt.promise
-    void attempt.promise.then(() => { disposeFlight = undefined }, () => { disposeFlight = undefined })
+    const finishCleanup = owner.beginCleanupAttempt()
+    void attempt.promise.then(() => { disposeFlight = undefined; finishCleanup() }, () => { disposeFlight = undefined; finishCleanup() })
     owner.retire()
     const fenceEntries = () => { for (const entry of table.entries().values()) {
       if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,

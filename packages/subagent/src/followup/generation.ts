@@ -140,6 +140,10 @@ class OriginalGeneration implements RetainedResidentResource {
   }
   close(): Promise<void> {
     if (inOriginalInvocation(this)) { this.retire(); return refusedReentry() }
+    return residentOwnerFor(this.deps).joinGenerationCleanup(this, () => this.closeOriginals())
+  }
+  get generationCleanup(): Promise<void> | undefined { return this.flight }
+  private closeOriginals(): Promise<void> {
     if (this.flight) return this.flight
     const attempt = Promise.withResolvers<void>()
     this.flight = attempt.promise

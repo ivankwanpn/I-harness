@@ -118,30 +118,49 @@ it('holds the original cold inbox until exact live publication and runs a second
   } finally { release.resolve(); await first.catch(() => {}); await repeated.catch(() => {}); await service.close(); await coordinator.close() }
 }, 20_000)
 
-it('retains original root dependencies until the failed original producer acknowledges and does not replay successful phases', async () => {
+it.each([false, true])('retains original root cleanup callbacks and dependencies across alias replacement (cancelFails=%s)', async cancelFails => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'bar-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'parent' })
   const document = await coordinator.openManagedDocument('parent'), closeDocument = vi.spyOn(document, 'close')
-  let cancels = 0, disposes = 0, fail = true
+  let cancels = 0, disposes = 0, fail = true, replacementCancels = 0, replacementDisposes = 0
+  let originalMount: import('@i-harness/code-mode').CodeModeMount | undefined
+  let originalCancel: import('@i-harness/code-mode').CodeModeMount['cancel'] | undefined
+  let originalDispose: import('@i-harness/code-mode').CodeModeMount['dispose'] | undefined
   const assembly = await createSessionAssembly({ workspace: root, sessionId: 'parent', coordinator, modelPolicy: 'test-mock', codeMode: { mode: 'mixed' }, codeModeFactory(ctx, tools, options) {
     const mount = registerCodeMode(ctx, tools, options), cancel = mount.cancel.bind(mount), dispose = mount.dispose.bind(mount)
-    mount.cancel = async (...args) => { cancels++; await cancel(...args) }
-    mount.dispose = async () => { disposes++; if (fail) throw false; await dispose() }
+    mount.cancel = async function (...args) { expect(this).toBe(mount); cancels++; if (cancelFails && fail) throw undefined; await cancel(...args) }
+    mount.dispose = async function () { expect(this).toBe(mount); disposes++; if (fail) throw false; await dispose() }
+    originalMount = mount; originalCancel = mount.cancel; originalDispose = mount.dispose
     return mount
   } })
   try {
     await expect(assembly.dispose()).rejects.toBeInstanceOf(AggregateError)
     expect(closeDocument).not.toHaveBeenCalled()
     expect([cancels, disposes]).toEqual([1, 1])
+    originalMount!.cancel = async () => { replacementCancels++ }
+    originalMount!.dispose = async () => { replacementDisposes++ }
+    await expect(assembly.dispose()).rejects.toBeInstanceOf(AggregateError)
+    expect(closeDocument).not.toHaveBeenCalled()
+    expect([cancels, disposes]).toEqual([cancelFails ? 2 : 1, 2])
+    expect([replacementCancels, replacementDisposes]).toEqual([0, 0])
     fail = false
     await assembly.dispose()
-    expect([cancels, disposes]).toEqual([1, 2])
+    expect([cancels, disposes]).toEqual([cancelFails ? 3 : 1, 3])
     expect(closeDocument).toHaveBeenCalledTimes(1)
     await assembly.dispose()
-    expect([cancels, disposes]).toEqual([1, 2])
+    expect([cancels, disposes]).toEqual([cancelFails ? 3 : 1, 3])
+    expect([replacementCancels, replacementDisposes]).toEqual([0, 0])
     expect(closeDocument).toHaveBeenCalledTimes(1)
-  } finally { fail = false; await assembly.dispose(); await coordinator.close() }
+    console.info('root-original-cleanup-evidence', JSON.stringify({ root, cancelFails, counts: { cancels, disposes, replacementCancels, replacementDisposes }, documentCloses: closeDocument.mock.calls.length }))
+  } finally {
+    fail = false
+    originalMount!.cancel = originalCancel!; originalMount!.dispose = originalDispose!
+    // A failing RED may have credited the replacement no-op. Close the exact
+    // original fixture resource explicitly rather than leave that debt open.
+    if (replacementDisposes) await originalDispose!.call(originalMount!)
+    await assembly.dispose(); await coordinator.close()
+  }
 })
 
 it.each(['close', 'extension-false', 'hook-revoke'] as const)('retires the exact pending service ticket before publication (%s)', async mode => {
