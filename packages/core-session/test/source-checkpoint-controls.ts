@@ -300,5 +300,3 @@ export function checkpointControls(fixture: () => Promise<CheckpointFixture>, co
     } finally { f.action.finish(); await f.cleanup() }
   })
 }
-
-
