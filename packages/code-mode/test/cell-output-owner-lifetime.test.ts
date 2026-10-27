@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest'
 import type { CodeSettlementFact, SessionEvent } from '@i-harness/core-session'
-import { fixture, output } from './cell-output-owner-fixture.ts'
+import { fixture, output, unknownMountReceipt } from './cell-output-owner-fixture.ts'
 
 it.each(['native', 'memory'] as const)('retains the admission-owned source for later output after a successful refresh (%s)', async mode => {
   const f = await fixture(mode)
@@ -256,5 +256,111 @@ it.each(['native', 'memory'] as const)('original Stop cannot acknowledge an inva
   f.facts.stopOptional()
   await expect(result).rejects.toMatchObject({ code: 'FACT_INVALID_GROUP' })
   expect(cancelled).toBe(0); expect(f.sources[1]!.descriptor!.readCut().failed).toBe(true)
+  await f.cleanup(true)
+})
+
+it.each(['reference', 'terminal', 'required'] as const)('recovers the exact unknown mount %s receipt and the same queued optional Store without Stop', async kind => {
+  const f = await unknownMountReceipt(kind), mount = f.sources[0]!
+  let installed = 0, cancelled = 0, committed = 0
+  await expect(f.start(() => { committed++ })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  const original = mount.captures[0]!
+  expect(await original.observe()).toEqual({ kind: 'unknown', key: f.batch.key })
+  expect(() => f.owner.beginAction()).toThrow(expect.objectContaining({ code: 'FACT_RECOVERY_REQUIRED' }))
+  expect(() => f.sources[1]!.action.assertOpen()).toThrow(expect.objectContaining({ code: 'FACT_RECOVERY_REQUIRED' }))
+  const nativeAdmissionGuard = await f.sources[1]!.action.facts.metadata.admit({ type: 'session/title', title: 'guard probe', source: 'user', messageSeqs: [] })
+  expect(nativeAdmissionGuard).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
+  expect(f.facts.observationState()).toBe('unavailable')
+  await expect(f.facts.store({ type: 'code/store', version: 1, cellId: 'A', writes: [['original', 42]] }, () => { installed++ }, () => { cancelled++ })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  const store = f.stores[0]!.capture
+  expect(f.stores).toHaveLength(1); expect(f.stores[0]!.outcomes).toEqual([])
+  expect(await store.observe()).toMatchObject({ kind: 'not-issued' })
+  expect(f.issues.filter(i => i.events.some(e => (e as {type?: string}).type === 'code/store'))).toEqual([])
+  await expect(mount.source.checkpoint()).rejects.toMatchObject({ code: 'FACT_OWNER_UNSUPPORTED' })
+  f.note('mount-native-uncertainty-guards', { nativeAdmissionGuard, original: await original.observe(), queuedStore: await store.observe(), storeAttempts: [...f.stores[0]!.outcomes] })
+  await f.save('mount-native-uncertainty-guards')
+  f.releaseReceipt()
+  const recovery = await f.facts.refresh().then(() => ({ succeeded: true }), error => ({ succeeded: false, code: error?.code }))
+  const outcome = await original.observe()
+  expect(outcome).toMatchObject({ kind: 'committed', receipt: f.receipt })
+  f.note('mount-recovery-store-result', { sourceKind: kind, recovery, original: outcome, store: await store.observe(), installed, cancelled, committed, sourceCount: f.sources.length })
+  await f.save('mount-recovery-store-result')
+  expect(recovery.succeeded).toBe(true)
+  expect([installed, cancelled, committed]).toEqual([1, 0, kind === 'reference' ? 0 : 1])
+  expect(f.stores[0]!.capture).toBe(store)
+  expect(await store.observe()).toMatchObject({ kind: 'committed' })
+  expect(await original.reconcile()).toEqual(outcome)
+  expect(f.issues.filter(i => i.key === f.batch.key)).toHaveLength(1)
+  expect(f.issues.filter(i => i.events.some(e => (e as {type?: string}).type === 'code/store'))).toHaveLength(1)
+  mount.source.assertHeld(); expect(f.sources[0]).toBe(mount); expect(mount.descriptor).toBeUndefined()
+  expect(mount.source.holdRecovery).not.toHaveBeenCalled()
+  f.document!.assertReady(); f.sources[1]!.action.assertOpen()
+  const admitted = f.owner.beginAction(); admitted.finish()
+  expect(f.facts.observationState()).toBe('available')
+  expect(f.sources[1]!.action.signal.aborted).toBe(false)
+  await f.terminal('A'); await f.cleanup()
+})
+
+for (const kind of ['reference', 'terminal'] as const) for (const resolution of ['release', 'Stop'] as const) {
+  it(`keeps a foreign original hold after ${kind} receipt recovery until its real ${resolution}`, async () => {
+    const f = await unknownMountReceipt(kind)
+    const outerAction = f.owner.beginAction(), outer = outerAction.registerSettlementSource(async () => {})
+    outerAction.finish(); outer.holdRecovery()
+    let installed = 0, cancelled = 0
+    await expect(f.start()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    await expect(f.facts.store({ type: 'code/store', version: 1, cellId: 'A', writes: [['original', 42]] }, () => { installed++ }, () => { cancelled++ })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    const store = f.stores[0]!.capture, original = f.sources[0]!.captures[0]!
+    f.releaseReceipt()
+    await expect(f.facts.refresh()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    expect(await original.observe()).toMatchObject({ kind: 'committed', receipt: f.receipt })
+    expect(f.stores[0]!.outcomes[0]).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
+    expect([installed, cancelled]).toEqual([0, 0]); expect(() => f.owner.beginAction()).toThrow()
+    expect(f.issues.filter(i => i.events.some(e => (e as {type?: string}).type === 'code/store'))).toEqual([])
+    f.note('mount-recovered-foreign-still-held', { resolution, mount: await original.observe(), store: await store.observe(), installed, cancelled })
+    await f.save('mount-recovered-foreign-still-held')
+    if (resolution === 'release') {
+      await outer.close(); await f.facts.refresh()
+      expect([installed, cancelled]).toEqual([1, 0]); expect(await store.observe()).toMatchObject({ kind: 'committed' })
+      await f.terminal('A')
+    } else {
+      f.facts.stopOptional(); await f.facts.refresh()
+      expect([installed, cancelled]).toEqual([0, 1]); expect(await store.observe()).toMatchObject({ kind: 'not-issued' })
+      expect(await store.observe()).not.toHaveProperty('receipt')
+      expect(f.issues.filter(i => i.events.some(e => (e as {type?: string}).type === 'code/store'))).toEqual([])
+      expect(() => f.owner.beginAction()).toThrow(); outer.assertHeld()
+      await outer.close()
+      f.live.delete('A'); await f.facts.required({ type: 'code/cell', cellId: 'A', state: 'terminated' })
+    }
+    expect(f.stores).toHaveLength(1); expect(f.stores[0]!.capture).toBe(store)
+    expect(f.sources[0]!.source.holdRecovery).not.toHaveBeenCalled()
+    await f.cleanup()
+  })
+}
+
+it.each(['terminal', 'required'] as const)('keeps actual mount %s installation failure sticky after the original unknown receipt commits', async kind => {
+  const f = await unknownMountReceipt(kind), mount = f.sources[0]!
+  let callbacks = 0, installed = 0
+  await expect(f.start(() => { callbacks++; throw 0 })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  await expect(f.facts.store({ type: 'code/store', version: 1, cellId: 'A', writes: [['original', 42]] }, () => { installed++ }, () => {})).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  const original = mount.captures[0]!, store = f.stores[0]!.capture
+  f.releaseReceipt()
+  await expect(f.facts.refresh()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  expect(await original.observe()).toMatchObject({ kind: 'committed', receipt: f.receipt })
+  expect(await f.document!.reconcile(f.batch.key)).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
+  expect([callbacks, installed]).toEqual([1, 0]); expect(f.stores[0]!.outcomes).toEqual([])
+  expect(await store.observe()).toMatchObject({ kind: 'not-issued' })
+  expect(f.facts.observationState()).toBe('unavailable')
+  expect(() => f.owner.beginAction()).toThrow(); expect(() => f.sources[1]!.action.assertOpen()).toThrow()
+  expect(await f.sources[1]!.action.facts.metadata.admit({ type: 'session/title', title: 'sticky guard', source: 'user', messageSeqs: [] })).toMatchObject({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' })
+  expect(mount.source.holdRecovery).not.toHaveBeenCalled()
+  await expect(f.facts.refresh()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  expect(callbacks).toBe(1)
+  f.note('mount-committed-installation-sticky', { sourceKind: kind, original: await original.observe(), store: await store.observe(), callbacks, installed, state: f.facts.observationState() })
+  await f.save('mount-committed-installation-sticky')
+  // This fixture's actual still-live A producer responds to original Stop with
+  // a real terminal seal; the failed earlier mount record still blocks it.
+  f.facts.stopOptional(); f.live.delete('A')
+  await expect(f.facts.required({ type: 'code/cell', cellId: 'A', state: 'terminated' })).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+  expect(f.stores[0]!.capture).toBe(store); expect(f.stores).toHaveLength(1)
+  expect(f.issues.filter(i => i.events.some(e => (e as {type?: string}).type === 'code/store'))).toEqual([])
   await f.cleanup(true)
 })

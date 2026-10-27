@@ -25,9 +25,10 @@ export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () =>
     hold(record) {
       const cell = record.kind === 'output' ? record.cell : undefined
       if (cell) { cell.recoveryRecords.add(record); cell.revision++; cell.holdEpoch++; cell.held = true; held.add(cell); cell.source.holdRecovery() }
-      // Optional store refusal is not an output-source obligation or a new
-      // output hold. Its original action/capture remains queued.
-      else if (record.kind !== 'store') source.holdRecovery()
+      // Ordinary mount records have frozen DTOs and original native captures.
+      // Native pending/quarantine fences their uncertain receipts; an extra
+      // mount hold has no checkpoint release path. Store refusal likewise
+      // stays queued without becoming an output-source hold obligation.
       changed()
     },
     completed(record) {
