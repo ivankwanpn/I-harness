@@ -7,7 +7,7 @@ import { createSessionCoordinator } from '../../session-persistence/src/index.ts
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createCodeModeEventFacts } from '../src/event-facts.ts'
 
-// Diagnostic characterization only: changing source admission/retirement or
+// Retained original-owner regression: changing source admission/retirement or
 // optional cancellation should require revisiting these observed boundaries.
 // Every wrapper delegates once, preserving the original object and error.
 async function fixture(control: string) {
@@ -102,7 +102,7 @@ async function fixture(control: string) {
     })
     return action
   })
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = createCodeModeEventFacts(document, async () => { await facts.required({ type: 'code/cell', cellId: 'original', state: 'terminated' }) })
   await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
   const outerAction = document.beginAction()
   const outer = outerAction.registerSettlementSource(async () => { note('outer.drain') })
@@ -138,7 +138,7 @@ async function fixture(control: string) {
 }
 
 for (const order of ['closed-first', 'open-backlog'] as const) {
-  it(`characterizes same-cell source admission under an unchanged outer hold: ${order}`, async () => {
+  it(`retains same-cell source admission under an unchanged outer hold: ${order}`, async () => {
     const f = await fixture(order), gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
     const first = f.output('first original π\n'), second = f.output('second original 二\n')
     let preparedFirst = 0, preparedSecond = 0, installedFirst = 0, installedSecond = 0
@@ -158,22 +158,15 @@ for (const order of ['closed-first', 'open-backlog'] as const) {
         }, () => { installedSecond++; f.note('install.second') })
         f.note('second.returned.promise')
       } catch (error) { synchronousError = error; f.note('second.synchronous.error', { error: f.errorData(error) }) }
-      if (order === 'open-backlog') { gate.resolve(); await firstReceipt; await secondReceipt }
+      if (order === 'open-backlog') { gate.resolve(); await firstReceipt }; await secondReceipt
       f.note('counters', { preparedFirst, preparedSecond, installedFirst, installedSecond,
         inputFirst: JSON.stringify(first), inputSecond: JSON.stringify(second) })
       raw = await f.snapshot()
       expect(preparedFirst).toBe(1); expect(installedFirst).toBe(1)
       const events = f.document.view.events.filter(event => event.type === 'code/output')
-      expect(events.map(event => event.envelope?.preview)).toEqual(order === 'closed-first'
-        ? ['first original π\n'] : ['first original π\n', 'second original 二\n'])
-      expect(events.map(({ seq: _seq, ...event }) => JSON.stringify(event))).toEqual(
-        order === 'closed-first' ? [JSON.stringify(first)] : [JSON.stringify(first), JSON.stringify(second)])
-      if (order === 'closed-first') {
-        expect(synchronousError).toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
-        expect(secondReceipt).toBeUndefined(); expect(preparedSecond).toBe(0); expect(installedSecond).toBe(0)
-      } else {
-        expect(synchronousError).toBeUndefined(); expect(preparedSecond).toBe(1); expect(installedSecond).toBe(1)
-      }
+      expect(events.map(event => event.envelope?.preview)).toEqual(['first original π\n', 'second original 二\n'])
+      expect(events.map(({ seq: _seq, ...event }) => JSON.stringify(event))).toEqual([JSON.stringify(first), JSON.stringify(second)])
+      expect(synchronousError).toBeUndefined(); expect(preparedSecond).toBe(1); expect(installedSecond).toBe(1)
       // The actual outer hold is still fencing optional authority in both arms.
       expect(() => f.document.beginAction()).toThrow(expect.objectContaining({ code: 'FACT_RECOVERY_REQUIRED' }))
       expect(f.trace.filter(item => (item as { kind: string }).kind === 'source.hold')).toHaveLength(1)

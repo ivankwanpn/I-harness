@@ -1,210 +1,173 @@
-import { captureLegacyFact, isStrictFactData, committedFactSeqs, FactRecoveryRequiredError, subscribe, type CapturedActionFact, type CodeSettlementFact, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SessionEvent, type SettlementFacts } from '@i-harness/core-session';
-interface Pending {
-    fact?: CapturedActionFact<ProducerFactOutcome>;
-    prepare?: () => Promise<CodeSettlementFact>;
-    source?: SettlementFacts<ProducerFactOutcome>;
-    installed: boolean;
-    action?: ManagedAction<ProducerFactOutcome>;
-    onCommit?: () => void;
-    onCancelled?: () => void;
-    onSettled?: () => void;
-    installationFailed?: true;
-}
-/** Mount-owned pending event sources contain only real, not-yet-settled facts.
- * Once a receipt and local installation succeed, their captures are released. */
+import { captureLegacyFact, isStrictFactData, committedFactSeqs, FactRecoveryRequiredError, subscribe, type CodeSettlementFact, type FactOwner, type ManagedAction, type ProducerFactOutcome, type SessionEvent, type SettlementFacts, type SettlementOwnerProgress } from '@i-harness/core-session'
+import { callback, readCut, sameCut, type CellFacts, type Pending } from './event-facts/state.ts'
+import { createOutputQueue, recoveryError } from './event-facts/queue.ts'
+
+/** A mount owns one ordered queue. Each actual admission retains its one
+ * original output source until its terminal has synchronously sealed it. */
 export function createCodeModeEventFacts(owner: FactOwner, drainProducers: () => Promise<void>, onObservationChange?: () => void) {
-    const pending = new Set<Pending>(), actions = new Map<string, ManagedAction<ProducerFactOutcome>>(), action = owner.beginAction();
-    const outputs = new Map<string, { source: SettlementFacts<ProducerFactOutcome>; records: Pending[] }>();
-    const recoveryHolds = new Set<SettlementFacts<ProducerFactOutcome>>();
-    const admissionHolds = new Map<string, object>();
-    let retired = false, stickyRecovery = false, admitting = 0, cancelling = 0;
-    const changed = () => { try { onObservationChange?.(); } catch { /* Observation cannot fail the original producer. */ } };
-    const requireRecovery = () => { stickyRecovery = true; changed(); source.requireRecovery(); };
-    const observationState = (): 'available' | 'unavailable' | 'retired' => retired ? 'retired'
-        : stickyRecovery || admitting || cancelling || pending.size || recoveryHolds.size || admissionHolds.size ? 'unavailable' : 'available';
-    let serial = Promise.resolve();
-    const commit = async (record: Pending, firstIssue = false) => {
-        if (record.installationFailed)
-            throw new FactRecoveryRequiredError();
-        if (!record.fact) {
-            try { record.fact = (record.source ?? source).code.capture(await record.prepare!()); record.prepare = undefined; }
-            catch (cause) {
-                const held = record.source ?? source;
-                recoveryHolds.add(held); changed(); held.holdRecovery();
-                throw Object.assign(new FactRecoveryRequiredError(), { cause });
-            }
+  const cells = new Map<string, CellFacts>(), pending = new Set<Pending>()
+  const admissionHolds = new Map<string, { action?: ManagedAction<ProducerFactOutcome> }>()
+  const held = new Set<CellFacts>(), failedAdmissions = new Set<string>()
+  let retired = false, stickyRecovery = false, admitting = 0, driveSerial = Promise.resolve()
+  const changed = () => { try { onObservationChange?.() } catch { /* Passive observers cannot fail producers. */ } }
+  const requireRecovery = () => { stickyRecovery = true; changed(); source.requireRecovery() }
+  const observationState = (): 'available' | 'unavailable' | 'retired' => retired ? 'retired' : stickyRecovery || admitting || pending.size || held.size || admissionHolds.size ? 'unavailable' : 'available'
+  const queue = createOutputQueue({ changed,
+    failed(record, reason) {
+      const cell = record.cell ?? record.actionCell
+      if (cell) {
+        cell.failed = true; cell.errors.push(reason); cell.revision++
+        cell.fail(reason)
+        if (!record.cellClosed) cell.source.requireRecovery()
+      }
+      requireRecovery()
+    },
+    hold(record) {
+      const cell = record.kind === 'output' ? record.cell : undefined
+      if (cell) { cell.recoveryRecords.add(record); cell.revision++; cell.holdEpoch++; cell.held = true; held.add(cell); cell.source.holdRecovery() }
+      // Optional store refusal is not an output-source obligation or a new
+      // output hold. Its original action/capture remains queued.
+      else if (record.kind !== 'store') source.holdRecovery()
+      changed()
+    },
+    completed(record) {
+      pending.delete(record)
+      const cell = record.cell
+      if (record.kind === 'output' && cell) { cell.outputs.delete(record); cell.recoveryRecords.delete(record); cell.revision++ }
+      changed()
+    },
+  })
+  const enroll = (record: Pick<Pending, 'kind'> & Partial<Pending>) => {
+    const enrolled = queue.enroll({ attempted: false, disposed: false, cancelled: false, settled: false, commit: callback(), cancel: callback(), settle: callback(), ...record })
+    pending.add(enrolled); return enrolled
+  }
+  const settle = async (cell: CellFacts): Promise<SettlementOwnerProgress> => {
+    if (cell.failed) throw recoveryError(cell.errors)
+    if (!cell.outputs.size) return { kind: 'advanced' }
+    const result = await queue.pump(cell)
+    if (cell.failed) throw recoveryError(cell.errors)
+    if (!cell.outputs.size) return { kind: 'advanced' }
+    return { kind: 'blocked', reason: result.kind === 'blocked' ? result.reason : new FactRecoveryRequiredError() }
+  }
+  const refresh = (): Promise<void> => {
+    const run = driveSerial.then(async () => {
+      for (;;) {
+        const result = await queue.pump()
+        if (result.kind === 'close-cell') {
+          await result.cell.source.close()
+          held.delete(result.cell); result.cell.held = false; changed()
+          queue.releaseTerminal(result.record)
+          continue
         }
-        const outcome = await (firstIssue ? record.fact.admit() : record.fact.reconcile());
-        if (record.action?.signal.aborted && (outcome.kind === 'absent' || outcome.kind === 'not-issued')) {
-            cancelling++;
-            pending.delete(record);
-            try { record.onCancelled?.(); }
-            catch (error) { stickyRecovery = true; throw error; }
-            finally { cancelling--; changed(); }
-            return;
+        // A callback may append an original Store beyond this pump's fixed
+        // watermark. Give that queued head its real first attempt under the
+        // still-held output epoch before asking a checkpoint to release it.
+        if (result.kind === 'idle' && queue.hasPending()) continue
+        let released = false
+        for (const cell of [...held]) if (!cell.recoveryRecords.size && !cell.failed) {
+          const epoch = cell.holdEpoch
+          await cell.source.checkpoint()
+          if (epoch === cell.holdEpoch) { held.delete(cell); cell.held = false; changed(); released = true }
         }
-        committedFactSeqs(outcome);
-        if (!record.installed) {
-            try {
-                record.onCommit?.();
-                record.installed = true;
-                changed();
-            }
-            catch (cause) {
-                record.installationFailed = true;
-                requireRecovery();
-                throw Object.assign(new FactRecoveryRequiredError(), { cause });
-            }
+        if (released) continue
+        if (result.kind === 'blocked') throw recoveryError([result.reason])
+        if (!queue.hasPending()) return
+      }
+    })
+    driveSerial = run.catch(() => {})
+    return run
+  }
+  const drain = async () => {
+    // Settle eligible original prerequisites before joining producers. A live
+    // cell's close waits for the producer's terminal seal, so initiate producer
+    // cancellation before asking those unsealed sources to close.
+    await refresh()
+    await drainProducers()
+    await refresh()
+  }
+  const mountAction = owner.beginAction(), source = mountAction.registerSettlementSource(drain)
+  mountAction.finish()
+  const off = subscribe(owner.view, () => { if (pending.size) void refresh().catch(() => {}) })
+  const seal = (cell: CellFacts) => { if (!cell.sealed) { cell.sealed = true; cell.revision++; cell.sealNow() } }
+  const required = (event: CodeSettlementFact, onCommit?: () => void, failedAdmission = false) => {
+    if (!isStrictFactData(event)) { requireRecovery(); throw new FactRecoveryRequiredError() }
+    const original = captureLegacyFact(event)
+    if (original.kind !== 'captured') { requireRecovery(); throw new FactRecoveryRequiredError() }
+    const captured = original.value, cell = captured.type === 'code/cell' ? cells.get(captured.cellId) : undefined
+    // The existing admission handler may report the same original failure.
+    // Keep its already-enqueued interrupted fact instead of allocating another.
+    if (!failedAdmission && captured.type === 'code/cell' && captured.state === 'interrupted' && failedAdmissions.has(captured.cellId)) return refresh()
+    if (cell?.terminal) throw new FactRecoveryRequiredError()
+    const admission = captured.type === 'code/cell' ? admissionHolds.get(captured.cellId) : undefined
+    const record = enroll({ kind: captured.type === 'code/cell' ? 'terminal' : 'required', cell, source,
+      prepare: async () => captured, commit: callback(onCommit), settle: callback(() => {
+        if (captured.type === 'code/cell') {
+          const admittedAction = cell?.action ?? admission?.action
+          admittedAction?.finish()
+          if (cells.get(captured.cellId) === cell) cells.delete(captured.cellId)
+          if (admissionHolds.get(captured.cellId) === admission) admissionHolds.delete(captured.cellId)
         }
-        pending.delete(record);
-        record.onSettled?.();
-        changed();
-    };
-    const refresh = (): Promise<void> => {
-        const settling = serial.then(async () => {
-            do {
-                const errors: unknown[] = [];
-                for (const record of [...pending]) {
-                    try {
-                        if (record.source) {
-                            await record.source.close();
-                            for (const [cellId, group] of outputs) if (group.source === record.source) outputs.delete(cellId);
-                            recoveryHolds.delete(record.source);
-                            changed();
-                        }
-                        else await commit(record);
-                    }
-                    catch (error) {
-                        errors.push(error);
-                        // Later original outputs cannot pass an unresolved earlier
-                        // output's storage/publication boundary.
-                        break;
-                    }
-                }
-                if (errors.length)
-                    throw Object.assign(new AggregateError(errors, 'Code Mode event settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' });
-            } while (pending.size);
-        });
-        serial = settling.catch(() => { });
-        return settling;
-    };
-    const drain = async () => {
-        // Unknown facts return before joining a producer whose continuation needs
-        // that same receipt. Local callbacks may now schedule required settlement.
-        await refresh();
-        await drainProducers();
-        await refresh();
-    };
-    const source = action.registerSettlementSource(drain);
-    action.finish();
-    const off = subscribe(owner.view, () => {
-        if (pending.size)
-            void refresh().catch(() => { });
-    });
-    return {
-        refresh,
-        observationState,
-        requireRecovery,
-        assertHeld() { source.assertHeld(); },
-        /** Register original accepted work before its first storage await. The
-         * same record owns preparation and exactly one eventual F1 capture. */
-        requiredPrepared(cellId: string, prepare: (assertHeld: () => void) => Promise<CodeSettlementFact>, onCommit?: () => void) {
-            let group = outputs.get(cellId);
-            if (!group) {
-                const cellAction = actions.get(cellId);
-                if (!cellAction) throw new FactRecoveryRequiredError();
-                const records: Pending[] = [];
-                const outputSource = cellAction.registerSettlementSource(async () => {
-                    for (let index = 0; index < records.length; index++) if (!records[index]!.installed) await commit(records[index]!);
-                });
-                group = { source: outputSource, records }; outputs.set(cellId, group);
-            }
-            // Already accepted backlog belongs to the same original source.
-            // Recovery must not allocate new authority under its own hold.
-            const outputSource = group.source;
-            const record: Pending = { prepare: () => prepare(outputSource.assertHeld), source: outputSource, installed: false, onCommit };
-            group.records.push(record);
-            pending.add(record);
-            changed();
-            return refresh();
-        },
-        captureReference(ref: Extract<SessionEvent, {
-            type: 'context/result-ref';
-        }>['ref']) {
-            const record: Pending = { fact: source.retention.capture({ type: 'context/result-ref', ignorable: true, ref }), installed: false };
-            pending.add(record);
-            changed();
-            return async () => {
-                if (!record.installed)
-                    await commit(record);
-            };
-        },
-        required(event: CodeSettlementFact, onCommit?: () => void) {
-            if (!isStrictFactData(event)) { requireRecovery(); throw new FactRecoveryRequiredError(); }
-            const original = captureLegacyFact(event);
-            if (original.kind !== 'captured') { requireRecovery(); throw new FactRecoveryRequiredError(); }
-            const captured = original.value;
-            // Only this rejected start's original interrupted record can
-            // release its observation hold, after installation AND deletion.
-            const admission = captured.type === 'code/cell' && captured.state === 'interrupted' ? admissionHolds.get(captured.cellId) : undefined;
-            const record: Pending = {
-                // Freeze metadata now; allocate its F1 capture only at the
-                // ordered queue position. Source pre-drain must not issue a
-                // terminal ahead of an earlier unknown output artifact.
-                prepare: async () => captured, installed: false, onCommit: () => {
-                    onCommit?.();
-                    if (captured.type === 'code/cell') {
-                        actions.get(captured.cellId)?.finish();
-                        actions.delete(captured.cellId);
-                    }
-                },
-                onSettled: admission ? () => {
-                    if (captured.type === 'code/cell' && admissionHolds.get(captured.cellId) === admission) admissionHolds.delete(captured.cellId);
-                } : undefined
-            };
-            pending.add(record);
-            changed();
-            // Terminal publication cannot overtake an accepted output whose
-            // original storage/F1 stage is still pending, including human Stop.
-            return refresh();
-        },
-        async optional(event: Extract<SessionEvent, {
-            type: 'code/cell';
-        }>, signal?: AbortSignal) {
-            admitting++; changed();
-            const admission = {};
-            try {
-                const action = owner.beginAction(signal);
-                actions.set(event.cellId, action);
-                committedFactSeqs(await action.facts.code.record(event));
-            } catch (error) {
-                admissionHolds.set(event.cellId, admission);
-                throw error;
-            } finally { admitting--; changed(); }
-        },
-        async store(event: Extract<SessionEvent, {
-            type: 'code/store';
-        }>, onCommit: () => void, onCancelled: () => void) {
-            const action = actions.get(event.cellId);
-            if (!action)
-                throw new FactRecoveryRequiredError();
-            const record: Pending = { fact: action.captureCodeStore(event), action, installed: false, onCommit, onCancelled };
-            pending.add(record);
-            changed();
-            await commit(record, true);
-        },
-        stopOptional() {
-            for (const action of actions.values())
-                action.stop();
-        },
-        assertObserved() {
-            if (pending.size)
-                throw new FactRecoveryRequiredError();
-        },
-        async close() {
-            if (!retired) { retired = true; changed(); }
-            await source.close();
-            off();
-        },
-    };
+      }),
+    })
+    if (cell) { cell.terminal = record; seal(cell) }
+    changed(); return refresh()
+  }
+  return {
+    refresh, observationState, requireRecovery,
+    assertHeld() { source.assertHeld() },
+    requiredPrepared(cellId: string, prepare: (assertHeld: () => void) => Promise<CodeSettlementFact>, onCommit?: () => void) {
+      const cell = cells.get(cellId)
+      if (!cell || cell.sealed) throw new FactRecoveryRequiredError()
+      const record = enroll({ kind: 'output', cell, source: cell.source, prepare: () => prepare(cell.source.assertHeld), commit: callback(onCommit) })
+      cell.outputs.add(record); cell.revision++; changed()
+      return refresh()
+    },
+    captureReference(ref: Extract<SessionEvent, { type: 'context/result-ref' }>['ref']) {
+      const captured = captureLegacyFact({ type: 'context/result-ref' as const, ignorable: true as const, ref })
+      if (captured.kind !== 'captured') { requireRecovery(); throw new FactRecoveryRequiredError() }
+      const record = enroll({ kind: 'reference', source, capture: () => source.retention.capture(captured.value) })
+      changed(); return async () => { if (!record.settled) await refresh() }
+    },
+    required(event: CodeSettlementFact, onCommit?: () => void) { return required(event, onCommit) },
+    async optional(event: Extract<SessionEvent, { type: 'code/cell' }>, signal?: AbortSignal) {
+      if (cells.has(event.cellId)) throw new FactRecoveryRequiredError()
+      admitting++; changed()
+      const admission: { action?: ManagedAction<ProducerFactOutcome> } = {}
+      let cell: CellFacts | undefined
+      try {
+        failedAdmissions.delete(event.cellId)
+        const action = owner.beginAction(signal), sealGate = Promise.withResolvers<void>(), failure = Promise.withResolvers<never>()
+        // Observe the original failure promise before any producer/callback
+        // can reject it; lifecycle still races the same retained promise.
+        void failure.promise.catch(() => {})
+        admission.action = action
+        cell = { action, source: undefined as unknown as SettlementFacts<ProducerFactOutcome>, outputs: new Set(), recoveryRecords: new Set(), revision: 0, holdEpoch: 0, held: false, sealed: false, seal: sealGate.promise, sealNow: () => sealGate.resolve(), failure: failure.promise, fail: reason => failure.reject(reason), failed: false, errors: [] }
+        const original = cell
+        cell.source = action.registerSettlementSource(async () => {
+          // Failure wakes an existing unsealed wait by rejection. Only the
+          // actual terminal enqueue can fulfill the successful seal branch.
+          await Promise.race([original.seal, original.failure])
+          const result = await settle(original)
+          if (result.kind === 'blocked') throw recoveryError([result.reason])
+        }, undefined, { readCut: () => readCut(original), isCurrent: cut => sameCut(original, cut), settle: () => settle(original) })
+        cells.set(event.cellId, cell)
+        committedFactSeqs(await action.facts.code.record(event))
+      } catch (error) {
+        admissionHolds.set(event.cellId, admission)
+        failedAdmissions.add(event.cellId)
+        if (!cell?.terminal) void required({ ...event, state: 'interrupted', error: 'Code Mode admission did not complete' }, undefined, true).catch(() => {})
+        throw error
+      } finally { admitting--; changed() }
+    },
+    async store(event: Extract<SessionEvent, { type: 'code/store' }>, onCommit: () => void, onCancelled: () => void) {
+      const cell = cells.get(event.cellId)
+      if (!cell || cell.sealed) throw new FactRecoveryRequiredError()
+      const record = enroll({ kind: 'store', action: cell.action, actionCell: cell, fact: cell.action.captureCodeStore(event), commit: callback(onCommit), cancel: callback(onCancelled) })
+      changed()
+      try { await refresh() } catch (reason) { if (!record.settled) throw record.failure ? record.failure.reason : reason }
+    },
+    stopOptional() { for (const cell of cells.values()) cell.action.stop() },
+    assertObserved() { if (pending.size) throw new FactRecoveryRequiredError() },
+    async close() { if (!retired) { retired = true; changed() }; await source.close(); off() },
+  }
 }
