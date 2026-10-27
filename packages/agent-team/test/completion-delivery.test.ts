@@ -1,5 +1,6 @@
 import { controlledModel } from '../../subagent/test/generation-fixture.ts'
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it, vi } from "vitest"
@@ -8,13 +9,15 @@ import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts
 import { createDurableSessionLoader, createSessionService } from "../../session-executor/src/index.ts"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import type { ParentInputAdmission } from "@i-harness/subagent"
-import { SYSTEM_INPUT_PLUGIN, decodeFactBatch, type SessionEvent } from "@i-harness/core-session"
+import { SYSTEM_INPUT_PLUGIN, decodeFactBatch, subscribe, type SessionEvent, type SettlementFacts, type ReceivedInputSource, type BatchKey } from "@i-harness/core-session"
+import { admitTeam, releaseTeam } from '../src/scheduler/admission.ts'
 
-async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[]) {
+async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: ParentInputAdmission, seed?: SessionEvent[], configure?: (coordinator: ReturnType<typeof createSessionCoordinator>, backend: ReturnType<typeof createJsonlBackend>) => void) {
   const root = await mkdtemp(join(tmpdir(), "team-completion-"))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "lead" })
   if (seed?.length) await coordinator.append("lead", seed)
+  configure?.(coordinator, backend)
   const service = createSessionService({
     workspace: root, model: lead, coordinator, sessionFor: createDurableSessionLoader(coordinator), team: {}, concurrentSessionTeams: true,
     roleSelectionFor: (role) => role === "teammate" ? { provider: "local", model: "fixture" } : undefined,
@@ -25,7 +28,10 @@ async function fixture(lead: ModelClient, child: ModelClient, parentNotify?: Par
   })
   const assembly = await service.assemblyFor("lead")
   const execute = (name: string, args: unknown) => assembly.tools.get(name)!.execute(args, { sessionId: "lead" })
-  return { root, service, assembly, coordinator, backend, execute, close: async () => { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
+  return { root, service, assembly, coordinator, backend, execute, close: async () => {
+    try { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    catch (error) { console.info('completion-fixture-close-failure', JSON.stringify({ root, error: boundedError(error) })); throw error }
+  } }
 }
 
 async function assertColdDoesNotWake(root: string, marker: string) {
@@ -40,6 +46,321 @@ async function assertColdDoesNotWake(root: string, marker: string) {
     expect(seen).toEqual([])
   } finally { await service.close(); await coordinator.close() }
 }
+
+function boundedError(error: unknown): unknown {
+  const identities = new Map<object, number>()
+  let remaining = 128
+  const visit = (value: unknown, depth: number): unknown => {
+    if (value === null || typeof value !== 'object') return { type: typeof value, value }
+    const previous = identities.get(value)
+    if (previous !== undefined) return { cycleOrSharedReference: previous }
+    if (remaining-- <= 0 || depth > 8) return { overflow: true, depth }
+    const identity = identities.size + 1; identities.set(value, identity)
+    if (value instanceof Error) return {
+      identity, name: value.name, message: value.message, code: (value as Error & { code?: unknown }).code,
+      stack: value.stack?.slice(0, 16_384), stackOverflow: (value.stack?.length ?? 0) > 16_384,
+      ...(value instanceof AggregateError ? { errors: value.errors.slice(0, 16).map(error => visit(error, depth + 1)), errorsOverflow: value.errors.length > 16 } : {}),
+      ...('cause' in value ? { cause: visit(value.cause, depth + 1) } : {}),
+    }
+    if (Array.isArray(value)) return { identity, values: value.slice(0, 16).map(item => visit(item, depth + 1)), overflow: value.length > 16 }
+    const entries = Object.entries(value)
+    return { identity, values: Object.fromEntries(entries.slice(0, 16).map(([key, item]) => [key, visit(item, depth + 1)])), overflow: entries.length > 16 }
+  }
+  return visit(error, 0)
+}
+
+async function completionEvidence(label: string, value: unknown) {
+  const root = process.env.IH_STRUCTURE_EVIDENCE_ROOT
+  if (!root) return
+  const destination = join(root, 'task5'); await mkdir(destination, { recursive: true })
+  await writeFile(join(destination, `${label}.json`), JSON.stringify(value, null, 2))
+}
+
+async function readRetainedJobBody(f: Awaited<ReturnType<typeof fixture>>, jobId: string, label: string) {
+  const retained = Promise.withResolvers<void>()
+  const check = () => { if (f.assembly.subagentState().agentTable.find(entry => entry.jobId === jobId)?.result?.kind === 'retained') retained.resolve() }
+  const off = f.assembly.onSubagentsChanged!(check)
+  try { check(); await retained.promise } finally { off() }
+  const metadata = await f.execute('job_output', { job_id: jobId }) as {
+    status: string; text: string; result_revision: string; result_ref: { id: string; revision: string }; result_retention: string
+  }
+  expect(metadata.status).toBe('completed'); expect(metadata.result_retention).toBe('artifact')
+  expect(metadata.result_revision).toBeDefined(); expect(metadata.result_ref).toBeDefined()
+  const pages: import('@i-harness/subagent').TaskResultPage[] = []
+  let offset = 0, encodedBody = ''
+  for (;;) {
+    const page = await f.execute('job_output', { job_id: jobId, body: true, result_revision: metadata.result_revision,
+      ref_id: metadata.result_ref.id, ref_revision: metadata.result_ref.revision, offset_bytes: offset, max_output_bytes: 4096 }) as import('@i-harness/subagent').TaskResultPage
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
+    expect(page.codec).toBe('json-utf8-v1'); expect(page.resultRevision).toBe(metadata.result_revision)
+    expect(page.ref).toMatchObject(metadata.result_ref); expect(page.offset).toBe(offset)
+    expect(page.data.kind).toBe('text'); expect(page.data.text).not.toContain('\uFFFD')
+    pages.push(page); encodedBody += page.data.text
+    if (page.eof) { expect(page.nextOffset).toBeNull(); break }
+    expect(page.nextOffset).toBeGreaterThan(offset); offset = page.nextOffset!
+  }
+  const body = JSON.parse(encodedBody) as { resultText: string }
+  expect(Object.keys(body)).toEqual(['resultText'])
+  await completionEvidence(label, { root: f.root, jobId, metadata, pages, encodedBody })
+  return { metadata, body }
+}
+
+function aggregateLeaves(error: unknown): unknown[] {
+  return error instanceof AggregateError ? error.errors.flatMap(aggregateLeaves) : [error]
+}
+
+// These controls observe the shipping service and the original native owners.
+// The admission wrapper delegates exactly once and holds only its committed RETURN.
+async function qualifyServiceOrder(order: 'stop-before-return' | 'ack-before-stop' | 'open-recovery') {
+  const marker = `TEAM_ACK_OWNER_${order}`
+  const admitted = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const acknowledged = Promise.withResolvers<void>(), parentIdle = Promise.withResolvers<void>()
+  const seen: LLMRequest[] = [], trace: unknown[] = []
+  const batches: { sessionId: string; key: BatchKey; bytesBase64: string; batch: ReturnType<typeof decodeFactBatch>; result: unknown }[] = []
+  const captures: { action: number; source?: SettlementFacts; tuple: unknown; fact: object }[] = []
+  const documents = new Map<string, { document: Awaited<ReturnType<ReturnType<typeof createSessionCoordinator>['openManagedDocument']>>; closes: number }>()
+  const sources: { action: number; source: SettlementFacts; closes: number; closed: number }[] = []
+  const inputCaptures: { source: ReceivedInputSource; tuple: unknown; fact: object }[] = []
+  const cancellationObservations: Promise<void>[] = []
+  const cancellations: { receiver: object; args: [string, (string | undefined)?]; promise?: Promise<boolean>; outcome?: { kind: 'returned'; value: boolean } | { kind: 'rejected' | 'threw'; error: unknown } }[] = []
+  const errorInfo = boundedError
+  let overflow = 0, actions = 0, childTurns = 0, admitCalls = 0, cancelCalls = 0
+  let originalInput: Parameters<Awaited<ReturnType<typeof fixture>>['assembly']['inbox']['admit']>[0] | undefined
+  let actualReturn: unknown, closing: Promise<void> | undefined, serviceClosed = false
+  let primaryOccurred = false, primary: unknown, cleanupOccurred = false, cleanup: unknown
+  const note = (phase: string, detail?: unknown) => { if (trace.length < 256) trace.push({ ordinal: trace.length + 1, phase, detail }); else overflow++ }
+  const lead: ModelClient = controlledModel(async function* (request): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
+    seen.push(request); note('parent-model', { turn: seen.length }); yield { type: 'text/chunk', text: 'received' }; yield { type: 'end' }
+  })
+  const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> {
+    childTurns++; note('child-model', { turn: childTurns }); yield { type: 'text/chunk', text: marker }; yield { type: 'end' }
+  })
+  const f = await fixture(lead, child, undefined, undefined, (coordinator, backend) => {
+    const open = coordinator.openManagedDocument.bind(coordinator)
+    coordinator.openManagedDocument = async (...args) => {
+      const document = await open(...args)
+      if (!documents.has(args[0])) {
+        const row = { document, closes: 0 }; documents.set(args[0], row)
+        const close = document.close.bind(document)
+        document.close = async () => { row.closes++; note('document-close', { id: args[0] }); await close() }
+        if (args[0] === 'lead') {
+          const registerInputs = document.registerReceivedInputSource.bind(document)
+          document.registerReceivedInputSource = (...inputArgs) => {
+            const source = registerInputs(...inputArgs), capture = source.captureCancellation.bind(source)
+            source.captureCancellation = event => {
+              const fact = capture(event); inputCaptures.push({ source, tuple: event, fact }); note('original-cancellation-captured', event); return fact
+            }
+            return source
+          }
+          const begin = document.beginAction.bind(document)
+          document.beginAction = (...actionArgs) => {
+            const action = begin(...actionArgs), id = ++actions
+            const queue = action.captureTeamTransaction.bind(action), register = action.registerSettlementSource.bind(action)
+            action.captureTeamTransaction = events => { const fact = queue(events); captures.push({ action: id, tuple: events, fact }); return fact }
+            action.registerSettlementSource = (...sourceArgs) => {
+              const source = register(...sourceArgs), row = { action: id, source, closes: 0, closed: 0 }
+              sources.push(row)
+              const capture = source.delivery.capture.bind(source.delivery), close = source.close.bind(source)
+              source.delivery.capture = event => {
+                const fact = capture(event); captures.push({ action: id, source, tuple: event, fact })
+                if (event.type === 'team/message/delivered') note('original-ack-captured', { action: id, event })
+                return fact
+              }
+              source.close = async () => { row.closes++; await close(); row.closed++; note('source-closed', { action: id }) }
+              return source
+            }
+            return action
+          }
+        }
+      } else expect(documents.get(args[0])!.document).toBe(document)
+      return document
+    }
+    const append = backend.appendOwnedBatch!
+    backend.appendOwnedBatch = async (...args) => {
+      const result = await append(...args)
+      const batch = decodeFactBatch(args[3].bytes)
+      batches.push({ sessionId: args[0], key: args[3].key, bytesBase64: Buffer.from(args[3].bytes).toString('base64'), batch, result })
+      if (args[0] === 'lead') note('native-batch-return', { key: args[3].key, result, types: batch.events.map(event => event.type) })
+      return result
+    }
+  })
+  const off = subscribe(f.assembly.session, event => {
+    if (event.type === 'team/message/delivered') { note('ack-installed', event); acknowledged.resolve() }
+    if (event.type === 'agent/input/cancelled') note('input-cancelled', event)
+  })
+  const offState = f.service.onExecutionState!(state => {
+    note('parent-lane', state)
+    if (state.sessionId === 'lead' && !state.running && state.queued === 0 && seen.length > 0) parentIdle.resolve()
+  })
+  const admit = f.assembly.inbox.admit, cancel = f.assembly.inbox.cancel
+  const temporary = new Error('original inbox RETURN lost after native commit')
+  f.assembly.inbox.admit = async function (...args) {
+    const result = await admit.apply(this, args)
+    if (args[0].text.includes(marker)) {
+      admitCalls++; originalInput = args[0]; actualReturn = result
+      const queue = f.assembly.session.events.find(event => event.type === 'team/message/queued' && event.message.content.includes(marker))
+      expect(queue?.type).toBe('team/message/queued')
+      if (queue?.type !== 'team/message/queued') throw new Error('missing original queue')
+      expect(args[0].text).toBe(`Team message <${queue.message.id}> from <helper>:\n${queue.message.content}`)
+      expect(f.assembly.session.events.some(event => event.type === 'team/member' && event.member.id === queue.message.senderId && event.member.name === 'helper')).toBe(true)
+      expect(args[0].inputId).toBe(`parent-notify-${createHash('sha256').update(args[0].text).update('Team message from helper').digest('hex')}`)
+      note('inbox-admit-committed-return-held', { input: args[0], actualReturn: result, receiverIsOriginal: this === f.assembly.inbox })
+      admitted.resolve()
+      await release.promise
+      note('inbox-admit-return-released')
+      if (order === 'open-recovery') throw temporary
+    }
+    return result
+  }
+  f.assembly.inbox.cancel = function (...args) {
+    cancelCalls++
+    const row: (typeof cancellations)[number] = { receiver: this, args }
+    cancellations.push(row)
+    const identity = cancellations.length
+    note('actual-inbox-cancel', { identity, receiverIsOriginal: this === f.assembly.inbox, args })
+    try {
+      const originalPromise = cancel.apply(this, args)
+      row.promise = originalPromise
+      cancellationObservations.push(originalPromise.then(value => {
+        row.outcome = { kind: 'returned', value }; note('actual-inbox-cancel-returned', { identity, value })
+      }, error => {
+        row.outcome = { kind: 'rejected', error }; note('actual-inbox-cancel-rejected', { identity, error: errorInfo(error) })
+      }))
+      return originalPromise
+    } catch (error) {
+      row.outcome = { kind: 'threw', error }; note('actual-inbox-cancel-threw', { identity, error: errorInfo(error) }); throw error
+    }
+  }
+  const heldTools = ['spawn_teammate', 'team_send_message', 'team_followup_task', 'team_task_create'].map(name => {
+    const tool = f.assembly.tools.get(name); expect(tool, name).toBeDefined(); return tool!
+  })
+  try {
+    await f.execute('spawn_teammate', { name: 'helper', description: 'text-only actual service qualification', prompt: 'one final', context: 'fresh' })
+    await admitted.promise
+    const events = f.assembly.session.events
+    const queue = events.find(event => event.type === 'team/message/queued' && event.message.content.includes(marker))!
+    if (queue.type !== 'team/message/queued') throw new Error('missing matching queued message')
+    const messageId = queue.message.id
+    const matchingAck = () => events.filter(event => event.type === 'team/message/delivered' && event.messageId === messageId)
+    const inputEvents = () => events.filter(event => event.type === 'agent/input/admitted' && event.inputId === originalInput!.inputId)
+    const audits = () => events.filter(event => event.type === 'subagent/inbox' && event.messageId === messageId)
+    expect(audits()).toHaveLength(1); expect(inputEvents()).toHaveLength(1); expect(matchingAck()).toEqual([])
+    expect(f.assembly.inbox.pending().filter(input => input.inputId === originalInput!.inputId)).toHaveLength(1)
+    expect([admitCalls, childTurns, seen.length]).toEqual([1, 1, 0])
+    const queueCapture = captures.find(capture => Array.isArray(capture.tuple) && capture.tuple.some(event => event.type === 'team/message/queued' && event.message.id === messageId))!
+    expect(queueCapture).toBeDefined()
+    const originalSources = sources.map(row => row.source)
+    const actionsAtGate = actions
+    if (order === 'stop-before-return') {
+      note('service-close-called'); closing = f.service.close()
+      expect(f.service.liveAssembly('lead')).toBeUndefined()
+      expect(() => f.assembly.factOwner.beginAction()).toThrow(expect.objectContaining({ code: 'FACT_CLOSED' }))
+      const refusalArgs = [
+        { name: 'refused', description: 'closed roster probe', prompt: 'must not spawn', context: 'fresh' },
+        { target: 'helper', message: 'closed mailbox probe' },
+        { target: 'helper', message: 'closed driver probe' },
+        { subject: 'closed task probe', description: 'must not create a task' },
+      ]
+      const refusals = await Promise.allSettled(heldTools.map((tool, index) => Promise.resolve().then(() => tool.execute(refusalArgs[index], { sessionId: 'lead' }))))
+      refusals.forEach((refusal, index) => note('optional-refused', { name: heldTools[index]!.name, args: refusalArgs[index], caller: { sessionId: 'lead' }, status: refusal.status, ...(refusal.status === 'rejected' ? { error: errorInfo(refusal.reason) } : { value: refusal.value }) }))
+      for (const refusal of refusals) expect(refusal).toMatchObject({ status: 'rejected', reason: { code: 'FACT_CLOSED' } })
+      expect(actions).toBe(actionsAtGate); expect(matchingAck()).toEqual([]); expect(seen).toEqual([])
+      release.resolve(); await closing; serviceClosed = true; note('service-close-acknowledged')
+      expect(events.filter(event => event.type === 'agent/input/cancelled' && event.inputId === originalInput!.inputId)).toHaveLength(1)
+      expect(cancelCalls).toBe(1)
+      expect(cancellations).toHaveLength(1)
+      expect(cancellations[0]!.receiver).toBe(f.assembly.inbox)
+      expect(cancellations[0]!.args).toEqual([originalInput!.inputId, 'parent stopped'])
+      expect(cancellations[0]!.outcome).toEqual({ kind: 'returned', value: true })
+      expect(inputCaptures).toHaveLength(1)
+      expect(inputCaptures[0]!.tuple).toEqual({ type: 'agent/input/cancelled', version: 1, inputId: originalInput!.inputId, reason: 'parent stopped' })
+      expect(seen).toEqual([]); expect(actions).toBe(actionsAtGate)
+    } else {
+      release.resolve()
+      if (order === 'open-recovery') {
+        // First recovery joins the original attempt if its return is still unwinding.
+        // A second explicit OPEN recovery may then retry the known queued attempt.
+        await f.assembly.drainParentNotifications!()
+        await f.assembly.drainParentNotifications!()
+      }
+      await acknowledged.promise; await parentIdle.promise
+      expect(seen).toHaveLength(1); expect(JSON.stringify(seen[0]!.messages)).toContain(marker)
+      expect(events.filter(event => event.type === 'user/message' && event.input?.inputId === originalInput!.inputId)).toHaveLength(1)
+      expect(events.filter(event => event.type === 'agent/input/cancelled' && event.inputId === originalInput!.inputId)).toEqual([])
+      expect(cancelCalls).toBe(0)
+      note('service-close-called'); closing = f.service.close(); await closing; serviceClosed = true; note('service-close-acknowledged')
+    }
+    expect(matchingAck()).toEqual([expect.objectContaining({ teamId: queue.teamId, messageId, targetId: queue.message.targetId })])
+    expect([audits().length, inputEvents().length, admitCalls, childTurns]).toEqual([1, 1, 1, 1])
+    const originalBatches = batches.filter(batch => batch.sessionId === 'lead')
+    const queueBatches = originalBatches.filter(batch => batch.batch.events.some(event => event.type === 'team/message/queued' && event.message.id === messageId))
+    const auditBatches = originalBatches.filter(batch => batch.batch.events.some(event => event.type === 'subagent/inbox' && event.messageId === messageId))
+    const inputBatches = originalBatches.filter(batch => batch.batch.events.some(event => event.type === 'agent/input/admitted' && event.inputId === originalInput!.inputId))
+    const cancelBatches = originalBatches.filter(batch => batch.batch.events.some(event => event.type === 'agent/input/cancelled' && event.inputId === originalInput!.inputId))
+    const ackBatches = originalBatches.filter(batch => batch.batch.events.some(event => event.type === 'team/message/delivered' && event.messageId === messageId))
+    expect([queueBatches.length, auditBatches.length, inputBatches.length, cancelBatches.length, ackBatches.length]).toEqual([1, 1, 1, order === 'stop-before-return' ? 1 : 0, 1])
+    for (const batch of [...queueBatches, ...auditBatches, ...inputBatches, ...cancelBatches, ...ackBatches]) {
+      expect(batch.result).toMatchObject({ kind: 'committed', receipt: { key: batch.key, owner: { sessionId: 'lead' } } })
+      expect(batch.batch.key).toEqual(batch.key)
+    }
+    expect(new Set([...queueBatches, ...auditBatches, ...inputBatches, ...cancelBatches, ...ackBatches].map(batch => batch.key.batchId)).size).toBe(order === 'stop-before-return' ? 5 : 4)
+    const ackCaptures = captures.filter(capture => (capture.tuple as { type?: string }).type === 'team/message/delivered')
+    expect(ackCaptures).toHaveLength(1)
+    const teamSource = sources.find(row => row.source === ackCaptures[0]!.source)!
+    expect(originalSources).toContain(teamSource.source); expect(teamSource.action).toBeLessThan(queueCapture.action)
+    expect(ackCaptures[0]!.source).toBe(teamSource.source)
+    expect(ackCaptures[0]!.action).toBe(teamSource.action); expect(ackCaptures[0]!.fact).not.toBe(queueCapture.fact)
+    expect(ackCaptures[0]!.tuple).toEqual({ type: 'team/message/delivered', version: 1, teamId: queue.teamId, messageId, targetId: queue.message.targetId })
+    expect(teamSource.closed).toBe(1); expect(() => teamSource.source.assertHeld()).toThrow(expect.objectContaining({ code: 'FACT_CLOSED' }))
+    expect(f.assembly.inbox.pending()).toEqual([]); expect(f.service.queueState('lead')).toEqual({ running: false, queued: 0 })
+    expect(f.assembly.subagentState().agentTable).toEqual([])
+    expect(f.assembly.subagentState().roles.some(role => role.name === 'teammate')).toBe(false)
+    for (const tool of heldTools) expect(f.assembly.tools.get(tool.name)).not.toBe(tool)
+    for (const row of documents.values()) {
+      expect(row.closes).toBeGreaterThanOrEqual(1)
+      expect(() => row.document.beginAction()).toThrow(expect.objectContaining({ code: 'FACT_CLOSED' }))
+    }
+    // Probe the real module's released reservation without constructing another owner.
+    const reservation = admitTeam({ parentSession: f.assembly.session }); expect(reservation.teamId).toBe(queue.teamId); releaseTeam(reservation.teamId)
+    note('cleanup-phases-acknowledged', { source: true, children: documents.size - 1, tools: heldTools.map(tool => tool.name), reservationReleased: true })
+    await f.service.close() // acknowledged phases cannot replay callbacks
+    expect([admitCalls, childTurns, teamSource.closed]).toEqual([1, 1, 1])
+    expect(overflow).toBe(0)
+  } catch (error) { primaryOccurred = true; primary = error }
+  finally {
+    release.resolve()
+    try { if (!closing) closing = f.service.close(); await closing; serviceClosed = true; await f.coordinator.close() }
+    catch (error) { cleanupOccurred = true; cleanup = error }
+    await Promise.all(cancellationObservations)
+    off(); offState()
+    const evidence = { order, root: f.root, marker, trace, overflow, actions, childTurns, admitCalls, cancelCalls, serviceClosed,
+      originalInput, actualReturn, batches,
+      captures: captures.map((capture, index) => ({ identity: index + 1, action: capture.action, tuple: capture.tuple, sourceIdentity: capture.source ? sources.findIndex(row => row.source === capture.source) + 1 : undefined })),
+      sources: sources.map(({ action, closes, closed }, index) => ({ identity: index + 1, action, closes, closed })),
+      documents: [...documents].map(([id, row]) => ({ id, closes: row.closes })),
+      inputCaptures: inputCaptures.map((capture, index) => ({ identity: index + 1, tuple: capture.tuple })),
+      cancellations: cancellations.map((row, index) => ({ identity: index + 1, receiverIsOriginal: row.receiver === f.assembly.inbox, args: row.args,
+        promiseIdentity: row.promise ? cancellations.findIndex(candidate => candidate.promise === row.promise) + 1 : undefined,
+        returnedOriginalPromise: row.promise !== undefined, outcome: row.outcome?.kind === 'returned' ? row.outcome : row.outcome ? { kind: row.outcome.kind, error: errorInfo(row.outcome.error) } : undefined })),
+      primaryOccurred, primary: errorInfo(primary), cleanupOccurred, cleanup: errorInfo(cleanup), cleanupIsPrimary: primaryOccurred && cleanupOccurred && primary === cleanup }
+    console.info('team-ack-owner-order-evidence', JSON.stringify(evidence))
+    const evidenceRoot = process.env.IH_STRUCTURE_EVIDENCE_ROOT
+    if (evidenceRoot) {
+      const destination = join(evidenceRoot, 'task5'); await mkdir(destination, { recursive: true })
+      await writeFile(join(destination, `${order}.json`), JSON.stringify(evidence, null, 2))
+      for (const id of documents.keys()) await writeFile(join(destination, `${order}-${id}.jsonl`), await readFile(join(f.root, `${id}.jsonl`)))
+    }
+  }
+  if (primaryOccurred && cleanupOccurred) throw new AggregateError([primary, cleanup], 'Qualification and original cleanup failed')
+  if (primaryOccurred) throw primary
+  if (cleanupOccurred) throw cleanup
+}
+
+it('team-ack-owner-order qualifies actual Stop before committed inbox RETURN, then inverse and OPEN recovery', async () => {
+  await qualifyServiceOrder('stop-before-return')
+  await qualifyServiceOrder('ack-before-stop')
+  await qualifyServiceOrder('open-recovery')
+})
 
 it("delivers initial and followup teammate finals exactly once to an idle Lead using real service admission", async () => {
   const seen: LLMRequest[] = []
@@ -80,26 +401,33 @@ it("shipping teammate completion waits for strict owned retention and bounds its
   const output = "TEAM_BARRIER " + '中文🙂"\n'.repeat(12000)
   const child: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: output }; yield { type: "end" } })
   const lead: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "text/chunk", text: "received" }; yield { type: "end" } })
-  const notices: string[] = []
-  const f = await fixture(lead, child, { admit: async input => { notices.push(input.text) }, wake: () => {} })
+  const notices: string[] = [], notice = Promise.withResolvers<void>(), retaining = Promise.withResolvers<void>()
+  const f = await fixture(lead, child, { admit: async input => { notices.push(input.text); notice.resolve() }, wake: () => {} })
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
   const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
-  let retained = false
+  let retained = false, snapshot: unknown
   f.coordinator.putDocumentStrict = async (key, data) => {
-    if (key === "lead" && JSON.stringify(data).includes("TEAM_BARRIER")) { await held; retained = true }
     await strict(key, data)
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_BARRIER")) { snapshot = data; retained = true; retaining.resolve(); await held }
   }
   try {
     await f.execute("spawn_teammate", { name: "helper", description: "large result", prompt: "first", context: "fresh" })
-    await vi.waitFor(() => expect(f.assembly.subagentState().jobs.some(job => job.output === output)).toBe(true))
+    await retaining.promise
+    const job = f.assembly.subagentState().jobs.find(job => job.output.startsWith('TEAM_BARRIER'))!
+    expect(job).toMatchObject({ status: 'completed' }); expect(output.startsWith(job.output)).toBe(true)
+    expect(job.output.length).toBeLessThan(output.length)
     expect(notices).toHaveLength(0)
     release()
-    await vi.waitFor(() => expect(notices).toHaveLength(1))
+    await notice.promise; expect(notices).toHaveLength(1)
     expect(retained).toBe(true)
     expect(Buffer.byteLength(notices[0]!, "utf8")).toBeLessThanOrEqual(16384)
-    expect(notices[0]).toContain("job_output")
-    expect(f.assembly.subagentState().jobs.find(job => job.output === output)?.status).toBe("completed")
+    expect(Buffer.byteLength(JSON.stringify(notices[0]))).toBeLessThanOrEqual(16384)
+    expect(notices[0]).toContain(job.output); expect(notices[0]).toContain('[Result retention: durable]')
+    const result = await readRetainedJobBody(f, job.id, 'retention-barrier-body')
+    expect(result.body.resultText).toBe(output)
+    expect(f.assembly.subagentState().jobs.find(row => row.id === job.id)?.status).toBe("completed")
+    await completionEvidence('retention-barrier', { root: f.root, snapshot, notices, retained })
   } finally { release(); await f.close() }
 })
 
@@ -109,8 +437,9 @@ it("shipping teammate retention failure keeps the real completed result inspecta
   const lead: ModelClient = controlledModel(async function* (): AsyncGenerator<import('@i-harness/llm-seam').LLMStreamEvent> { yield { type: "end" } })
   const f = await fixture(lead, child, { admit: async () => { admissions++ }, wake: () => {} })
   const strict = f.coordinator.putDocumentStrict!.bind(f.coordinator)
+  const diskFull = new Error('team result disk full')
   f.coordinator.putDocumentStrict = async (key, data) => {
-    if (key === "lead" && JSON.stringify(data).includes("TEAM_RETENTION_FAILED")) throw new Error("team result disk full")
+    if (key === "lead" && JSON.stringify(data).includes("TEAM_RETENTION_FAILED")) throw diskFull
     await strict(key, data)
   }
   try {
@@ -120,7 +449,18 @@ it("shipping teammate retention failure keeps the real completed result inspecta
     expect(f.assembly.subagentState().jobs[0]).toMatchObject({ status: "completed", output: "TEAM_RETENTION_FAILED completed effect" })
     const job = await f.execute("job_output", { job_id: f.assembly.subagentState().jobs[0]!.id }) as any
     expect(job).toMatchObject({ status: "completed", text: "TEAM_RETENTION_FAILED completed effect", retention: "failed", retention_error: "team result disk full" })
-  } finally { await f.close() }
+  } finally {
+    const close = await Promise.allSettled([f.service.close()])
+    expect(close[0]!.status).toBe('rejected')
+    if (close[0]!.status !== 'rejected') throw new Error('missing original retention failure at close')
+    const leaves = aggregateLeaves(close[0]!.reason)
+    expect(leaves).toHaveLength(1); expect(leaves[0]).toBe(diskFull)
+    await completionEvidence('retention-failure-close', { root: f.root, error: boundedError(close[0]!.reason), exactOriginalLeaf: leaves[0] === diskFull, turns, admissions })
+    await expect(f.service.close()).resolves.toBeUndefined()
+    expect([turns, admissions]).toEqual([1, 0])
+    expect(f.assembly.subagentState().agentTable).toEqual([])
+    await f.close()
+  }
 })
 
 it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized UTF-8 result summary and retains the full job output (%#)", async (output) => {
@@ -135,20 +475,14 @@ it.each(["R".repeat(65_536), "結果😀".repeat(8_000)])("delivers an oversized
     expect(notification?.type).toBe("agent/input/admitted")
     if (notification?.type !== "agent/input/admitted") throw new Error("missing notification")
     expect(Buffer.byteLength(notification.text, "utf8")).toBeLessThanOrEqual(65_536)
-    expect(notification.text).toContain("Result truncated")
-    const jobId = notification.text.match(/job_output\(\{job_id:"([^"]+)"\}\)/)?.[1]
-    expect(jobId).toBeDefined()
+    const job = f.assembly.subagentState().jobs[0]!
+    expect(job.status).toBe('completed'); expect(output.startsWith(job.output)).toBe(true)
+    expect(job.output.length).toBeLessThan(output.length)
+    expect(notification.text).toContain(job.output); expect(notification.text).not.toContain(output)
+    expect(notification.text).toContain('[Result retention: durable]')
     expect(notification.text).not.toContain("\uFFFD")
-    let offset = 0, digest: string | undefined, full = ""
-    for (;;) {
-      const page = await f.execute("job_output", { job_id: jobId, offset_bytes: offset, digest, max_output_bytes: 4096 }) as { text: string; status: string; digest: string; next_offset_bytes: number; truncated: boolean }
-      expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(4096)
-      expect(page.status).toBe("completed")
-      full += page.text; digest = page.digest
-      if (!page.truncated) break
-      expect(page.next_offset_bytes).toBeGreaterThan(offset); offset = page.next_offset_bytes
-    }
-    expect(full).toBe(output)
+    const result = await readRetainedJobBody(f, job.id, `oversized-body-${output.startsWith('R') ? 'ascii' : 'utf8'}`)
+    expect(result.body.resultText).toBe(output)
   } finally { await f.close() }
 })
 
