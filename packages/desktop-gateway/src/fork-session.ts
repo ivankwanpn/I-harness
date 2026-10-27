@@ -134,7 +134,11 @@ export function createGatewayForkHost(options: {
     },
     async withReadyTarget(operation, document, use) {
       assertAvailable()
-      const id = operation.invocation.targetSessionId, authority = await projects.authorityFor(id)
+      const id = operation.invocation.targetSessionId
+      // The original observer refuses archived acquisition before callback.
+      // Classify only this actual target metadata denial; never an I/O error.
+      if ((await coordinator.profile(id)).meta.archived) throw new ForkTargetPolicyDeniedError()
+      const authority = await projects.authorityFor(id)
       const policy = () => { assertAvailable(); const state = authority(); if (state.kind === 'revoked' || state.kind === 'unavailable') throw new ForkTargetPolicyDeniedError() }
       policy()
       return coordinator.withExistingSessionBindingObservation!({ sessionIds: [id] }, observation => {

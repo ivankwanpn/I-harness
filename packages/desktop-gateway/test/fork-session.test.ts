@@ -383,3 +383,46 @@ it('actual Gateway host retains the exact original L1 cleanup debt and its depen
     expect([nativeCloses, coordinatorCloses]).toEqual([1, 1])
   } finally { fail = false; await f.close() }
 })
+
+it('actual createDesktopHost transfers nonempty managed and L1 data before READY and reads after source release', async () => {
+  let owners!: Parameters<typeof gatewayFork.createGatewayForkHost>[0], producerAlive = true, heldProfiles = 0
+  const active = new (await import('node:async_hooks')).AsyncLocalStorage<{ ids: Set<string>; active: boolean }>()
+  const f = await actualHostFixture((_host, value) => {
+    owners = value
+    const observe = value.coordinator.withExistingSessionBindingObservation!.bind(value.coordinator), profile = value.coordinator.profile.bind(value.coordinator)
+    value.coordinator.withExistingSessionBindingObservation = (input, use) => observe(input, observation => {
+      const scope = { ids: new Set(input.sessionIds), active: true }
+      return active.run(scope, async () => { try { return await use(observation) } finally { scope.active = false } })
+    })
+    value.coordinator.profile = async id => { const scope = active.getStore(); if (scope?.active && scope.ids.has(id)) { heldProfiles++; throw new Error('Actual full host held profile recursion') } return profile(id) }
+  })
+  try {
+    expect((await f.call('desktop/context-subsystems/configure', { patch: { scope: 'workspace', contextOutput: { enabled: true } } })).error).toBeUndefined()
+    await owners.coordinator.adoptOwnership('source')
+    const source = await owners.nativeContext.sourceFor('source'), current = (await owners.projects.resultReadScopeFor('source'))!
+    const scope = owners.nativeContext.contextOutput.registerResultScope({ operationId: 'full-host-producer', sessionId: 'source', callId: 'retained', source }, () => { current(); return producerAlive && !!owners.coordinator.ownerOf('source') })
+    const sink = await owners.nativeContext.contextOutput.beginResult(scope, 'text-utf8-v1'); await sink.write(Buffer.from('FULL HOST MANAGED'))
+    const saved = await sink.finish('complete'); if (saved.kind !== 'committed') throw new Error('Actual full host publication refused')
+    const legacy = await owners.nativeContext.contextOutput.capture({ sessionId: 'source', callId: 'retained', label: 'real', text: 'FULL HOST LEGACY', complete: true, source })
+    if (!legacy) throw new Error('Actual full host legacy capture refused')
+    await owners.coordinator.append('source', [{ type: 'turn/start' }, { type: 'user/message', text: 'retained source' }, { type: 'step/start' }, { type: 'tool/call', callId: 'retained', name: 'fixture_result', args: {} }, { type: 'assistant/message', text: '' },
+      { type: 'tool/result', callId: 'retained', name: 'fixture_result', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'retained', media: [], retention: { kind: 'artifact', ref: saved.ref } } },
+      { type: 'step/end' }, { type: 'context/result-ref', ref: legacy }, { type: 'turn/end' }])
+    expect((await f.call('desktop/context-subsystems/configure', { patch: { scope: 'workspace', contextOutput: { enabled: false } } })).error).toBeUndefined()
+    const operation = await f.prepare(), ready = await f.call('session/fork/begin', { operation })
+    expect(ready.result).toMatchObject({ kind: 'ready', sessionId: 'child' })
+    expect((await f.call('session/result/read', { sessionId: 'child', ref: saved.ref })).result).toMatchObject({ data: { text: 'FULL HOST MANAGED' } })
+    await owners.nativeContext.contextOutput.clear('source'); producerAlive = false
+    await owners.coordinator.closeManagedDocument('source'); await owners.coordinator.updateMeta('source', { archived: true })
+    expect((await f.call('desktop/context-subsystems/configure', { patch: { scope: 'workspace', contextOutput: { enabled: true } } })).error).toBeUndefined()
+    const sourceProfile = owners.coordinator.profile.bind(owners.coordinator)
+    owners.coordinator.profile = async id => { if (id === 'source') throw new Error('Released source profile forbidden'); return sourceProfile(id) }
+    expect((await f.call('session/result/read', { sessionId: 'child', ref: saved.ref })).result).toMatchObject({ data: { text: 'FULL HOST MANAGED' } })
+    await owners.nativeContext.withLegacyReadObservation({ sessionId: 'child' }, async observation => {
+      expect((await owners.nativeContext.contextOutput.readLegacyObserved({ sessionId: 'child' }, { refId: legacy.id }, observation)).text).toBe('FULL HOST LEGACY')
+      expect((await owners.nativeContext.contextOutput.searchLegacyObserved({ sessionId: 'child' }, { query: 'FULL' }, observation)).hits.map(hit => hit.ref.id)).toEqual([legacy.id])
+    })
+    expect((await f.call('session/fork/retry', { operation })).result).toMatchObject({ kind: 'adopted', sessionId: 'child' })
+    expect(heldProfiles).toBe(0)
+  } finally { producerAlive = false; await f.close() }
+})
