@@ -24,11 +24,29 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
     let retired = false;
     const action = owner.beginAction();
     let source: ReturnType<typeof action.registerSettlementSource> | undefined;
-    const close = async () => { retired = true; action.finish(); await source?.close(); };
-    retainFactsCleanup?.(close);
-    try { source = action.registerSettlementSource(drainTransactions); }
-    catch (error) { action.finish(); throw error; }
-    action.finish();
+    let actionFinished = false, sourceClosed = false, initializing = true;
+    const finishAction = () => { if (!actionFinished) { action.finish(); actionFinished = true; } };
+    const close = async () => {
+        retired = true;
+        const failures: unknown[] = [];
+        try { finishAction(); } catch (error) { failures.push(error); }
+        try { if (source && !sourceClosed) { await source.close(); sourceClosed = true; } } catch (error) { failures.push(error); }
+        if (failures.length === 1) throw failures[0];
+        if (failures.length) throw new AggregateError(failures, 'Team facts cleanup incomplete');
+    };
+    try {
+        retainFactsCleanup?.(close);
+        source = action.registerSettlementSource(() => initializing && transactions.size === 0 ? Promise.resolve() : drainTransactions());
+        finishAction();
+        initializing = false;
+    } catch (error) {
+        // The mount owns staged retries. Standalone callers still finish an
+        // action whose registration refused before returning a facts facade.
+        if (!retainFactsCleanup) {
+            try { finishAction(); } catch (cleanup) { throw new AggregateError([error, cleanup], 'Team facts construction and cleanup failed', { cause: error }); }
+        }
+        throw error;
+    }
     const assertOpen = () => { if (retired) throw Object.assign(new Error('Team message admission is closed'), { code: 'FACT_CLOSED' }); };
     const findMessage = (queued: Queued) => {
         for (const record of transactions.values()) {
@@ -38,7 +56,7 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
         }
     };
     return {
-        run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> { return signals.run({ signal }, work); },
+        run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> { assertOpen(); return signals.run({ signal }, work); },
         async commit(events: readonly TeamEvent[]) {
             let pending = transactions.get(events);
             if (pending?.kind === 'message') throw new Error('Message queue is not a generic transaction');

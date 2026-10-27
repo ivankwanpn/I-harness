@@ -145,6 +145,8 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  /** Retain the original partial assembly's cleanup before Team construction. */
+  retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
   instructionEnvironment?: InstructionEnvironment
   instructionSettingsPath?: string
   prepareHumanInput?: (text: string) => Promise<string>
@@ -1210,6 +1212,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   ].filter(Boolean).join('\n\n')
 
   try {
+    opts.retainConstructionCleanup?.(dispose)
     // The original mount guard must own the asynchronous policy/watch lifetime
     // before any dependent setup can reject. Earlier config getters acquire none.
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
@@ -1459,7 +1462,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // messages to entry.session — mirrors must be live first).
     await subagent.ready
     if (opts.team !== undefined) {
-      teamHandles.push(await mountAgentTeams(ctx, tools, {
+      await mountAgentTeams(ctx, tools, {
+        retainMount: handle => { teamHandles.push(handle) },
         ...(opts.parentNotify ? { parentNotify: opts.parentNotify } : {}),
         allowConcurrentTeams: opts.concurrentSessionTeams,
         preserveSubagentTools: opts.concurrentSessionTeams,
@@ -1501,7 +1505,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           followupGeneration: subagent.followupGeneration,
         },
         parentModel: model,
-      } satisfies TeamDeps, opts.team))
+      } satisfies TeamDeps, opts.team)
     }
 
     // M49 Task 14 (spec §11): the base system prompt is the I-harness-owned
@@ -1775,7 +1779,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   } catch (err) {
     // A failed mount must not leak a half-built assembly.
     try { await dispose() }
-    catch (cleanup) { throw new AggregateError([err, cleanup], "Assembly construction and cleanup failed", { cause: err }) }
+    catch (cleanup) { throw Object.assign(new AggregateError([err, cleanup], "Assembly construction and cleanup failed", { cause: err }), { cleanup: dispose }) }
     throw err
   }
 
@@ -1800,13 +1804,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     rewindSubscription = undefined
     await rewindDrain
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
-    // one handle's failure must not block the rest — and dispose never throws.
+    // Every original Team handle remains retained until its own cleanup acknowledges.
     const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
     for (const handle of mounts.reverse()) {
       try {
         await handle.unmount()
-      } catch {
-        // cleanup failure on unmount: disposal continues
+      } catch (error) {
+        processCleanupFailures.push(error)
       }
     }
     for (const handle of [skillsMount, workflowMount]) {

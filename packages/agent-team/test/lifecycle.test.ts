@@ -13,6 +13,13 @@ import { fixtureGenerationFor, controlledModel } from '../../subagent/test/gener
 // restore path.
 import { describe, expect, it, vi } from "vitest"
 import { mountAgentTeams, type TeamDeps } from "../src/index.ts"
+import type { TeamMountHandle } from '../src/scheduler.ts'
+import { TeamMountFailure } from '../src/scheduler.ts'
+import { createCompletionJobs } from '../src/scheduler/completion.ts'
+import { createTeamFacts } from '../src/facts.ts'
+import { createTeamTransact } from '../src/transact.ts'
+import { createMailbox } from '../src/mailbox.ts'
+import { foldTeam } from '../src/fold.ts'
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession, decodeFactBatch, isNondurableSession } from "@i-harness/core-session"
@@ -57,6 +64,296 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  for (const error of [undefined, null]) it(`completion cleanup retains and reports original ${String(error)} once without replaying delivery`, async () => {
+    const f = await ownedTeamFixture(), deps = makeDeps()
+    const state = foldTeam([]).state
+    state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'spawn', context: 'fresh', phase: 'active' })
+    const lead = createTeamFacts(f.document, () => tx.drain(), () => {})
+    const tx = createTeamTransact(lead, state)
+    let calls = 0
+    const mailbox = createMailbox({ teamId: 'team', state, transact: tx, memberStatus: () => 'idle',
+      deliver: async () => { calls++; return { kind: 'consumed', via: 'target', sendFailure: { occurred: true, error } } },
+    })
+    const { id } = deps.subagents.jobs.registerJob('root', 'subagent', 'helper')
+    const entry = { path: 'lead/helper', jobId: id, status: 'waiting' as const, session: createSession(), controller: new AbortController(), mailbox: [] }
+    deps.subagents.table.add(entry.path, entry)
+    const completion = createCompletionJobs(deps.subagents, state, { maxMembers: 8, maxTasks: 256, maxPendingMessagesPerMember: 64, maxMessageBytes: 65_536, startupTimeoutMs: 10_000, waitMinMs: 10_000, waitMaxMs: 3_600_000, waitDefaultMs: 30_000 }, () => false, () => mailbox, () => ({ notify() {} }))
+    try {
+      completion.teamJobs.updateJob(id, { status: 'completed', output: 'report' })
+      await vi.waitFor(() => expect(f.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(1))
+      await new Promise<void>(resolve => setImmediate(resolve))
+      // Baseline deleted settled jobs and silently discarded this exact error.
+      expect(completion.completionJobs.size).toBe(1)
+      completion.sealCompletions()
+      await expect(completion.joinCompletions()).rejects.toMatchObject({ errors: [error] })
+      await lead.close()
+      await expect(completion.joinCompletions()).resolves.toBeUndefined()
+      const second = deps.subagents.jobs.registerJob('root', 'subagent', 'second')
+      deps.subagents.table.update(entry.path, entry, { jobId: second.id })
+      completion.teamJobs.updateJob(second.id, { status: 'completed', output: 'late' })
+      expect(completion.completionJobs.size).toBe(0)
+      expect(calls).toBe(1)
+      expect(f.document.view.events.map(event => event.type)).toEqual(['team/message/queued', 'team/message/delivered'])
+    } finally { await f.coordinator.close() }
+  })
+
+  it('cleanup ownership retains the shell before source construction and cleans a throwing retain callback', async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const failure = new Error('retain failed')
+    let retained: TeamMountHandle | undefined
+    const result = await mountAgentTeams(ctx, tools, { ...deps, retainMount(handle) { retained = handle; throw failure } }).then(async handle => { await handle.unmount(); return handle }, error => error)
+    expect(result).toBe(failure)
+    expect(retained).toBeDefined()
+    await retained!.unmount()
+    const next = await mountAgentTeams(ctx, tools, deps)
+    await next.unmount()
+  })
+
+  it('cleanup ownership fences construction when the retained shell retires during recovery', async () => {
+    const f = await ownedTeamFixture([{ type: 'team/message/queued', version: 1, teamId: 'retiring-construction', message: {
+      id: 'held-recovery', senderId: 'child', senderName: 'helper', targetId: 'retiring-construction', delivery: 'quiet', content: 'held',
+    } }])
+    const ctx = createContext(), tools = createToolRegistry(ctx), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<boolean>()
+    let retained: TeamMountHandle | undefined
+    const mounting = mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
+      retainMount(handle) { retained = handle }, deliver: async () => { entered.resolve(); return release.promise },
+    })).then(handle => ({ handle }), error => ({ error }))
+    await entered.promise
+    const closing = retained!.unmount()
+    try {
+      release.resolve(true)
+      const result = await mounting
+      await closing
+      expect(result).toMatchObject({ error: { code: 'FACT_CLOSED' } })
+      expect(tools.get('send_message')).toBeUndefined()
+      const next = await mountAgentTeams(ctx, tools, makeDeps()); await next.unmount()
+    } finally { release.resolve(false); await mounting; await retained!.unmount(); await f.coordinator.close() }
+  })
+
+  it('cleanup ownership retains the exact registered source when construction fails before facts return', async () => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const begin = f.document.beginAction.bind(f.document)
+    const construction = new Error('finish after source registration failed'), cleanup = new Error('source close held')
+    let blocked = true, source: object | undefined, retained: TeamMountHandle | undefined, begins = 0, closes = 0
+    f.document.beginAction = (...args) => {
+      begins++
+      const action = begin(...args), register = action.registerSettlementSource.bind(action), finish = action.finish.bind(action)
+      let first = true
+      action.registerSettlementSource = producer => {
+        const actual = register(producer), close = actual.close.bind(actual)
+        source = actual
+        actual.close = async () => { closes++; if (blocked) throw cleanup; await close() }
+        return actual
+      }
+      action.finish = () => { if (first) { first = false; throw construction }; finish() }
+      return action
+    }
+    try {
+      const failure = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document, retainMount(handle) { retained = handle } })).catch(error => error)
+      expect(failure).toBeInstanceOf(TeamMountFailure)
+      expect(failure.cause).toBe(construction); expect(failure.cleanup).toBe(retained)
+      expect(source).toBeDefined(); expect([begins, closes]).toEqual([1, 1])
+      blocked = false; await retained!.unmount()
+      expect([begins, closes]).toEqual([1, 2])
+    } finally { blocked = false; await retained?.unmount(); await f.coordinator.close() }
+  })
+
+  it('cleanup ownership preserves falsey registration and unfinished action cleanup failures without inventing a source', async () => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const begin = f.document.beginAction.bind(f.document)
+    let blocked = true, registrations = 0, finishes = 0, retained: TeamMountHandle | undefined
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), finish = action.finish.bind(action)
+      action.registerSettlementSource = () => { registrations++; throw undefined }
+      action.finish = () => { finishes++; if (blocked) throw null; finish() }
+      return action
+    }
+    try {
+      const failure = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document, retainMount(handle) { retained = handle } })).catch(error => error)
+      expect(failure).toBeInstanceOf(TeamMountFailure)
+      expect(failure.cause).toBeUndefined()
+      expect(failure.errors[1].errors).toEqual([null])
+      expect([registrations, finishes]).toEqual([1, 1])
+      blocked = false; await retained!.unmount()
+      expect([registrations, finishes]).toEqual([1, 2])
+    } finally { blocked = false; await retained?.unmount(); await f.coordinator.close() }
+  })
+
+  it('cleanup ownership permits actual empty producer drain before the transaction is initialized', async () => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const begin = f.document.beginAction.bind(f.document)
+    let producerDrains = 0
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), register = action.registerSettlementSource.bind(action)
+      action.registerSettlementSource = producer => {
+        const source = register(producer)
+        // Native producer calls are legal before the transaction facade returns.
+        // An empty actual facts owner needs no uninitialized transaction read.
+        producerDrains++; void producer()
+        return source
+      }
+      return action
+    }
+    let handle: TeamMountHandle | undefined
+    try {
+      handle = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document }))
+      expect(producerDrains).toBe(1)
+    } finally { await handle?.unmount(); await f.coordinator.close() }
+  })
+
+  it('cleanup ownership retries the exact failed child before releasing the reservation', async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    let blocked = true, attempts = 0
+    const failure = new Error('child cleanup held')
+    const entry = { path: 'lead/helper', status: 'waiting' as const, session: createSession(), controller: new AbortController(), mailbox: [],
+      async dispose() { attempts++; if (blocked) throw failure },
+    }
+    deps.subagents.table.add(entry.path, entry)
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      await expect(handle.unmount()).rejects.toMatchObject({ errors: expect.arrayContaining([failure]) })
+      expect(deps.subagents.table.get(entry.path)).toBe(entry)
+      await expect(mountAgentTeams(ctx, tools, deps)).rejects.toThrow(/only one team|already mounted/)
+      blocked = false
+      await handle.unmount()
+      expect(attempts).toBe(2)
+      expect(deps.subagents.table.get(entry.path)).toBeUndefined()
+      const next = await mountAgentTeams(ctx, tools, deps)
+      await next.unmount()
+    } finally { blocked = false; await handle.unmount() }
+  })
+
+  it('cleanup ownership retains actual child audit debt until its original backend acknowledgement', async () => {
+    const parent = await ownedTeamFixture([
+      { type: 'team/member', version: 1, teamId: 'child-debt-team', member: { id: 'child-id', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
+      { type: 'team/member', version: 1, teamId: 'child-debt-team', member: { id: 'child-id', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'child' } },
+    ])
+    const child = await ownedTeamFixture([], 'child'), ctx = createContext(), tools = createToolRegistry(ctx)
+    const deps = makeDeps({ parentSession: parent.document.view, factOwner: parent.document })
+    const append = child.backend.appendOwnedBatch!, reconcile = child.backend.reconcileOwnedBatch!
+    let allow = false, writes = 0
+    const keys: string[] = []
+    child.backend.appendOwnedBatch = async (...args) => { writes++; await append(...args); return { kind: 'unknown', key: args[3].key } }
+    child.backend.reconcileOwnedBatch = async (...args) => { keys.push(args[3].key.batchId); return allow ? reconcile(...args) : { kind: 'unknown', key: args[3].key } }
+    const entry = { path: 'lead/helper', status: 'waiting' as const, session: child.document.view, factOwner: child.document, sessionId: 'child', controller: new AbortController(), mailbox: [], dispose: () => child.document.close() }
+    deps.subagents.table.add(entry.path, entry)
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      await expect(tools.get('send_message')!.execute({ target: 'helper', message: 'audit held' }, {})).resolves.toMatchObject({ status: 'queued' })
+      await expect(handle.unmount()).rejects.toThrow(/cleanup incomplete/)
+      expect(deps.subagents.table.get(entry.path)).toBe(entry)
+      await expect(mountAgentTeams(ctx, tools, deps)).rejects.toThrow(/only one team|already mounted/)
+      allow = true; await handle.unmount()
+      expect(deps.subagents.table.get(entry.path)).toBeUndefined()
+      expect(writes).toBe(1); expect(new Set(keys).size).toBe(1)
+      expect(child.document.view.events.filter(event => event.type === 'subagent/inbox')).toHaveLength(1)
+      expect(parent.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(0)
+      console.info('child-cleanup-evidence', JSON.stringify({ parentRoot: parent.root, childRoot: child.root, writes, keys }))
+    } finally { allow = true; await handle.unmount(); await child.coordinator.close(); await parent.coordinator.close() }
+  })
+
+  it('cleanup ownership retries a failed job cancellation without repeating acknowledged child disposal', async () => {
+    const child = await ownedTeamFixture([], 'child'), ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    let blocked = true, removeBlocked = true, disposed = 0
+    const failure = new Error('cancel held')
+    const job = deps.subagents.jobs.registerJob('root', 'subagent', 'helper', undefined, undefined, () => { if (blocked) throw failure })
+    const entry = { path: 'lead/helper', sessionId: 'child', jobId: job.id, status: 'waiting' as const, session: child.document.view, controller: new AbortController(), mailbox: [],
+      async dispose() { disposed++; await child.document.close() },
+    }
+    deps.subagents.table.add(entry.path, entry)
+    const agent: Agent = { run: vi.fn(), followup: vi.fn() }
+    deps.subagents.agents.register('child', agent)
+    const remove = deps.subagents.agents.remove.bind(deps.subagents.agents)
+    deps.subagents.agents.remove = id => { if (removeBlocked) throw null; remove(id) }
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    try {
+      await expect(handle.unmount()).rejects.toMatchObject({ errors: [failure] })
+      expect(deps.subagents.table.get(entry.path)).toBe(entry)
+      expect(disposed).toBe(1)
+      blocked = false; await expect(handle.unmount()).rejects.toMatchObject({ errors: [null] })
+      expect(deps.subagents.agents.get('child')).toBe(agent)
+      removeBlocked = false; await handle.unmount()
+      expect(disposed).toBe(1)
+      expect(deps.subagents.table.get(entry.path)).toBeUndefined()
+      expect(deps.subagents.agents.get('child')).toBeUndefined()
+    } finally { blocked = false; removeBlocked = false; await handle.unmount(); await child.coordinator.close() }
+  })
+
+  it('cleanup ownership retains exact tool and role failures and continues independent phases', async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    const originalTool = tools.get('send_message'), originalRole = deps.subagents.roles.get('teammate')
+    const unregister = tools.unregister.bind(tools), remove = deps.subagents.roles.remove.bind(deps.subagents.roles)
+    let heldTool = true, heldRole = true
+    tools.unregister = name => { if (name === 'send_message' && heldTool) throw undefined; return unregister(name) }
+    deps.subagents.roles.remove = name => { if (name === 'teammate' && heldRole) throw null; return remove(name) }
+    try {
+      const failure = await handle.unmount().catch(error => error)
+      expect(failure.errors[0].errors).toEqual([undefined]); expect(failure.errors[1]).toBeNull()
+      expect(tools.get('send_message')).toBe(originalTool)
+      expect(tools.get('spawn_teammate')).toBeUndefined()
+      expect(deps.subagents.roles.get('teammate')).toBe(originalRole)
+      heldTool = false
+      await expect(handle.unmount()).rejects.toMatchObject({ errors: [null] })
+      expect(tools.get('send_message')).toBeUndefined()
+      await expect(mountAgentTeams(ctx, tools, deps)).rejects.toThrow(/only one team|already mounted/)
+      heldRole = false; await handle.unmount()
+      expect(deps.subagents.roles.get('teammate')).toBeUndefined()
+    } finally { heldTool = false; heldRole = false; await handle.unmount() }
+  })
+
+  it('cleanup ownership retains partial tool replacement and retries original restoration', async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps()
+    const original = { name: 'send_message', description: 'original', inputSchema: { type: 'object' }, execute: async () => 'original' }
+    tools.register(original)
+    const register = tools.register.bind(tools)
+    const construction = new Error('tool publication failed'), cleanup = new Error('tool restoration held')
+    let blocked = true, retained: TeamMountHandle | undefined
+    tools.register = tool => {
+      if (tool.name === 'followup_task') throw construction
+      if (tool === original && blocked) throw cleanup
+      return register(tool)
+    }
+    try {
+      const result = await mountAgentTeams(ctx, tools, { ...deps, retainMount(handle) { retained = handle } }).catch(error => error)
+      expect(result).toMatchObject({ cause: construction, cleanup: retained })
+      expect(retained).toBeDefined()
+      await expect(mountAgentTeams(ctx, tools, deps)).rejects.toThrow(/only one team|already mounted/)
+      blocked = false; tools.register = register
+      await retained!.unmount()
+      expect(tools.get('send_message')).toBe(original)
+      expect(tools.get('spawn_teammate')).toBeUndefined()
+      const next = await mountAgentTeams(ctx, tools, deps); await next.unmount()
+    } finally { blocked = false; tools.register = register; await retained?.unmount() }
+  })
+
+  it('cleanup ownership releases waiters before joining an accepted held driver and fences new work', async () => {
+    const ctx = createContext(), tools = createToolRegistry(ctx)
+    const owned = await ownedTeamFixture([
+      { type: 'team/member', version: 1, teamId: 'held-team', member: { id: 'child', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
+      { type: 'team/member', version: 1, teamId: 'held-team', member: { id: 'child', name: 'helper', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'child' } },
+    ])
+    const deps = makeDeps({ parentSession: owned.document.view, factOwner: owned.document })
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<boolean>()
+    deps.deliver = async () => { entered.resolve(); return release.promise }
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    const send = tools.get('send_message')!, wait = tools.get('wait_agent')!
+    const waiting = wait.execute({ timeout_ms: 30_000 }, {})
+    const sending = send.execute({ target: 'helper', message: 'held' }, {})
+    await entered.promise
+    let closed = false
+    const closing = handle.unmount().then(() => { closed = true })
+    try {
+      expect(await waiting).toMatchObject({ timedOut: false })
+      expect(() => send.execute({ target: 'helper', message: 'late' }, {})).toThrow(/closed/)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      expect(closed).toBe(false)
+      expect(owned.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(0)
+      release.resolve(true); await sending; await closing
+      expect(owned.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(1)
+    } finally { release.resolve(false); await closing; await owned.coordinator.close() }
+  })
+
   it("recovery reads live parent admission after the target flush and acknowledges before tool publication", async () => {
     const ctx = createContext(), tools = createToolRegistry(ctx)
     const f = await ownedTeamFixture([{ type: "team/message/queued", version: 1, teamId: "lead-order", message: {
@@ -123,12 +420,12 @@ describe("mountAgentTeams lifecycle", () => {
     try {
       expect(await waiting).toMatchObject({ timedOut: false })
       await disposing.promise
-      expect(order).toEqual(["dispose", "wait-released"])
+      expect(order).toEqual(["wait-released", "dispose"])
       expect(controller.signal.aborted).toBe(true)
       expect(tools.get("wait_agent")).toBe(teamWait)
       expect(deps.subagents.roles.get("teammate")).toBeDefined()
       release.resolve(); await closing
-      expect(order).toEqual(["dispose", "wait-released", "disposed"])
+      expect(order).toEqual(["wait-released", "dispose", "disposed"])
       expect(tools.get("wait_agent")).toBe(previous)
       expect(deps.subagents.roles.get("teammate")).toBeUndefined()
     } finally { release.resolve(); await closing }
@@ -137,7 +434,7 @@ describe("mountAgentTeams lifecycle", () => {
   it("publishes a closing barrier before draining a teammate and preserves a replacement", async () => {
     const deps = makeDeps(), ctx = createContext(), release = Promise.withResolvers<void>()
     const table = deps.subagents.table
-    const original = { path: "lead/helper", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], followupChain: release.promise }
+    const original = { path: "lead/helper", sessionId: 'replaced-child', status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], followupChain: release.promise }
     table.add(original.path, original)
     const handle = await mountAgentTeams(ctx, createToolRegistry(ctx), deps)
     const seen: unknown[] = [], closingEntered = Promise.withResolvers<void>()
@@ -147,10 +444,13 @@ describe("mountAgentTeams lifecycle", () => {
       await closingEntered.promise
       expect(seen).toEqual([{ kind: "update", closing: true }])
       const replacement = { ...original, controller: new AbortController() }
+      const agent: Agent = { run: vi.fn(), followup: vi.fn() }
       table.add(original.path, replacement)
+      deps.subagents.agents.register(original.sessionId, agent)
       release.resolve(); await closing
       expect(table.get(original.path)).toBe(replacement)
       expect(replacement.controller.signal.aborted).toBe(false)
+      expect(deps.subagents.agents.get(original.sessionId)).toBe(agent)
     } finally { release.resolve(); await closing }
   })
   it("makes the generated teammate role available for resident rebuild without persisting it or replacing a custom role", async () => {
@@ -492,7 +792,12 @@ describe("mountAgentTeams lifecycle", () => {
       const res = (await waitP) as { timedOut: boolean }
       expect(res.timedOut).toBe(false)
     } finally {
-      await handle.unmount()
+      // The completion notification was accepted before retirement, but its
+      // queued driver may reach the open guard after the wait edge wakes us.
+      // Report that original failure once; it is not continuing cleanup debt.
+      const closed = await handle.unmount().then(() => ({ errors: [] as unknown[] }), error => error as AggregateError)
+      for (const error of closed.errors) expect(error).toMatchObject({ code: 'FACT_CLOSED' })
+      await expect(handle.unmount()).resolves.toBeUndefined()
       await coordinator.close()
     }
   })

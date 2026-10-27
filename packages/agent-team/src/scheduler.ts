@@ -89,6 +89,8 @@ export interface TeamSubagentDeps {
 }
 
 export interface TeamDeps {
+  /** Receives the original partial shell before any owned mutation. */
+  retainMount?: (handle: TeamMountHandle) => void
   parentNotify?: ParentInputAdmission
   /** Desktop sessions own independent team tool registries and ledgers. */
   allowConcurrentTeams?: boolean
@@ -118,6 +120,13 @@ export interface TeamMountHandle {
   drainLeadMessages?(): Promise<void>
 }
 
+export class TeamMountFailure extends AggregateError {
+  constructor(cause: unknown, cleanupError: unknown, readonly cleanup: TeamMountHandle) {
+    super([cause, cleanupError], 'Team construction and cleanup failed', { cause })
+    this.name = 'TeamMountFailure'
+  }
+}
+
 export async function mountAgentTeams(
   ctx: PluginContext,
   tools: ToolRegistry,
@@ -126,24 +135,89 @@ export async function mountAgentTeams(
 ): Promise<TeamMountHandle> {
   // config validation BEFORE anything is reserved (fail-closed, no side effects)
   const { cfg, state, teamId } = admitTeam(deps, config)
-  let unmounted = false
+  let phase: 'constructing' | 'open' | 'retiring' | 'recovery' | 'closed' = 'constructing'
+  const isRetired = () => phase !== 'constructing' && phase !== 'open'
+  const assertConstructing = () => { if (isRetired()) throw Object.assign(new Error('Team construction is closed'), { code: 'FACT_CLOSED' }) }
+  let inFlight: Promise<void> | undefined
+  let activity: ReturnType<typeof createActivity> | undefined
+  let lead: ReturnType<typeof createTeamFacts> | undefined
+  let factsCleanup: (() => Promise<void>) | undefined
+  let factsClosed = false, toolsClosed = false, roleClosed = false
+  let toolMount: ReturnType<typeof mountTeamTools> | undefined
+  let completions: ReturnType<typeof createCompletionJobs> | undefined
+  let mailbox: ReturnType<typeof createMailbox> | undefined
+  let children: { path: string; entry: ChildAgentEntry; agent: ReturnType<AgentRegistry['get']>; disposed: boolean; jobClosed: boolean; detached: boolean; removeAgent: boolean }[] | undefined
   let generatedRole: SubagentRole | undefined
   const removeGeneratedRole = () => {
     if (generatedRole && deps.subagents.roles.get(TEAMMATE_ROLE_NAME) === generatedRole) deps.subagents.roles.remove(TEAMMATE_ROLE_NAME)
   }
-  // Every failure path below must release the reservation — the idempotent
-  // unmount flag plus this catch keeps a mid-mount throw from leaking it.
+  const handle: TeamMountHandle = {
+    teamName: teamId,
+    unmount() {
+      if (inFlight) return inFlight
+      if (phase === 'closed') return Promise.resolve()
+      phase = 'retiring'
+      // Fence admission and release every waiter synchronously, before joins.
+      lead?.retire(); completions?.sealCompletions(); activity?.close()
+      children ??= [...deps.subagents.table.entries()].filter(([path]) => path.startsWith('lead/')).map(([path, entry]) => ({
+        path, entry, agent: entry.sessionId ? deps.subagents.agents.get(entry.sessionId) : undefined,
+        disposed: false, jobClosed: false, detached: false, removeAgent: false,
+      }))
+      const attempt = (async () => {
+        const failures: unknown[] = []
+        try { await completions?.joinCompletions() }
+        catch (error) { failures.push(...(error instanceof AggregateError ? error.errors : [error])) }
+        try { if (!factsClosed) { await factsCleanup?.(); factsClosed = true } } catch (error) { failures.push(error) }
+        for (const child of [...children!]) {
+          const { path, entry } = child, sub = deps.subagents
+          try {
+            if (!child.disposed) {
+              sub.table.update(path, entry, { closing: true })
+              entry.controller.abort()
+              if (entry.dispose) await entry.dispose()
+              else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
+              child.disposed = true
+            }
+            if (!child.jobClosed) { if (entry.jobId) sub.jobs.kill(entry.jobId); child.jobClosed = true }
+            if (!child.detached) {
+              const ownsEntry = sub.table.get(path) === entry
+              if (ownsEntry) sub.table.remove(path)
+              child.removeAgent = ownsEntry
+              child.detached = true
+            }
+            if (child.removeAgent && entry.sessionId && sub.agents.get(entry.sessionId) === child.agent) sub.agents.remove(entry.sessionId)
+            children!.splice(children!.indexOf(child), 1)
+          } catch (error) { failures.push(error) }
+        }
+        try { if (!toolsClosed) { await toolMount?.close(); toolsClosed = true } } catch (error) { failures.push(error) }
+        try { if (!roleClosed) { removeGeneratedRole(); roleClosed = true } } catch (error) { failures.push(error) }
+        if (factsClosed && children!.length === 0 && toolsClosed && roleClosed) { releaseTeam(teamId); phase = 'closed' }
+        else phase = 'recovery'
+        if (failures.length) throw Object.assign(new AggregateError(failures, 'Team cleanup incomplete'), { resourcesClosed: phase === 'closed' })
+      })()
+      inFlight = attempt
+      const clear = () => { if (inFlight === attempt) inFlight = undefined }
+      void attempt.then(clear, clear)
+      return attempt
+    },
+    async drainLeadMessages() { if (phase === 'open') await mailbox?.recoverRoot(teamId) },
+  }
+  // Every failure path invokes this same shell; only acknowledged resource
+  // cleanup releases its reservation.
   try {
+    deps.retainMount?.(handle)
+    assertConstructing()
     const sub = deps.subagents
-    const { completionJobs, teamJobs } = createCompletionJobs(sub, state, cfg, () => unmounted, () => mailbox, () => activity)
+    completions = createCompletionJobs(sub, state, cfg, isRetired, () => mailbox!, () => activity!)
+    const { teamJobs } = completions
     let teamToolNames: string[] = []
     // Teammate role tool surface (Minor 5): derived from the CREATED team tools
     // (Ruling 19 discipline) minus the Lead-only ones; populated right after
     // createTeamTools below — spawns only ever happen post-mount, so the
     // closure reads the final value.
     let teamRoleTools: string[] = [...TEAMMATE_BASE_TOOLS, ...(tools.get("shell") ? ["shell"] : [])]
-    const activity = createActivity({ waitMinMs: cfg.waitMinMs, waitMaxMs: cfg.waitMaxMs, waitDefaultMs: cfg.waitDefaultMs })
-    const lead = createTeamFacts(teamFactOwner(deps.parentSession,deps.factOwner),()=>tx.drain(),()=>activity.notify())
+    activity = createActivity({ waitMinMs: cfg.waitMinMs, waitMaxMs: cfg.waitMaxMs, waitDefaultMs: cfg.waitDefaultMs })
+    lead = createTeamFacts(teamFactOwner(deps.parentSession,deps.factOwner),()=>tx.drain(),()=>activity!.notify(), close => { factsCleanup = close })
     const tx = createTeamTransact(lead, state)
 
     // ---- real bridge bindings (Ruling 18) ----
@@ -162,7 +236,7 @@ export async function mountAgentTeams(
     const realMemberStatus = createMemberStatus(teamId, state, sub)
     const memberStatus = deps.memberStatus ?? realMemberStatus
 
-    const realDeliver = createTaskDelivery(teamId, state, deps, sub, teamJobs, activity, () => unmounted)
+    const realDeliver = createTaskDelivery(teamId, state, deps, sub, teamJobs, activity, isRetired)
     // Boolean overrides confer only their returned disposition; rejection keeps
     // its original value and grants no Team acknowledgement authority.
     const booleanDeliver = deps.deliver
@@ -190,7 +264,7 @@ export async function mountAgentTeams(
         return member ? sub.table.get(AgentPath.parse(`lead/${member.name}`).toString())?.jobId : undefined
       },
     })
-    const mailbox = createMailbox({
+    mailbox = createMailbox({
       teamId,
       state,
       transact: tx,
@@ -209,7 +283,7 @@ export async function mountAgentTeams(
       activity,
     }
     const collisions = new Set(["send_message", "followup_task", "wait_agent", "interrupt_agent"])
-    const teamTools = createTeamTools(toolDeps).map(tool=>({...tool,execute:(args:unknown,exec:ToolExec)=>lead.run(exec.abortSignal,()=>Promise.resolve(tool.execute(args,exec)))})).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
+    const teamTools = createTeamTools(toolDeps).map(tool=>({...tool,execute:(args:unknown,exec:ToolExec)=>lead!.run(exec.abortSignal,()=>Promise.resolve(tool.execute(args,exec)))})).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
       ? { ...tool, name: `team_${tool.name}` } : tool)
     // Tool names DERIVED from the created tools (Ruling 19) — mount and
     // unmount can never drift from each other or from Task 9's surface.
@@ -230,20 +304,19 @@ export async function mountAgentTeams(
     // (a) reconcile stuck provisioning members (provisioning→active if the
     //     child session is durable, else failed) — CROSS-TASK CARRY (Ruling 11).
     await roster.reconcileProvisioning()
+    assertConstructing()
     // (b) replay queued−delivered messages to their targets (at-least-once).
     await mailbox.recoverRoot()
+    assertConstructing()
 
     // ---- register the tools ----
-    const bindUnmount = mountTeamTools(tools, teamTools, state, sub, toolDeps)
-
-    const unmount = bindUnmount(activity, completionJobs, () => unmounted, () => { unmounted = true }, () => {
-      removeGeneratedRole()
-      releaseTeam(teamId)
-    })
-    return { teamName: teamId, async unmount(){await lead.close();await unmount()}, drainLeadMessages: async () => { if (!unmounted) await mailbox.recoverRoot(teamId) } }
+    toolMount = mountTeamTools(tools, teamTools, state, sub, toolDeps)
+    toolMount.mount()
+    phase = 'open'
+    return handle
   } catch (err) {
-    removeGeneratedRole()
-    releaseTeam(teamId)
+    try { await handle.unmount() }
+    catch (cleanup) { throw new TeamMountFailure(err, cleanup, handle) }
     throw err
   }
 }

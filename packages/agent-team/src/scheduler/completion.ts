@@ -4,6 +4,7 @@ import type { TeamConfig } from "../types.ts"
 import type { TeamFoldState } from "../fold.ts"
 import type { createMailbox } from "../mailbox.ts"
 import type { createActivity } from "../activity.ts"
+import type { Failure } from '../transact.ts'
 
 // Completion tracking has one owner. Mailbox/activity are bound at their
 // original allocation points, and are only read when a job actually settles.
@@ -15,13 +16,14 @@ export function createCompletionJobs(
   getMailbox: () => Pick<ReturnType<typeof createMailbox>, "sendMessage">,
   getActivity: () => Pick<ReturnType<typeof createActivity>, "notify">,
 ) {
-  const completionJobs = new Set<Promise<unknown>>()
+  const completionJobs = new Set<{ done: Promise<void>; failure: Failure; errorDelivered: boolean }>()
+  let sealed = false
   const completionCounts = new Map<string, number>()
   const teamJobs: JobRegistry = { ...sub.jobs, updateJob(id, patch) {
     let wasRunning = false
     try { wasRunning = sub.jobs.read(id).status === "running" } catch { /* preserve unknown-job semantics */ }
     const updated = sub.jobs.updateJob(id, patch)
-    if (!updated || !wasRunning || isUnmounted() || (patch.status !== "completed" && patch.status !== "error")) return updated
+    if (!updated || !wasRunning || sealed || isUnmounted() || (patch.status !== "completed" && patch.status !== "error")) return updated
     const entry = [...sub.table.entries()].find(([path, row]) => path.startsWith("lead/") && row.jobId === id)
     if (!entry || entry[1].controller.signal.aborted) return updated
     const name = entry[0].slice("lead/".length)
@@ -57,6 +59,9 @@ export function createCompletionJobs(
       content = `${header}${summary}${footer}`
       displayBody = sub.reportPolicy ? output : `${summary}\n[Result truncated; full output is available in job output]`
     }
+    const done = Promise.withResolvers<void>()
+    const record: { done: Promise<void>; failure: Failure; errorDelivered: boolean } = { done: done.promise, failure: { occurred: false }, errorDelivered: false }
+    completionJobs.add(record)
     const job = (async () => {
       if (sub.reportPolicy) {
         sub.table.update(entry[0], entry[1], { retention: "pending", retentionError: undefined })
@@ -71,11 +76,29 @@ export function createCompletionJobs(
         kind: "team-result", title: `${patch.status === "completed" ? "Team reply ended" : "Team reply error"}: ${name}`, body: displayBody,
       })
     })()
-    completionJobs.add(job)
-    void job.catch(error => {
-      if (sub.reportPolicy) sub.table.update(entry[0], entry[1], { retention: entry[1].retention === "pending" ? "failed" : entry[1].retention, retentionError: error instanceof Error ? error.message : String(error) })
-    }).finally(() => { completionJobs.delete(job); getActivity().notify() })
+    void (async () => {
+      try { await job }
+      catch (error) {
+        record.failure = { occurred: true, error }
+        if (sub.reportPolicy) sub.table.update(entry[0], entry[1], { retention: entry[1].retention === "pending" ? "failed" : entry[1].retention, retentionError: error instanceof Error ? error.message : String(error) })
+      }
+      finally { getActivity().notify() }
+    })().then(() => done.resolve(), error => {
+      if (!record.failure.occurred) record.failure = { occurred: true, error }
+      done.resolve()
+    })
     return updated
   } }
-  return { completionJobs, teamJobs }
+  return { completionJobs, teamJobs,
+    sealCompletions() { sealed = true },
+    async joinCompletions(): Promise<void> {
+      const failures: unknown[] = []
+      for (const record of completionJobs) {
+        await record.done
+        if (record.failure.occurred && !record.errorDelivered) { record.errorDelivered = true; failures.push(record.failure.error) }
+        completionJobs.delete(record)
+      }
+      if (failures.length) throw new AggregateError(failures, 'Team completion failures')
+    },
+  }
 }

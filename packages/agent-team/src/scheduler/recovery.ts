@@ -1,7 +1,6 @@
 import type { Tool, ToolExec, ToolRegistry } from "@i-harness/core-tools"
 import type { TeamSubagentDeps } from "../scheduler.ts"
 import type { TeamFoldState } from "../fold.ts"
-import type { createActivity } from "../activity.ts"
 import type { TeamCaller } from "../types.ts"
 import { AgentPath } from "../agent-path.ts"
 import { hasCommittedInitialInput } from '@i-harness/subagent'
@@ -67,49 +66,36 @@ export function mountTeamTools(
       return closeAgent.execute(args, exec)
     },
   })
-  for (const t of mountedTools) {
-    const existing = tools.get(t.name)
-    if (existing) {
-      replaced.set(t.name, existing)
-      tools.unregister(t.name)
-    }
-    tools.register(t)
-  }
-
-  // The latch stays at the facade; all consumers use these same live reads.
-  return (activity: Pick<ReturnType<typeof createActivity>, "close">, completionJobs: Set<Promise<unknown>>, isUnmounted: () => boolean, markUnmounted: () => void, release: () => void) => {
-    const unmount = async (): Promise<void> => {
-      if (isUnmounted()) return
-      markUnmounted()
-      try {
-        // release every waiter first (wait_agent must not hang past unmount)
-        activity.close()
-        await Promise.allSettled([...completionJobs])
-        // tear down live teammate children best-effort: abort + unmount scope
-        // + kill job + drop from table/agents (mirrors subagent close_agent).
-        // Only lead/* entries belong to this team — regular subagents (root/*)
-        // are untouched.
-        for (const [path, entry] of [...sub.table.entries()]) {
-          if (!path.startsWith("lead/")) continue
-          try {
-            sub.table.update(path, entry, { closing: true })
-            entry.controller.abort()
-            if (entry.dispose) await entry.dispose()
-            else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
-            if (entry.jobId) sub.jobs.kill(entry.jobId)
-            if (sub.table.get(path) === entry) sub.table.remove(path)
-            if (entry.sessionId) sub.agents.remove(entry.sessionId)
-          } catch {
-            // best-effort teardown: one broken child must not block unmount
-          }
+  const stages = mountedTools.map(tool => ({ tool, removed: false, installed: false, uninstalled: false, restored: false }))
+  return {
+    mount() {
+      for (const stage of stages) {
+        const existing = tools.get(stage.tool.name)
+        if (existing) {
+          replaced.set(stage.tool.name, existing)
+          tools.unregister(stage.tool.name)
+          stage.removed = true
         }
-        for (const tool of mountedTools) tools.unregister(tool.name)
-        // reverse of the collision replacement: restore the pre-mount tool
-        for (const tool of replaced.values()) tools.register(tool)
-      } finally {
-        release()
+        tools.register(stage.tool)
+        stage.installed = true
       }
-    }
-    return unmount
+    },
+    async close() {
+      const failures: unknown[] = []
+      for (const stage of [...stages].reverse()) {
+        try {
+          if (stage.installed && !stage.uninstalled) {
+            if (tools.get(stage.tool.name) === stage.tool) tools.unregister(stage.tool.name)
+            stage.uninstalled = true
+          }
+          if (stage.removed && !stage.restored) {
+            const original = replaced.get(stage.tool.name)!
+            if (tools.get(stage.tool.name) !== original) tools.register(original)
+            stage.restored = true
+          }
+        } catch (error) { failures.push(error) }
+      }
+      if (failures.length) throw new AggregateError(failures, 'Team tool restoration incomplete')
+    },
   }
 }

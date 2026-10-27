@@ -274,7 +274,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const loadingWriters = new Map<string, Promise<Session | undefined>>()
   const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
-  const creating = new Map<string, Promise<SessionAssembly>>()
+  type CreatingAssembly = { work: Promise<SessionAssembly>; cleanup?: () => Promise<void>; failed: boolean }
+  const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
@@ -606,8 +607,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const existing = assemblies.get(sessionId)
     if (existing !== undefined) return existing
     let pending = creating.get(sessionId)
+    if (pending?.failed) throw new Error('Session process cleanup incomplete; retry close before admission')
     if (pending === undefined) {
-      pending = (async () => {
+      // Publish the owner before build starts, including synchronous retention
+      // during the original constructor. Never replace this row after failure.
+      const work = Promise.withResolvers<SessionAssembly>()
+      const row: CreatingAssembly = { work: work.promise, failed: false }
+      pending = row
+      creating.set(sessionId, row)
+      void (async () => {
         const extensions = await opts.extensionsFor?.(sessionId)
         const projectContext = opts.projectContextFor ? await opts.projectContextFor(sessionId) : opts.projectContext
         const executionAuthority = opts.executionAuthorityFor ? await opts.executionAuthorityFor(sessionId) : opts.executionAuthority
@@ -649,6 +657,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             projectContext,
             executionAuthority,
             executionCallerAvailable,
+            retainConstructionCleanup: cleanup => { row.cleanup = cleanup },
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
@@ -692,6 +701,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             projectContext,
             executionAuthority,
             executionCallerAvailable,
+            retainConstructionCleanup: cleanup => { row.cleanup = cleanup },
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
             webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
@@ -706,6 +716,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) await assembly.recordSandboxMode(currentSandbox)
         writableSessions.set(sessionId, assembly.session)
         mountingAssemblies.set(sessionId, assembly)
+        row.cleanup = undefined // ownership transfers to this real assembly
         surfaceSubscriptions.set(assembly, assembly.onExecutionSurfaceChanged?.(() => {
           if (assembly.executionSurfaceState?.() === 'retired') retireSurface(sessionId, assembly)
         }) ?? (() => {}))
@@ -814,11 +825,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // Failed setup cleanup still owns its mounted resources. A retry must
         // acknowledge that close before another assembly can replace them.
         if (mountingAssemblies.has(sessionId)) failedClose.add(sessionId)
+        row.failed = true
+        if (row.cleanup) failedClose.add(sessionId)
         throw error
-      }).finally(() => { creating.delete(sessionId) })
-      creating.set(sessionId, pending)
+      }).finally(() => { if (!row.cleanup && creating.get(sessionId) === row) creating.delete(sessionId) }).then(work.resolve, work.reject)
     }
-    return pending
+    return pending.work
   }
 
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: SessionSubmitOptions, deliveryOwner?: SessionAssembly): Promise<void> {
@@ -1128,7 +1140,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size && !defaultInstructions) return
+    if (closed && ownedAssemblies().size === 0 && creating.size === 0 && writableSessions.size === 0 && loadingWriters.size === 0 && !resultReader.size && !defaultInstructions) return
     closed = true
     defaultInstructions?.dispose()
     for (const id of new Set([...assemblies.keys(), ...mountingAssemblies.keys(), ...writableSessions.keys(), ...loadingWriters.keys(), ...creating.keys(), ...queues.keys()])) {
@@ -1137,7 +1149,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const [readerJoined] = await Promise.allSettled([
       resultReader.join(),
       ...active,
-      ...creating.values(),
+      ...[...creating.values()].map(row => row.work),
       ...loadingWriters.values(),
       ...modelBindings.values(),
       ...closing.values(),
@@ -1158,14 +1170,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         removeSurface(id, handle)
       } catch (error) { failedClose.add(id); failures.push(error) }
     }
+    for (const [id, row] of creating) {
+      try {
+        await row.cleanup?.()
+        if (creating.get(id) === row) creating.delete(id)
+        writableSessions.delete(id); inputInboxes.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
+      } catch (error) { row.failed = true; failedClose.add(id); failures.push(error) }
+    }
     for (const id of writableSessions.keys()) {
-      if (assemblies.has(id) || mountingAssemblies.has(id)) continue
+      if (assemblies.has(id) || mountingAssemblies.has(id) || creating.has(id)) continue
       try { await opts.coordinator?.closeManagedDocument(id); writableSessions.delete(id); inputInboxes.delete(id); failedClose.delete(id) }
       catch (error) { failedClose.add(id); failures.push(error) }
     }
     // Retained assembly publications still own pins in this shared source.
     // Reader-only cleanup debt is independent and must not prevent its close.
-    if (defaultInstructions && ownedAssemblies().size === 0) {
+    if (defaultInstructions && ownedAssemblies().size === 0 && creating.size === 0) {
       try { await defaultInstructions.close(); defaultInstructions = undefined }
       catch (error) { failures.push(error) }
     }
@@ -1188,14 +1207,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const turn = chains.get(sessionId)
       if (turn !== undefined) await Promise.allSettled([turn])
       const build = creating.get(sessionId)
-      if (build !== undefined) await build.catch(() => undefined)
+      if (build !== undefined) await build.work.catch(() => undefined)
       const writer = loadingWriters.get(sessionId)
       if (writer !== undefined) await writer.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
       await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops, deliveryDrains.get(sessionId)?.join()])
       const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
-      try { if (handle) await handle.dispose(); else await opts.coordinator?.closeManagedDocument(sessionId) }
+      try {
+        if (handle) await handle.dispose()
+        else if (build?.cleanup) await build.cleanup()
+        else await opts.coordinator?.closeManagedDocument(sessionId)
+        if (build && creating.get(sessionId) === build) creating.delete(sessionId)
+      }
       catch (error) {
         failedClose.add(sessionId)
         if (readerFailure !== undefined) throw new AggregateError([readerFailure, error], 'Session process cleanup incomplete')
@@ -1225,7 +1249,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   return {
     async refreshExtensions() {
       if (closed || !opts.extensionsFor) return
-      await Promise.allSettled([...creating.values()])
+      await Promise.allSettled([...creating.values()].map(row => row.work))
       const jobs = [...assemblies].map(([id, assembly]) => {
         const job = (extensionRefreshes.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
           if (closed || assemblies.get(id) !== assembly) return
