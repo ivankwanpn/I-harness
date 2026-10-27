@@ -34,7 +34,7 @@ function validateTarget(value: BootstrapRequest['target']) {
     if (!digest(value.expectedHeaderDigest) || value.expectedPrefix.eventCount !== 0 || value.expectedPrefix.bodyBytes !== 0 || value.expectedPrefix.prefixDigest !== legacyPrefixDigest(0,new Uint8Array())) bad()
   } else bad()
 }
-function validateCreation(metadata: BootstrapRequest['metadata'], lineage: BootstrapRequest['lineage']) {
+export function validateCreation(metadata: BootstrapRequest['metadata'], lineage: BootstrapRequest['lineage']) {
   fields(metadata,[],['title','workspaceId','modelSelection']); fields(lineage,['origin'],['parentSession','delegationDepth','subagentProtocolVersion'])
   if (metadata.title !== undefined && (typeof metadata.title !== 'string' || Buffer.byteLength(metadata.title) > 32768) || metadata.workspaceId !== undefined && !id(metadata.workspaceId)) bad()
   if (metadata.modelSelection !== undefined) {

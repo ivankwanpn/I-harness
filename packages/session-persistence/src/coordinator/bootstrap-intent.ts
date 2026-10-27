@@ -5,7 +5,7 @@ import { bootstrapFields, captureBootstrapInvocation } from './bootstrap-header.
 export type BootstrapProjectIntent = { kind: 'unmanaged' } | { kind: 'unassigned' } | { kind: 'project'; projectId: string }
 export interface BootstrapRequestIntent { version: 1; requestCoreDigest: string; project: BootstrapProjectIntent }
 
-function projectIntent(value: BootstrapProjectIntent): BootstrapProjectIntent {
+export function captureBootstrapProjectIntent(value: BootstrapProjectIntent): BootstrapProjectIntent {
   bootstrapFields(value, ['kind'], ['projectId'])
   if (value.kind === 'project') {
     bootstrapFields(value, ['kind', 'projectId'])
@@ -34,14 +34,14 @@ function captureCore(value: unknown): unknown {
   return JSON.parse(canonicalJsonData(value))
 }
 export function createBootstrapRequestIntent(core: unknown, project: BootstrapProjectIntent): { intent: BootstrapRequestIntent; requestDigest: string } {
-  const intent: BootstrapRequestIntent = { version: 1, requestCoreDigest: bootstrapHash('ih.bootstrap.request.core.v1', captureCore(core)), project: projectIntent(project) }
+  const intent: BootstrapRequestIntent = { version: 1, requestCoreDigest: bootstrapHash('ih.bootstrap.request.core.v1', captureCore(core)), project: captureBootstrapProjectIntent(project) }
   return { intent: freezeJsonData(intent) as BootstrapRequestIntent, requestDigest: bootstrapHash('ih.bootstrap.request.v1', intent) }
 }
 export function captureBootstrapRequestIntent(invocation: BootstrapInvocation, value: BootstrapRequestIntent): BootstrapRequestIntent {
   const original = captureBootstrapInvocation(invocation)
   bootstrapFields(value, ['version', 'requestCoreDigest', 'project'])
   if (value.version !== 1 || typeof value.requestCoreDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.requestCoreDigest)) throw new TypeError('Invalid bootstrap request intent')
-  const intent: BootstrapRequestIntent = Object.freeze({ version: 1, requestCoreDigest: value.requestCoreDigest, project: projectIntent(value.project) })
+  const intent: BootstrapRequestIntent = Object.freeze({ version: 1, requestCoreDigest: value.requestCoreDigest, project: captureBootstrapProjectIntent(value.project) })
   if (bootstrapHash('ih.bootstrap.request.v1', intent) !== original.requestDigest) throw new TypeError('Bootstrap request intent mismatch')
   return intent
 }
