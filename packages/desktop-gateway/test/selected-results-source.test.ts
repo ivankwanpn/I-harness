@@ -387,3 +387,49 @@ it('does not let a rewound top-level call make a current native declaration ambi
     expect(result.classifications).toContainEqual({ kind: 'excluded', reason: 'rewound' })
   } finally { await fixture.close() }
 })
+it('review I1 keeps a current ordinary legacy declaration on its accepted exchange when a native identity was rewound', async () => {
+  const fixture = await setup()
+  try {
+    const rewoundCall = fixture.document.view.events.length
+    await recordFixture(fixture.document, { type: 'code/call', cellId: 'rewound', callId: 'nested', name: 'fixture', parentCallId: 'obsolete', args: {} })
+    await recordFixture(fixture.document, { type: 'rewind/point', version: 1, anchorSeq: rewoundCall, targetTurn: 1, mode: 'conversation', fileOps: [] })
+    const stepSeq = fixture.document.view.events.length
+    const current = await accepted(fixture.document, 'nested')
+    const closedSeq = fixture.document.view.events.at(-1)!.seq!
+    const declarationSeq = fixture.document.view.events.length, declared = legacy('nested')
+    await recordFixture(fixture.document, { type: 'context/result-ref', ref: declared })
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    const result = await inspect(fixture)
+    expect(result.outcome.kind).toBe('selected'); expect(result.rows).toHaveLength(2)
+    const row = result.rows.find(row => row.protocol === 'legacy')!
+    expect(row).toMatchObject({ protocol: 'legacy', ref: declared, original: { kind: 'local', sessionId: 'source', seq: declarationSeq, event: 'context/result-ref', slot: 'ref' },
+      basis: { kind: 'selected-observation', unit: { kind: 'exchange', at: { origin: 0, seq: stepSeq, part: 'step' }, closedAt: { origin: 0, seq: closedSeq, part: 'step' } } } })
+    expect(row.branchEvidence).toContainEqual({ origin: 0, seq: current.call, part: 'call' })
+    expect(row.branchEvidence).toContainEqual({ origin: 0, seq: current.result, part: 'result' })
+    expect(result.rows.every(row => row.basis.kind === 'selected-observation' && row.branchEvidence.every(at => !at.part.startsWith('code/') && at.seq !== rewoundCall))).toBe(true)
+  } finally { await fixture.close() }
+})
+it('review I2 refuses an extra callId-free output hidden without its own complete consumption proof', async () => {
+  const fixture = await setup()
+  try {
+    await accepted(fixture.document); await native(fixture.document)
+    const output = fixture.document.view.events.find(event => event.type === 'code/output')!
+    expect(Object.hasOwn(output, 'callId')).toBe(false)
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    await reset(fixture.document, [output.seq!])
+    const result = await inspect(fixture)
+    expect(result.outcome).toEqual({ kind: 'refused', reason: 'unsupported-history' }); expect(result.rows).toEqual([])
+    expect(output.type === 'code/output' && output.envelope?.execution).toEqual({ outcome: 'unknown', dispatch: 'not-dispatched' })
+  } finally { await fixture.close() }
+})
+it('review I3 refuses a retained terminal job hidden without a complete consumption proof', async () => {
+  const fixture = await setup()
+  try {
+    const seq = fixture.document.view.events.length, action = fixture.document.beginAction()
+    try { committedFactSeqs(await action.facts.delivery.record({ type: 'job/status', version: 1, job: { jobId: 'job', kind: 'process', label: 'job', status: 'completed', outputAvailable: true, result: { version: 1, revision: 'revision', kind: 'retained', envelope: envelope() } } })) } finally { action.finish() }
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    await reset(fixture.document, [seq])
+    const result = await inspect(fixture)
+    expect(result.outcome).toEqual({ kind: 'refused', reason: 'unsupported-history' }); expect(result.rows).toEqual([])
+  } finally { await fixture.close() }
+})

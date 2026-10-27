@@ -122,7 +122,7 @@ export function createResultResourceLedger(context: CompletedPassiveContext) {
     if (fact.type === 'job/status') {
       if (fact.jobStatus === 'running') return { kind: 'excluded', reason: 'open' }
       if (!fact.jobId || !fact.resultRevision || !['completed', 'killed', 'error'].includes(fact.jobStatus!)) return refused('unsupported-history')
-      const bound = extentGuard(declaration.extent); if (bound) return bound
+      const bound = evidenceGuard([fact.index]) ?? extentGuard(declaration.extent); if (bound) return bound
       const at = resultAt(fact)
       return finish(declaration, { kind: 'selected-observation', unit: { kind: 'job', at, closedAt: at } }, [at])
     }

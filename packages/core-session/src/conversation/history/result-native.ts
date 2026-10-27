@@ -63,7 +63,7 @@ export function createNativeResultIndex(facts: readonly HistoryFact[], units: re
     return { kind: 'proof', basis: { kind: 'standalone-native', unit: { kind: 'code-cell', at, closedAt }, completedCell: closedAt },
       evidence: [...proof.map(value => resultAt(value)), ...parentProof, acceptance, parent.unit.at, parent.unit.closedAt,
         ...(parent.consumption ? [parent.consumption.first, parent.consumption.latest] : [])],
-      indices: [...new Set([...proof.map(value => value.index), ...parent.indices])], parent }
+      indices: [...new Set([fact.index, ...proof.map(value => value.index), ...parent.indices])], parent }
   }
-  return { prove, hasCall: (id: string | undefined) => get('code/call', id).length > 0 }
+  return { prove, hasCall: (id: string | undefined) => get('code/call', id).some(branch) }
 }
