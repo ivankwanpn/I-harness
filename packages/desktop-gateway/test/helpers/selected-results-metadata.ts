@@ -5,6 +5,9 @@ import { buildSelectionSource, resolveSeedBoundary, selectSeedHistory } from '..
 import { createSemanticSourceConversationIndex } from '../../../core-session/src/conversation/validation.ts'
 import { exchangeCompletion, physicalUnitState } from '../../../core-session/src/conversation/unit-state.ts'
 import type { ResultSourceObservation } from '../../../session-executor/src/lifecycle/result-observation.ts'
+import { createCompletedPassiveContext } from '../../../core-session/src/conversation/passive-seed-context.ts'
+import { projectSelectedResults } from '../../../core-session/src/conversation/selected-results.ts'
+import type { FactOwner, SelectedResultRow } from '@i-harness/core-session'
 
 // Diagnostic only. Every serialized object below is constructed from named
 // metadata slots. No event/history-item spread or body discovery is permitted.
@@ -69,9 +72,22 @@ export async function createMetadataRecorder(mode: 'off' | 'only') {
   let bytes = 0, snapshots = 0
   return {
     path,
-    async record(source: ResultSourceObservation | undefined, phase: string) {
+    async record(source: ResultSourceObservation | undefined, phase: string, document: FactOwner) {
       if (!source) throw new Error('Actual held Gateway source observation missing')
       source.assertCurrent()
+      if (document.view !== source.view) throw new Error('Projection must use the actual observed document owner')
+      const held = createCompletedPassiveContext({ kind: 'held-public-fork', sourceSessionId: source.sessionId, view: source.view, factOwner: document, assertCurrent: source.assertCurrent }, { kind: 'completed' })
+      if (held.kind !== 'ready') throw new Error('Actual held projection context refused: ' + held.reason)
+      const projected = await projectSelectedResults(held.context, { assertCurrent: source.assertCurrent, async *legacy() {
+        source.assertCurrent()
+        if (source.metadata.semanticSeed || (source.metadata.seedLength ?? 0) !== 0) throw new Error('Nonempty inherited L1 proof requires its original reader')
+      } })
+      source.assertCurrent()
+      if (projected.kind !== 'selected') throw new Error('Actual selected-results projection refused: ' + projected.reason)
+      const projectedRows: SelectedResultRow[] = []
+      for await (const page of projected.results.pages()) projectedRows.push(...page.rows)
+      const classifications = []
+      for await (const classification of projected.results.classifications()) classifications.push(classification)
       const view = source.view, built = buildSelectionSource(view), selected = selectSeedHistory(view, { kind: 'completed' }, built)
       const boundary = resolveSeedBoundary(view, { kind: 'completed' }, built.turns)
       const index = createSemanticSourceConversationIndex(view.events, view.formatVersion, view.header)
@@ -96,6 +112,7 @@ export async function createMetadataRecorder(mode: 'off' | 'only') {
       const end = built.turns.ends.findLast(value => boundary.kind === 'resolved' && value.turn === boundary.boundary.last)
       const upper = end ? built.turns.starts.find(start => start.seq > end.seq) : undefined
       const snapshot = { diagnostic: 'selected-results-metadata-v1', mode, phase, observed: true,
+        selectedResults: { summary: projected.results.summary, rows: projectedRows, classifications, context: { boundary: held.context.boundary, first: held.context.first, last: held.context.last }, inheritedLegacyProof: 'actual non-bootstrap zero-inherited source; nonempty original L1 reader remains Task5' },
         held: { sessionId: source.sessionId, metadata: scalars(source.metadata, ['sessionId', 'parentSession', 'origin', 'createdAt', 'seedLength', 'archived']), source: scalars(source.source, ['sourceId', 'path', 'revision', 'readonly']), formatVersion: view.formatVersion, eventCount: view.events.length },
         boundary: boundary.kind === 'resolved' ? { kind: boundary.kind, last: boundary.boundary.last, localCutSeq: boundary.boundary.localCutSeq,
           upper: upper ? { kind: 'before-event', at: { index: upper.seq, seq: upper.seq } } : { kind: 'archive-end', eventCount: view.events.length }, upperBasis: 'derived-from-actual-B1-turn-boundary-no-new-held-owner' } : boundary,
@@ -107,7 +124,7 @@ export async function createMetadataRecorder(mode: 'off' | 'only') {
         currentDeclarations: { managed: declaredManaged, legacy: visibility.kind === 'visible' ? [...visibility.local()].map(value => ({ original: at(value.original), ref: legacy(value.ref) })) : visibility },
         existingLegacyTransferSelection: transfer.kind === 'selected' ? { kind: transfer.kind, local: [...transfer.local()].map(value => ({ original: at(value.original), extent: extent(value.extent), anchor: scalars(value.anchor, ['kind', 'seq', 'manifestSeq', 'ordinal']), ref: legacy(value.ref) })) } : transfer,
         bodyReadAvailability: 'separate original fixture read assertions; not used as discovery or eligibility',
-        unsupported: ['No authoritative selected-results eligibility implemented', 'Upper is B1-derived, not a fabricated CompletedPassiveContext', 'Native links are raw scalar evidence; final classification requires review'] }
+        unsupported: ['No new route/wire/protocol transfer grant', 'Nonempty inherited L1 metadata reader remains Task5', 'Original native target READY/read/search/source-clear/cold positives remain required'] }
       source.assertCurrent()
       const line = JSON.stringify(snapshot) + '\n'
       bytes += Buffer.byteLength(line); snapshots++
@@ -115,6 +132,7 @@ export async function createMetadataRecorder(mode: 'off' | 'only') {
       await appendFile(path, line)
       source.assertCurrent()
       console.info(JSON.stringify({ diagnostic: 'selected-results-snapshot', mode, phase, path, bytes: Buffer.byteLength(line), eventCount: view.events.length }))
+      return projectedRows
     },
   }
 }

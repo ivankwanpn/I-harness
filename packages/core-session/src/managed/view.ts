@@ -6,6 +6,16 @@ import { captureLegacyFact, freezeJsonData } from './capture.ts'
 import type { SessionView } from './types.ts'
 import { prepareSessionEvent } from '../events/intake.ts'
 const originalIndexes = new WeakMap<SessionView, ConversationValidationIndex>()
+const originalSourceSessions = new WeakMap<SessionView, string | undefined>()
+/** Exact containing document identity; a caller label cannot choose a source. */
+export function isManagedResultSource(view: SessionView, owner: object, sessionId: string): boolean {
+  return managedFactOwners.get(view) === owner && originalSourceSessions.get(view) === sessionId
+}
+/** Existing owned structural index, shared by held semantic/result selection. */
+export function readOwnedSelectionMetadata(view: SessionView) {
+  const index = originalIndexes.get(view)
+  return index && { facts: index.resultFacts(), history: index.history() }
+}
 /** Only immutable views constructed here have an original committed read link.
  * Mutable memory sessions deliberately use a strict observation replay instead. */
 export function readOwnedDeliveryState(view: SessionView) {
@@ -47,6 +57,7 @@ function managedSessionState(source: Session, scope: { sessionId: string } | und
   })
   managedSessions.add(view)
   originalIndexes.set(view, index)
+  originalSourceSessions.set(view, scope?.sessionId)
   return {
     view,
     bindOwner(owner: object) {

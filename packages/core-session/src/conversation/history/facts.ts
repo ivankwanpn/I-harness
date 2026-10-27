@@ -2,10 +2,11 @@ import type { SessionEventView } from '../../managed/types.ts'
 import type { ConversationCoverage, ConversationItemRef } from '../../events/replacement.ts'
 import { outcomeField } from '../payload.ts'
 import { resultDisposition, resultIsError } from '../../results/projection.ts'
+import { resultFactMetadata, type ResultFactMetadata } from './result-metadata.ts'
 
 /** Only structural metadata. No text, arguments, result/native/image bodies,
  * request attribution or receipts are retained by the history index. */
-export interface HistoryFact {
+export interface HistoryFact extends ResultFactMetadata {
   readonly seedArtifacts?: readonly import('../../results/types.ts').ManagedArtifactRef[]
   readonly seedArtifactIndices?: readonly number[]
   readonly seedTurns?: import('../seed-types.ts').SeedTurnDomain
@@ -14,6 +15,7 @@ export interface HistoryFact {
     kind: 'input' | 'summary' | 'exchange'; scope: 'turn' | 'session'; extent: import('../seed-types.ts').TurnExtent
     calls: readonly { id: string; name: string; outcome: 'success' | 'error' | 'not-dispatched'; result: number }[]
     resultCount: number; mediaCount: number
+    resultUses: readonly { result: number; slot: 'sourceRetention.artifact' | 'dependencies.artifact'; artifact: number; use: import('../selected-results-types.ts').ResultUse }[]
   }[]
   readonly deliveryDependencies?: readonly number[]
   readonly deliveryGeneration?: string
@@ -33,7 +35,7 @@ export interface HistoryFact {
 export interface HistoryArchive { readonly length: number; get(index: number): HistoryFact }
 
 export function historyFact(event: SessionEventView, index: number, inheritedBoundary = 0): HistoryFact {
-  const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }) }
+  const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }), ...resultFactMetadata(event) }
   switch (event.type) {
     case 'agent/delivery-generation': return {...base, deliveryOperation:event.op, ...(event.op==='open'?{deliveryGeneration:event.generationId,deliveryDependencies:[event.originInputSeq]}:{})}
     case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryDependencies:[event.callSeq,event.startSeq]}
@@ -45,7 +47,11 @@ export function historyFact(event: SessionEventView, index: number, inheritedBou
         ...(result.dependencies?.kind === 'catalog' ? [result.dependencies.artifact] : []),
       ])), seedExtent: { ...event.group.extent }, seedItems: event.group.items.map(item => ({ kind: item.kind, scope: item.scope, extent: { ...item.extent },
       calls: item.kind === 'exchange' ? item.calls.map(call => ({ id: call.id, name: call.name, outcome: call.outcome, result: call.result })) : [],
-      resultCount: item.kind === 'exchange' ? item.results.length : 0, mediaCount: item.kind === 'input' ? item.input.media.length : item.kind === 'exchange' ? item.results.reduce((count, result) => count + result.media.length, 0) : 0 })) }
+      resultCount: item.kind === 'exchange' ? item.results.length : 0,
+      resultUses: item.kind !== 'exchange' ? [] : item.results.flatMap((result, ordinal) => result.kind !== 'envelope' ? [] : [
+        ...(result.sourceRetention.kind === 'artifact' ? [{ result: ordinal, slot: 'sourceRetention.artifact' as const, artifact: result.sourceRetention.artifact, use: { kind: 'result' as const } }] : []),
+        ...(result.dependencies?.kind === 'catalog' ? [{ result: ordinal, slot: 'dependencies.artifact' as const, artifact: result.dependencies.artifact, use: { kind: 'dependency-catalog' as const, count: result.dependencies.count } }] : []),
+      ]), mediaCount: item.kind === 'input' ? item.input.media.length : item.kind === 'exchange' ? item.results.reduce((count, result) => count + result.media.length, 0) : 0 })) }
     case 'step/start': return { ...base, actionId: event.actionId, attemptId: event.attemptId }
     case 'model/exchange-accepted': return { ...base, exchangeId: event.exchangeId, stepStartSeq: event.stepStartSeq, assistantSeq: event.assistantSeq, callSeqs: [...event.callSeqs] }
     case 'tool/call': return { ...base, callId: event.callId, name: event.name }

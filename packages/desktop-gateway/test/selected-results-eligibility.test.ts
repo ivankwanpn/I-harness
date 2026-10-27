@@ -115,8 +115,11 @@ it.each(['off','only'] as const)('metadata-only child %s traces declared resourc
       return {label:event.type==='code/output'?'emitted':'direct',ref:found[0]!,expected:event.type==='code/output'?emitted:direct}
     })
     const assertLegacy=async(id:string,phase:string)=>{
+      const actualOwner=await coordinator.openManagedDocument(id)
       await runtime.withLegacyReadObservation({sessionId:id},async read=>{
-        await recorder.record(runtime.observations.current(id),phase)
+        const selectedRows=await recorder.record(runtime.observations.current(id),phase,actualOwner)
+        expect(selectedRows.filter(row=>row.protocol==='managed').map(row=>row.ref)).toEqual(bodies.map(body=>body.ref))
+        expect(selectedRows.filter(row=>row.protocol==='legacy').map(row=>row.ref)).toEqual(refs)
         for(const [index,ref] of refs.entries()){
           let offset=0,text=''
           for(;;){

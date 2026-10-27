@@ -5,6 +5,7 @@ import { historyVisibility } from './visibility.ts'
 import { canonicalJsonData } from '../../serialization/json-data.ts'
 import { historyFact, type HistoryArchive, type HistoryFact } from './facts.ts'
 import { projectHistory, validateHistoricalReplacement } from './replacements.ts'
+import { freezeJsonData } from '../../managed/capture.ts'
 
 /** The existing validation owner's staged logical metadata. This registry is
  * structural only; it neither retains an event array nor renders payloads. */
@@ -17,6 +18,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
   const admissions = new Map<string, number | undefined>()
   let count = 0
   return {
+    resultFacts: (): readonly HistoryFact[] => Object.freeze([...facts.values()]),
     history: (throughSeq?: number) => projectHistory({ length: count, get: position => facts.get(position)! }, throughSeq),
     semanticSeedResultRefs() {
       const branch = historyVisibility(facts.values()).branch
@@ -38,7 +40,7 @@ export function createHistoryIndex(formatVersion: number, validateShape = valida
       let stagedLength = 0
       return { advance(event: SessionEventView) {
         validateShape(event, formatVersion)
-        const position = baseCount + stagedLength++, fact = historyFact(event, position, inheritedBoundary)
+        const position = baseCount + stagedLength++, fact = freezeJsonData(historyFact(event, position, inheritedBoundary)) as HistoryFact
         if (event.type === 'agent/input/admitted') nextAdmissions.set(event.inputId, event.seq)
         if (event.type === 'user/message') for (const id of [event.input?.inputId, event.imageInputId]) {
           if (id === undefined) continue

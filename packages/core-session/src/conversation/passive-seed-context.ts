@@ -12,7 +12,7 @@ export type Boundary = { kind: 'local-completed'; lastTurn: number; end: Coordin
   | { kind: 'explicit-inherited-group'; lastTurn: number; group: Coordinate; ordinal: number; upper: Upper; inherited: { kind: 'empty' } | { kind: 'completed'; manifest: Coordinate; turn: number } }
   | { kind: 'inherited-default'; lastTurn: number; upper: Upper; inherited: InheritedLatest }
 export interface HeldSeedOwner { kind: 'held-public-fork'; sourceSessionId: string; view: SessionView; factOwner: FactOwner; assertCurrent(): void }
-export interface SelectionSource { view: SessionView; coordinates: readonly Coordinate[]; turns: ReturnType<typeof import('./history/turns.ts').historyTurns>; history: ReturnType<import('./validation.ts').ConversationValidationIndex['history']>; originalWindows: readonly import('../projection/rewind.ts').OriginalWindow[] }
+export interface SelectionSource { view: SessionView; coordinates: readonly Coordinate[]; facts: readonly import('./history/facts.ts').HistoryFact[]; turns: ReturnType<typeof import('./history/turns.ts').historyTurns>; history: ReturnType<import('./validation.ts').ConversationValidationIndex['history']>; originalWindows: readonly import('../projection/rewind.ts').OriginalWindow[] }
 export interface CompletedPassiveContext {
   kind: 'completed-passive'; owner: HeldSeedOwner; selection: CompletedSelection; source: SelectionSource; first: 1; last: number
   selected: Extract<ReturnType<typeof selectSeedHistory>, { kind: 'selected' }>; boundary: Boundary
@@ -20,6 +20,11 @@ export interface CompletedPassiveContext {
 }
 export type ContextResult = { kind: 'ready'; context: CompletedPassiveContext } | { kind: 'refused'; reason: SeedRefusal }
 export type PassiveExportOption = { kind: 'public-completed-passive'; owner: HeldSeedOwner }
+const completedContexts = new WeakMap<CompletedPassiveContext, { owner: HeldSeedOwner; source: SelectionSource; selected: CompletedPassiveContext['selected']; boundary: Boundary }>()
+export function isOriginalCompletedPassiveContext(context: CompletedPassiveContext): boolean {
+  const original = completedContexts.get(context)
+  return !!original && original.owner === context.owner && original.source === context.source && original.selected === context.selected && original.boundary === context.boundary
+}
 export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: CompletedSelection): ContextResult {
   if (owner.kind !== 'held-public-fork' || !isManagedFactOwner(owner.view, owner.factOwner)) return { kind: 'refused', reason: 'source-unsupported' }
   try { owner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } }
@@ -58,6 +63,8 @@ export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: C
       return { ordinal, extent: group.extent, establishments, anchor }
     })
     try { owner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } }
-    return { kind: 'ready', context: { kind: 'completed-passive', owner, selection, source, first: 1, last, selected, boundary, groups } }
+    const context: CompletedPassiveContext = { kind: 'completed-passive', owner, selection, source, first: 1, last, selected, boundary, groups }
+    completedContexts.set(context, { owner, source, selected, boundary })
+    return { kind: 'ready', context }
   } catch { return { kind: 'refused', reason: 'invalid-seed' } }
 }
