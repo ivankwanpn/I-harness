@@ -20,7 +20,8 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
         fact: CapturedActionFact<ProducerFactOutcome>;
     };
     type Message = MessageObligation & { kind: 'message'; failed(error: unknown): void };
-    const transactions = new Map<readonly TeamEvent[], Transaction | Message>();
+    type Run = { kind: 'run'; done: Promise<void> };
+    const transactions = new Map<readonly TeamEvent[], Transaction | Message | Run>();
     let retired = false;
     const action = owner.beginAction();
     let source: ReturnType<typeof action.registerSettlementSource> | undefined;
@@ -56,10 +57,29 @@ export function createTeamFacts(owner: FactOwner, drainTransactions: () => Promi
         }
     };
     return {
-        run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> { assertOpen(); return signals.run({ signal }, work); },
+        run<T>(signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
+            assertOpen();
+            // Retain accepted outer work before its first acquisition await.
+            // The original caller still owns its result/error; cleanup joins a
+            // resolving sentinel and never invokes the work a second time.
+            const key: readonly TeamEvent[] = [], done = Promise.withResolvers<void>();
+            transactions.set(key, { kind: 'run', done: done.promise });
+            const release = () => { transactions.delete(key); done.resolve(); };
+            try {
+                const running = signals.run({ signal }, work);
+                void running.then(release, release);
+                return running;
+            } catch (error) { release(); throw error; }
+        },
+        async joinRuns(): Promise<void> {
+            // Only the external retiring owner joins outer work. In particular,
+            // the native source producer must not join an operation awaiting it.
+            await Promise.all([...transactions.values()].filter(record => record.kind === 'run').map(record => record.done));
+        },
         async commit(events: readonly TeamEvent[]) {
             let pending = transactions.get(events);
             if (pending?.kind === 'message') throw new Error('Message queue is not a generic transaction');
+            if (pending?.kind === 'run') throw new Error('Team operation is not a generic transaction');
             const existing = !!pending;
             if (!pending) {
                 const action = owner.beginAction(signals.getStore()?.signal);

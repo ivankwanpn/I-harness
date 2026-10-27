@@ -159,15 +159,18 @@ export async function mountAgentTeams(
       phase = 'retiring'
       // Fence admission and release every waiter synchronously, before joins.
       lead?.retire(); completions?.sealCompletions(); activity?.close()
-      children ??= [...deps.subagents.table.entries()].filter(([path]) => path.startsWith('lead/')).map(([path, entry]) => ({
-        path, entry, agent: entry.sessionId ? deps.subagents.agents.get(entry.sessionId) : undefined,
-        disposed: false, jobClosed: false, detached: false, removeAgent: false,
-      }))
       const attempt = (async () => {
         const failures: unknown[] = []
+        await lead?.joinRuns()
         try { await completions?.joinCompletions() }
         catch (error) { failures.push(...(error instanceof AggregateError ? error.errors : [error])) }
         try { if (!factsClosed) { await factsCleanup?.(); factsClosed = true } } catch (error) { failures.push(error) }
+        // Sealed accepted acquisitions have now finished publication or failed.
+        // Freeze membership once, retaining exact entries and phase bits on retry.
+        children ??= [...deps.subagents.table.entries()].filter(([path]) => path.startsWith('lead/')).map(([path, entry]) => ({
+          path, entry, agent: entry.sessionId ? deps.subagents.agents.get(entry.sessionId) : undefined,
+          disposed: false, jobClosed: false, detached: false, removeAgent: false,
+        }))
         for (const child of [...children!]) {
           const { path, entry } = child, sub = deps.subagents
           try {

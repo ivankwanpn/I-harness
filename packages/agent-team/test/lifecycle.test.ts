@@ -22,9 +22,9 @@ import { createMailbox } from '../src/mailbox.ts'
 import { foldTeam } from '../src/fold.ts'
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createSession, decodeFactBatch, isNondurableSession } from "@i-harness/core-session"
+import { committedFactSeqs, createSession, decodeFactBatch, isNondurableSession, type BatchKey } from "@i-harness/core-session"
 import { ownedTeamFixture } from './owned-fixture.ts'
-import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
+import { createAgentTable, createJobRegistry, createRoleRegistry, type ChildAgentEntry } from "@i-harness/subagent"
 import { snapshotState } from "../../subagent/src/persist.ts"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { registerExec } from "@i-harness/exec"
@@ -64,6 +64,169 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it.each(['child-first', 'ack-first'] as const)('joins original accepted child acquisition before freezing cleanup membership (%s)', async order => {
+    const f = await ownedTeamFixture([
+      { type: 'team/member', version: 1, teamId: 'acquisition-team', member: { id: 'target-id', name: 'target', description: 'd', provider: 'spawn', context: 'fresh', phase: 'provisioning' } },
+      { type: 'team/member', version: 1, teamId: 'acquisition-team', member: { id: 'target-id', name: 'target', description: 'd', provider: 'spawn', context: 'fresh', phase: 'active', sessionId: 'target' } },
+    ])
+    await f.coordinator.create({ sessionId: 'target', parentSession: 'parent' })
+    const target = await f.coordinator.openManagedDocument('target')
+    const ctx = createContext(), tools = createToolRegistry(ctx), deps = makeDeps({ parentSession: f.document.view, factOwner: f.document, parentRegistry: tools })
+    deps.subagents.generationFactoryFor = fixtureGenerationFor
+    deps.subagents.childSessions = { coordinator: f.coordinator, parentSessionId: 'parent' }
+    let targetDisposes = 0
+    deps.subagents.table.add('lead/target', { path: 'lead/target', status: 'waiting', session: target.view, factOwner: target,
+      sessionId: 'target', controller: new AbortController(), mailbox: [], async dispose() { targetDisposes++; await target.close() },
+    })
+    const childCreated = Promise.withResolvers<void>(), releaseChild = Promise.withResolvers<void>()
+    const ackEntered = Promise.withResolvers<void>(), releaseAck = Promise.withResolvers<void>()
+    const published = Promise.withResolvers<ChildAgentEntry>(), debtReady = Promise.withResolvers<void>()
+    const create = f.coordinator.create.bind(f.coordinator), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
+    let childCreates = 0, allowChildAck = false, childKey: BatchKey | undefined, childWrites = 0, disposeCalls = 0
+    let lateEntry: ChildAgentEntry | undefined, lateAgent: Agent | undefined
+    const childKeys: BatchKey[] = [], receipts: unknown[] = []
+    let debtWork: Promise<void> | undefined
+    f.coordinator.create = async (...args) => {
+      const result = await create(...args)
+      if (args[0]?.sessionId?.startsWith('child-')) { childCreates++; childCreated.resolve(); await releaseChild.promise }
+      return result
+    }
+    f.backend.appendOwnedBatch = async (...args) => {
+      const events = decodeFactBatch(args[3].bytes).events, result = await append(...args)
+      if (events.some(event => event.type === 'team/message/delivered')) { ackEntered.resolve(); await releaseAck.promise }
+      if (events.some(event => event.type === 'subagent/inbox' && event.messageId === 'late-child-cleanup-debt')) {
+        childWrites++; childKey = args[3].key
+        const reported = { kind: 'unknown' as const, key: childKey }
+        receipts.push({ actual: result, reported }); return reported
+      }
+      return result
+    }
+    f.backend.reconcileOwnedBatch = async (...args) => {
+      if (childKey && args[3].key.batchId === childKey.batchId) {
+        childKeys.push(args[3].key)
+        if (!allowChildAck) return { kind: 'unknown', key: args[3].key }
+      }
+      return reconcile(...args)
+    }
+    const off = deps.subagents.table.subscribe(change => {
+      if (change.path !== 'lead/late' || change.kind !== 'add') return
+      const entry = change.entry
+      lateEntry = entry; lateAgent = deps.subagents.agents.get(entry.sessionId!)
+      const dispose = entry.dispose!
+      entry.dispose = async () => { disposeCalls++; await debtReady.promise; await dispose() }
+      published.resolve(entry)
+    })
+    const installChildDebt = (entry: ChildAgentEntry) => {
+      // Give the actual published child's document a real required audit whose
+      // committed backend return is hidden. Its own close must reconcile it.
+      const action = entry.factOwner!.beginAction()
+      let fact: ReturnType<ReturnType<typeof action.registerSettlementSource>['delivery']['capture']>
+      const source = action.registerSettlementSource(async () => { committedFactSeqs(await fact.reconcile()) })
+      action.finish()
+      fact = source.delivery.capture({ type: 'subagent/inbox', messageId: 'late-child-cleanup-debt', message: 'original child cleanup debt',
+        provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' },
+      })
+      debtWork = fact.admit().then(outcome => { expect(outcome.kind).toBe('unknown'); debtReady.resolve() }, debtReady.reject)
+    }
+    const handle = await mountAgentTeams(ctx, tools, deps)
+    const spawning = tools.get('spawn_teammate')!.execute({ name: 'late', description: 'd', prompt: 'quiet local fixture' }, {}).then(value => ({ value }), error => ({ error }))
+    await childCreated.promise
+    expect(deps.subagents.table.get('lead/late')).toBeUndefined()
+    expect(f.document.view.events.some(event => event.type === 'team/member' && event.member.name === 'late' && event.member.phase === 'provisioning')).toBe(true)
+    const sending = tools.get('send_message')!.execute({ target: 'target', message: 'hold original Team acknowledgement' }, {})
+    await ackEntered.promise
+    const waiting = tools.get('wait_agent')!.execute({ timeout_ms: 30_000 }, {})
+    let cleanupSettled = false
+    const closing = handle.unmount().then(() => { cleanupSettled = true; return { errors: [] as unknown[] } }, error => { cleanupSettled = true; return error as AggregateError })
+    try {
+      expect(await waiting).toMatchObject({ timedOut: false })
+      expect(() => tools.get('spawn_teammate')!.execute({ name: 'too-late', description: 'd', prompt: 'blocked' }, {})).toThrow(/closed/)
+      if (order === 'ack-first') {
+        releaseAck.resolve(); await sending
+        await new Promise<void>(resolve => setImmediate(resolve))
+        expect(cleanupSettled).toBe(false)
+        expect(deps.subagents.table.get('lead/late')).toBeUndefined()
+      }
+      releaseChild.resolve()
+      const exactEntry = await published.promise
+      // Finish the actual local initial generation before introducing the
+      // independent cleanup debt, so no unrelated generation source is refused.
+      await exactEntry.followupChain
+      installChildDebt(exactEntry)
+      await debtReady.promise
+      expect(exactEntry).toBe(lateEntry)
+      expect(deps.subagents.table.get('lead/late')).toBe(exactEntry)
+      expect(cleanupSettled).toBe(false)
+      releaseAck.resolve(); await sending
+      expect(await spawning).toMatchObject({ value: { member: { name: 'late' } } })
+      await debtWork
+      const failure = await closing
+      expect(failure.errors.length).toBeGreaterThan(0)
+      expect(deps.subagents.table.get('lead/late')).toBe(exactEntry)
+      expect(deps.subagents.agents.get(exactEntry.sessionId!)).toBe(lateAgent)
+      expect(disposeCalls).toBe(1)
+      await expect(mountAgentTeams(ctx, tools, makeDeps())).rejects.toThrow(/only one team/)
+      allowChildAck = true; await handle.unmount()
+      expect(disposeCalls).toBe(2)
+      expect(deps.subagents.table.get('lead/late')).toBeUndefined()
+      expect(deps.subagents.agents.get(exactEntry.sessionId!)).toBeUndefined()
+      expect(deps.subagents.jobs.read(exactEntry.jobId!).status).not.toBe('running')
+      expect(childCreates).toBe(1); expect(childWrites).toBe(1)
+      expect(targetDisposes).toBe(1)
+      for (const key of childKeys) expect(key).toEqual(childKey)
+      expect(exactEntry.session.events.filter(event => event.type === 'subagent/inbox' && event.messageId === 'late-child-cleanup-debt')).toHaveLength(1)
+      console.info('accepted-acquisition-cleanup-evidence', JSON.stringify({ order, root: f.root, childSessionId: exactEntry.sessionId, childCreates, childWrites, disposeCalls, targetDisposes, childKey, childKeys, receipts }))
+    } finally {
+      releaseChild.resolve(); releaseAck.resolve(); allowChildAck = true; debtReady.resolve()
+      await spawning; await sending; await debtWork; await closing
+      off()
+      await handle.unmount()
+      // Baseline's omitted entry still needs its exact original disposal in
+      // fixture teardown; this is never counted as successful Team cleanup.
+      if (lateEntry && deps.subagents.table.get('lead/late') === lateEntry) {
+        await lateEntry.dispose!(); deps.subagents.table.remove('lead/late')
+        if (lateEntry.sessionId && deps.subagents.agents.get(lateEntry.sessionId) === lateAgent) deps.subagents.agents.remove(lateEntry.sessionId)
+      }
+      await f.coordinator.close()
+    }
+  })
+
+  for (const error of [undefined, null]) it(`joins concurrent unmounts through original failed run ${String(error)} without source-producer self-wait`, async () => {
+    const f = await ownedTeamFixture(), ctx = createContext(), tools = createToolRegistry(ctx)
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+    const begin = f.document.beginAction.bind(f.document)
+    let source: ReturnType<ReturnType<typeof begin>['registerSettlementSource']> | undefined, attempts = 0
+    f.document.beginAction = (...args) => {
+      const action = begin(...args), register = action.registerSettlementSource.bind(action)
+      action.registerSettlementSource = producer => { source = register(producer); return source }
+      return action
+    }
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
+      spawnChild: async () => { attempts++; entered.resolve(); await release.promise; throw error },
+    }))
+    const spawning = tools.get('spawn_teammate')!.execute({ name: 'fails', description: 'd', prompt: 'original' }, {})
+    const original = spawning.catch(value => ({ occurred: true, error: value }))
+    await entered.promise
+    let closed = false
+    const first = handle.unmount(), second = handle.unmount()
+    void first.then(() => { closed = true }, () => { closed = true })
+    try {
+      expect(second).toBe(first)
+      // The actual source producer may run while accepted outer work is held.
+      // It drains its original lane, never recursively joins this tool run.
+      await source!.close()
+      expect(closed).toBe(false)
+      release.resolve()
+      expect(await original).toEqual({ occurred: true, error })
+      await Promise.all([first, second])
+      await expect(spawning).rejects.toBe(error)
+      await expect(handle.unmount()).resolves.toBeUndefined()
+      expect(attempts).toBe(1)
+      expect(f.document.view.events.filter(event => event.type === 'team/member').map(event => event.member.phase)).toEqual(['provisioning', 'failed'])
+      expect(f.document.view.events.filter(event => event.type === 'team/message/delivered')).toHaveLength(0)
+    } finally { release.resolve(); await original; await first; await f.coordinator.close() }
+  })
+
   for (const error of [undefined, null]) it(`completion cleanup retains and reports original ${String(error)} once without replaying delivery`, async () => {
     const f = await ownedTeamFixture(), deps = makeDeps()
     const state = foldTeam([]).state
