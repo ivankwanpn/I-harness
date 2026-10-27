@@ -297,3 +297,16 @@ it('refuses a registry-missing entry with an original unknown disposer without o
     await f.sub.dispose(); expect(closes).toBe(1)
   } finally { await f.close() }
 })
+
+it('retries the same original entry disposer after failure rather than adopting a replacement method', async () => {
+  const f = await harness({ resident: true })
+  let fail = true, originalCalls = 0, replacementCalls = 0
+  const original = async () => { originalCalls++; if (fail) throw false; await f.document.close() }
+  f.entry.dispose = original
+  try {
+    await expect(f.sub.dispose()).rejects.toBeInstanceOf(AggregateError)
+    f.entry.dispose = async () => { replacementCalls++ }
+    fail = false; await f.sub.dispose()
+    expect([originalCalls, replacementCalls]).toEqual([2, 0])
+  } finally { fail = false; f.entry.dispose = original; await f.close() }
+})

@@ -1,9 +1,11 @@
 import { expect, it, vi } from 'vitest'
-const controls = vi.hoisted(() => ({ team: undefined as import('@i-harness/agent-team').TeamMountHandle | undefined }))
+const controls = vi.hoisted(() => ({ team: undefined as import('@i-harness/agent-team').TeamMountHandle | undefined,
+  sub: undefined as import('@i-harness/agent-team').TeamSubagentDeps | undefined }))
 vi.mock('@i-harness/agent-team', async original => {
   const native = await original<typeof import('@i-harness/agent-team')>()
   return { ...native, async mountAgentTeams(...args: Parameters<typeof native.mountAgentTeams>) {
     const [ctx, tools, deps, ...rest] = args, retain = deps.retainMount
+    controls.sub = deps.subagents
     return native.mountAgentTeams(ctx, tools, { ...deps, retainMount(handle) { controls.team = handle; retain?.(handle) } }, ...rest)
   } }
 })
@@ -16,7 +18,7 @@ import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionService } from '../src/service.ts'
 import { controlledModel } from './controlled-model.ts'
 
-it.each(['publish', 'partial-close'] as const)('keeps Team recoverRoot ACK data-ready while original wakeup waits for publication (%s)', async mode => {
+it.each(['publish', 'partial-close', 'alias-replacement'] as const)('keeps Team recoverRoot ACK data-ready while original wakeup waits for publication (%s)', async mode => {
   controls.team = undefined
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'team-'))
   await writeFile(join(root, 'settings.json'), '{}')
@@ -31,7 +33,7 @@ it.each(['publish', 'partial-close'] as const)('keeps Team recoverRoot ACK data-
   await parent.close(); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
   const restoredState: SubagentStateSnapshot = { formatVersion: 2, jobs: [], roles: builtinRoles(), agentTable: [{ path: 'lead/helper', status: 'waiting', mailbox: [], sessionId: 'child', roleName: 'general', lastInboxSeq: -1 }] }
   const mounted = Promise.withResolvers<import('../src/assembly.ts').SessionAssembly>(), release = Promise.withResolvers<void>()
-  let requests = 0
+  let requests = 0, replacements = 0
   const service = createSessionService({ workspace: root, coordinator, modelPolicy: 'test-mock', team: {}, restoredState, codeMode: { mode: 'off' }, contextOutputSettingsPath: join(root, 'settings.json'),
     model: controlledModel(async function* () { requests++; yield { type: 'text/chunk', text: 'done' }; yield { type: 'end' } }),
     extensionsFor: async () => ({ options: {}, async mount(assembly) { mounted.resolve(assembly); await release.promise } }) })
@@ -47,12 +49,14 @@ it.each(['publish', 'partial-close'] as const)('keeps Team recoverRoot ACK data-
     expect(child.view.events.filter(e => e.type === 'context/action' || e.type === 'user/message')).toEqual([])
     expect(requests).toBe(0)
     if (mode === 'partial-close') await controls.team!.unmount()
+    if (mode === 'alias-replacement') controls.sub!.ensureResident = async () => { replacements++; return false }
     release.resolve(); expect(await creating).toBe(assembly)
-    if (mode === 'publish') {
+    if (mode !== 'partial-close') {
       await expect.poll(() => requests).toBe(1)
       await expect.poll(() => assembly.subagentState().agentTable[0]?.result?.kind).toBe('retained')
     }
-    expect(requests).toBe(mode === 'publish' ? 1 : 0)
+    expect(requests).toBe(mode === 'partial-close' ? 0 : 1)
+    expect(replacements).toBe(0)
     expect(assembly.session.events.filter(e => e.type === 'team/message/delivered')).toHaveLength(1)
     expect(child.view.events.filter(e => e.type === 'subagent/inbox')).toHaveLength(1)
     console.info('resident-team-activation-evidence', JSON.stringify({ phase: 'after-publication', mode, root, requests,

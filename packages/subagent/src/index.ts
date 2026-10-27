@@ -316,7 +316,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
   }
   let disposeFlight: Promise<void> | undefined
-  const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean }>()
+  const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean; dispose?: () => Promise<void>; unmount?: () => void; chain?: Promise<void>; sessionId?: string; agent?: ReturnType<AgentRegistry['get']> }>()
   let factsFlushed = false, tasksFlushed = false, factsClosed = false, readyFailureReported = false
   function dispose(): Promise<void> {
     notificationsRetired = true
@@ -328,7 +328,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void attempt.promise.then(() => { disposeFlight = undefined }, () => { disposeFlight = undefined })
     owner.retire()
     const fenceEntries = () => { for (const entry of table.entries().values()) {
-      if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false })
+      if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false,
+        dispose: entry.dispose?.bind(entry), unmount: entry.unmount?.bind(entry), chain: entry.followupChain,
+        sessionId: entry.sessionId, agent: entry.sessionId ? agents.get(entry.sessionId) : undefined })
       if (!entry.closing) table.update(entry.path, entry, { closing: true })
       entry.controller.abort()
       if (entry.sessionId) opts.persist?.coordinator.revokeManagedDocumentNewWork(entry.sessionId)
@@ -346,11 +348,11 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
         const failures: unknown[] = []
         if (!phases.settled) try { await owner.settleEntryResult(entry); phases.settled = true } catch (error) { failures.push(error) }
         if (!phases.disposed) try {
-          if (entry.dispose) await entry.dispose()
-          else { await entry.followupChain; await entry.unmount?.() }
+          if (phases.dispose) await phases.dispose()
+          else { await phases.chain; await phases.unmount?.() }
           phases.disposed = true
         } catch (error) { failures.push(error) }
-        if (!failures.length && entry.sessionId) agents.remove(entry.sessionId)
+        if (!failures.length && phases.sessionId && agents.get(phases.sessionId) === phases.agent) agents.remove(phases.sessionId)
         if (failures.length) throw new AggregateError(failures, 'Original entry cleanup incomplete')
       }))
       errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
