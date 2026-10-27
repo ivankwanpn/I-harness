@@ -11,6 +11,7 @@
 ## Global constraints
 
 - Root sequencing ruling: Task1 declares closed child data/route/reservation aliases and parsers only. Do not widen existing shipping public header/read-state fields to their union until the routed consumers in Tasks2–4 are connected; that avoids an invalid intermediate public-only consumer graph. No private coordinator capability is advertised in Task1.
+- The full-stage validator that requires the routed reservation union is wired with Task2, while Task1 covers pure core/request/intent/reservation/initial commitment. Use a cohesive private child-data leaf rather than inserting an unrelated large block into existing public owners; factoring the existing metadata validator without behavior change is permitted. No casts may stand in for a routed consumer.
 - Root sequencing ruling: Task2's actual READY→mutation qualification depends on Task3's private entry and Task4's Documents facade. Implement the shared backend first, but defer that actual-facade runtime gate until these consumers exist; do not fabricate a READY record or bypass Documents to claim Task2 complete. Root may batch the tightly coupled Tasks2–4 into one reviewed owner slice.
 - Runtime tooling: resolve the first Node Application result, not all Get-Command matches. Every test/type/runtime invocation receives six new short task IH roots from its brief. Use existing direct Vitest/TS and sequential --no-file-parallelism; never pnpm run/exec/install/relink, HOME/USERPROFILE changes, or protected evidence traversal.
 
@@ -121,4 +122,4 @@ $childBootstrapNode = (Get-Command node -CommandType Application | Select-Object
 | M1/R1 | Task1 exact existing initial digest tuple, Task3 >262144UTF8 generic/private positive and post-callback mismatch spends reservation; no prompt text duplication. |
 | M2 | Task1 complete caller/lineage/model/role/numeric/absence/anonymous matrix; Task3 preserves generic anonymous/durable-parent restriction and excludes passive V2. |
 
-Candidates now return to the same independent reviewer. Original design/rulings/review remain untouched; no product implementation, tests/runtime, Git mutations, subagents, network/provider/profile work is released by either candidate.
+Design rereview is complete and original candidate/rulings/review files remain untouched. Root releases bounded implementation slices in task briefs; later qualification, caller integration and release approval remain separate.
