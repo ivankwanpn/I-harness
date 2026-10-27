@@ -10,6 +10,22 @@ import { openExecutorDocument } from '../src/lifecycle/managed-document.ts'
 import { prepareInputExecution } from '../src/lifecycle/input-preparation.ts'
 import { openLiteralInputExecution } from '../src/lifecycle/literal-input.ts'
 import { createSessionService } from '../src/index.ts'
+import { assertSettlementRegistrationForwarding, type TestAction } from '../../core-agent/test/helpers/settlement-registration.ts'
+
+function failSourceConstruction<Action extends TestAction>(action: Action, cut: string, original: Error) {
+  const register = action.registerSettlementSource
+  let registrations = 0
+  action.registerSettlementSource = (...args) => {
+    registrations++
+    if (cut === 'generation-source' && registrations === 1 || cut === 'preparation-source' && registrations === 2) throw original
+    return register.apply(action, args)
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the ingress source adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => failSourceConstruction(action, 'completed', Error('unused')))
+})
 
 afterEach(() => vi.unstubAllEnvs())
 
@@ -24,16 +40,10 @@ async function setup(cut: string) {
   const original = Error('original construction boundary ' + cut), actions: ManagedAction<ProducerFactOutcome>[] = [], begin = document.beginAction.bind(document)
   document.beginAction = signal => {
     if (cut === 'begin-action') throw original
-    const action = begin(signal), register = action.registerSettlementSource.bind(action)
+    const action = begin(signal)
     expect(document.ownsAction(action)).toBe(true)
     actions.push(action)
-    let registrations = 0
-    action.registerSettlementSource = (drain, reconcilePending) => {
-      registrations++
-      if (cut === 'generation-source' && registrations === 1 || cut === 'preparation-source' && registrations === 2) throw original
-      return register(drain, reconcilePending)
-    }
-    return action
+    return failSourceConstruction(action, cut, original)
   }
   const service = createSessionService({ workspace: root, coordinator, sessionFor: async () => document.view, model: createMockClient([]), modelPolicy: 'test-mock', approveAll: true, sandbox: 'danger-full-access' })
   return { root, backend, coordinator, id, attachment, document, input, pending: attachment.inbox.pending().find(entry => entry.inputId === input.inputId)!, original, actions, service,

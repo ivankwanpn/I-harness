@@ -12,22 +12,34 @@ import { createMailbox, type MailboxDeps } from '../src/mailbox.ts'
 import { createFoldState } from '../src/fold.ts'
 import { ownedTeamFixture } from './owned-fixture.ts'
 import type { DeliveryOutcome, Queued } from '../src/transact.ts'
+import { assertSettlementRegistrationForwarding, type TestAction } from '../../core-agent/test/helpers/settlement-registration.ts'
+
+type AckCapture = { action: number; kind: string; tuple: unknown; fact: object; source?: object }
+
+function observeAckSources<Action extends TestAction>(action: Action, id: number, captures: AckCapture[]) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const source = register.apply(action, args), capture = source.delivery.capture
+    source.delivery.capture = event => { const fact = capture(event); captures.push({ action: id, kind: 'delivery', tuple: event, fact, source }); return fact }
+    return source
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the acknowledgement source adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => observeAckSources(action, 1, []))
+})
 
 async function fixture(deliver: MailboxDeps['deliver'], maxPendingMessagesPerMember = 64) {
   const f = await ownedTeamFixture()
-  const captures: { action: number; kind: string; tuple: unknown; fact: object; source?: object }[] = []
+  const captures: AckCapture[] = []
   let actions = 0
   const beginAction = f.document.beginAction
   f.document.beginAction = (...args) => {
     const action = beginAction(...args), id = ++actions
-    const captureQueue = action.captureTeamTransaction, register = action.registerSettlementSource
+    const captureQueue = action.captureTeamTransaction
     action.captureTeamTransaction = events => { const fact = captureQueue(events); captures.push({ action: id, kind: 'queue', tuple: events, fact }); return fact }
-    action.registerSettlementSource = (...args) => {
-      const source = register(...args), capture = source.delivery.capture
-      source.delivery.capture = event => { const fact = capture(event); captures.push({ action: id, kind: 'delivery', tuple: event, fact, source }); return fact }
-      return source
-    }
-    return action
+    return observeAckSources(action, id, captures)
   }
   const state = createFoldState()
   state.members.set('helper', { id: 'child', name: 'helper', description: '', provider: 'fixture', context: 'fresh', phase: 'active' })

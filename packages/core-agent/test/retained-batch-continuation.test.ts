@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
-import { createSession, FactRecoveryRequiredError, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
+import { createSession, createNondurableFactOwner, FactRecoveryRequiredError, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
 import { createToolRegistry, declareToolResultOutcome, retainedToolOutcome, type PreparedCall } from '@i-harness/core-tools'
 import { createMockClient } from '@i-harness/llm-mock'
 import { observeModelClient } from '@i-harness/llm-seam'
@@ -15,6 +15,32 @@ import { createBatchRecords } from '../src/tool-batch/record.ts'
 import { createBatchCancellation } from '../src/tool-batch/cancel.ts'
 import { createUnstartedCallSettlement } from '../src/agent/unstarted-call-settlement.ts'
 import { createLiveInvocation, issueLiveBatch, prepareLiveBatch, reserveLiveContinuation, consumeLiveContinuation, releaseLiveBatch } from '../src/tool-batch/live-continuation.ts'
+import { assertSettlementRegistrationForwarding, type TestAction } from './helpers/settlement-registration.ts'
+
+function injectBatchDrainFailure<Action extends TestAction>(action: Action, registered: () => number, afterDrain: (ordinal: number) => void) {
+  const register = action.registerSettlementSource.bind(action)
+  action.registerSettlementSource = (drain, pending, checkpointOwner) => {
+    const ordinal = registered()
+    return register(async () => { await drain(); afterDrain(ordinal) }, pending, checkpointOwner)
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the retained-batch drain adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => injectBatchDrainFailure(action, () => 1, () => {}), { instrumentedDrain: true })
+})
+
+it('keeps the retained-batch injected failure after the original drain and before source retirement', async () => {
+  const action = createNondurableFactOwner(createSession()).beginAction(), order: string[] = [], failure = Error('after original drain')
+  let first = true
+  injectBatchDrainFailure(action, () => 3, ordinal => { expect(ordinal).toBe(3); order.push('injection'); if (first) { first = false; throw failure } })
+  const source = action.registerSettlementSource(async () => { order.push('original drain') })
+  await expect(source.close()).rejects.toBe(failure)
+  expect(order).toEqual(['original drain', 'injection'])
+  expect(() => source.assertHeld()).not.toThrow()
+  await source.close(); action.finish()
+  expect(order).toEqual(['original drain', 'injection', 'original drain', 'injection'])
+})
 
 async function fixture(names = ['retained']) {
   const root = await mkdtemp(join(tmpdir(), 'ih-live-batch-core-')), backend = createJsonlBackend(root)
@@ -192,12 +218,9 @@ it('retains a failed original batch source for owner cleanup retry without grant
   let registrations = 0, closes = 0
   const closeFailure = new Error('original source drain failed once')
   f.document.beginAction = signal => {
-    const action = begin(signal), register = action.registerSettlementSource.bind(action)
-    action.registerSettlementSource = (drain, pending) => {
-      const ordinal = ++registrations
-      return register(async () => { await drain(); if (ordinal === 3 && ++closes === 1) throw closeFailure }, pending)
-    }
-    return action
+    return injectBatchDrainFailure(begin(signal), () => ++registrations, ordinal => {
+      if (ordinal === 3 && ++closes === 1) throw closeFailure
+    })
   }
   try {
     const error = await f.agent().run('one input').catch(error => error)

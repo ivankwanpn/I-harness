@@ -4,6 +4,25 @@ import { ownedTeamFixture } from '../../agent-team/test/owned-fixture.ts'
 import { createSessionService } from '../src/service.ts'
 import { createSessionAssembly } from '../src/assembly.ts'
 import type { SubagentStateSnapshot } from '@i-harness/subagent'
+import { assertSettlementRegistrationForwarding, type TestAction } from '../../core-agent/test/helpers/settlement-registration.ts'
+
+function observeAcknowledgements<Action extends TestAction>(action: Action, sources: object[], captures: object[]) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const source = register.apply(action, args), capture = source.delivery.capture.bind(source.delivery)
+    source.delivery.capture = event => {
+      const fact = capture(event)
+      if (event.type === 'team/message/delivered') { sources.push(source); captures.push(fact) }
+      return fact
+    }
+    return source
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the construction cleanup source adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => observeAcknowledgements(action, [], []))
+})
 
 async function recoveryFixture() {
   const f = await ownedTeamFixture([
@@ -29,17 +48,7 @@ async function recoveryFixture() {
       opened.add(document)
       const begin = document.beginAction.bind(document)
       document.beginAction = (...actionArgs) => {
-        const action = begin(...actionArgs), register = action.registerSettlementSource.bind(action)
-        action.registerSettlementSource = producer => {
-          const source = register(producer), capture = source.delivery.capture.bind(source.delivery)
-          source.delivery.capture = event => {
-            const fact = capture(event)
-            if (event.type === 'team/message/delivered') { sources.push(source); captures.push(fact) }
-            return fact
-          }
-          return source
-        }
-        return action
+        return observeAcknowledgements(begin(...actionArgs), sources, captures)
       }
     }
     return document

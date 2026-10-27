@@ -13,6 +13,22 @@ import { createAnthropicClient } from '../../llm-anthropic/src/index.ts'
 import { createAgent } from '../src/index.ts'
 import { fixtureExecutionIdentity } from './fixtures/execution.ts'
 import { createLoopbackProvider, writeSplitSse, type LoopbackRequest } from './helpers/provider-loopback.ts'
+import { assertSettlementRegistrationForwarding, type TestAction, type TestSource } from './helpers/settlement-registration.ts'
+
+function trackResultSources<Action extends TestAction>(action: Action, sources: Set<TestSource>, handles: CapturedSettlementFact<ProducerFactOutcome>[]) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const source = register.apply(action, args), capture = source.tools.captureResult
+    source.tools.captureResult = event => { const handle = capture(event); handles.push(handle); return handle }
+    sources.add(source)
+    return source
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the unstarted-call source adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => trackResultSources(action, new Set(), []))
+})
 
 const installCut = vi.hoisted(() => ({ blocked: false, acceptance: false }))
 vi.mock('@i-harness/core-session', async original => {
@@ -41,15 +57,9 @@ async function setup() {
   const actions: ManagedAction<ProducerFactOutcome>[] = []
   const begin = document.beginAction.bind(document)
   document.beginAction = signal => {
-    const action = begin(signal), register = action.registerSettlementSource.bind(action)
+    const action = begin(signal)
     actions.push(action)
-    action.registerSettlementSource = (drain, reconcilePending) => {
-      const source = register(drain, reconcilePending), capture = source.tools.captureResult
-      source.tools.captureResult = event => { const handle = capture(event); handles.push(handle); return handle }
-      sources.add(source)
-      return source
-    }
-    return action
+    return trackResultSources(action, sources, handles)
   }
   const server = await createLoopbackProvider('/v1/messages', [response => writeSplitSse(response, [
     { type: 'message_start', message: { usage: { input_tokens: 1000 } } },
