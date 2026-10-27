@@ -15,6 +15,7 @@ import type { ReportPolicy } from "../report-policy.ts"
 import type { ParentInputAdmission } from '../task-notification.ts'
 
 export interface SubagentToolDeps extends RoleModelHost {
+  residentActivation?: import('../followup/activation.ts').ResidentInboxActivation
   parentNotify?: ParentInputAdmission
   notificationNamespace?: string
   onTaskTerminalCommitted?: () => void

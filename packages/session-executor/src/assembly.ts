@@ -1,4 +1,6 @@
 import { summaryFactory, composeCompactConfig } from './context-composition.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 import { ownedContextReadiness } from "@i-harness/session-persistence"
 // packages/session-executor/src/assembly.ts — R-C0 (engine-owned posture).
 // ONE assembly implementation. `runHeadless` (one-shot) and the web
@@ -145,6 +147,7 @@ type RoleModelSelection = {
 }
 
 export interface AssemblyOptions {
+  residentActivation?: ResidentActivationController
   /** Retain the original partial assembly's cleanup before Team construction. */
   retainConstructionCleanup?: (cleanup: () => Promise<void>) => void
   instructionEnvironment?: InstructionEnvironment
@@ -1178,9 +1181,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let disposeSubagents: (() => Promise<void>) | undefined
   let childObservation: ReturnType<typeof createChildObservation> | undefined
   let disposing = false
+  let disposeFlight: Promise<void> | undefined
+  const disposeInvocation = new AsyncLocalStorage<boolean>()
+  const cleanupDone = new Set<unknown>()
+  const mountCloses = new Map<object, () => Promise<void>>()
   const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
   let executionSurfaceRetired = false
+  let constructionComplete = false
+  const residentActivation = opts.residentActivation ?? createResidentActivation(() => constructionComplete && !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false)
   let offCodeModeSurface: (() => void) | undefined
   const executionSurfaceListeners = new Set<() => void>()
   const executionSurfaceChanged = () => {
@@ -1189,6 +1198,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
   }
   const retireExecutionSurface = () => {
+    residentActivation.retire()
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
     offCodeModeSurface?.(); offCodeModeSurface = undefined
@@ -1273,6 +1283,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const generationFactoryFor: import('@i-harness/core-agent').DocumentGenerationFactory = (owner, sessionId, selectedClient) => (action, dependencies) =>
       createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
     const subagent = registerSubagent(ctx, tools, {
+      residentActivation: residentActivation.ticket,
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
       generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       factOwner,
@@ -1503,6 +1514,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
               : undefined,
           ensureResident: subagent.ensureResident,
           followupGeneration: subagent.followupGeneration,
+          followupActivation: subagent.followupActivation,
+          captureFollowupGeneration: subagent.captureFollowupGeneration,
         },
         parentModel: model,
       } satisfies TeamDeps, opts.team)
@@ -1629,6 +1642,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       const first = stdout.slice(0, 131072)
       return { output: first + stderr.slice(0, 131072 - first.length), outputTruncated: stdout.length + stderr.length > 131072 }
     }
+    constructionComplete = true
+    if (!opts.residentActivation) residentActivation.activate()
     return {
       reconcileExecutionAuthority: () => executionRuntime.reconcile(),
       settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
@@ -1783,61 +1798,79 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     throw err
   }
 
-  async function dispose(): Promise<void> {
+  function dispose(): Promise<void> {
     retireExecutionSurface()
     managedDocument?.revokeNewWork()
     disposing = true
+    if (disposeInvocation.getStore()) {
+      const refusal = Promise.reject(Object.assign(new Error('Original assembly cleanup cannot join its own invocation'), { code: 'FACT_RECOVERY_REQUIRED' }))
+      void refusal.catch(() => {})
+      return refusal
+    }
+    if (disposeFlight) return disposeFlight
+    const attempt = Promise.withResolvers<void>()
+    disposeFlight = attempt.promise
+    void attempt.promise.then(() => { disposeFlight = undefined }, () => { disposeFlight = undefined })
+    void disposeInvocation.run(true, disposeOriginals).then(attempt.resolve, attempt.reject)
+    return attempt.promise
+  }
+
+  async function disposeOriginals(): Promise<void> {
     childObservation?.dispose()
     const processCleanupFailures: unknown[] = []
+    const phase = async (identity: unknown, close: () => unknown) => {
+      if (cleanupDone.has(identity)) return
+      try { await close(); cleanupDone.add(identity) } catch (error) { processCleanupFailures.push(error) }
+    }
     const draining:Promise<void>[]=[]
     for (const job of backgroundJobs.values()) {
-      try { job.cancel();draining.push(job.done) }
+      if (cleanupDone.has(job)) continue
+      try { job.cancel();draining.push(job.done.then(() => { cleanupDone.add(job) }, error => { cleanupDone.add(job); throw error })) }
       catch(error) { processCleanupFailures.push(error);d.warn(`Background job cancellation failed: ${String(error)}`) }
     }
     for (const result of await Promise.allSettled(draining)) if (result.status === 'rejected') processCleanupFailures.push(result.reason)
-    try { await codeModeMount?.cancel("Session assembly disposed") } catch (error) { processCleanupFailures.push(error); d.warn(`Code Mode cancellation failed: ${String(error)}`) }
-    try { await codeModeMount?.dispose() } catch (error) { processCleanupFailures.push(error); d.warn(`Code Mode disposal failed: ${String(error)}`) }
-    try { await disposeSubagents?.() } catch (error) { processCleanupFailures.push(error); d.warn(`Subagent disposal failed: ${String(error)}`) }
-    try { await pluginCapabilities?.dispose() } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
+    if (!cleanupDone.has('code-mode')) {
+      await phase('code-cancel', () => codeModeMount?.cancel('Session assembly disposed'))
+      // Native dispose is the complete producer barrier even after a separate
+      // cancellation occurrence. Once it acknowledges, do not replay either.
+      await phase('code-mode', () => codeModeMount?.dispose())
+    }
+    await phase('subagents', () => disposeSubagents?.())
+    if (!cleanupDone.has('plugins')) {
+      try { await pluginCapabilities?.dispose(); cleanupDone.add('plugins') } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
+    }
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
     rewindSubscription = undefined
-    await rewindDrain
+    await phase('rewind', () => rewindDrain)
     // Unmount in REVERSE mount order (last-mounted unmounts first), best-effort:
     // Every original Team handle remains retained until its own cleanup acknowledges.
     const mounts = [...mcpHandles, ...lspHandles, ...teamHandles]
     for (const handle of mounts.reverse()) {
-      try {
-        await handle.unmount()
-      } catch (error) {
-        processCleanupFailures.push(error)
-      }
+      let close = mountCloses.get(handle)
+      if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }
+      await phase(handle, close)
     }
     for (const handle of [skillsMount, workflowMount]) {
-      try {
-        await handle?.unmount()
-      } catch {
-        // cleanup failure on unmount: disposal continues
-      }
+      if (!handle) continue
+      let close = mountCloses.get(handle)
+      if (!close) { close = handle.unmount.bind(handle); mountCloses.set(handle, close) }
+      try { if (!cleanupDone.has(handle)) { await close(); cleanupDone.add(handle) } } catch { /* Preserve this optional mount's existing best-effort cleanup. */ }
     }
     // M26-B2: terminal handle disposal (all PTYs).
-    try {
-      await terminalMount.dispose()
-    } catch (error) { processCleanupFailures.push(error); d.warn(`Terminal disposal failed: ${String(error)}`) }
-    try { await assemblyExec.dispose() } catch (error) { processCleanupFailures.push(error); d.warn(`Exec disposal failed: ${String(error)}`) }
+    await phase('terminal', () => terminalMount.dispose())
+    await phase('exec', () => assemblyExec.dispose())
     // Task documents have their own save chain above the coordinator queue.
     // Join that producer before the owner performs its final store close.
-    try { await flushSubagentPersistence?.() }
-    catch (error) { processCleanupFailures.push(error); d.warn(`Subagent persistence drain failed: ${String(error)}`) }
-    const producersDrained = processCleanupFailures.length === 0
-    let instructionsClosed = false, runtimeClosed = false, documentClosed = false
-    for (const join of [async () => { await runtimeContext.close(); runtimeClosed = true }, async () => { await managedDocument?.close(); documentClosed = true }, async () => {
-      if (!runtimeClosed) throw Object.assign(new Error('Original runtime publication cleanup remains held'), { code: 'FACT_RECOVERY_REQUIRED' })
-      await instructionManager?.close(); instructionsClosed = true
-    },
-      () => opts.instructionEnvironment || !instructionsClosed ? undefined : instructionEnvironment?.close(),
-      () => producersDrained && runtimeClosed && instructionsClosed && documentClosed ? resultStore.release() : undefined]) {
-      try { await join() } catch (error) { processCleanupFailures.push(error) }
+    await phase('persistence', () => flushSubagentPersistence?.())
+    // Failed child/generation debt still borrows the original publication,
+    // document, environment and result-store owners. Never release through it.
+    if (!processCleanupFailures.length) {
+      await phase('runtime', () => runtimeContext.close())
+      if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
+      if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())
+      if (cleanupDone.has('document')) await phase('environment', () => opts.instructionEnvironment ? undefined : instructionEnvironment?.close())
+      if (!processCleanupFailures.length && cleanupDone.has('environment')) await phase('result-store', () => resultStore.release())
     }
     if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —

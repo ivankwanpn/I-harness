@@ -23,6 +23,7 @@ export type { ChildInstructionContextInput, ChildInstructionContext, ChildInstru
 export { createSubagentTools } from "./tools.ts"
 export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
+export type { ResidentInboxActivation } from './followup/activation.ts'
 export { restoreState, wireSubagentPersistence, snapshotState } from "./persist.ts"
 export { retainedResultWitness } from './result-publication.ts'
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
@@ -58,8 +59,10 @@ import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, tas
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
+import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
+  residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
   results?: import("./task/result.ts").TaskResultStore
   reportPolicy?: ReportPolicy
   /** The host mounted the generic shell tool; expose it to built-in workers. */
@@ -115,7 +118,9 @@ export interface RegisterSubagentResult {
   // SubagentToolDeps. registerSubagent encapsulates the deps object, so hosts
   // (run.ts → mountAgentTeams) wire this into the agent-team deliver gate to
   // fix the post-resume wakeup no-op without duplicating the deps shape.
-  ensureResident: (entry: ChildAgentEntry, controller?: AbortController) => Promise<boolean>
+  ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => Promise<boolean>
+  followupActivation?: import('./followup/drive.ts').FollowupDeps['activation']
+  captureFollowupGeneration?: import('./followup/drive.ts').FollowupDeps['captureGeneration']
   followupGeneration: import('./followup/drive.ts').FollowupDeps['openGeneration']
   // M24a (G1a/G4): resolves when the post-restore async steps complete — the
   // G1a hooked-mirror rebuild (each restored child's durable log loaded into
@@ -205,6 +210,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // ensureResident closure below closes over the SAME (persist-wrapped)
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
+    residentActivation: opts.residentActivation,
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
     results: opts.results,
@@ -309,6 +315,53 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // rebuild + G4 pending-inbox sweep. `ready` gates hosts until it completes.
     ready = restoreTasksAndSweep(subagentDeps, table, opts.persist, tasks)
   }
+  let disposeFlight: Promise<void> | undefined
+  const entryPhases = new Map<ChildAgentEntry, { settled: boolean; disposed: boolean }>()
+  let factsFlushed = false, tasksFlushed = false, factsClosed = false, readyFailureReported = false
+  function dispose(): Promise<void> {
+    notificationsRetired = true
+    const owner = residentOwnerFor(subagentDeps)
+    if (owner.inInvocation()) { owner.retire(); return refusedReentry() }
+    if (disposeFlight) return disposeFlight
+    const attempt = Promise.withResolvers<void>()
+    disposeFlight = attempt.promise
+    void attempt.promise.then(() => { disposeFlight = undefined }, () => { disposeFlight = undefined })
+    owner.retire()
+    const fenceEntries = () => { for (const entry of table.entries().values()) {
+      if (!entryPhases.has(entry)) entryPhases.set(entry, { settled: false, disposed: false })
+      if (!entry.closing) table.update(entry.path, entry, { closing: true })
+      entry.controller.abort()
+      if (entry.sessionId) opts.persist?.coordinator.revokeManagedDocumentNewWork(entry.sessionId)
+    } }
+    fenceEntries()
+    void (async () => {
+      const errors: unknown[] = []
+      try { await ready } catch (error) { if (!readyFailureReported) { errors.push(error); readyFailureReported = true } }
+      fenceEntries()
+      // Begin the private owner's attempt before entry aliases can join it;
+      // a failed phase is attempted once by this external close, not twice.
+      const ownedClosing = owner.close()
+      void ownedClosing.catch(() => {})
+      const results = await Promise.allSettled([...entryPhases].map(async ([entry, phases]) => {
+        const failures: unknown[] = []
+        if (!phases.settled) try { await owner.settleEntryResult(entry); phases.settled = true } catch (error) { failures.push(error) }
+        if (!phases.disposed) try {
+          if (entry.dispose) await entry.dispose()
+          else { await entry.followupChain; await entry.unmount?.() }
+          phases.disposed = true
+        } catch (error) { failures.push(error) }
+        if (!failures.length && entry.sessionId) agents.remove(entry.sessionId)
+        if (failures.length) throw new AggregateError(failures, 'Original entry cleanup incomplete')
+      }))
+      errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
+      try { await ownedClosing } catch (error) { errors.push(error) }
+      if (!factsFlushed) try { await factPersistence?.flushFacts(); factsFlushed = true } catch (error) { errors.push(error) }
+      if (!tasksFlushed) try { await tasks.flushPersistence(); tasksFlushed = true } catch (error) { errors.push(error) }
+      if (!errors.length && !factsClosed) try { await factPersistence?.closeFacts(); factsClosed = true } catch (error) { errors.push(error) }
+      if (errors.length) throw Object.assign(new AggregateError(errors, 'Subagent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
+    })().then(attempt.resolve, attempt.reject)
+    return attempt.promise
+  }
   return {
     async retainResults() {
       if (!opts.persist) return "memory"
@@ -317,7 +370,9 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       return "durable"
     },
     roles, jobs, table, agents,
-    ensureResident: (entry: ChildAgentEntry, controller?: AbortController) => ensureResidentAgent(subagentDeps, entry, controller),
+    ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => ensureResidentAgent(subagentDeps, entry, controller, executionCurrent),
+    followupActivation: subagentDeps.residentActivation,
+    captureFollowupGeneration: followupDepsWithRebuild(subagentDeps).captureGeneration,
     followupGeneration: followupDepsWithRebuild(subagentDeps).openGeneration,
     ready, tasks,
     settleParentDeliverySources,
@@ -330,26 +385,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       notificationDrains.add(job)
       try { await job } finally { notificationDrains.delete(job) }
     },
-    async dispose() {
-      notificationsRetired = true
-      const entries = [...table.entries().values()]
-      for (const entry of entries) {
-        table.update(entry.path, entry, { closing: true }); entry.controller.abort()
-        if (entry.sessionId) opts.persist?.coordinator.revokeManagedDocumentNewWork(entry.sessionId)
-      }
-      await ready
-      const results = await Promise.allSettled(entries.map(async entry => {
-        await entry.resultCapture?.settle()
-        if (entry.dispose) await entry.dispose()
-        else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
-        if (entry.sessionId) agents.remove(entry.sessionId)
-      }))
-      const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-      try { await factPersistence?.flushFacts() } catch (error) { errors.push(error) }
-      try { await tasks.flushPersistence() } catch (error) { errors.push(error) }
-      if (errors.length) throw Object.assign(new AggregateError(errors, 'Subagent settlement requires recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
-      await factPersistence?.closeFacts()
-    },
+    dispose,
     async flushPersistence() {
       await ready
       for (;;) {

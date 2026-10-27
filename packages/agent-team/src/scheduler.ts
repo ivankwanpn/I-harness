@@ -84,7 +84,9 @@ export interface TeamSubagentDeps {
   // teammate (restoreState maps running/waiting → "error" and the Agent
   // registry is fresh-empty) instead of dropping the drive; absent keeps the
   // conservative behavior (message stays queued).
-  ensureResident?: (entry: ChildAgentEntry, controller?: AbortController) => Promise<boolean>
+  ensureResident?: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => Promise<boolean>
+  followupActivation?: import('@i-harness/subagent').FollowupDeps['activation']
+  captureFollowupGeneration?: import('@i-harness/subagent').FollowupDeps['captureGeneration']
   followupGeneration?: import('@i-harness/subagent').FollowupDeps['openGeneration']
 }
 

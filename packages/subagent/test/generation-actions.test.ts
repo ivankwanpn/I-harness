@@ -12,9 +12,13 @@ import { createGenerationLifecycle } from '../../session-executor/src/lifecycle/
 import { createAgentTable } from '../src/agent-table.ts'
 import { createJobRegistry } from '../src/jobs.ts'
 import { spawnChild, type SpawnOptions } from '../src/child.ts'
-import { ensureResidentAgent, followupDepsWithRebuild } from '../src/followup/resident.ts'
 import { driveFollowups } from '../src/followup/drive.ts'
 import { createRoleRegistry } from '../src/roles.ts'
+import { snapshotState, type SubagentStateSnapshot } from '../src/persist.ts'
+import { registerSubagent, type RegisterSubagentResult } from '../src/index.ts'
+import { createTaskRegistry } from '../src/task-protocol.ts'
+import { createCloseTool } from '../src/tools/cancel.ts'
+import { registerExec } from '@i-harness/exec'
 
 afterEach(() => vi.unstubAllGlobals())
 it.each([false, true])('a fresh declared child opens before its held resolver and honors Stop=%s', async stop => {
@@ -40,6 +44,9 @@ it.each([false, true])('a fresh declared child opens before its held resolver an
   } as SpawnOptions
   const spawning = spawnChild(options)
   void spawning.catch(() => {})
+  let restored: RegisterSubagentResult | undefined
+  let restoredCoordinator: ReturnType<typeof createSessionCoordinator> | undefined
+  let restoredCtx: ReturnType<typeof createContext> | undefined
   try {
     await entered.promise
     const children = (await coordinator.list()).filter(id => id !== parent.id)
@@ -66,37 +73,62 @@ it.each([false, true])('a fresh declared child opens before its held resolver an
     const final = (await backend.read(children[0]!)).events
     expect(final.filter(event => event.type === 'context/attempt' && event.op === 'reserve')).toHaveLength(1)
     expect(final.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(1)
-    agents.remove(result.sessionId!)
     const roles = createRoleRegistry(); roles.register(options.role)
-    const followupDeps = { ...options, roles } as unknown as import('../src/tools/types.ts').SubagentToolDeps
-    expect(await ensureResidentAgent(followupDeps, entry)).toBe(true)
+    // A resident reconstruction belongs to a saved/disposed/cold owner. Merely
+    // deleting a live fresh Agent binding leaves an unknown live disposer and
+    // cannot transfer that owner's document/context to a replacement.
+    const saved = snapshotState({ table, jobs, roles })
+    await coordinator.putDocumentStrict!(parent.id, saved)
+    await createCloseTool({ ...options, roles, tasks: createTaskRegistry() } as unknown as import('../src/tools/types.ts').SubagentToolDeps).execute({ target: entry.path }, {})
+    await coordinator.close()
+    restoredCoordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+    const restoredParent = await restoredCoordinator.openManagedDocument(parent.id)
+    const restoredState = await restoredCoordinator.getDocument(parent.id) as SubagentStateSnapshot
+    restoredCtx = createContext()
+    let resolveResident = options.resolveModel
+    restored = registerSubagent(restoredCtx, createToolRegistry(restoredCtx), {
+      parentSession: restoredParent.view, factOwner: restoredParent, parentModel: model,
+      exec: registerExec(restoredCtx), resolveModel: selection => resolveResident(selection), allowSubagentModelSelection: true,
+      generationFactoryFor: options.generationFactoryFor, restoredState,
+      persist: { coordinator: restoredCoordinator, stateId: parent.id, parentSessionId: parent.id },
+    })
+    await restored.ready
+    const resident = restored.table.get(result.path)!
+    expect(resident).not.toBe(entry)
+    expect(resident.dispose).toBeUndefined()
+    expect(resident.factOwner?.view).toBe(resident.session)
+    expect(await restored.ensureResident(resident)).toBe(true)
     expect(resolves).toBe(1)
-    expect(agents.get(result.sessionId!)).toBeUndefined()
+    expect(restored.agents.get(result.sessionId!)).toBeUndefined()
     expect((await backend.read(children[0]!)).events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
     const nextEntered = Promise.withResolvers<void>(), nextRelease = Promise.withResolvers<void>()
-    followupDeps.resolveModel = async () => { resolves++; nextEntered.resolve(); await nextRelease.promise; return { status: 'ready', binding: { client: model, contextWindow: 16000, maxOutputTokens: 2000 } } }
-    const delivery = entry.factOwner!.beginAction(new AbortController().signal)
+    resolveResident = async () => { resolves++; nextEntered.resolve(); await nextRelease.promise; return { status: 'ready', binding: { client: model, contextWindow: 16000, maxOutputTokens: 2000 } } }
+    const delivery = resident.factOwner!.beginAction(new AbortController().signal)
     await delivery.facts.delivery.record({ type: 'subagent/inbox', messageId: 'new-inbox', message: 'next delegation', provenance: { kind: 'inherited', authority: 'observation', scope: 'turn', producer: 'subagent.followup', originSessionId: parent.id } })
     delivery.finish()
-    const followup = driveFollowups(followupDepsWithRebuild(followupDeps), entry, result.sessionId!)
+    const followupDeps = { agents: restored.agents, table: restored.table, jobs: restored.jobs,
+      captureGeneration: restored.captureFollowupGeneration, openGeneration: restored.followupGeneration,
+      rebuild: (entry: import('../src/agent-table.ts').ChildAgentEntry, controller: AbortController, current?: () => boolean) => restored!.ensureResident(entry, controller, current) }
+    const followup = driveFollowups(followupDeps, resident, result.sessionId!)
     try {
-      await Promise.race([nextEntered.promise, followup.then(() => { throw new Error(`Followup finished without entering its model resolver: ${entry.error ?? 'no error'}`) })])
+      await Promise.race([nextEntered.promise, followup.then(() => { throw new Error(`Followup finished without entering its model resolver: ${resident.error ?? 'no error'}`) })])
       const held = (await backend.read(children[0]!)).events
       expect(held.filter(event => event.type === 'context/action' && event.op === 'open').map(event => event.origin.kind === 'delegated-input' ? event.origin.ref : 'wrong')).toEqual(['admitted', 'inbox'])
       expect(calls).toHaveLength(1)
     } finally { nextRelease.resolve(); await followup }
-    expect(entry.error).toBeUndefined()
+    expect(resident.error).toBeUndefined()
     expect(calls).toHaveLength(2)
-    await driveFollowups(followupDepsWithRebuild(followupDeps), entry, result.sessionId!)
+    await driveFollowups(followupDeps, resident, result.sessionId!)
     expect(calls).toHaveLength(2)
     expect(resolves).toBe(2)
-    await entry.dispose?.(); await coordinator.close()
+    await restored.dispose(); await restoredCoordinator.close()
     const cold = createSessionCoordinator(backend, { lock: { enabled: true } })
     try {
       const reopened = await cold.openManagedDocument(result.sessionId!)
       expect(reopened.view.events.filter(event => event.type === 'model/exchange-accepted')).toHaveLength(2)
       expect(reopened.view.events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(2)
+      expect(reopened.view.events.filter(event => event.type === 'agent/input/admitted' && event.provenance?.producer === 'subagent.initial')).toHaveLength(1)
       expect(calls).toHaveLength(2)
     } finally { await cold.close().catch(() => {}) }
-  } finally { released.resolve(); await spawning.catch(() => {}); for (const entry of table.entries().values()) await entry.dispose?.(); await coordinator.close().catch(() => {}) }
+  } finally { released.resolve(); await spawning.catch(() => {}); await restored?.dispose(); await restoredCoordinator?.close(); await restoredCtx?.scope.unmount(); for (const entry of table.entries().values()) await entry.dispose?.(); await coordinator.close().catch(() => {}) }
 })
