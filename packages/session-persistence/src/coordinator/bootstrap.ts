@@ -29,9 +29,18 @@ export interface ManagedEntry {
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
-  flight?: Promise<unknown>; revoked?: boolean; ready?: boolean; headerUnknown?: boolean;
+  flight?: Promise<unknown>; revoked?: boolean; revocation?: object; ready?: boolean; headerUnknown?: boolean;
   bootstrap?: { invocation: BootstrapInvocation; manifestDigest?: string; request?: BootstrapRequest; stage?: BootstrapHeaderStage; operation?: BootstrapHeaderOperation; phase: BootstrapPhase; issued: boolean; pending?: FactOutcome;
     capture?: { request: BootstrapCaptureRequest|ChildBootstrapCaptureRequest; reservation: OwnedCaptureReservation; phase: 'unreserved'|'reserving'|'reserved'|'capturing'|'captured'|'spent'; entered: boolean; ownedRequest?: BootstrapRequest } };
+}
+/** New-work revocation stays terminal; its identity also fences in-flight observations. */
+export function markManagedEntryRevoked(entry:ManagedEntry) {
+  entry.revoked=true;entry.revocation={}
+  if(entry.captureIO)entry.captureIO.activeIssue=undefined
+}
+export function revokeManagedEntry(entry:ManagedEntry) {
+  markManagedEntryRevoked(entry)
+  entry.document?.revokeNewWork()
 }
 const emptyPrefix=():JournalPrefix=>({eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())})
 function current(guards:BootstrapGuards,entry?:ManagedEntry) {
@@ -142,7 +151,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   function closeCaptureAdmission() {
     assertOutsideCapture();captureClosed=true
-    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture){entry.revoked=true;entry.document?.revokeNewWork()}}
+    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture)revokeManagedEntry(entry)}
     const original=[...inspections]
     return async()=>{
       const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}))
@@ -189,7 +198,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!reconcile)current(guards,entry)
     return outcome.kind==='confirmed'?outcome.closureDigest:undefined
   }
-  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation):Promise<BootstrapOutcome> {
+  async function adopt(entry:ManagedEntry,state:BootstrapReadState,guards:BootstrapGuards,cached?:ManagedReadyObservation,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,stage=b.stage!
     cached?.assertCurrent()
     if(state.torn)return blocked(entry)
@@ -223,7 +232,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     })
     cached?.assertCurrent()
     targetCurrent(guards)
-    if(entry.revoked)return blocked(entry)
+    if(entry.revocation!==observation.revocation)return blocked(entry)
     if(cached)cached.assertCurrent();else entry.control!.ready()
     entry.ready=true;b.phase='completion';entry.headerUnknown=false
     return {kind:'already-ready',document:doc,receipt:{version:1,invocation:b.invocation,manifestDigest:manifest(stage),seedLength:stage.seed.seedLength,dependencyClosureDigest:closure,
@@ -276,7 +285,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }
-  async function run(entry:ManagedEntry,guards:BootstrapGuards):Promise<BootstrapOutcome> {
+  async function run(entry:ManagedEntry,guards:BootstrapGuards,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
     if(entry.captureIO)entry.captureIO.activeIssue=()=>{current(guards,entry);b.issued=true;entry.headerUnknown=true;entry.captureIO!.settled=false}
@@ -322,7 +331,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const publication=publicationStatus(state,b.stage)
       if(publication==='conflict')return {kind:'refused',reason:'conflict'}
       if(publication==='unknown'&&(b.stage||!b.request||!state.stageBytes))return blocked(entry,b.stage?'unknown':'payload-required')
-      if(b.stage&&readyState(state))return await adopt(entry,state,guards)
+      if(b.stage&&readyState(state))return await adopt(entry,state,guards,undefined,observation)
       if(!b.stage&&readyState(state))return blocked(entry,'payload-required')
       if(!b.request)return blocked(entry,'payload-required')
       if(!b.stage) {
@@ -392,7 +401,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         targetCurrent(guards)
         state=await read(b.invocation,entry.route)
       }
-      const adopted=await adopt(entry,state,guards)
+      const adopted=await adopt(entry,state,guards,undefined,observation)
       return adopted.kind==='already-ready'?{...adopted,kind:'ready'}:adopted
     } catch(error) {
       const code=(error as {code?:string}).code
@@ -453,6 +462,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(entry.flight)return entry.flight as Promise<BootstrapOutcome>
       }else{entry={route:birthRoute,bootstrap:{invocation:request.invocation,phase:'header',issued:false}};documents.set(id,entry)}
       const owned=entry,b=owned.bootstrap!
+      const observation={revocation:owned.revocation}
       b.capture??={request,reservation:route.protocol==='public'?{version:1,kind:'semantic-bootstrap-capture',request:route.request}:{version:1,kind:'semantic-bootstrap-child-capture',request:route.request},phase:'unreserved',entered:false}
       const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
         let originalFailure:unknown,originalFailed=false,callbackFailed=false
@@ -463,9 +473,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           io.settled=false
           const inspected=await ownership.withSessionOperation(id,()=>route.protocol==='child-v1'?backend.bootstrapRoutes!.readCapture(id,io.held,route):backend.readBootstrapCapture!(id,io.held,request as BootstrapCaptureRequest))
           await settleCapture(owned)
-          if(inspected.kind==='materialized')return await run(owned,guards)
+          if(inspected.kind==='materialized')return await run(owned,guards,observation)
           if(inspected.kind==='conflict')return {kind:'refused',reason:'conflict'}
-          if(b.capture!.ownedRequest){if(inspected.kind==='absent')return blocked(owned);return await run(owned,guards)}
+          if(b.capture!.ownedRequest){if(inspected.kind==='absent')return blocked(owned);return await run(owned,guards,observation)}
           if(inspected.kind!=='absent'||b.capture!.phase!=='unreserved'||b.issued){if(inspected.kind==='reserved'){b.issued=true;b.capture!.phase='spent'}return blocked(owned,inspected.kind==='reserved'?'payload-required':'unknown')}
           current(guards,owned);b.capture!.phase='reserving'
           io.activeIssue=()=>{current(guards,owned);mutations.assertWritableBootstrap(id);b.issued=true;io.settled=false}
@@ -487,7 +497,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           let r:BootstrapRequest
           try{r=captureBootstrapRequest(returned);buildBootstrapHeader(r,undefined,undefined,b.capture!.reservation)}catch{return {kind:'refused',reason:'manifest-invalid'}}
           b.capture!.ownedRequest=r;b.request=r;b.capture!.phase='captured'
-          return await run(owned,guards)
+          return await run(owned,guards,observation)
         } catch(error) {
           originalFailed=true;originalFailure=error
           // A local callback fault is not an owner guard outcome, even when

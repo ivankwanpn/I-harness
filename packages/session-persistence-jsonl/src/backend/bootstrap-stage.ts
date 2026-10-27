@@ -56,7 +56,7 @@ export async function lookupBootstrapStage(path:string,expectation:StageExpectat
   if(bootstrapPathsForRoute(path,route).stage!==selected.stage||!same(routeInvocation(route),invocation))return{kind:'conflict',present:true}
   if(expectation.kind==='route'&&!same(route,expectation.route))return{kind:'conflict',present:true}
   if(stage&&reservation&&!same(reservation.request.invocation,stage.invocation))return{kind:'conflict',present:true}
-  if(promote!==undefined){if(stage||!reservation)return{kind:'conflict',present:true};const full=parseBootstrapHeaderStage(promote);if(!same(full.captureReservation,reservation)||!same(full.invocation,invocation))return{kind:'conflict',present:true}}
+  if(promote!==undefined){const full=parseBootstrapHeaderStage(promote);if(stage||!reservation||!same(full.captureReservation,reservation)||!same(full.invocation,invocation))return{kind:'conflict',present:true}}
   if(publish!==undefined){if(!stage||stage.originalTarget.kind==='new')return{kind:'conflict',present:true};const expected=Buffer.from(stage.headerBytes);if(publish.length>expected.length||!Buffer.from(publish).equals(expected.subarray(0,publish.length)))return{kind:'conflict',present:true}}
   if(expectation.kind==='header'){if(!stage)return{kind:'unavailable',present:true};matchesHeader(stage,expectation.meta)}
   io.assertCurrent()

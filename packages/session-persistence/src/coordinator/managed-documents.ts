@@ -5,7 +5,7 @@ import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { createManagedDocument } from './managed-document.ts'
 import { heldFactOwner } from './fact-owner.ts'
-import { createBootstrapOwner, type ManagedEntry } from './bootstrap.ts'
+import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
@@ -22,6 +22,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
       entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined)
     entry.document=document
+    const revoke=document.revokeNewWork
+    document.revokeNewWork=()=>{markManagedEntryRevoked(entry);revoke()}
     const close=document.close
     document.close=async()=>{await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}}
     if(entry.revoked)document.revokeNewWork()
@@ -34,7 +36,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   async function closeOne(id:string) {
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
-    entry.revoked=true;if(entry.captureIO)entry.captureIO.activeIssue=undefined;entry.document?.revokeNewWork();await entry.flight?.catch(()=>{})
+    revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
@@ -45,7 +47,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     ...bootstrap,
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
-    revoke(id:string){bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry){entry.revoked=true;if(entry.captureIO)entry.captureIO.activeIssue=undefined;entry.document?.revokeNewWork()}},
+    revoke(id:string){bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
     closeOne,
