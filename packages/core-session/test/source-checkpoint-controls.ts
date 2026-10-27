@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest'
-import type { ManagedAction, ProducerFactOutcome, SessionView, SettlementFacts } from '../src/index.ts'
+import type { BatchKey, ManagedAction, ProducerFactOutcome, SessionView, SettlementFacts } from '../src/index.ts'
 import { subscribe } from '../src/index.ts'
 import { appendFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -30,6 +30,7 @@ export type CheckpointFixture = {
   view: SessionView
   cleanup(expectedRecovery?: boolean): Promise<void>
   assertOptional(): void
+  watchNativeIssues?(listener: (key: BatchKey) => void): () => void
 }
 
 // The shared controls exercise the real public source and capture handles in
@@ -185,6 +186,69 @@ export function checkpointControls(fixture: () => Promise<CheckpointFixture>, co
       expect(f.view.events).toHaveLength(1); expect(await late!.observe()).toMatchObject({ kind: 'not-issued' })
       off(); state.pending = state.recoveryPending = 0; state.revision++
       await source.checkpoint(); await source.close()
+    } finally { off(); f.action.finish(); await f.cleanup() }
+  })
+
+  it.each(['checkpoint', 'close'] as const)('stops %s before original B after a C-only late capture during original A', async operation => {
+    const f = await fixture(), { owner, work } = ownerState(), originalCut = owner.readCut(), reason = { boundary: 'fresh-owner-pass-blocked' }
+    let ownerCalls = 0, blocked = true, lifecycleDrains = 0
+    work.settle = async () => { ownerCalls++; return ownerCalls === 2 && blocked ? { kind: 'blocked', reason } : { kind: 'advanced' } }
+    const source = f.action.registerSettlementSource(async () => { lifecycleDrains++ }, undefined, owner)
+    const a = source.recovery.capture({ ...terminal, recoveryId: 'A' }), b = source.recovery.capture({ ...terminal, recoveryId: 'B' })
+    let late: ReturnType<typeof source.recovery.capture> | undefined
+    const installs: { original: string; ownerCalls: number }[] = []
+    const nativeIssues: { key: BatchKey; ownerCalls: number }[] = []
+    const unwatch = f.watchNativeIssues?.(key => { nativeIssues.push({ key, ownerCalls }) })
+    const off = subscribe(f.view, event => {
+      if (event.type !== 'context/recovery') return
+      installs.push({ original: event.recoveryId, ownerCalls })
+      if (event.recoveryId === 'A') late = source.recovery.capture({ ...terminal, recoveryId: 'L' })
+    })
+    try {
+      source.holdRecovery() // Original H only; the late capture changes C alone.
+      await expect(source[operation]()).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED', errors: [reason] })
+      const firstA = await a.observe(), firstB = await b.observe(), firstLate = await late!.observe()
+      traceCheckpoint('capture-only-cut-after-original-A', { action: f.action, source, owner, a, b, late: late! }, { operation, originalCut, afterCut: owner.readCut(), installs, nativeIssues, ownerCalls, holdCalls: 1, lifecycleDrains, firstA, firstB, firstLate })
+      expect(owner.readCut()).toEqual(originalCut)
+      expect(ownerCalls).toBe(2); expect(lifecycleDrains).toBe(0)
+      expect(installs).toEqual([{ original: 'A', ownerCalls: 1 }])
+      expect(firstA).toMatchObject({ kind: committed, seqs: [0] })
+      expect(nativeIssues.map(issue => issue.ownerCalls)).toEqual(committed === 'committed' ? [1] : [])
+      if (firstA.kind === 'committed') expect(nativeIssues[0]!.key).toEqual(firstA.receipt.key)
+      expect(firstB).toMatchObject({ kind: 'not-issued' }); expect(firstLate).toMatchObject({ kind: 'not-issued' })
+      source.assertHeld(); expect(() => f.assertOptional()).toThrow()
+
+      blocked = false
+      expect(await source.checkpoint()).toEqual({ kind: 'settled' })
+      expect(ownerCalls).toBe(4); expect(owner.readCut()).toEqual(originalCut)
+      expect(installs).toEqual([{ original: 'A', ownerCalls: 1 }, { original: 'B', ownerCalls: 3 }, { original: 'L', ownerCalls: 3 }])
+      const bOutcome = await b.observe(), lateOutcome = await late!.observe()
+      expect(bOutcome).toMatchObject({ kind: committed, seqs: [1] }); expect(lateOutcome).toMatchObject({ kind: committed, seqs: [2] })
+      expect(nativeIssues.map(issue => issue.ownerCalls)).toEqual(committed === 'committed' ? [1, 3, 3] : [])
+      if (bOutcome.kind === 'committed' && lateOutcome.kind === 'committed') {
+        expect(nativeIssues[1]!.key).toEqual(bOutcome.receipt.key); expect(nativeIssues[2]!.key).toEqual(lateOutcome.receipt.key)
+      }
+      expect(await a.reconcile()).toEqual(firstA); expect(await b.reconcile()).toEqual(bOutcome); expect(await late!.reconcile()).toEqual(lateOutcome)
+      expect(installs).toHaveLength(3); f.assertOptional()
+      expect(nativeIssues).toHaveLength(committed === 'committed' ? 3 : 0)
+      traceCheckpoint('capture-only-cut-original-handles-recovered', { action: f.action, source, owner, a, b, late: late! }, { operation, originalCut, afterCut: owner.readCut(), installs, nativeIssues, ownerCalls, holdCalls: 1, firstA, bOutcome, lateOutcome })
+      await source.close(); expect(lifecycleDrains).toBe(1)
+    } finally { off(); unwatch?.(); f.action.finish(); await f.cleanup() }
+  })
+
+  it('accounts only expected original disposition/removal changes and still verifies a fresh final cut', async () => {
+    const f = await fixture(), { owner, work } = ownerState(); let ownerCalls = 0
+    work.settle = async () => { ownerCalls++; return { kind: 'advanced' } }
+    const source = f.action.registerSettlementSource(async () => {}, undefined, owner)
+    const a = source.recovery.capture({ ...terminal, recoveryId: 'A' }), b = source.recovery.capture({ ...terminal, recoveryId: 'B' })
+    const installs: number[] = [], off = subscribe(f.view, () => { installs.push(ownerCalls) })
+    try {
+      expect(await source.checkpoint()).toEqual({ kind: 'settled' })
+      expect(installs).toEqual([1, 1]); expect(ownerCalls).toBe(2)
+      expect(await a.reconcile()).toMatchObject({ kind: committed, seqs: [0] }); expect(await b.reconcile()).toMatchObject({ kind: committed, seqs: [1] })
+      expect(installs).toHaveLength(2)
+      traceCheckpoint('expected-original-deltas-fresh-final-cut', { source, owner, a, b }, { installs, ownerCalls, cut: owner.readCut() })
+      await source.close()
     } finally { off(); f.action.finish(); await f.cleanup() }
   })
 

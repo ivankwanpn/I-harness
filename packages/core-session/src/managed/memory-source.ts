@@ -17,7 +17,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
   const stickyErrors: unknown[] = []
   let checkpointing: ReturnType<SettlementFacts['checkpoint']> | undefined
   let stages = Promise.resolve()
-  const pendingFacts = new Set<CapturedSettlementFact<NondurableFactOutcome>>()
+  const pendingFacts = new Map<CapturedSettlementFact<NondurableFactOutcome>, { revision: number }>()
   const owner = checkpointOwner && {
     readCut: checkpointOwner.readCut.bind(checkpointOwner),
     settle: checkpointOwner.settle.bind(checkpointOwner),
@@ -26,17 +26,18 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
   const recoveryError = (errors: unknown[] = []) => Object.assign(new AggregateError(errors, 'Required source needs recovery'), { code: 'FACT_RECOVERY_REQUIRED' })
   const quarantine = () => { failed = true; recovery?.requireRecovery() }
   const retain = (fact: CapturedSettlementFact<NondurableFactOutcome>) => {
+    const record = { revision: 0 }
     let disposition: NondurableFactOutcome | undefined
     const run = (method: keyof typeof fact) => async () => {
       assertHeld()
       const outcome = await fact[method]()
-      if (!disposition || outcome.kind !== disposition.kind || outcome.kind === 'not-issued' && disposition.kind === 'not-issued' && outcome.code !== disposition.code) revision++
+      if (!disposition || outcome.kind !== disposition.kind || outcome.kind === 'not-issued' && disposition.kind === 'not-issued' && outcome.code !== disposition.code) { revision++; record.revision++ }
       disposition = outcome
-      if (outcome.kind === 'memory-committed' && pendingFacts.delete(owned)) revision++
+      if (outcome.kind === 'memory-committed' && pendingFacts.delete(owned)) { revision++; record.revision++ }
       return outcome
     }
     const owned = { admit: run('admit'), reconcile: run('reconcile'), observe: run('observe'), retryAbsent: run('retryAbsent') }
-    pendingFacts.add(owned); revision++
+    pendingFacts.set(owned, record); revision++
     return owned
   }
   const invalid = () => { quarantine(); return retain(rejectedMemoryCapture()) }
@@ -54,7 +55,7 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
     for (let pass = 0; pass < 2; pass++) {
       assertHeld()
       if (failed) throw recoveryError(stickyErrors)
-      const cut = owner.readCut(), captureRevision = revision, epoch = holdEpoch, snapshot = [...pendingFacts]
+      const cut = owner.readCut(), captureRevision = revision, epoch = holdEpoch, snapshot = [...pendingFacts.keys()]
       if (failed || cut.failed) throw recoveryError()
       const ownerCurrent = () => { assertHeld(); return !failed && owner.isCurrent(cut) && holdEpoch === epoch }
       const current = () => ownerCurrent() && revision === captureRevision
@@ -66,10 +67,15 @@ export function createMemorySettlementSource(session: Session, drain: () => Prom
         if (!current()) continue
         if (failed || cut.failed) throw recoveryError()
         if (cut.pending === 0 && cut.recoveryPending === 0 && progress.kind === 'advanced') {
+          let expectedRevision = captureRevision
           for (const fact of snapshot) {
-            if (!ownerCurrent()) break
+            if (!ownerCurrent() || revision !== expectedRevision) break
+            const record = pendingFacts.get(fact), before = record?.revision ?? 0
             committedFactSeqs(await fact.reconcile())
-            if (!ownerCurrent()) break
+            // This allowance is local to snapshot iteration. The pass's
+            // original captureRevision still requires fresh verification.
+            expectedRevision += (record?.revision ?? 0) - before
+            if (!ownerCurrent() || revision !== expectedRevision) break
           }
           if (!current()) continue
         }
