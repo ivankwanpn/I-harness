@@ -68,13 +68,14 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     const path=filePath(invocation.targetSessionId),paths=bootstrapPathsForRoute(path,route)
     let selected=await lookupBootstrapStage(path,{kind:'route',route},ordinaryStageIO(path))
     const siblings=await bootstrapNamespace(path),stagePresent=siblings.includes(basename(paths.stage)),promotionPresent=siblings.includes(basename(paths.promote)),publicationPresent=siblings.includes(basename(paths.publish))
-    // Preserve the public reader's original publication diagnostics. Selection
-    // still validates the sole exact stage; publicationStatus owns its conflict
-    // disposition in B2. Header/birth and every child lookup remain strict.
-    if(route.protocol==='public'&&selected.kind==='conflict'&&publicationPresent&&!promotionPresent&&siblings.every(n=>n===basename(paths.stage)||n===basename(paths.publish))){
-      const io=ordinaryStageIO(path),publication=basename(paths.publish)
-      const proof=await lookupBootstrapStage(path,{kind:'route',route},{...io,namespace:async()=>(await io.namespace()).filter(n=>n!==publication),read:(p,limit)=>p===paths.publish?Promise.resolve(undefined):io.read(p,limit)})
-      if(proof.kind==='full')selected=proof
+    // Preserve the original public diagnostics for a sole retained publication
+    // or promotion. This proves only the stage: B2 still receives the actual
+    // artifact bytes, and only the live original captured payload can continue
+    // a partial public promotion. Header/birth and all child lookups are strict.
+    if(route.protocol==='public'&&(selected.kind==='conflict'||selected.kind==='unavailable')&&promotionPresent!==publicationPresent&&siblings.every(n=>[paths.stage,paths.promote,paths.publish].some(p=>n===basename(p)))){
+      const io=ordinaryStageIO(path),artifact=promotionPresent?paths.promote:paths.publish
+      const proof=await lookupBootstrapStage(path,{kind:'route',route},{...io,namespace:async()=>(await io.namespace()).filter(n=>n!==basename(artifact)),read:(p,limit)=>p===artifact?Promise.resolve(undefined):io.read(p,limit)})
+      if(publicationPresent&&proof.kind==='full'||promotionPresent&&proof.kind==='reserved')selected=proof
     }
     const retained={stagePresent,promotionPresent,publicationPresent,foreign:selected.kind==='conflict',...(selected.kind==='reserved'?{captureReservation:selected.reservation}:{}),...(selected.kind==='full'?{stageBytes:selected.exactBytes}:{})}
     try {
