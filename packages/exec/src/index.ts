@@ -135,7 +135,7 @@ export interface ExecService {
   /** Passive metadata only: no observer registration or storage settlement. */
   getJobView?(jobId: string): BackgroundJobView
   listJobViews?(): BackgroundJobView[]
-  killJob(jobId: string): Promise<"cancellation-requested" | "already-finished">
+  killJob(jobId: string, expected?: { instanceId: string; sourceId?: string }): Promise<"cancellation-requested" | "already-finished">
   launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution>
   cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement>
   dispose(): Promise<void>

@@ -229,10 +229,19 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     listJobs() {
       return [...jobs.values()].filter(job => canAccess(job.owner)).map(job => { if (job.status !== "running") void observe(job.capture); return view(job) })
     },
-    async killJob(jobId) {
+    async killJob(jobId, expected) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
-      if (await settledAfterRetirement(job)) return "already-finished"
+      const instanceId = expected?.instanceId, sourceId = expected?.sourceId
+      const current = () => {
+        if (disposed || jobs.get(jobId) !== job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+        if (instanceId !== undefined && instanceId !== job.instanceId) throw new Error("stale-instance")
+        if (sourceId !== undefined && sourceId !== job.nativeJob.sourceId) throw new Error("stale-source")
+      }
+      current()
+      const retired = await settledAfterRetirement(job)
+      current()
+      if (retired) return "already-finished"
       if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
       let settlement: ExecutionSettlement
       try { settlement = await supervisor.cancel(job.capture.execution.id, "cancelled") }
