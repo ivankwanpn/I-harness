@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { resolve } from 'node:path'
 import { createExecutionLease, type TransportExecutionBackend } from '@i-harness/sandbox'
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
@@ -6,7 +6,7 @@ import { createExecService, withExecCallerScope } from '../src/index.ts'
 
 // Keep the genuine service, supervisor, admission and capture. Only the native
 // transport is controlled so pending completion and observation faults are deterministic.
-function service(resultRetention?: import('../src/index.ts').ExecResultRetention, access?: () => boolean) {
+function service(resultRetention?: import('../src/index.ts').ExecResultRetention, access?: () => boolean, defaultOwner = { sessionId: 'same-owner' }) {
   let release!: () => void, drained!: () => void
   const gate = new Promise<void>(done => { release = done })
   const ioDone = new Promise<void>(done => { drained = done })
@@ -25,7 +25,7 @@ function service(resultRetention?: import('../src/index.ts').ExecResultRetention
       } }
     },
   }
-  const exec = createExecService({ resultRetention, execution: { defaultOwner: { sessionId: 'same-owner' }, canAccessOwner: access, selectBackend: () => backend, validateAuthority() {},
+  const exec = createExecService({ resultRetention, execution: { defaultOwner, canAccessOwner: access, selectBackend: () => backend, validateAuthority() {},
     resolvePolicy: owner => compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'j1', workspaceRoot: resolve('.') } }) } })
   return { exec, release }
 }
@@ -178,4 +178,51 @@ it.each(['steer', 'abort'] as const)('genuine native job_output %s detaches its 
     await completed(f, jobId)
     expect(await tool.execute({ job_id: jobId }, { session })).toMatchObject({ native_job: nativeJob, status: 'completed', display_only: true })
   } finally { f.release(); await f.exec.dispose() }
+})
+
+it('rejects an unbounded native wait promptly on access-loss publication and cleans its original listener', async () => {
+  const { createJobOutputTool } = await import('../../subagent/src/tools/status.ts')
+  const a = adapter(), caller = { sessionId: 'same-owner' }
+  let authorized = true, activeListeners = 0
+  const summarize = vi.fn(async () => ({ kind: 'unavailable' as const, reason: 'quota' }))
+  const readFrames = vi.fn(async () => ({ kind: 'unavailable' as const, reason: 'quota' }))
+  const f = service({ ...a.owner, summarize, readFrames }, () => authorized, caller)
+  const controller = new AbortController(), subscribed = Promise.withResolvers<void>()
+  const subscribe = f.exec.subscribeJob.bind(f.exec)
+  const subscription = vi.spyOn(f.exec, 'subscribeJob').mockImplementation((id, listener) => {
+    const off = subscribe(id, listener)
+    activeListeners++; subscribed.resolve()
+    return () => { activeListeners--; off() }
+  })
+  const observe = vi.spyOn(f.exec, 'observeJobOutput'), pages = vi.spyOn(f.exec, 'readJobOutputFrames')
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['controlled'] })
+    // The genuine standalone host now serves a delegated reader. Publications
+    // and passive checks both consult that real caller and mutable access rule.
+    caller.sessionId = 'reader'
+    const tool = createJobOutputTool({ exec: f.exec, jobs: { read() { throw new Error('unknown job') } }, table: { entries: () => new Map() } } as any)
+    const reading = tool.execute({ job_id: jobId, wait: true, timeout_ms: Infinity }, { abortSignal: controller.signal })
+    const outcome = reading.then(value => ({ kind: 'resolved' as const, value }), cause => ({ kind: 'rejected' as const, cause }))
+    await subscribed.promise
+    expect(activeListeners).toBe(1)
+    authorized = false
+    f.release()
+    const result = await Promise.race([outcome, new Promise<{ kind: 'watchdog' }>(resolve => { watchdog = setTimeout(() => resolve({ kind: 'watchdog' }), 500) })])
+    expect(result.kind, 'native publication must reject without a deadline, steer or abort').toBe('rejected')
+    if (result.kind !== 'rejected') throw new Error('Native access-loss observation did not reject promptly')
+    expect(result.cause).toBeInstanceOf(Error)
+    expect(result.cause.message).toMatch(/unknown job|authorized/)
+    expect(activeListeners).toBe(0)
+    expect(observe).not.toHaveBeenCalled(); expect(pages).not.toHaveBeenCalled()
+    expect(summarize).not.toHaveBeenCalled(); expect(readFrames).not.toHaveBeenCalled()
+    expect(a.observers).toBe(0)
+    caller.sessionId = 'same-owner'
+    await completed(f, jobId)
+    expect(f.exec.getJobView(jobId)).toMatchObject({ nativeJob, status: 'completed', stdout: 'same bytes', exitCode: 0 })
+  } finally {
+    clearTimeout(watchdog); controller.abort(new Error('test cleanup only'))
+    caller.sessionId = 'same-owner'; authorized = true; subscription.mockRestore(); observe.mockRestore(); pages.mockRestore()
+    f.release(); await f.exec.dispose()
+  }
 })

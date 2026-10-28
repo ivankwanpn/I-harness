@@ -83,3 +83,19 @@ it('summarizes an actual committed source-limited capture through the original a
     await expect(summarizeExecFrames(ref, (cursor, maxBytes) => service.readExecResult({ sessionId: 'foreign' }, { ref, cursor, maxBytes }))).rejects.toThrow()
   } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+it('keeps source-limited summary completeness when caller mutates only the original ref during a read', async () => {
+  const f = fixture(true, 'source-limited'), original = { ...f.ref }, pageRef = Object.freeze({ ...f.ref })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const scanning = summarizeExecFrames(original, async (cursor, maxBytes) => {
+    entered.resolve(); await release.promise
+    return readExecFramePage(pageRef, { cursor, maxBytes }, async (offset, length) => f.body.subarray(offset, offset + length))
+  })
+  await entered.promise
+  original.completeness = 'complete'
+  release.resolve()
+  expect(await scanning).toEqual({ version: 1, stdout: { bytes: f.stdout.length, sha256: sha(f.stdout) },
+    stderr: { bytes: f.stderr.length, sha256: sha(f.stderr) }, totalRawBytes: f.stdout.length + f.stderr.length, completeness: 'source-limited' })
+  expect(original.completeness).toBe('complete')
+  expect(pageRef.completeness).toBe('source-limited')
+})

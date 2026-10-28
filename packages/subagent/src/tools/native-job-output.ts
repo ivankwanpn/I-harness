@@ -51,7 +51,7 @@ export async function nativeJobOutput(service: ExecService, selected: Background
   }
   current()
   const reason = args.wait === true ? await waitForObservation({ ready: () => { current(); return latest.status !== 'running' },
-    changes: { subscribe: wake => service.subscribeJob(identity.jobId, () => { current(); wake() }) },
+    changes: { subscribe: wake => service.subscribeJob(identity.jobId, wake) },
     timeoutMs: args.timeout_ms === Infinity || Number.isNaN(args.timeout_ms) ? undefined : Math.max(0, args.timeout_ms as number ?? 30000),
     abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
   }) : undefined
