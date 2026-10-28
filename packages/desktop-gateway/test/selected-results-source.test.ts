@@ -16,6 +16,7 @@ import { compileSelectedResultsSemanticSeed } from '../../session-persistence/sr
 import { codecWire } from '../../core-session/test/fixtures/selected-results.ts'
 import { createManagedSessionState } from '../../core-session/src/managed/view.ts'
 import type { FactOwner } from '../../core-session/src/managed/ports.ts'
+import { captureSeedSelectionForResults } from '../../core-session/src/conversation/seed-capture.ts'
 
 const ref = (digit = 'a'): ManagedArtifactRef => ({ version: 1, id: 'ctxv1_' + digit.repeat(64), revision: digit.repeat(64), codec: 'json-utf8-v1', encodedBytes: 12, contentDigest: digit.repeat(64), completeness: 'source-limited' })
 const envelope = (retained = ref(), catalog = false): ResultEnvelope => ({ version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'artifact', ref: retained }, ...(catalog ? { dependencies: { kind: 'artifact-set' as const, ref: retained, count: 7 } } : {}) })
@@ -491,5 +492,37 @@ it('Task2 captures a genuine held source once and preserves its historical resul
     console.log(JSON.stringify({ control: 'Task2 genuine held source to metadata descendant', source: first.sourceObservationDigest, firstSeed: first.digest,
       firstResults: first.seed.results.summary, descendant: second.sourceObservationDigest, descendantSeed: second.digest, descendantResults: second.seed.results.summary,
       groups: second.seed.groups.length, origins: second.seed.origins }))
+  } finally { await fixture.close() }
+})
+
+it('Task2 fix round1 I1 freezes authentic coordinator-held local selection and group order before capture', async () => {
+  const fixture = await setup()
+  try {
+    await recordFixture(fixture.document, { type: 'user/message', text: 'first local input' })
+    await accepted(fixture.document)
+    await recordFixture(fixture.document, { type: 'turn/end' })
+    const witness = createForkSourceWitness(fixture.document), originalCount = fixture.document.view.events.length
+    await fixture.coordinator.withExistingSessionBindingObservation!({ sessionIds: ['source'] }, async observation => {
+      const assertCurrent = () => { observation.assertCurrent(); witness.assertUnchanged() }
+      const made = createCompletedPassiveContext({ kind: 'held-public-fork', sourceSessionId: 'source', view: fixture.document.view, factOwner: fixture.document, assertCurrent }, { kind: 'completed' })
+      if (made.kind !== 'ready') throw Error(made.reason)
+      const context = made.context, projected = await projectSelectedResults(context, { assertCurrent, async *legacy() {} })
+      if (projected.kind !== 'selected') throw Error(projected.reason)
+      expect(context.selected.groups.length).toBeGreaterThan(1)
+      const pages = await collect(projected.results.pages()), summary = projected.results.summary
+      expect(pages.flatMap(page => page.rows).length).toBeGreaterThan(0)
+      expect(pages.flatMap(page => page.rows).every(row => row.branchEvidence.every(at => at.origin === 0))).toBe(true)
+      expect(() => { context.selection.atSeq = 0 }).toThrow(TypeError)
+      expect(() => { context.selected.groups.reverse() }).toThrow(TypeError)
+      expect(() => { context.selected.groups[0]!.items[0]!.recipes[0] = { kind: 'summary', index: 0 } }).toThrow(TypeError)
+      const captured = captureSeedSelectionForResults(context, projected.results)
+      expect(captured.groups).toHaveLength(context.selected.groups.length)
+      expect(await collect(projected.results.pages())).toEqual(pages)
+      expect(projected.results.summary).toBe(summary)
+      expect(fixture.document.view.events).toHaveLength(originalCount)
+      assertCurrent()
+      console.log(JSON.stringify({ control: 'Task2 fix round1 I1 genuine held context', sourceSessionId: context.owner.sourceSessionId,
+        originalCount, selectedGroups: context.selected.groups.length, summary, captureGroups: captured.groups.length, currentCount: fixture.document.view.events.length }))
+    })
   } finally { await fixture.close() }
 })

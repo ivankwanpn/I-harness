@@ -10,6 +10,7 @@ import { iterateHeldInheritedResultMetadata } from './history/result-inherited.t
 import { createSeedOriginNormalizer, collectSelectedConversationOrigins, registerSelectedOriginPlan, mapResultOrigins, resultOriginAddresses } from './seed-origins.ts'
 import { inheritedResultMembership, extentOverlap } from './history/result-membership.ts'
 import { seedLayout } from './seed-layout.ts'
+import { streamJsonData } from '../serialization/json-stream.ts'
 
 // Explicit bounded metadata diagnostics. No payload is part of these budgets.
 export const SELECTED_RESULT_METADATA_LIMITS = Object.freeze({ rows: 10_000, bytes: 8_388_608, pageRows: 100, pageBytes: 65_536 })
@@ -36,10 +37,22 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
     type Manifest = Extract<typeof context.source.view.events[number], { type: 'conversation/seed-manifest' }>
     const imported = new Map<object, Manifest>()
     let rows: SelectedResultRow[] = []
+    let draftBytes = 0
     const record = (classification: ResultClassification, inheritedRow = false, domain?: Manifest) => {
       if (classification.kind === 'refused') return classification
-      const snapshot = immutable(structuredClone(classification))
       if (classifications.length >= SELECTED_RESULT_METADATA_LIMITS.rows) return { kind: 'refused' as const, reason: 'metadata-limit' as const }
+      // Historical slots can shrink during final remapping. Count their typed
+      // address slots at minimum width, so no valid final table is rejected by
+      // provisional indices. Everything else is exact. The bounded address
+      // count/safe integers also bound the draft's width difference. Stream
+      // escaping in chunks and refuse before cloning/retaining this record.
+      const budget = classification.kind === 'included' && domain
+        ? { kind: 'included', row: mapResultOrigins(classification.row, () => 0) } : classification
+      for (const chunk of streamJsonData(budget, { lexical: true, dataOnly: true })) {
+        draftBytes += Buffer.byteLength(chunk)
+        if (draftBytes > SELECTED_RESULT_METADATA_LIMITS.bytes) return { kind: 'refused' as const, reason: 'metadata-limit' as const }
+      }
+      const snapshot = immutable(structuredClone(classification))
       classifications.push(snapshot)
       if (snapshot.kind === 'included') {
         const row = immutable({ ...snapshot.row, ordinal: rows.length }) as SelectedResultRow

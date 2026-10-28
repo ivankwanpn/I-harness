@@ -2,7 +2,7 @@ import { expect, it } from 'vitest'
 import { append, createSession, exportConversationSeed, type Session } from '../src/index.ts'
 import type { FactOwner } from '../src/managed/ports.ts'
 import { createManagedSessionState } from '../src/managed/view.ts'
-import { createCompletedPassiveContext, type CompletedPassiveContext, type HeldSeedOwner } from '../src/conversation/passive-seed-context.ts'
+import { createCompletedPassiveContext, isOriginalCompletedPassiveContext, type CompletedPassiveContext, type HeldSeedOwner } from '../src/conversation/passive-seed-context.ts'
 import { projectPassiveCodeStore } from '../src/projection/passive-code-store/project.ts'
 import { capturePassiveCodeStore, replayPassiveCodeStore } from '../src/projection/passive-code-store.ts'
 import { originalRewindWindows, rewindCuts } from '../src/projection/rewind.ts'
@@ -89,7 +89,10 @@ it.each(['cycle', 'NaN', 'getter'])('keeps superseded %s bodies opaque and rejec
   // Raw context for deferred bodies: actual managed intake intentionally rejects
   // non-JSON graphs, so use the same structural SelectionSource after ownership.
   const clean = framed(); store(clean, 0); store(clean, 7, 'later')
-  const selected = context(clean)
+  // Passive body-shape unit fixture only. The authentic factory context stays
+  // immutable; this copied shell has no original held-source/capture authority.
+  const selected = { ...context(clean) }
+  expect(isOriginalCompletedPassiveContext(selected)).toBe(false)
   selected.source = { ...selected.source, view: source }
   expect(projected(selected)).toEqual({ kind: 'value', entries: [['x', 7]] })
   source.events.splice(-2)
@@ -99,7 +102,9 @@ it.each(['cycle', 'NaN', 'getter'])('keeps superseded %s bodies opaque and rejec
 })
 it('rejects eligible malformed slots and overwritten entry shapes while ignoring foreign and ineligible payloads', () => {
   const source = framed(); store(source, 1); store(source, 7, 'later')
-  const selected = context(source)
+  // Pure malformed-body projection fixture, never an original held context.
+  const selected = { ...context(source) }
+  expect(isOriginalCompletedPassiveContext(selected)).toBe(false)
   const first = source.events[3] as any
   let reads = 0
   Object.defineProperty(first.writes[0], '1', { enumerable: true, get() { reads++; return 1 } })

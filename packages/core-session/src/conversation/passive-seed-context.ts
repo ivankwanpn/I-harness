@@ -4,6 +4,8 @@ import type { SeedSelection, SeedRefusal, TurnExtent } from './seed-types.ts'
 import type { selectSeedHistory } from './seed-selection.ts'
 import { buildSelectionSource, resolveSeedBoundary, selectSeedHistory as selectHistory } from './seed-selection.ts'
 import { isManagedFactOwner } from '../managed/view.ts'
+import { immutableCompletedMetadata } from './completed-metadata.ts'
+import { seedData, seedFields } from './seed-codec.ts'
 export type CompletedSelection = Extract<SeedSelection, { kind: 'completed' }>
 export type Coordinate = Readonly<{ index: number; seq: number }>
 export type Upper = { kind: 'before-event'; at: Coordinate } | { kind: 'archive-end'; eventCount: number }
@@ -29,6 +31,9 @@ export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: C
   if (owner.kind !== 'held-public-fork' || !isManagedFactOwner(owner.view, owner.factOwner)) return { kind: 'refused', reason: 'source-unsupported' }
   try { owner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } }
   try {
+    try { seedFields(selection, ['kind'], ['atSeq']); seedData(selection) }
+    catch { return { kind: 'refused', reason: 'invalid-selection' } }
+    selection = Object.freeze({ ...selection })
     for (const [index, event] of owner.view.events.entries()) {
       const field = Object.getOwnPropertyDescriptor(event, 'seq')
       if (!field || !field.enumerable || !('value' in field) || field.value !== index) return { kind: 'refused', reason: 'source-unsupported' }
@@ -62,9 +67,19 @@ export function createCompletedPassiveContext(owner: HeldSeedOwner, selection: C
       const anchor = establishments.reduce((first, at) => at.index < first.index ? at : first)
       return { ordinal, extent: group.extent, establishments, anchor }
     })
-    try { owner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } }
-    const context: CompletedPassiveContext = { kind: 'completed-passive', owner, selection, source, first: 1, last, selected, boundary, groups }
-    completedContexts.set(context, { owner, source, selected, boundary })
+    const { rebase, ...selectedMetadata } = selected
+    const metadata = immutableCompletedMetadata({ selection, boundary, groups, selected: selectedMetadata,
+      source: { coordinates: source.coordinates, turns: source.turns, history: source.history, originalWindows: source.originalWindows } })
+    // The history index already owns a frozen fact array and frozen facts.
+    // Keep that exact owner metadata; do not clone its declaration population.
+    const capturedSource = Object.freeze({ ...metadata.source, facts: source.facts, view: source.view })
+    const capturedSelected = Object.freeze({ ...metadata.selected, rebase })
+    const capturedOwner: HeldSeedOwner = Object.freeze({ kind: owner.kind, sourceSessionId: owner.sourceSessionId, view: owner.view, factOwner: owner.factOwner,
+      assertCurrent: owner.assertCurrent.bind(owner) })
+    const context: CompletedPassiveContext = Object.freeze({ kind: 'completed-passive', owner: capturedOwner, selection: metadata.selection, source: capturedSource,
+      first: 1, last, selected: capturedSelected, boundary: metadata.boundary, groups: metadata.groups })
+    try { capturedOwner.assertCurrent() } catch { return { kind: 'refused', reason: 'source-changed' } }
+    completedContexts.set(context, { owner: capturedOwner, source: capturedSource, selected: capturedSelected, boundary: metadata.boundary })
     return { kind: 'ready', context }
   } catch { return { kind: 'refused', reason: 'invalid-seed' } }
 }
