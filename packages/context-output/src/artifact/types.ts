@@ -4,7 +4,12 @@ export interface ArtifactOwner { operationId: string; sessionId: string; callId:
 export type ArtifactSettlement = { kind: 'committed'; ref: ManagedArtifactRef }
   | { kind: 'refused'; reason: 'quota' | 'encoding' | 'storage-refused' | 'capture-canceled'; observedEncodedBytes: number }
   | { kind: 'recovery-required'; operationId: string }
+export type WriteContinuationResult = { kind: 'written' }
+  | { kind: 'not-eligible'; reason: 'original-unavailable' | 'gate-denied' }
+  | { kind: 'unresolved'; progress: 'pending' | 'record-applied'; reason: 'original-unavailable' | 'gate-denied' | 'continuation-failed'; cause?: unknown }
 export interface ResultArtifactSink {
+  /** Continue only the exact original rejected admission, without replacement bytes or authority. */
+  continueFailedWrite?(originalCause: unknown, continuationAllowed: () => boolean): Promise<WriteContinuationResult>
   write(bytes: Uint8Array): Promise<void>
   reconcileWrite(): Promise<'ready' | 'recovery-required'>
   finish(completeness: ResultCompleteness): Promise<ArtifactSettlement>

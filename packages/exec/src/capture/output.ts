@@ -102,7 +102,7 @@ export function createCaptureFactory(options: ExecServiceOptions, supervisor: Ex
           const ordinal = frameOrdinal++
           if (frames && !frameCaptureFailed) {
             for (let offset = 0; offset < bytes.length; offset += 32768) {
-              try { await frames.write({ channel, frame: ordinal, offset, end: offset + 32768 >= bytes.length, bytes: bytes.subarray(offset, Math.min(bytes.length, offset + 32768)) }) }
+              try { await frames.write({ channel, frame: ordinal, offset, end: offset + 32768 >= bytes.length, bytes: bytes.subarray(offset, Math.min(bytes.length, offset + 32768)) }, { continuationAllowed: () => stop === undefined && !captureStopped && !signal.signal.aborted && !command.abortSignal?.aborted }) }
               catch { frameCaptureFailed = true; break }
             }
           }

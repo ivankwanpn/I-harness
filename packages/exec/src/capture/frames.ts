@@ -2,9 +2,10 @@ import type { ExecutionOwner } from '@i-harness/sandbox'
 import type { ResultCompleteness, ResultDependency } from '@i-harness/core-session'
 
 export interface ExecFramePart { channel: 'stdout' | 'stderr'; frame: number; offset: number; end: boolean; bytes: Uint8Array }
+export interface ExecFrameWriteOptions { continuationAllowed(): boolean }
 export interface ExecFrameCapture {
   readonly sourceId: string
-  write(part: ExecFramePart): Promise<void>
+  write(part: ExecFramePart, options?: ExecFrameWriteOptions): Promise<void>
   complete(completeness: ResultCompleteness): void
   settle(): Promise<{ kind: 'ready'; dependency: ResultDependency } | { kind: 'recovery-required' }>
 }

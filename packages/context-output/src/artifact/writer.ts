@@ -3,7 +3,7 @@ import { mkdir, open, rm, lstat } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import type { FileHandle } from 'node:fs/promises'
 import type { ResultCompleteness } from '@i-harness/core-session'
-import type { ArtifactOperation, ArtifactSettlement, ResultArtifactSink } from './types.ts'
+import type { ArtifactOperation, ArtifactSettlement, ResultArtifactSink, WriteContinuationResult } from './types.ts'
 import { atomicJson, readExact, writeAll } from './io.ts'
 import { buildIndex, CHUNK, dimensions, leafHash } from './index.ts'
 import { artifactRef } from './manifest.ts'
@@ -14,10 +14,12 @@ export interface WriterAuthority {
   mutate<T>(work: () => Promise<T>): Promise<T>
   reserve(growth: number): Promise<void>
   lifetime(): 'current' | 'deleted' | 'unavailable'
+  recoveryAllowed(): boolean
   cancelPublication(): Promise<void>
   closed(): void
 }
 export interface OwnedArtifactSink extends ResultArtifactSink { suspend(): Promise<void> }
+interface FailedIssue { admitted: PendingWrite; cause?: unknown; candidate: boolean; finalized: boolean; consumed: boolean; applied: boolean }
 interface PendingWrite { bytes: Buffer; start: number; ordinal: number; digest: string; bodyDone: boolean; accounted: boolean; copied: number; reserved: boolean }
 
 /** Matching partial bytes may be completed; foreign bytes never get replaced. */
@@ -48,6 +50,7 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
   const digest = createHash('sha256'), partial = Buffer.alloc(CHUNK)
   let used = 0, leafCount = 0, ordinal = 0, serial: Promise<unknown> = Promise.resolve(), finished = false, closed = false
   let pending: PendingWrite | undefined, completion: ArtifactSettlement | undefined, completeness: ResultCompleteness | undefined
+  let failedIssue: FailedIssue | undefined
   let refusing: ArtifactOperation['reason']
   const assertCurrent = () => {
     const lifetime = authority.lifetime()
@@ -55,7 +58,8 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
   }
   const publish = createArtifactPublication(directory, operation, assertCurrent)
   const enqueue = <T>(work: () => Promise<T>): Promise<T> => { const next = serial.then(work); serial = next.catch(() => {}); return next }
-  const save = () => atomicJson(resolve(directory, 'operation.json'), operation)
+  const metadataPath = resolve(directory, 'operation.json')
+  const save = (renameRejected?: (cause: unknown) => void) => atomicJson(metadataPath, operation, renameRejected)
   async function closeFiles() { if (!closed) { await body.close(); await leaves.close(); closed = true; authority.closed() } }
   async function refuse(reason: NonNullable<ArtifactOperation['reason']>) {
     refusing = reason
@@ -69,11 +73,12 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
     await resumeBytes(leaves, leafHash(leafCount, partial.subarray(0, used)), leafCount * 32)
     leafCount++; used = 0
   }
-  async function applyPending(): Promise<void> {
+  async function applyPending(issue?: FailedIssue, continuation?: { allowed(): boolean; applied(): void }): Promise<void> {
     const admitted = pending
     if (!admitted) return
     if (admitted.ordinal !== ordinal || createHash('sha256').update(admitted.bytes).digest('hex') !== admitted.digest) throw new Error('Artifact admitted write conflict')
     await authority.mutate(async () => {
+      if (continuation && !continuation.allowed()) return
       if (refusing) { await refuse(refusing); pending = undefined; ordinal++; return }
       if (!admitted.reserved) {
         assertCurrent()
@@ -91,7 +96,16 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
         const length = Math.min(CHUNK - used, admitted.bytes.length - admitted.copied)
         admitted.bytes.copy(partial, used, admitted.copied, admitted.copied + length); used += length; admitted.copied += length
       }
-      await save(); pending = undefined; ordinal++
+      await save(issue ? cause => {
+        const error = cause as (NodeJS.ErrnoException & { dest?: string }) | null
+        // Only the actual owned metadata rename rejection reaches this callback.
+        if (operation.phase === 'capturing' && error?.code === 'EPERM' && error.syscall === 'rename' && error.dest === metadataPath) {
+          issue.cause = cause; issue.candidate = true
+        }
+      } : undefined)
+      pending = undefined; ordinal++
+      if (issue) issue.applied = true
+      continuation?.applied()
     })
   }
   async function commit(): Promise<ArtifactSettlement> {
@@ -135,7 +149,51 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
       const bytes = Buffer.from(input)
       if (completion?.kind === 'refused') { operation.encodedBytes += bytes.length; return Promise.resolve() }
       pending = { bytes, start: operation.encodedBytes, ordinal, digest: createHash('sha256').update(bytes).digest('hex'), bodyDone: false, accounted: false, copied: 0, reserved: false }
-      return enqueue(applyPending)
+      const issue: FailedIssue = { admitted: pending, candidate: false, finalized: false, consumed: false, applied: false }
+      failedIssue = undefined
+      return enqueue(() => applyPending(issue)).catch(cause => {
+        // Exact outer identity proves clean retirement under the genuine
+        // WorkspaceMutationOwner contract. Never inspect aggregate children.
+        if (issue.candidate && cause === issue.cause && pending === issue.admitted) {
+          issue.finalized = true; failedIssue = issue
+        }
+        throw cause
+      })
+    },
+    continueFailedWrite(originalCause, continuationAllowed) {
+      const issue = failedIssue
+      const same = () => failedIssue === issue && !!issue?.finalized && pending === issue.admitted
+      const allowed = () => {
+        try { return !finished && !closed && !refusing && completeness === undefined && operation.phase === 'capturing'
+          && authority.lifetime() === 'current' && authority.recoveryAllowed() && continuationAllowed() === true }
+        catch { return false }
+      }
+      if (!issue || !same() || issue.consumed || originalCause !== issue.cause)
+        return Promise.resolve({ kind: 'not-eligible', reason: 'original-unavailable' })
+      if (!allowed()) return Promise.resolve({ kind: 'not-eligible', reason: 'gate-denied' })
+      issue.consumed = true
+      return enqueue(async (): Promise<WriteContinuationResult> => {
+        const unresolved = (reason: 'original-unavailable' | 'gate-denied' | 'continuation-failed', cause?: unknown): WriteContinuationResult => ({
+          kind: 'unresolved', progress: issue.applied ? 'record-applied' : 'pending', reason,
+          ...(cause !== undefined && cause !== originalCause ? { cause } : {}),
+        })
+        if (!same()) return unresolved('original-unavailable')
+        if (!allowed()) return unresolved('gate-denied')
+        let appliedHere = false
+        try {
+          // Exactly one mutation layer; gate also runs inside the acquired turn.
+          await applyPending(undefined, {
+            allowed: () => same() && allowed(),
+            applied: () => { appliedHere = true; issue.applied = true },
+          })
+        } catch (cause) {
+          return unresolved('continuation-failed', cause)
+        }
+        if (!appliedHere) return unresolved('gate-denied')
+        if (failedIssue !== issue || !allowed()) return unresolved('gate-denied')
+        failedIssue = undefined
+        return { kind: 'written' }
+      })
     },
     finish(value) {
       if (!['complete', 'source-limited', 'capture-canceled', 'producer-incomplete'].includes(value)) return Promise.reject(new Error('Invalid artifact completeness'))

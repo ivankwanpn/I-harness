@@ -80,6 +80,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       await atomicJson(resolve(target, 'operation.json'), operation)
       let sink: OwnedArtifactSink
       sink = await createArtifactWriter({ directory: target, operation, mutate, reserve: growth => requireSpace(root, quota(), growth),
+        recoveryAllowed: () => !closing && !closed,
         lifetime: () => deletedDocuments.has(registered.owner.sessionId) || deletedDocuments.has(registered.owner.documentId ?? registered.owner.sessionId) ? 'deleted' : !closed && registered.current() ? 'current' : 'unavailable',
         cancelPublication: async () => { await releaseDocumentPin(root, target, registered.owner.documentId ?? registered.owner.sessionId) },
         closed: () => { writers.delete(sink) } }, true)

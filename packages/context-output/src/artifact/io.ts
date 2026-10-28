@@ -34,7 +34,7 @@ export async function boundedJson(path: string, budget = 65536, retire?: RetireF
     return JSON.parse((await readExact(handle, info.size, 0)).toString('utf8'))
   } finally { await retireFile(handle, retire) }
 }
-export async function atomicJson(path: string, value: unknown): Promise<void> {
+export async function atomicJson(path: string, value: unknown, renameRejected?: (cause: unknown) => void): Promise<void> {
   const bytes = Buffer.from(JSON.stringify(value))
   if (bytes.length > 65536) throw new Error('Artifact metadata exceeds limit')
   // The exact record bytes name their original transaction. A rejected sync
@@ -57,7 +57,8 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
     await writeAll(handle, bytes.subarray(info.size), info.size)
     await handle.sync()
   } finally { await handle.close() }
-  await rename(temporary, path)
+  try { await rename(temporary, path) }
+  catch (cause) { renameRejected?.(cause); throw cause }
 }
 
 /** Physical disposition only. Callers retain their own lifetime/policy checks.
