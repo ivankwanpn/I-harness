@@ -2,7 +2,7 @@ import { createDeliveryControl } from '../../../core-session/src/managed/deliver
 import { createBootstrapManagedSessionState } from '@i-harness/core-session/internal/bootstrap';
 import type { BootstrapDocumentControl } from './bootstrap-types.ts';
 import { randomUUID } from 'node:crypto';
-import { captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, type SessionView } from '@i-harness/core-session';
+import { CURRENT_FORMAT_VERSION, captureFactGroup, createManagedSessionState, encodeFactBatch, FactRecoveryRequiredError, resolveFactGroup, stringifyJsonData, bindFactSettlementSource, type CapturedFactGroup, type FactGroupDraft, type FactOutcome, type FactReceipt, type JournalPrefix, type Session, type SessionView } from '@i-harness/core-session';
 import type { BackendFactOutcome, ManagedDocument, HeldFactOwner } from './fact-types.ts';
 import type { Ownership } from './ownership.ts';
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts';
@@ -55,7 +55,15 @@ export interface ManagedReadyObservation {
     readonly prefix: Readonly<JournalPrefix>;
     assertCurrent(): void;
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }> }>();
+type ProcessLatch = { assertCurrent(): void };
+type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
+type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertDrained(): void; close(): void };
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }>; captureProcess(latch: ProcessLatch, checkEntry: () => void): ManagedProcessCapture }>();
+export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, latch: ProcessLatch, checkEntry: () => void): ManagedProcessCapture {
+    const original = readyOwners.get(document);
+    if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
+    return original.captureProcess(latch, checkEntry);
+}
 export function captureManagedParentReadiness(document: ManagedDocument, ownership: Ownership) {
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
@@ -491,7 +499,44 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     });
     state.bindOwner(document);
     const originalReady = document.assertReady, originalView = state.view;
-    readyOwners.set(document, { ownership, captureParent() {
+    readyOwners.set(document, { ownership, captureProcess(latch, checkEntry) {
+        const view = state.view, header = view.header, events = view.events;
+        let delivered = prefix, count = events.length, failed = false, retired = false;
+        const check = () => {
+            try {
+                const viewProperty = Object.getOwnPropertyDescriptor(document, 'view');
+                const readyProperty = Object.getOwnPropertyDescriptor(document, 'assertReady');
+                if (failed || retired || !bootstrapReady || pending || queue.length || quarantined || sourceFault || recoveryHolds.size || closing || closed
+                    || formatVersion !== CURRENT_FORMAT_VERSION || header?.semanticSeed !== undefined
+                    || !viewProperty || !('value' in viewProperty) || viewProperty.value !== view
+                    || !readyProperty || !('value' in readyProperty) || readyProperty.value !== originalReady
+                    || state.view !== view || view.header !== header || view.events !== events
+                    || prefix.eventCount !== events.length || prefix.eventCount < count || prefix.bodyBytes < delivered.bodyBytes
+                    || (prefix.eventCount === count && prefix !== delivered)) throw new FactRecoveryRequiredError();
+                checkEntry(); latch.assertCurrent(); assertAuthorized(rootAuthorization);
+            } catch (error) { failed = true; throw error; }
+        };
+        check();
+        const initial: SessionView = Object.freeze({ ...view, events: Object.freeze([...events]) });
+        const result: ManagedProcessCapture = Object.freeze({ initial,
+            take() {
+                if (this !== result) throw new TypeError('Invalid process capture receiver');
+                check();
+                if (prefix === delivered) return Object.freeze({ kind: 'unchanged' as const, highWater: count });
+                const from = count, to = prefix.eventCount, suffix = Object.freeze(events.slice(from, to));
+                if (to <= from || suffix.length !== to - from) { failed = true; throw new FactRecoveryRequiredError(); }
+                delivered = prefix; count = to;
+                return Object.freeze({ kind: 'suffix' as const, from, to, events: suffix });
+            },
+            assertDrained() {
+                if (this !== result) throw new TypeError('Invalid process capture receiver');
+                check();
+                if (prefix !== delivered || events.length !== count) { failed = true; throw new FactRecoveryRequiredError(); }
+            },
+            close() { if (this !== result) throw new TypeError('Invalid process capture receiver'); retired = true; },
+        });
+        return result;
+    }, captureParent() {
         const check = () => {
             const ready = Object.getOwnPropertyDescriptor(document, 'assertReady');
             const view = Object.getOwnPropertyDescriptor(document, 'view');

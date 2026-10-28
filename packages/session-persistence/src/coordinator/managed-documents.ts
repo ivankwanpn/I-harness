@@ -3,7 +3,7 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { createManagedDocument, captureManagedParentReadiness } from './managed-document.ts'
+import { createManagedDocument, captureManagedParentReadiness, captureManagedProcessRead } from './managed-document.ts'
 import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
@@ -48,6 +48,16 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
   return {
     ...bootstrap,
+    captureProcessRead(document: ManagedDocument, latch: { assertCurrent(): void }) {
+      const association = documentEntries.get(document)
+      if (!association) throw new FactRecoveryRequiredError()
+      const { id, entry } = association
+      const check = () => {
+        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap) throw new FactRecoveryRequiredError()
+      }
+      check()
+      return captureManagedProcessRead(document, ownership, latch, check)
+    },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()
