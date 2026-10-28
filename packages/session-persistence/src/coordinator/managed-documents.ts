@@ -64,6 +64,12 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       check()
       return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
+    captureProcessReadById(id: string, documentKeys: readonly string[]) {
+      const entry = documents.get(id), document = entry?.document
+      if (!entry || !document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError()
+      const check = () => { if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap || resolved.get(id) !== document) throw new FactRecoveryRequiredError() }
+      return captureManagedProcessRead(document, ownership, documentKeys, check)
+    },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()

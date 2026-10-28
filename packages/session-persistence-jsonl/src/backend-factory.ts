@@ -26,6 +26,7 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
   const owner = processReadOwners.get(backend)!
   return assembleSessionCoordinatorWithProcessStorage(backend, options, {
     capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) },
+    captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
   })
 }
 

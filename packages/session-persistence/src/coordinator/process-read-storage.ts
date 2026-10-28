@@ -9,4 +9,9 @@ export interface ProcessReadStorage {
     check(): Promise<void>
     finish(): Promise<void>
   }>
+  captureManagedAuxiliary(id: string, keys: readonly string[]): Promise<{
+    documents: ReadonlyMap<string, ObservedDocument>
+    check(): Promise<void>
+    finish(): Promise<void>
+  }>
 }
