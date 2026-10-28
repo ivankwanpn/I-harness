@@ -130,6 +130,7 @@ export function createCatalog() {
     if (!tool) throw new ToolNotFoundError(call.name)
     const bindingGeneration = bindingGenerations.get(call.name)!
     const executeBinding = dataMethod(tool, 'execute')
+    if (!executeBinding) throw new TypeError('Invalid execute method')
     const planBinding = dataMethod(tool, 'captureNativePlan') as Tool['captureNativePlan']
     const bindingValidation = () => {
       try { return tools.get(call.name) === tool && bindingGenerations.get(call.name) === bindingGeneration
@@ -137,7 +138,7 @@ export function createCatalog() {
       catch { return false }
     }
 
-    return { tool, bindingGeneration, bindingValidation, planBinding }
+    return { tool, bindingGeneration, bindingValidation, planBinding, executeBinding: executeBinding as Tool['execute'] }
   }
 
   return { register, get, unregister, schemas, genToolCatalog, verifyToolCatalog, installSearch, search, promote, deferredSearchIndex, deferredToolCount, captureBinding }

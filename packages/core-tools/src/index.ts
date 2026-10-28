@@ -40,7 +40,7 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
   const prepare: ToolRegistry['prepare'] = async (...args) => {
     return prepareCaptured(preparer.capture(args[0], args[2]), args[1])
   }
-  const dispatch = createDispatcher(ctx, catalog.get, () => registry)
+  const dispatch = createDispatcher(ctx, catalog.get, () => registry, preparer.invokePrepared)
   const { finalize, resultFinalization } = createFinalizer(ctx, retention)
 
   // M13: thin sequential wrapper — behavior byte-identical to the pre-M13

@@ -4,7 +4,7 @@ import { beginRetainedDispatch } from './retained-outcome.ts'
 import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
 
-export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry): ToolRegistry["dispatch"] {
+export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
   // (`tools/execute` cascade handlers wrap the real tool body). `prepare` and
   // `finalize` run in the ordered lane so the policy layer stays model-ordered.
@@ -15,6 +15,9 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
       if (prepared.approvalValidation?.() === false) throw new Error("prepared approval identity, rule or policy changed before dispatch")
       const guardReason = ctx.checkGuards("tools/execute", { name: prepared.call.name, args: prepared.call.args })
       if (guardReason !== undefined) throw new Error(`guard denied: ${guardReason}`)
+      // Synchronous policy/guard callbacks can revoke or replace a registration
+      // too. Check again after them without rereading the live execute method.
+      if (getTool(prepared.call.name) !== prepared.tool || !prepared.bindingValidation()) throw new Error("prepared tool binding changed: replaced or revoked before dispatch")
     } catch (cause) {
       // These checks also run inside dispatch, after asynchronous hooks. Their
       // site is an authority gate, never a body failure the model can repair.
@@ -36,7 +39,7 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
         // authority check and invoking the body whose binding was validated.
         validatePrepared(prepared)
         dispatchResultStarted(prepared.exec)
-        const result = await withToolResultProducer(prepared.exec, () => prepared.tool.execute(prepared.call.args as never, prepared.exec))
+        const result = await withToolResultProducer(prepared.exec, () => invokePrepared(prepared))
         dispatchResultReturned(prepared.exec)
         retained?.body.observed(); retained?.body.ready(result)
         return result

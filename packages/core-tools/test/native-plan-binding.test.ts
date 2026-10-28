@@ -2,6 +2,32 @@ import { expect, it } from 'vitest'
 import { createContext } from '@i-harness/core-plugin'
 import { createToolRegistry, nativeMutation, nativeOperation, nativePlanValidationFailure, isNativePlanValidationError } from '../src/index.ts'
 
+for (const replacement of ['method', 'accessor'] as const) {
+  it(`refuses an execute ${replacement} replacement made by the final synchronous guard`, async () => {
+    const ctx = createContext(), registry = createToolRegistry(ctx)
+    let originalBodies = 0, replacementBodies = 0, accessorReads = 0, atBodyGate = false, replaced = false
+    const tool = { name: 'guard-replacement', description: '', inputSchema: {},
+      captureNativePlan: () => ({ targets: [], operation: { value: 'original' } }),
+      execute: async () => { originalBodies++; return 'original' },
+    }
+    registry.register(tool)
+    ctx.guard('tools/execute', () => {
+      if (atBodyGate && !replaced) {
+        replaced = true
+        const execute = async () => { replacementBodies++; return 'replacement' }
+        if (replacement === 'method') tool.execute = execute
+        else Object.defineProperty(tool, 'execute', { configurable: true, get() { accessorReads++; return execute } })
+      }
+      return undefined
+    })
+    const prepared = await registry.prepare({ name: tool.name, args: {} })
+    ctx.onCascade('tools/execute', (_input, next) => { atBodyGate = true; return next() })
+    await expect(registry.dispatch(prepared)).rejects.toThrow(/binding|replaced|revoked/i)
+    expect(replaced).toBe(true)
+    expect({ originalBodies, replacementBodies, accessorReads }).toEqual({ originalBodies: 0, replacementBodies: 0, accessorReads: 0 })
+  })
+}
+
 it('does not execute after its native plan provider changes during an execution hook', async () => {
   const ctx = createContext(), registry = createToolRegistry(ctx)
   let release!: () => void, entered!: () => void, effects = 0
@@ -24,7 +50,7 @@ it('captures one plan with the original receiver and exposes the same frozen ope
   const observed: unknown[] = []
   const tool = { name: 'planned', description: '', inputSchema: {},
     captureNativePlan(args: unknown) { observed.push(this, args, Object.isFrozen(args)); return { targets: [], operation: { args } } },
-    execute: async (args: unknown, exec: import('../src/types.ts').ToolExec) => { observed.push(args, nativeOperation(exec)); return 'done' },
+    async execute(args: unknown, exec: import('../src/types.ts').ToolExec) { observed.push(args, nativeOperation(exec), this); return 'done' },
   }
   registry.register(tool)
   const args = { value: 'original' }, capture = registry.capture({ name: tool.name, args })
@@ -32,7 +58,9 @@ it('captures one plan with the original receiver and exposes the same frozen ope
   args.value = 'changed'
   const prepared = await registry.prepareCaptured(capture)
   await registry.dispatch(prepared)
-  expect(observed).toEqual([tool, { value: 'original' }, true, { value: 'original' }, inspected.native!.operation])
+  expect(observed).toEqual([tool, { value: 'original' }, true, { value: 'original' }, inspected.native!.operation, tool])
+  expect(observed[1]).toBe(inspected.call.args)
+  expect(observed[3]).toBe(inspected.call.args)
   expect(observed[4]).toBe(inspected.native!.operation)
   expect(Object.isFrozen(inspected.native!.operation)).toBe(true)
 })

@@ -13,8 +13,14 @@ import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
 
 export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false) {
-  type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
+  type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
+  const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
+  function invokePrepared(prepared: PreparedCall): Promise<unknown> {
+    const invoke = executions.get(prepared)
+    if (!invoke) throw new Error('Foreign prepared execution')
+    return invoke()
+  }
   function owned(handle: CapturedToolCall): Capture {
     const entry = handle && captures.get(handle)
     if (!entry) throw new Error('Foreign tool capture')
@@ -24,7 +30,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     assertToolSettlementScope(identity.session, identity.settlementSource)
     const call = captureToolCall(input)
     freezeArguments(call)
-    const { tool, bindingGeneration, bindingValidation, planBinding } = catalog.captureBinding(call)
+    const { tool, bindingGeneration, bindingValidation, planBinding, executeBinding } = catalog.captureBinding(call)
 
     // spec §3.7: BEFORE the policy layers, so a malformed call never reaches an
     // approval prompt — nobody should be asked to approve garbage. The refusal
@@ -41,7 +47,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
       freezeArguments(copied); native = copied
     }
     const handle: CapturedToolCall = Object.freeze({ kind: 'captured-tool-call' })
-    captures.set(handle, { call, identity: Object.freeze({ ...identity }), tool, bindingGeneration, bindingValidation, native, concurrencySafe: tool.isConcurrencySafe === true, used: false })
+    captures.set(handle, { call, identity: Object.freeze({ ...identity }), tool, executeBinding, bindingGeneration, bindingValidation, native, concurrencySafe: tool.isConcurrencySafe === true, used: false })
     return handle
   }
   function inspectCapture(handle: CapturedToolCall) {
@@ -72,7 +78,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     // The mounted bridge must remain fail-closed until the manager can verify
     // accepted origins and install its source-bound preflight capability.
     if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate')) throw new Error('Native instruction origin unavailable')
-    const { call, identity, tool, bindingGeneration, bindingValidation } = entry
+    const { call, identity, tool, executeBinding, bindingGeneration, bindingValidation } = entry
     assertToolSettlementScope(identity.session, identity.settlementSource)
     const commandDialect = tool.commandDialect?.(call.args)
     // Policy/hook identity comes only from the trusted host, never model JSON.
@@ -177,8 +183,11 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     }
     bindPreparedSettlement(prepared, identity?.settlementSource)
     registerResultPrepared(prepared, identity?.settlementSource)
+    // The callback stays private to this registry; hooks cannot replace the
+    // executable, receiver, frozen arguments or exec through prepared metadata.
+    executions.set(prepared, () => executeBinding.call(tool, call.args as never, exec))
     return prepared
   }
 
-  return { capture, inspectCapture, bindNativeInstructions, prepareCaptured }
+  return { capture, inspectCapture, bindNativeInstructions, prepareCaptured, invokePrepared }
 }
