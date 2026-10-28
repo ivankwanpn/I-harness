@@ -21,6 +21,8 @@ it('connects the genuine document witness to the original retained binding acros
   const document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{})
   let disposal:Promise<void>|undefined;const witness=retainSelectedSourceRead(document,ownership,()=>{disposal=retained.release()});let first:unknown,second:unknown
   await retained.use(async()=>{witness.assertCurrent();first=witness.view});await retained.use(async()=>{witness.assertCurrent();second=witness.view});expect(second).toBe(first)
-  const write=document.metadata.enterPlan('proposal');await Promise.resolve();await Promise.resolve();expect(disposal).toBeDefined();await disposal;expect(()=>retained.assertCurrent()).toThrow();await write;witness.unsubscribe();await document.close().catch(()=>{});await bindings.closeAdmission()()
+  const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();const active=retained.use(async()=>{entered.resolve();await leave.promise}).catch(error=>error);await entered.promise
+  const write=document.metadata.enterPlan('proposal');await Promise.resolve();await Promise.resolve();expect(disposal).toBeDefined();let disposed=false;void disposal!.then(()=>{disposed=true});await Promise.resolve();expect(disposed).toBe(false);leave.resolve();await active;await disposal;expect(()=>retained.assertCurrent()).toThrow();await write;witness.unsubscribe();await document.close().catch(()=>{});await bindings.closeAdmission()()
  }finally{await claim.release()}
 })
+
