@@ -16,12 +16,12 @@ it('captures a genuine ready owner and delivers its immutable committed suffix o
     const initial = createSessionCoordinator(backend, options);
     await initial.create({ sessionId: 's' }); await initial.close();
     const ownership = createOwnership(backend, options), mutations = createMutations(backend, ownership, 200, () => {});
-    const loads = createLoads(backend, ownership, mutations), registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations);
+    const latches = createProcessReadLatches();
+    const loads = createLoads(backend, ownership, mutations), registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches);
     try {
         const document = await registry.open('s');
-        const latch = createProcessReadLatches().capture({ sessionId: 's', documentKeys: [], mode: 'managed', managedOwner: {} });
-        expect(() => registry.captureProcessRead({ ...document }, latch)).toThrow();
-        const capture = registry.captureProcessRead(document, latch);
+        expect(() => registry.captureProcessRead({ ...document }, [])).toThrow();
+        const capture = registry.captureProcessRead(document, []);
         const count = capture.initial.events.length;
         expect(Object.isFrozen(capture.initial.events)).toBe(true);
         expect((await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed');
@@ -29,14 +29,17 @@ it('captures a genuine ready owner and delivers its immutable committed suffix o
         expect(() => capture.assertDrained()).toThrow();
         // A failed guard cannot be recovered or used to obtain the suffix.
         expect(() => capture.take()).toThrow();
-        const next = registry.captureProcessRead(document, latch);
+        const next = registry.captureProcessRead(document, []);
         expect((await document.metadata.admit({ type: 'plan/mode', mode: 'off' })).kind).toBe('committed');
         const update = next.take();
         expect(update.kind).toBe('suffix');
         if (update.kind === 'suffix') { expect(update.from).toBe(count + 1); expect(update.to).toBe(count + 2); expect(Object.isFrozen(update.events)).toBe(true); }
         expect(next.take()).toEqual({ kind: 'unchanged', highWater: count + 2 });
         next.assertDrained(); next.close(); expect(() => next.take()).toThrow();
-        const tampered = registry.captureProcessRead(document, latch), originalView = document.view;
+        const verified = registry.captureProcessRead(document, []); verified.markVerified();
+        expect((await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed');
+        expect(() => verified.assertDrained()).toThrow(); verified.close();
+        const tampered = registry.captureProcessRead(document, []), originalView = document.view;
         let getterCalls = 0;
         Object.defineProperty(document, 'view', { configurable: true, get() { getterCalls++; return originalView; } });
         expect(() => tampered.take()).toThrow(); expect(getterCalls).toBe(0);
@@ -44,8 +47,8 @@ it('captures a genuine ready owner and delivers its immutable committed suffix o
         expect(() => tampered.take()).toThrow();
         const foreignOwnership = createOwnership(backend, options);
         const foreign = createManagedDocuments(backend, foreignOwnership, loads.loadOwned, options, () => {}, mutations);
-        expect(() => foreign.captureProcessRead(document, latch)).toThrow();
-        registry.revoke('s'); expect(() => registry.captureProcessRead(document, latch)).toThrow();
+        expect(() => foreign.captureProcessRead(document, [])).toThrow();
+        registry.revoke('s'); expect(() => registry.captureProcessRead(document, [])).toThrow();
     } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
 });
 

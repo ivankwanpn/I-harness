@@ -49,7 +49,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
   return {
     ...bootstrap,
-    captureProcessRead(document: ManagedDocument, latch: { assertCurrent(): void }) {
+    captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
       const association = documentEntries.get(document)
       if (!association) throw new FactRecoveryRequiredError()
       const { id, entry } = association
@@ -57,7 +57,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         if (documents.get(id) !== entry || entry.document !== document || entry.revoked || entry.bootstrap) throw new FactRecoveryRequiredError()
       }
       check()
-      return captureManagedProcessRead(document, ownership, latch, check)
+      return captureManagedProcessRead(document, ownership, documentKeys, check)
     },
     captureParent(document: ManagedDocument) {
       const association = documentEntries.get(document)
