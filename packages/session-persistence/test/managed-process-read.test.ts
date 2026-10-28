@@ -59,7 +59,10 @@ it('invalidates a cold reader before genuine managed admission reaches its queue
     const mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations);
     const registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches);
     try {
-        const document = await registry.open('s');
+        const beforeOpen = latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' });
+        const opening = registry.open('s');
+        const openDenied = (() => { try { beforeOpen.assertCurrent(); return false } catch { return true } })();
+        const document = await opening; expect(openDenied).toBe(true);
         const reader = latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' });
         let observerCanCapture = false;
         const unsubscribe = subscribe(document.view, () => { try { latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' }); observerCanCapture = true } catch {} });

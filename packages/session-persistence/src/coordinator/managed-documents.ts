@@ -85,6 +85,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(!ownership.lockEnabled||!backend.appendOwnedBatch||!backend.reconcileOwnedBatch||!backend.readJournalPrefix)return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'),{code:'FACT_OWNER_UNSUPPORTED'}))
       const existing=documents.get(id)
       if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
+      const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       const entry:ManagedEntry={};documents.set(id,entry)
       const operation=(async()=>{
         const {session}=await loadOwned(id)
@@ -97,9 +98,9 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
           return attach(id,entry,session,prefix)
         })
       })()
-      entry.flight=operation
-      operation.catch(()=>{if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}})
-      return operation
+      const tracked=operation.then(document=>{token?.end('settled');return document},error=>{token?.end('unknown');if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};throw error})
+      entry.flight=tracked
+      return tracked
     },
     async close(){const results=await Promise.allSettled([...documents.keys()].map(closeOne));const errors=results.flatMap(r=>r.status==='rejected'?[r.reason]:[]);if(errors.length)throw new AggregateError(errors,'Managed documents require recovery before close')},
   }
