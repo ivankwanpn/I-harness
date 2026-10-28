@@ -11,6 +11,21 @@ export interface ExecFrameCapture {
 export type ExecFrameObservation =
   | { kind: 'ready'; dependency: ResultDependency }
   | { kind: 'recovery-required' }
+/** Structural port: exec never imports the context-output implementation.
+ * Counts and hashes describe captured bytes only; completeness never certifies
+ * omitted output for a source-limited capture. */
+export interface ExecRawSummary {
+  readonly version: 1
+  readonly stdout: Readonly<{ bytes: number; sha256: string }>
+  readonly stderr: Readonly<{ bytes: number; sha256: string }>
+  readonly totalRawBytes: number
+  readonly completeness: ResultCompleteness
+}
+export type ExecOutputSource =
+  | { kind: 'retained-summary'; dependency: ResultDependency; summary: ExecRawSummary }
+  | { kind: 'pending' }
+  | { kind: 'unavailable'; reason: string }
+  | { kind: 'recovery-required' }
 export interface ExecResultRetention {
   readonly previewBytes?: number
   begin(input: { sourceId: string; owner: Readonly<ExecutionOwner> }): ExecFrameCapture
@@ -26,4 +41,7 @@ export interface ExecResultRetention {
    * by the capture. A later observer is registered even when the artifact was
    * already committed for an earlier one. */
   observe(capture: ExecFrameCapture): Promise<ExecFrameObservation>
+  /** Original capture only; the binder resolves owner/ref from weak provenance.
+   * Cancellation belongs to this reader, never the native execution. */
+  summarize?(capture: ExecFrameCapture, options?: { signal?: AbortSignal }): Promise<Exclude<ExecOutputSource, { kind: 'pending' }>>
 }

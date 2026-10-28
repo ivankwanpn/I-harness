@@ -138,6 +138,48 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       return view(job)
     },
     listJobViews() { return [...jobs.values()].filter(job => canAccess(job.owner)).map(view) },
+    async observeJobOutput(jobId, { signal } = {}) {
+      const job = jobs.get(jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error('unknown job: ' + jobId)
+      const instance = job.instanceId
+      const current = () => {
+        signal?.throwIfAborted()
+        if (disposed || jobs.get(jobId) !== job || job.instanceId !== instance || !canAccess(job.owner)) throw new Error('Job observation no longer current or authorized')
+      }
+      current()
+      const result = (source: import('../capture/frames.ts').ExecOutputSource) => { current(); return { view: view(job), nativeJob: job.nativeJob, source } }
+      const join = <T>(pending: Promise<T>): Promise<T> => {
+        if (!signal) return pending
+        return new Promise((resolve, reject) => {
+          const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
+          signal.addEventListener('abort', abort, { once: true })
+          void pending.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, cause => { signal.removeEventListener('abort', abort); reject(cause) })
+          if (signal.aborted) abort()
+        })
+      }
+      const owner = options.resultRetention, frames = job.capture.frames
+      if (!owner || !frames) return result({ kind: 'unavailable', reason: 'retention-unsupported' })
+      // Begin inside the genuine caller before any await or finalizer. Handle
+      // rejection immediately, including a running caller that returns pending.
+      let observing: Promise<import('../capture/frames.ts').ExecFrameObservation>
+      try { observing = Promise.resolve(owner.observe(frames)).catch(() => ({ kind: 'recovery-required' as const })) }
+      catch { observing = Promise.resolve({ kind: 'recovery-required' }) }
+      if (job.status === 'running') return result({ kind: 'pending' })
+      const observed = await join(observing)
+      current()
+      await join(record(job))
+      current()
+      if (observed.kind === 'recovery-required') return result(observed)
+      if (observed.dependency.retention.kind === 'unavailable') return result({ kind: 'unavailable', reason: observed.dependency.retention.reason })
+      if (!owner.summarize) return result({ kind: 'unavailable', reason: 'summary-unsupported' })
+      try {
+        const source = await join(owner.summarize(frames, { signal }))
+        return result(source)
+      } catch {
+        current()
+        return result({ kind: 'unavailable', reason: 'read-unavailable' })
+      }
+    },
     getOutput(jobId) {
       const job = jobs.get(jobId)
       if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)

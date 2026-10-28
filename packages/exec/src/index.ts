@@ -12,7 +12,7 @@ export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader, execResultOutcome } from "./retained-output.ts"
-export type { ExecFrameObservation, ExecFramePart, ExecFrameCapture, ExecResultRetention } from './capture/frames.ts'
+export type { ExecFrameObservation, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecRawSummary, ExecOutputSource } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
@@ -128,6 +128,7 @@ export interface ExecService {
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
   runBackground(cmd: ExecCommand): Promise<BackgroundRun>
   getOutput(jobId: string): BackgroundJobView
+  observeJobOutput?(jobId: string, options?: { signal?: AbortSignal }): Promise<JobOutputObservation>
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   /** Passive metadata only: no observer registration or storage settlement. */
@@ -142,7 +143,13 @@ export interface ExecService {
 /** The original registry guarantees provenance; structural compatibility ports
  * above also accept legacy/custom implementations with no native identity. */
 export interface NativeBackgroundJobView extends BackgroundJobView { nativeJob: NativeJobIdentity }
+export interface JobOutputObservation {
+  view: NativeBackgroundJobView
+  nativeJob: NativeJobIdentity
+  source: import('./capture/frames.ts').ExecOutputSource
+}
 export interface NativeExecService extends ExecService {
+  observeJobOutput(jobId: string, options?: { signal?: AbortSignal }): Promise<JobOutputObservation>
   run(cmd: ExecCommand): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | NativePromotedRun>
