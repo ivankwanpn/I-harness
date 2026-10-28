@@ -37,6 +37,7 @@ export function createMutations(
     if (!wb) {
       wb = new SessionWriteBehind({
         maxDelayMs,
+        beginWrite: () => processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: [], kind: 'other' }),
         // M23-P4 (binding): enqueue stays synchronous — the lease is acquired
         // inside the write callback (flush → backend.append). A failed acquire
         // retains the batch for the next enqueue/flush attempt; a held lease

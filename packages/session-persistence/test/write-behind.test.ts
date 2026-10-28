@@ -35,6 +35,20 @@ describe("SessionWriteBehind", () => {
     gate.resolve(); await flushing
     expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
   })
+  it('retains each write-attempt witness with the batch across retries', async () => {
+    const latches = createProcessReadLatches(), ended: number[] = []
+    let attempts = 0
+    const controller = new SessionWriteBehind({ maxDelayMs: 1000,
+      beginWrite: () => { const index = ++attempts, token = latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' });
+        return { end(outcome) { ended.push(index); token.end(outcome) } } },
+      write: async () => { if (attempts === 1) throw new Error('retry') }, reportBackgroundFailure: () => {} })
+    controller.enqueue({ type: 'turn/start' })
+    await expect(controller.flush()).rejects.toThrow('retry')
+    expect(ended).toEqual([])
+    await controller.flush()
+    expect(ended).toEqual([1, 2])
+    expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
+  })
   it("uses one fixed window from the first queued event and owns its copy", async () => {
     vi.useFakeTimers()
     const batches: SessionEvent[][] = []
