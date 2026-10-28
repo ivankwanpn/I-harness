@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtemp, rm, writeFile, readFile, readdir, open } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, readFile, readdir, open, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBootstrapCaptureBackend } from '../src/backend/bootstrap-capture.ts'
@@ -12,7 +12,7 @@ import { codecSeed } from '../../core-session/test/fixtures/selected-results.ts'
 import { compileSelectedResultsSemanticSeed } from '../../session-persistence/src/semantic-seed.ts'
 import { buildSelectedResultsHeader } from '../../session-persistence/src/coordinator/selected-results-header.ts'
 
-vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,open:vi.fn(fs.open)}})
+vi.mock('node:fs/promises',async original=>{const fs=await original<typeof import('node:fs/promises')>();return {...fs,open:vi.fn(fs.open),stat:vi.fn(fs.stat),readdir:vi.fn(fs.readdir)}})
 afterEach(()=>vi.restoreAllMocks())
 function fixture(){
  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{title:'test'},results:'selected-results-v1'})
@@ -113,12 +113,82 @@ it('preserves typed cancellation before selected promotion issue',async()=>{
  }finally{await x.close()}
 })
 
-function headerOperation(f:ReturnType<typeof fixture>){return {invocation:f.route.request.invocation,target:{kind:'new' as const},stageBytes:Buffer.from(f.built.stageBytes),headerBytes:Buffer.from(f.built.headerBytes)}}
+function headerOperation(f:ReturnType<typeof fixture>){return {invocation:f.route.request.invocation,target:{kind:'new' as const},stageBytes:Buffer.from(f.built.stageBytes) as Uint8Array,headerBytes:Buffer.from(f.built.headerBytes) as Uint8Array}}
+it.each(['prepareSelectedHeader','reconcileSelectedHeader'] as const)('%s rejects hostile operation containers before caller code or IO',async method=>{
+ const x=await setup(),f=fixture()
+ try{
+  await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes)
+  const before=await diskSnapshot(x.root)
+  for(const container of ['operation','invocation','target'] as const)for(const shape of ['proxy','getter','inherited','missing','extra','symbol','nonenumerable','prototype'] as const){
+   const op=headerOperation(f),base=container==='operation'?op:op[container],key=container==='operation'?'stageBytes':container==='target'?'kind':'operationId'
+   let calls=0
+   const value=Object.getOwnPropertyDescriptor(base,key)!.value
+   let bad:object={...base}
+   if(shape==='proxy')bad=new Proxy(base,{get(){calls++;throw Error('proxy get')},ownKeys(){calls++;throw Error('proxy ownKeys')},getPrototypeOf(){calls++;throw Error('proxy prototype')}})
+   if(shape==='getter')Object.defineProperty(bad,key,{enumerable:true,get(){calls++;return container==='operation'&&calls>=4?Uint8Array.of(0):value}})
+   if(shape==='inherited'){delete (bad as any)[key];Object.setPrototypeOf(bad,{[key]:value})}
+   if(shape==='missing')delete (bad as any)[key]
+   if(shape==='extra')Object.assign(bad,{sourceCallback(){calls++}})
+   if(shape==='symbol')Object.assign(bad,{[Symbol('extra')]:true})
+   if(shape==='nonenumerable')Object.defineProperty(bad,key,{value,enumerable:false})
+   if(shape==='prototype')Object.setPrototypeOf(bad,{})
+   const input=container==='operation'?bad:{...op,[container]:bad}
+   vi.mocked(open).mockClear();vi.mocked(stat).mockClear();vi.mocked(readdir).mockClear()
+   await expect(x.backend[method]('target',x.issuer,f.route,input as typeof op),`${container}/${shape}`).rejects.toThrow()
+   expect(calls,`${container}/${shape}`).toBe(0)
+   expect(open).not.toHaveBeenCalled();expect(stat).not.toHaveBeenCalled();expect(readdir).not.toHaveBeenCalled()
+   expect(await diskSnapshot(x.root)).toEqual(before)
+  }
+  await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})
+it.each(['prepareSelectedHeader','reconcileSelectedHeader'] as const)('%s rejects accessor header bytes and byte proxies without calls or IO',async method=>{
+ const x=await setup(),f=fixture()
+ try{
+  for(const key of ['stageBytes','headerBytes'] as const)for(const proxy of [false,true]){
+   const op=headerOperation(f),value=op[key];let calls=0
+   if(proxy)op[key]=new Proxy(value,{get(){calls++;throw Error('byte proxy')}})
+   else Object.defineProperty(op,key,{enumerable:true,get(){calls++;return calls<4?value:Uint8Array.of(0)}})
+   vi.mocked(open).mockClear();vi.mocked(stat).mockClear();vi.mocked(readdir).mockClear()
+   await expect(x.backend[method]('target',x.issuer,f.route,op)).rejects.toThrow()
+   expect(calls).toBe(0);expect(open).not.toHaveBeenCalled();expect(stat).not.toHaveBeenCalled();expect(readdir).not.toHaveBeenCalled()
+  }
+ }finally{await x.close()}
+})
+it.each(['stageBytes','headerBytes'] as const)('bounds intrinsic %s size before copying despite shadowed lengths',async key=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),limit=key==='stageBytes'?262144:65536;let calls=0
+ try{
+  const bytes=new Uint8Array(limit+1)
+  for(const field of ['length','byteLength'])Object.defineProperty(bytes,field,{get(){calls++;return 1}})
+  op[key]=bytes
+  for(const method of ['prepareSelectedHeader','reconcileSelectedHeader'] as const){
+   vi.mocked(open).mockClear();vi.mocked(stat).mockClear();vi.mocked(readdir).mockClear()
+   await expect(x.backend[method]('target',x.issuer,f.route,op)).rejects.toThrow()
+   expect(calls).toBe(0);expect(open).not.toHaveBeenCalled();expect(stat).not.toHaveBeenCalled();expect(readdir).not.toHaveBeenCalled()
+  }
+ }finally{await x.close()}
+})
+it('accepts real Uint8Array views with intrinsic snapshots and no byte property hooks',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),path=join(x.root,'target.jsonl');let calls=0
+ try{
+  await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes)
+  for(const key of ['stageBytes','headerBytes'] as const){
+   const backing=new Uint8Array(op[key].length+4);backing.set(op[key],2);const view=backing.subarray(2,-2)
+   for(const field of ['length','byteLength','buffer','byteOffset','valueOf'])Object.defineProperty(view,field,{get(){calls++;throw Error('byte hook')}})
+   op[key]=view
+  }
+  const pending=x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)
+  Uint8Array.prototype.fill.call(op.stageBytes,0);Uint8Array.prototype.fill.call(op.headerBytes,0)
+  expect((await pending).kind).toBe('committed');expect(await readFile(path)).toEqual(Buffer.from(f.built.headerBytes));expect(calls).toBe(0)
+  expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,{...headerOperation(f),stageBytes:new Uint8Array(Buffer.from(f.built.stageBytes)),headerBytes:new Uint8Array(Buffer.from(f.built.headerBytes))})).kind).toBe('committed')
+  await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})
 async function diskSnapshot(root:string){const names=(await readdir(root)).sort();return Promise.all(names.map(async name=>[name,await readFile(join(root,name)).catch(()=>undefined)] as const))}
 it('repeats exact preparation and snapshots route as well as byte inputs',async()=>{
- const x=await setup(),f=fixture(),route=structuredClone(f.route),sourceCallback=vi.fn(),op={...headerOperation(f),sourceCallback},original=headerOperation(f)
+ const x=await setup(),f=fixture(),route=structuredClone(f.route),op=headerOperation(f),original=headerOperation(f)
  try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);const flight=x.backend.prepareSelectedHeader('target',x.issuer,route,op);route.request.invocation.operationId='changed';op.stageBytes.fill(0);op.headerBytes.fill(0)
- const first=await flight;expect(first.kind).toBe('committed');const before=await diskSnapshot(x.root);expect(await x.backend.prepareSelectedHeader('target',x.issuer,f.route,original)).toEqual(first);expect(await diskSnapshot(x.root)).toEqual(before);expect(sourceCallback).not.toHaveBeenCalled();await x.backend.settleBootstrapCaptureIO('target',x.held)
+ const first=await flight;expect(first.kind).toBe('committed');const before=await diskSnapshot(x.root);expect(await x.backend.prepareSelectedHeader('target',x.issuer,f.route,original)).toEqual(first);expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)
  }finally{await x.close()}
 })
 it('missing original stage refuses preparation and reconciliation without mutation',async()=>{

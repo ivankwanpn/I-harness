@@ -14,6 +14,32 @@ type SelectedCaptureInspection = {kind:'absent'} | {kind:'reserved';reservation:
 
 type Resource = { handle: FileHandle; error?: unknown; consumed?: boolean }
 type Ledger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<Resource>; settled: boolean; diagnostics: unknown[] }
+// Capture caller containers without evaluating properties or proxy traps.
+function selectedFields<K extends string>(input:unknown,keys:readonly K[]):Record<K,unknown> {
+  if(!input||typeof input!=='object'||types.isProxy(input))throw new TypeError('Invalid selected header operation')
+  const prototype=Object.getPrototypeOf(input)
+  if(prototype!==Object.prototype&&prototype!==null)throw new TypeError('Invalid selected header operation')
+  const descriptors=Object.getOwnPropertyDescriptors(input),ownKeys=Reflect.ownKeys(descriptors)
+  if(ownKeys.length!==keys.length||ownKeys.some(key=>typeof key!=='string'||!keys.includes(key as K)))throw new TypeError('Invalid selected header operation')
+  const captured=Object.create(null) as Record<K,unknown>
+  for(const key of keys){
+    const descriptor=descriptors[key]
+    if(!descriptor||!descriptor.enumerable||!('value' in descriptor)||descriptor.value===undefined)throw new TypeError('Invalid selected header operation')
+    captured[key]=descriptor.value
+  }
+  return captured
+}
+const selectedByteLength=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'length')!.get!
+const selectedByteSet=Uint8Array.prototype.set
+function selectedByteSnapshot(input:unknown,limit:number):Buffer {
+  if(types.isProxy(input)||!types.isUint8Array(input))throw new TypeError('Invalid selected header bytes')
+  // Intrinsics ignore shadowed length/valueOf/buffer fields on real typed data.
+  const length=selectedByteLength.call(input)
+  if(length>limit)throw new TypeError('Invalid selected header bytes')
+  const snapshot=Buffer.allocUnsafe(length)
+  selectedByteSet.call(snapshot,input)
+  return snapshot
+}
 export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string) {
   const ledgers = new WeakMap<object, Ledger>()
   function scope(id: string, owner: HeldFactOwner) {
@@ -231,9 +257,12 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
   }
   function selectedOperation(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation) {
     const route=captureSelectedResultsRoute(input)
-    if(types.isProxy(operation.stageBytes)||!(operation.stageBytes instanceof Uint8Array)||operation.stageBytes.length>262144||types.isProxy(operation.headerBytes)||!(operation.headerBytes instanceof Uint8Array)||operation.headerBytes.length>65536)throw new TypeError('Invalid selected header bytes')
-    const stageBytes=Buffer.from(operation.stageBytes),headerBytes=Buffer.from(operation.headerBytes),stage=parseSelectedResultsHeaderStage(stageBytes)
-    if(operation.target.kind!=='new'||canonicalJsonData(operation.invocation)!==canonicalJsonData(route.request.invocation)||id!==route.request.invocation.targetSessionId||canonicalJsonData(route.request)!==canonicalJsonData(stage.captureReservation.request)||!headerBytes.equals(Buffer.from(stage.headerBytes)))throw new TypeError('Selected header mismatch')
+    const captured=selectedFields(operation,['invocation','target','stageBytes','headerBytes'])
+    const invocationKeys=['version','operationId','targetSessionId','createdAt','requestDigest'] as const
+    const invocation=selectedFields(captured.invocation,invocationKeys),target=selectedFields(captured.target,['kind'])
+    if(target.kind!=='new'||invocationKeys.some(key=>invocation[key]!==route.request.invocation[key])||id!==route.request.invocation.targetSessionId)throw new TypeError('Selected header mismatch')
+    const stageBytes=selectedByteSnapshot(captured.stageBytes,262144),headerBytes=selectedByteSnapshot(captured.headerBytes,65536),stage=parseSelectedResultsHeaderStage(stageBytes)
+    if(canonicalJsonData(route.request)!==canonicalJsonData(stage.captureReservation.request)||!headerBytes.equals(Buffer.from(stage.headerBytes)))throw new TypeError('Selected header mismatch')
     scope(id,owner)
     return {route,stageBytes,headerBytes,reservationBytes:Buffer.from(canonicalJsonData(stage.captureReservation)+'\n')}
   }
