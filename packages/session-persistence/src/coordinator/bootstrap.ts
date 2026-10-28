@@ -24,6 +24,7 @@ import { ownBackendOutcome } from './fact-outcome.ts'
 import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 export interface ManagedEntry {
   route?: BootstrapRoute;
@@ -92,11 +93,29 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')
 }
-export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations) {
+export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
   const callbackScope=new AsyncLocalStorage<{id:string;active:boolean}>()
+  const bootstrapWitnesses = new Map<string, { token: ReturnType<NonNullable<typeof processLatches>['beginMutation']>; active: number; retained: boolean; ready: boolean }>()
+  function trackBootstrap(invocation: BootstrapInvocation, run: () => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+    if (!processLatches) return run()
+    const key = JSON.stringify([invocation.version, invocation.targetSessionId, invocation.operationId, invocation.createdAt, invocation.requestDigest])
+    let witness = bootstrapWitnesses.get(key)
+    if (!witness) { witness = { token: processLatches.beginMutation({ sessionIds: [invocation.targetSessionId], documentKeys: [], kind: 'other' }), active: 0, retained: false, ready: false }; bootstrapWitnesses.set(key, witness) }
+    const owned = witness; owned.active++
+    let result: Promise<BootstrapOutcome>
+    try { result = run() } catch (error) { owned.active--; owned.retained = true; throw error }
+    return result.then(outcome => {
+      if (outcome.kind === 'ready' || outcome.kind === 'already-ready') owned.ready = true
+      else if (outcome.kind === 'blocked' || documents.get(invocation.targetSessionId)?.bootstrap?.issued) { owned.retained = true; owned.ready = false }
+      return outcome
+    }, error => { owned.retained = true; owned.ready = false; throw error }).finally(() => {
+      owned.active--
+      if (!owned.active && (owned.ready || !owned.retained)) { owned.token.end('settled'); bootstrapWitnesses.delete(key) }
+    })
+  }
   let captureClosed=false
   function assertOutsideCapture(id?:string) { const scope=callbackScope.getStore();if(scope?.active&&(id===undefined||scope.id===id))throw new SessionBindingObservationError('conflict') }
   function captureSelfConflict(input:unknown,wrapped=false) {
@@ -411,6 +430,11 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     } finally { if(entry.captureIO){entry.captureIO.activeIssue=undefined;await settleCapture(entry)} }
   }
   function start(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
+    let captured: BootstrapInvocation
+    try { captured = captureBootstrapInvocation(invocation) } catch { return Promise.resolve({ kind: 'refused', reason: 'manifest-invalid' }) }
+    return trackBootstrap(captured, () => startInner(invocation, guards, request, route))
+  }
+  function startInner(invocation:BootstrapInvocation,guards:BootstrapGuards,request?:BootstrapRequest,route:BootstrapRoute={protocol:'public',invocation}):Promise<BootstrapOutcome> {
     if(!supported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
     let captured:BootstrapInvocation,r:BootstrapRequest|undefined
     try{captured=captureBootstrapInvocation(invocation);route=captureBootstrapRoute(route);r=request?captureBootstrapRequest(request):undefined;if(!sameBootstrapData(routeInvocation(route),captured)||r&&!sameBootstrapData(r.invocation,captured))throw new Error('invocation mismatch');
@@ -447,6 +471,11 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     owned.flight=flight;return flight
   }
   function captureTarget(input:BootstrapCaptureRoute,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>):Promise<BootstrapOutcome> {
+      let route: BootstrapCaptureRoute
+      try { route = captureBootstrapCaptureRoute(input) } catch { return Promise.resolve({ kind: 'refused', reason: 'manifest-invalid' }) }
+      return trackBootstrap(route.request.invocation, () => captureTargetInner(input, guards, capture))
+  }
+  function captureTargetInner(input:BootstrapCaptureRoute,guards:BootstrapGuards,capture:()=>Promise<BootstrapRequest>):Promise<BootstrapOutcome> {
       if(!captureSupported())return Promise.resolve({kind:'not-issued',reason:'unsupported'})
       let request:BootstrapCaptureRequest|ChildBootstrapCaptureRequest, route:BootstrapCaptureRoute
       try{route=captureBootstrapCaptureRoute(input);request=route.request;if(typeof capture!=='function'||utilTypes.isProxy(capture)||utilTypes.isProxy(guards))throw new TypeError('Invalid capture callback')}catch{return Promise.resolve({kind:'refused',reason:'manifest-invalid'})}

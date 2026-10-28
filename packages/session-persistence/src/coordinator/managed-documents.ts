@@ -51,7 +51,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     if(entry.document)await entry.document.close()
     else {await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
   }
-  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches)
   return {
     ...bootstrap,
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
