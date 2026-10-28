@@ -141,3 +141,40 @@ it('returns a native capture failure to the guest without dispatch', async () =>
     expect(f.session.events.filter(e => e.type === 'code/result')).toMatchObject([{ callId: 'bad', output: failure }])
   } finally { await broker.dispose() }
 })
+
+it('rejects a nominal plan error from a dispatched body and records its real execution', async () => {
+  const f = setup(), failure = nativePlanValidationFailure({ error: 'nested capture failed after effect', code: 'FS_EDIT_NOT_FOUND' })
+  let effects = 0
+  const executions: unknown[] = [], captureSynthetic = f.tools.captureSyntheticResult!.bind(f.tools)
+  f.tools.captureSyntheticResult = (context, output, execution) => { executions.push(execution); return captureSynthetic(context, output, execution) }
+  f.tools.register({ name: 'write', description: '', inputSchema: {}, execute: async () => { effects++; throw failure } })
+  const broker = createCodeModeBroker(f.ctx, f.tools, { session: f.session }); broker.startCell('c')
+  try {
+    const outcome = await broker.invoke(f.call('c', 'body-error', 'write')).then(value => ({ value }), error => ({ error }))
+    expect(effects).toBe(1)
+    expect(outcome).toEqual({ error: failure })
+    expect(f.session.events.filter(e => e.type === 'code/dispatch')).toHaveLength(1)
+    expect(executions).toEqual([{ outcome: 'failed', dispatch: 'dispatched' }])
+    expect(f.session.events.filter(e => e.type === 'code/result')).toMatchObject([{ callId: 'body-error', output: { code: 'TOOL_FAILED', error: failure.message } }])
+  } finally { await broker.dispose() }
+})
+
+it('keeps a real body output under recovery when finalization throws a nominal plan error', async () => {
+  const f = setup(), failure = nativePlanValidationFailure({ error: 'finalizer failure', code: 'FS_EDIT_NOT_FOUND' })
+  let effects = 0
+  const syntheticOutputs: unknown[] = [], captureSynthetic = f.tools.captureSyntheticResult!.bind(f.tools)
+  f.tools.captureSyntheticResult = (context, output, execution) => { syntheticOutputs.push(output); return captureSynthetic(context, output, execution) }
+  f.tools.register({ name: 'write', description: '', inputSchema: {}, execute: async () => { effects++; return { actual: 'completed body' } } })
+  f.ctx.on('tools/post-execute', () => { throw failure })
+  const broker = createCodeModeBroker(f.ctx, f.tools, { session: f.session }); broker.startCell('c')
+  try {
+    const outcome = await broker.invoke(f.call('c', 'finalizer-error', 'write')).then(value => ({ value }), error => ({ error }))
+    expect(effects).toBe(1)
+    expect(outcome).toMatchObject({ error: { code: 'FACT_RECOVERY_REQUIRED' } })
+    expect(f.session.events.filter(e => e.type === 'code/dispatch')).toHaveLength(1)
+    expect(f.session.events.filter(e => e.type === 'code/result')).toEqual([])
+    expect(syntheticOutputs).toEqual([])
+    await expect(broker.dispose()).rejects.toBe(failure)
+    expect(effects).toBe(1)
+  } finally { await broker.dispose().catch(() => {}) }
+})

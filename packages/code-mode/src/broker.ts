@@ -65,12 +65,22 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       item.action.assertOpen()
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
-      let prepared
+      let prepared, preparing = false
       try {
         item.generation = item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
           current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
+        preparing = true
         prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
-      } catch (error) { throw error instanceof ToolArgsError || isNativePlanValidationError(error) ? error : fatal(error) }
+      } catch (error) {
+        // The nominal type alone cannot prove nondispatch: a real body or
+        // finalizer may throw it too. Only this preparation occurrence is soft.
+        if (preparing && isNativePlanValidationError(error) && !isPolicyRefusal(error)) {
+          try { await records.record(item, error.output, true); records.settle(item, { value: error.output }) }
+          catch (cause) { records.settle(item, { error: recovery(cause) }) }
+          return
+        }
+        throw error instanceof ToolArgsError ? error : fatal(error)
+      }
       item.action.assertOpen()
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during admission")
@@ -89,11 +99,6 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       }
       records.settle(item, { value: await complete(item) })
     } catch (error) {
-      if (isNativePlanValidationError(error) && !isPolicyRefusal(error)) {
-        try { await records.record(item, error.output, true); records.settle(item, { value: error.output }) }
-        catch (cause) { records.settle(item, { error: recovery(cause) }) }
-        return
-      }
       if (item.retained) {
         records.settle(item, { error: recovery(error) })
         return
