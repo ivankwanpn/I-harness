@@ -152,6 +152,26 @@ it('verifies stable present documents and rejects concurrent checks permanently'
     } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+it('observes managed auxiliary documents without opening the transcript', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-aux-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        await backend.putDocument('task-s', { value: 7 });
+        const capability = lookupJsonlProcessRead(backend)!;
+        await rm(join(root, 's.jsonl'));
+        const witness = await capability.captureManagedAuxiliary('s', ['task-s']);
+        expect(witness.documents.get('task-s')).toEqual({ kind: 'present', value: { value: 7 } });
+        await witness.check(); await witness.finish();
+        const changed = await capability.captureManagedAuxiliary('s', ['task-s']);
+        await backend.putDocument('task-s', { value: 8 });
+        await expect(changed.check()).rejects.toThrow(); await expect(changed.finish()).rejects.toThrow();
+        const namespaced = await capability.captureManagedAuxiliary('s', []);
+        await writeFile(join(root, 's.jsonl.bootstrap-unknown'), 'x');
+        await expect(namespaced.finish()).rejects.toThrow();
+        await expect(capability.capture('s', [])).rejects.toThrow();
+    } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 it('captures genuine ordinary event bytes and refuses malformed middle records without rewriting them', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-journal-domain-')), backend = createJsonlBackend(root);
     try {

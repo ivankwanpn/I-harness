@@ -64,18 +64,22 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             if (offset !== w.identity.size || digest.digest('hex') !== w.digest || !same(w.identity, identity(await handle.stat({ bigint: true }))) || !same(w.identity, identity(await lstat(w.path, { bigint: true }))) || !sameParents(w.parents, await ancestors(w.path))) bad();
         } finally { await handle.close(); }
     }
-    return { async capture(id: string, requested: readonly string[]) {
+    async function captureCommon(id: string, requested: readonly string[], transcript: boolean) {
         ports.assertOriginal();
         const keys = [...new Set(requested)].sort(); if (keys.length > 32) bad();
         const path = ports.file(id), sessionParents = await ancestors(path);
         await ports.checkDeleted('session', id); await ports.checkNamespace(id);
-        const raw = await file(path, sessionParents), decoder = new TextDecoder('utf-8', { fatal: true });
-        if (!isUtf8(raw.bytes)) bad();
-        const end = raw.bytes.indexOf(10); if (end < 0 || raw.bytes.at(-1) !== 10) bad();
-        const meta = parseHeader(decoder.decode(raw.bytes.subarray(0, end)));
-        if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed || !meta.journal) bad();
-        const decoded = readFactJournal(raw.bytes.subarray(end + 1), meta.journal!, meta.formatVersion, meta);
-        if (decoded.torn || decoded.prefix.bodyBytes !== raw.bytes.length - end - 1) bad();
+        const raw = transcript ? await file(path, sessionParents) : undefined, decoder = new TextDecoder('utf-8', { fatal: true });
+        let initial: ReturnType<typeof freezeJsonData> | undefined;
+        if (raw) {
+            if (!isUtf8(raw.bytes)) bad();
+            const end = raw.bytes.indexOf(10); if (end < 0 || raw.bytes.at(-1) !== 10) bad();
+            const meta = parseHeader(decoder.decode(raw.bytes.subarray(0, end)));
+            if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed || !meta.journal) bad();
+            const decoded = readFactJournal(raw.bytes.subarray(end + 1), meta.journal!, meta.formatVersion, meta);
+            if (decoded.torn || decoded.prefix.bodyBytes !== raw.bytes.length - end - 1) bad();
+            initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events: decoded.events });
+        }
         const documents = new Map<string, { kind: 'absent' } | { kind: 'present'; value: unknown }>(), witnesses = new Map<string, Witness>();
         const documentParents = new Map<string, DirectoryChain>();
         for (const key of keys) {
@@ -91,7 +95,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             ports.assertOriginal();
             await ports.checkDeleted('session', id); await ports.checkNamespace(id);
             if (!sameParents(sessionParents, await ancestors(path))) bad();
-            const row = await lstat(path, { bigint: true }); if (!row.isFile() || row.isSymbolicLink() || !same(raw.witness.identity, identity(row))) bad();
+            if (raw) { const row = await lstat(path, { bigint: true }); if (!row.isFile() || row.isSymbolicLink() || !same(raw.witness.identity, identity(row))) bad(); }
             for (const key of keys) {
                 await ports.checkDeleted('document', key); const doc = ports.document(key), witness = witnesses.get(key);
                 if (!sameParents(documentParents.get(key)!, await ancestors(doc))) bad();
@@ -107,7 +111,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             [Symbol.iterator]: documents[Symbol.iterator].bind(documents),
             forEach(callback: (value: { kind: 'absent' } | { kind: 'present'; value: unknown }, key: string, map: ReadonlyMap<string, { kind: 'absent' } | { kind: 'present'; value: unknown }>) => void, thisArg?: unknown) { documents.forEach((value, key) => callback.call(thisArg, value, key, readonlyDocuments)); },
         });
-        return { initial: freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events: decoded.events }), documents: readonlyDocuments,
+        return { initial, documents: readonlyDocuments,
             async check() {
                 if (finished || checking || failed) { failed = true; bad(); }
                 checking = true; try { await cheap(); } catch (error) { failed = true; throw error; } finally { checking = false; }
@@ -115,7 +119,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             async finish() {
                 if (finished || checking || failed) { failed = true; bad(); } finished = true;
                 await cheap();
-                await ports.checkDeleted('session', id); await ports.checkNamespace(id); await verify(raw.witness);
+                await ports.checkDeleted('session', id); await ports.checkNamespace(id); if (raw) await verify(raw.witness);
                 for (const key of keys) {
                     await ports.checkDeleted('document', key); const witness = witnesses.get(key), doc = ports.document(key);
                     if (witness) await verify(witness);
@@ -127,5 +131,16 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 await cheap();
             },
         };
-    } };
+    }
+    return {
+        async capture(id: string, requested: readonly string[]) {
+            const result = await captureCommon(id, requested, true)
+            if (!result.initial) return bad()
+            return { ...result, initial: result.initial as import('@i-harness/core-session').SessionView }
+        },
+        async captureManagedAuxiliary(id: string, requested: readonly string[]) {
+            const { initial: _initial, ...result } = await captureCommon(id, requested, false)
+            return result
+        },
+    };
 }
