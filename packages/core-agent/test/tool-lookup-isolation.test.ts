@@ -1,7 +1,7 @@
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession } from "@i-harness/core-session"
-import { createToolRegistry, TOOL_FAILED, ToolArgsError, ToolNotFoundError } from "@i-harness/core-tools"
+import { createToolRegistry, nativePlanValidationFailure, TOOL_FAILED, ToolArgsError, ToolNotFoundError } from "@i-harness/core-tools"
 import { executeToolCalls } from "../src/execute-tool-calls.ts"
 
 it("answers an unknown model tool once and executes the independently authorized call in model order", async () => {
@@ -49,4 +49,15 @@ it.each([
   ], { maxParallel: 2 })).rejects.toBe(refusal)
   expect(bodies).toBe(0)
   expect(session.events.filter(event => event.type === "tool/dispatch")).toEqual([])
+})
+
+it('records a native plan validation failure without dispatch and continues independent work', async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  let effects = 0
+  tools.register({ name: 'bad-native', description: '', inputSchema: {}, captureNativePlan() { throw nativePlanValidationFailure({ error: 'invalid patch', code: 'FS_EDIT_NOT_FOUND' }) }, execute: async () => { throw Error('body must not run') } })
+  tools.register({ name: 'later', description: '', inputSchema: {}, execute: async () => { effects++; return { ok: true } } })
+  await executeToolCalls(ctx, session, tools, [{ callId: 'bad', name: 'bad-native', args: {} }, { callId: 'good', name: 'later', args: {} }], { maxParallel: 2 })
+  expect(effects).toBe(1)
+  expect(session.events.filter(event => event.type === 'tool/result')).toMatchObject([{ callId: 'bad', output: { error: 'invalid patch', code: 'FS_EDIT_NOT_FOUND' } }, { callId: 'good', output: { ok: true } }])
+  expect(session.events.filter(event => event.type === 'tool/dispatch').map(event => event.callId)).toEqual(['good'])
 })

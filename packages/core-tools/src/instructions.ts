@@ -2,15 +2,15 @@ import type { NativeMutation, NativePlan, ToolExec } from './types.ts'
 
 const failures = new WeakSet<object>()
 export class NativePlanValidationError extends Error {
-  readonly output: Readonly<{ error: string; code: string }>
-  constructor(output: Readonly<{ error: string; code: string }>) {
+  readonly output: Readonly<{ error: string; code: string; reason_truncated?: true }>
+  constructor(output: Readonly<{ error: string; code: string; reason_truncated?: true }>) {
     if (!output || typeof output.error !== 'string' || typeof output.code !== 'string') throw new TypeError('Invalid native plan failure')
     super(output.error)
-    this.output = Object.freeze({ error: output.error, code: output.code })
+    this.output = Object.freeze({ error: output.error, code: output.code, ...(output.reason_truncated === true ? { reason_truncated: true as const } : {}) })
     failures.add(this)
   }
 }
-export function nativePlanValidationFailure(output: Readonly<{ error: string; code: string }>): NativePlanValidationError { return new NativePlanValidationError(output) }
+export function nativePlanValidationFailure(output: Readonly<{ error: string; code: string; reason_truncated?: true }>): NativePlanValidationError { return new NativePlanValidationError(output) }
 export function isNativePlanValidationError(error: unknown): error is NativePlanValidationError { return typeof error === 'object' && error !== null && failures.has(error) }
 
 const executions = new WeakMap<ToolExec, { plan: NativePlan; mutation: NativeMutation }>()

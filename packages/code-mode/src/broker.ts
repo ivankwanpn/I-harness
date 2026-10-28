@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { captureLegacyFact, committedFactSeqs, FactRecoveryRequiredError, stringifyJsonData } from "@i-harness/core-session"
-import { isOriginalResultFinalization, isPolicyRefusal, retainedToolOutcome, resultExecution, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
+import { isOriginalResultFinalization, isPolicyRefusal, isNativePlanValidationError, retainedToolOutcome, resultExecution, ToolArgsError, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeInvocation, CodeModeMountOptions } from "./types.ts"
 import { captureCodeModeTools, codeModeDefinitions } from "./catalog.ts"
 import type { Cell, Queued } from './broker/types.ts'
@@ -70,7 +70,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
         item.generation = item.call.origin.generationLineage?.forInvocation({ view: options.session, cellId: item.call.cellId, action: item.action, eventSeq: item.eventSeq!, callId: item.call.invocationId, name: item.call.name, signal: item.signal,
           current: () => !disposed && !item.signal.aborted && cells.has(item.call.cellId) && active.has(item) && tools.get(item.call.name) === item.tool })
         prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session: options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code", settlementSource: item.source, modelGeneration: item.generation?.factories })
-      } catch (error) { throw error instanceof ToolArgsError ? error : fatal(error) }
+      } catch (error) { throw error instanceof ToolArgsError || isNativePlanValidationError(error) ? error : fatal(error) }
       item.action.assertOpen()
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during admission")
@@ -89,6 +89,11 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       }
       records.settle(item, { value: await complete(item) })
     } catch (error) {
+      if (isNativePlanValidationError(error) && !isPolicyRefusal(error)) {
+        try { await records.record(item, error.output, true); records.settle(item, { value: error.output }) }
+        catch (cause) { records.settle(item, { error: recovery(cause) }) }
+        return
+      }
       if (item.retained) {
         records.settle(item, { error: recovery(error) })
         return

@@ -6,6 +6,8 @@ import { createDispatcher } from "./registry/dispatch.ts"
 import { createFinalizer } from "./registry/finalize.ts"
 import { installPreExecuteDecision } from "./approval/decision.ts"
 import { assertSyntheticResult, bindSyntheticFinalization, type ToolResultRetention } from './registry/result-finalization.ts'
+import { isNativePlanValidationError } from './instructions.ts'
+import { isPolicyRefusal } from './types.ts'
 export { assertResultPrepared, assertSyntheticResult, declareToolResultOutcome, declareToolResultPresentation, resultExecution, resultPresentation, isOriginalResultFinalization, isOriginalSyntheticResultFinalization } from './registry/result-finalization.ts'
 export type { ResultFinalization, ResultProgram, ToolResultRetention, SyntheticResultContext } from './registry/result-finalization.ts'
 export { currentToolResultProducer, registerToolResultDependency, toolResultDependencies } from './registry/result-dependencies.ts'
@@ -46,7 +48,12 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
   // M13: thin sequential wrapper — behavior byte-identical to the pre-M13
   // `execute` for every existing caller (tests, CLI paths, subagent drivers).
   async function execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult> {
-    const prepared = await prepare(call, opts?.signal)
+    let prepared
+    try { prepared = await prepare(call, opts?.signal) }
+    catch (error) {
+      if (!isPolicyRefusal(error) && isNativePlanValidationError(error)) return { name: call.name, output: error.output }
+      throw error
+    }
     const output = await dispatch(prepared)
     return finalize(prepared, output)
   }

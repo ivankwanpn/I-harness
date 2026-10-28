@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, nativePlanValidationFailure } from "@i-harness/core-tools"
 import { createSession, decodeFactBatch } from "@i-harness/core-session"
 import { createCodeModeBroker } from "../src/broker.ts"
 import { mkdtemp } from 'node:fs/promises'
@@ -127,4 +127,17 @@ describe("Code Mode nested effects", () => {
       expect(maxHooks).toBe(1); expect(hooks).toEqual(["start", "end", "start", "end"])
     } finally { await b.dispose() }
   })
+})
+
+it('returns a native capture failure to the guest without dispatch', async () => {
+  const f = setup(), failure = { error: 'bad patch', code: 'FS_EDIT_NOT_FOUND' }
+  let effects = 0
+  f.tools.register({ name: 'patch', description: '', inputSchema: {}, captureNativePlan() { throw nativePlanValidationFailure(failure) }, execute: async () => { effects++; return 'unexpected' } })
+  const broker = createCodeModeBroker(f.ctx, f.tools, { session: f.session }); broker.startCell('c')
+  try {
+    expect(await broker.invoke(f.call('c', 'bad', 'patch'))).toEqual(failure)
+    expect(effects).toBe(0)
+    expect(f.session.events.filter(e => e.type === 'code/dispatch')).toEqual([])
+    expect(f.session.events.filter(e => e.type === 'code/result')).toMatchObject([{ callId: 'bad', output: failure }])
+  } finally { await broker.dispose() }
 })
