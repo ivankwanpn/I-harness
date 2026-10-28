@@ -25,8 +25,12 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
 
   async function retire<T>(id: string, run: () => Promise<T>) {
     managed.assertOutsideCapture(id)
-    const admission = observations.beginRetirement(id)
-    try { await admission.join(); return await run() } finally { admission.finish() }
+    const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
+    let outcome: 'settled' | 'unknown' = 'unknown'
+    try {
+      const admission = observations.beginRetirement(id)
+      try { await admission.join(); const result = await run(); outcome = 'settled'; return result } finally { admission.finish() }
+    } catch (error) { outcome = 'unknown'; throw error } finally { token?.end(outcome) }
   }
   const coordinator: SessionCoordinator = {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
@@ -81,6 +85,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     async close() {
       managed.assertOutsideCapture()
       assertOutsideForkController(coordinator)
+      processLatches?.closeAdmission()
       const join = observations.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
       const joinFork = closeForkControllerAdmission(coordinator)

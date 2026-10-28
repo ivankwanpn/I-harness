@@ -25,3 +25,18 @@ it('fences the manifest and session synchronously through actual deletion', asyn
         await deleting; expect(denied).toBe(true);
     } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
 });
+
+it('closes observation admission synchronously before lifecycle drainage', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-shutdown-')), backend = createJsonlBackend(root);
+    const ownership = createOwnership(backend, {}), latches = createProcessReadLatches();
+    const mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations);
+    const documents = createDocuments(backend, ownership, () => {}), managed = createManagedDocuments(backend, ownership, loads.loadOwned, {}, () => {}, mutations);
+    const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, latches);
+    try {
+        const reader = latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' });
+        const closing = lifecycle.close();
+        const denied = (() => { try { reader.assertCurrent(); return false } catch { return true } })();
+        await closing; expect(denied).toBe(true);
+        expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).toThrow();
+    } finally { await managed.close(); await rm(root, { recursive: true, force: true }); }
+});

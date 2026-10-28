@@ -53,6 +53,7 @@ export function createLifecycle(
       } finally { token?.end(outcome) }
     },
     async close(releaseOwners = true) {
+      processLatches?.closeAdmission()
       const flushed = await Promise.allSettled(flushWriteBehinds())
       cancelAutomaticWaits()
       await pendingDocuments()
