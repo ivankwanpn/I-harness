@@ -122,7 +122,8 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     }
   }
 
-  async function settledAfterRetirement(job: Job): Promise<boolean> {
+  async function settledAfterRetirement(job: Job, current: () => void = () => {}): Promise<boolean> {
+    current()
     if (job.settlement?.kind === "settled") {
       job.cleanupDetail = undefined
       return true
@@ -131,6 +132,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     // Its observer can retire the entry before this job-view observer runs.
     if (supervisor.list().some(entry => entry.id === job.capture.execution.id)) return false
     const settlement = await job.capture.execution.handle.settled
+    current()
     job.settlement = settlement
     if (settlement.kind !== "settled") {
       job.cleanupDetail = settlement.phase + ": " + settlement.detail
@@ -141,6 +143,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
   }
 
   return {
+    supportsNativeJobKill: true,
     run: run as NativeExecService["run"],
     async runBackground(command) { const capture = await makeCapture(command, undefined, true); const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } },
     getJobView(jobId) {
@@ -232,21 +235,26 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     async killJob(jobId, expected) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
-      const instanceId = expected?.instanceId, sourceId = expected?.sourceId
+      const instanceId = job.instanceId, identity = job.nativeJob, capture = job.capture
+      const jobInstanceId = expected?.jobInstanceId, sourceId = expected?.sourceId
+      if (expected !== undefined && (!expected || typeof expected !== 'object' || Object.keys(expected).some(key => key !== 'jobInstanceId' && key !== 'sourceId') || typeof jobInstanceId !== 'string' || !jobInstanceId.trim() || (sourceId !== undefined && (typeof sourceId !== 'string' || !sourceId.trim())))) throw new Error('invalid-selector')
       const current = () => {
-        if (disposed || jobs.get(jobId) !== job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
-        if (instanceId !== undefined && instanceId !== job.instanceId) throw new Error("stale-instance")
+        if (disposed || jobs.get(jobId) !== job || job.instanceId !== instanceId || job.nativeJob !== identity || job.capture !== capture || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+        if (jobInstanceId !== undefined && jobInstanceId !== instanceId) throw new Error("stale-instance")
         if (sourceId !== undefined && sourceId !== job.nativeJob.sourceId) throw new Error("stale-source")
       }
       current()
-      const retired = await settledAfterRetirement(job)
+      const retired = await settledAfterRetirement(job, current)
       current()
       if (retired) return "already-finished"
       if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
       let settlement: ExecutionSettlement
-      try { settlement = await supervisor.cancel(job.capture.execution.id, "cancelled") }
+      try { current(); settlement = await supervisor.cancel(capture.execution.id, "cancelled"); current() }
       catch (cause) {
-        if (await settledAfterRetirement(job)) return "already-finished"
+        current()
+        const retired = await settledAfterRetirement(job, current)
+        current()
+        if (retired) return "already-finished"
         job.status = "running"
         job.cleanupDetail = cause instanceof Error ? cause.message : String(cause)
         publish(job)
@@ -259,7 +267,8 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
         publish(job)
         throw new Error("Execution cancellation incomplete: " + settlement.detail)
       }
-      await job.capture.complete.catch(() => {})
+      await capture.complete.catch(() => {})
+      current()
       job.root = settlement.root
       job.exitCode = settlement.root.exitCode ?? -1
       job.failure = undefined
