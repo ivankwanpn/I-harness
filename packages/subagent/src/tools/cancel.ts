@@ -1,3 +1,4 @@
+import { isNativeExecService } from "@i-harness/exec"
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 
@@ -50,12 +51,22 @@ export function createCloseTool(deps: SubagentToolDeps): Tool {
 }
 
 export function createJobKillTool(deps: SubagentToolDeps): Tool {
-  const jobKillTool: Tool<{ job_id: string; reason?: string }, { outcome: string }> = {
+  const jobKillTool: Tool<{ job_id: string; reason?: string; backend?: "shell" | "child" | "workflow"; instance_id?: string; source_id?: string }, { outcome: string }> = {
     name: "job_kill",
     description: "Request cancellation of a running background job (subagent, shell, or workflow).",
-    inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" } }, required: ["job_id"] },
+    inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" }, backend: { type: "string", enum: ["shell", "child", "workflow"] }, instance_id: { type: "string" }, source_id: { type: "string" } }, required: ["job_id"] },
     isReadOnly: false,
     execute: async (args) => {
+      if (args.backend === "shell") {
+        if (!args.instance_id || !isNativeExecService(deps.exec)) throw new Error("Checked native cancellation unavailable")
+        return { outcome: await deps.exec.killJob(args.job_id, { instanceId: args.instance_id, sourceId: args.source_id }) }
+      }
+      if (args.instance_id !== undefined || args.source_id !== undefined) throw new Error("Native selectors require shell backend")
+      if (args.backend === "child") return { outcome: deps.jobs.kill(args.job_id) }
+      if (args.backend === "workflow") {
+        if (!deps.workflow) throw new Error("Workflow cancellation unavailable")
+        return { outcome: deps.workflow.killJob(args.job_id) }
+      }
       // M24b (spec §3.3) third layer: `workflow-` ids route to the workflow
       // job store (its killJob aborts the run's current step process tree).
       if (deps.workflow && args.job_id.startsWith("workflow-")) {
