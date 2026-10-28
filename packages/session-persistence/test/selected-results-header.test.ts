@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { codecPage, codecRow, codecSeed } from '../../core-session/test/fixtures/selected-results.ts'
+import { validateSubagentHeader } from '@i-harness/core-session'
+import { codecPage, codecRow, codecSeed, sealCodecSeed } from '../../core-session/test/fixtures/selected-results.ts'
 import { compileSelectedResultsSemanticSeed } from '../src/semantic-seed.ts'
 import { createSelectedResultsIntent, readSelectedResultsCore } from '../src/selected-results-fork-contract.ts'
 import { parseSelectedResultsHeaderStage, reconstituteSelectedResultsStage, buildSelectedResultsHeader } from '../src/coordinator/selected-results-header.ts'
@@ -78,6 +79,52 @@ it('rejects malformed stage structure and canonical byte encodings',()=>{
  expect(()=>parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes.trim()))).toThrow()
  expect(()=>parseSelectedResultsHeaderStage(Buffer.from([0xff]))).toThrow()
  expect(()=>parseSelectedResultsHeaderStage(new Uint8Array(262145))).toThrow()
+})
+it('rejects a complete initial tuple even when the generic Core header accepts it',()=>{
+ const f=fixture([codecPage([codecRow()])]), built=buildSelectedResultsHeader(f.request,f.reservation)
+ const stage:any=structuredClone(built.stage), header=JSON.parse(stage.headerBytes)
+ Object.assign(header.semanticSeed,{initialInputId:'x',initialInputDigest:'a'.repeat(64),initialStartedAt:0,initialExpiresAt:1})
+ expect(()=>validateSubagentHeader(header)).not.toThrow()
+ stage.headerBytes=canonical(header)+'\n'
+ const bytes=Buffer.from(canonical(stage)+'\n')
+ expect(()=>parseSelectedResultsHeaderStage(bytes)).toThrow()
+ expect(()=>reconstituteSelectedResultsStage(stage,f.request.seed.records)).toThrow()
+ expect(()=>selectedResultsPreparationFacts(stage,f.request.seed.records)).toThrow()
+})
+it('roundtrips pages followed by shifted groups and denies layout and record tampering',()=>{
+ const f=fixture(), exported=codecSeed('public-completed',[codecPage([codecRow(0,1)]),codecPage([codecRow(1,2)],1)])
+ // Accepted Core summary groups: two completed turns, with an empty passive cut per group.
+ exported.seed.groups=[1,2].map(turn=>({extent:{kind:'framed',first:turn,last:turn},items:[{kind:'summary',scope:'turn',extent:{kind:'framed',first:turn,last:turn},
+  origins:[{origin:0,seq:turn,part:'message'}],sourceProvenance:[{origin:0,kind:'summary',authority:'derived',scope:'turn'}],messages:[{role:'user',content:'summary'}]}]}))
+ exported.seed.passive.codeStore.groups=[0,0]
+ f.request.seed=compileSelectedResultsSemanticSeed(sealCodecSeed(exported.seed))
+ const built=buildSelectedResultsHeader(f.request,f.reservation), stage=parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes))
+ const checked=reconstituteSelectedResultsStage(stage,f.request.seed.records), facts=selectedResultsPreparationFacts(stage,f.request.seed.records)
+ expect(checked.stage).toEqual(built.stage)
+ expect(checked.seed.records.map((r:any)=>[r.type,r.seq,r.ordinal])).toEqual([
+  ['conversation/seed-manifest',0,undefined],['conversation/seed-results',1,0],['conversation/seed-results',2,1],['conversation/seed-group',3,0],['conversation/seed-group',4,1]])
+ expect(stage.seed).toMatchObject({seedLength:5,resultPageCount:2,groupCount:2})
+ expect(stage.headerBase.seedLength).toBe(5)
+ expect(JSON.parse(stage.headerBytes).semanticSeed.seedLength).toBe(5)
+ expect(facts).toMatchObject({seedLength:5,resultPageCount:2,groupCount:2,semantic:{profile:'public-completed',turns:{total:2,completed:[[1,2]],unframedPrefix:false}}})
+ expect(facts.semantic.results).toEqual(stage.seed.results)
+ for(const edit of [(r:any)=>r[3].seq=1,(r:any)=>r[3].ordinal=2,(r:any)=>r[0].groupCount=1,(r:any)=>r[0].resultPageCount=1,(r:any)=>{[r[2],r[3]]=[r[3],r[2]]},(r:any)=>{[r[3],r[4]]=[r[4],r[3]]}]) {
+  const records:any=structuredClone(f.request.seed.records);edit(records)
+  expect(()=>reconstituteSelectedResultsStage(stage,records)).toThrow()
+  expect(()=>selectedResultsPreparationFacts(stage,records)).toThrow()
+ }
+ // Keep header and stage layout copies coherent; rejection must use the complete records.
+ for(const [pages,groups,length] of [[1,3,5],[2,3,6]]) {
+  const changed:any=structuredClone(stage), header=JSON.parse(changed.headerBytes)
+  changed.seed.resultPageCount=header.semanticSeed.resultPageCount=pages
+  changed.seed.groupCount=header.semanticSeed.groupCount=groups
+  changed.seed.results.pages=header.semanticSeed.results.pages=pages
+  changed.seed.seedLength=changed.headerBase.seedLength=header.seedLength=header.semanticSeed.seedLength=length
+  changed.headerBytes=canonical(header)+'\n'
+  const parsed=parseSelectedResultsHeaderStage(Buffer.from(canonical(changed)+'\n'))
+  expect(()=>reconstituteSelectedResultsStage(parsed,f.request.seed.records)).toThrow()
+  expect(()=>selectedResultsPreparationFacts(parsed,f.request.seed.records)).toThrow()
+ }
 })
 it('requires the complete original records and rejects unbound header and record commitments',()=>{
  const f=fixture([codecPage([codecRow()])]), built=buildSelectedResultsHeader(f.request,f.reservation), stage=parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes))

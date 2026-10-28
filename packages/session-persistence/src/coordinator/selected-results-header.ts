@@ -90,10 +90,11 @@ export function parseSelectedResultsHeaderStage(bytes: Uint8Array): SelectedResu
   validateResultsSummary(seed.results)
   const header = captureData(JSON.parse(stage.headerBytes))
   bootstrapFields(header,['formatVersion','sessionId','createdAt','journal','seedLength','origin','parentSession','semanticSeed'],['title','workspaceId','modelSelection'])
-  const semantic = header.semanticSeed
   validateSubagentHeader(header)
+  const semantic = header.semanticSeed
   if (semantic.version !== 3 || semantic.codec !== 'semantic-seed-v3' || semantic.profile !== 'public-completed') invalid()
   seedLayout(semantic)
+  bootstrapFields(semantic,['version','codec','profile','results','resultPageCount','operationId','requestDigest','manifestDigest','seedDigest','dependencyDigest','seedLength','groupCount'])
   const invocation=request.invocation, metadata=request.core.metadata
   const expectedBase={formatVersion:13,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},
