@@ -55,7 +55,12 @@ export interface ManagedReadyObservation {
     readonly prefix: Readonly<JournalPrefix>;
     assertCurrent(): void;
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation }>();
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }> }>();
+export function captureManagedParentReadiness(document: ManagedDocument, ownership: Ownership) {
+    const original = readyOwners.get(document);
+    if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
+    return original.captureParent();
+}
 /** Private original-factory observation. No caller-shaped document/owner can issue it. */
 export function captureManagedReadyObservation(document: ManagedDocument, ownership: Ownership): ManagedReadyObservation {
     const original = readyOwners.get(document);
@@ -485,7 +490,21 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     });
     state.bindOwner(document);
-    readyOwners.set(document, { ownership, capture() {
+    const originalReady = document.assertReady, originalView = state.view;
+    readyOwners.set(document, { ownership, captureParent() {
+        const check = () => {
+            const ready = Object.getOwnPropertyDescriptor(document, 'assertReady');
+            const view = Object.getOwnPropertyDescriptor(document, 'view');
+            if (!ready || !('value' in ready) || ready.value !== originalReady || !view || !('value' in view) || view.value !== originalView || state.view !== originalView) throw new FactRecoveryRequiredError();
+            Reflect.apply(originalReady, document, []);
+        };
+        check();
+        const result = Object.freeze({ view: originalView, assertCurrent() {
+            if (this !== result) throw new TypeError('Invalid parent readiness receiver');
+            check();
+        } });
+        return result;
+    }, capture() {
         const view = state.view, events = view.events, eventCount = events.length, originalPrefix = prefix, header = view.header;
         const assertCurrent = () => {
             if (!bootstrapReady || pending || quarantined || document.view !== view || state.view !== view || view.events !== events || events.length !== eventCount

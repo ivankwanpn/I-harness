@@ -3,7 +3,8 @@ import { FactRecoveryRequiredError } from '@i-harness/core-session'
 import type { CoordinatorOptions, PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
-import { createManagedDocument } from './managed-document.ts'
+import { createManagedDocument, captureManagedParentReadiness } from './managed-document.ts'
+import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
@@ -17,11 +18,13 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   }
   const documents = new Map<string, ManagedEntry>()
   const resolved = new Map<string, ReturnType<typeof createManagedDocument>>()
+  const documentEntries = new WeakMap<ManagedDocument, { id: string; entry: ManagedEntry }>()
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
       entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined)
     entry.document=document
+    documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
     document.revokeNewWork=()=>{markManagedEntryRevoked(entry);revoke()}
     const close=document.close
@@ -45,6 +48,22 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations)
   return {
     ...bootstrap,
+    captureParent(document: ManagedDocument) {
+      const association = documentEntries.get(document)
+      if (!association) throw new FactRecoveryRequiredError()
+      const { id, entry } = association
+      const readiness = captureManagedParentReadiness(document, ownership)
+      const check = () => {
+        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || (entry.bootstrap && !entry.ready)) throw new FactRecoveryRequiredError()
+        readiness.assertCurrent()
+      }
+      check()
+      const parent = Object.freeze({ assertCurrent() {
+        if (this !== parent) throw new TypeError('Invalid parent receiver')
+        check()
+      } })
+      return parent
+    },
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
     revoke(id:string){bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
