@@ -1,4 +1,5 @@
-import { canonicalJsonData, freezeJsonData, isStrictFactData, legacyPrefixDigest, validateSubagentHeader, type SeedHeaderV3 } from '@i-harness/core-session'
+import { canonicalJsonData, freezeJsonData, isStrictFactData, legacyPrefixDigest, validateSubagentHeader, validateResultsSummary, type SeedHeaderV3 } from '@i-harness/core-session'
+import { types } from 'node:util'
 import { semanticSeedBodyFromRecords, seedLayout } from '@i-harness/core-session/internal/bootstrap'
 import { bootstrapHash, compileSelectedResultsSemanticSeed } from '../semantic-seed.ts'
 import { bootstrapFields } from './bootstrap-header.ts'
@@ -69,4 +70,55 @@ export function buildSelectedResultsHeader(input: unknown, reservationInput: unk
   const stageBytes = canonicalJsonData(stage)+'\n'
   if (Buffer.byteLength(headerBytes)>65536 || Buffer.byteLength(stageBytes)>262144) invalid()
   return Object.freeze({stage,stageBytes,headerBytes})
+}
+export type SelectedResultsHeaderStageV2 = ReturnType<typeof buildSelectedResultsHeader>['stage']
+/** Structural admission only. This cannot verify the outer manifest without the records. */
+export function parseSelectedResultsHeaderStage(bytes: Uint8Array): SelectedResultsHeaderStageV2 {
+  if (types.isProxy(bytes) || !(bytes instanceof Uint8Array) || bytes.length > 262144) invalid()
+  const stage = captureData(JSON.parse(Buffer.from(bytes).toString('utf8')))
+  bootstrapFields(stage,['version','kind','captureReservation','invocation','originalTarget','metadata','lineage','headerBase','seed','headerBytes'])
+  if (stage.version !== 2 || stage.kind !== 'semantic-bootstrap-selected-results-header' || typeof stage.headerBytes !== 'string' || Buffer.byteLength(stage.headerBytes)>65536) invalid()
+  const reservation = parseSelectedResultsReservation(encodeSelectedResultsReservation(stage.captureReservation)), request=reservation.request
+  bootstrapFields(stage.originalTarget,['kind']); bootstrapFields(stage.lineage,['origin','parentSession'])
+  if (stage.originalTarget.kind !== 'new' || !same(stage.invocation,request.invocation) || !same(stage.metadata,request.core.metadata)
+    || stage.lineage.origin !== 'fork' || stage.lineage.parentSession !== request.core.sourceSessionId) invalid()
+  const seed=stage.seed
+  bootstrapFields(seed,['digest','dependencyDigest','sourceObservation','seedLength','groupCount','resultPageCount','profile','results'])
+  bootstrapFields(seed.sourceObservation,['kind','digest'])
+  const digest=(x:unknown)=>typeof x==='string' && /^[a-f0-9]{64}$/.test(x)
+  if (!digest(seed.digest) || !digest(seed.dependencyDigest) || seed.sourceObservation.kind !== 'semantic' || !digest(seed.sourceObservation.digest) || seed.profile !== 'public-completed') invalid()
+  validateResultsSummary(seed.results)
+  const header = captureData(JSON.parse(stage.headerBytes))
+  bootstrapFields(header,['formatVersion','sessionId','createdAt','journal','seedLength','origin','parentSession','semanticSeed'],['title','workspaceId','modelSelection'])
+  const semantic = header.semanticSeed
+  validateSubagentHeader(header)
+  if (semantic.version !== 3 || semantic.codec !== 'semantic-seed-v3' || semantic.profile !== 'public-completed') invalid()
+  seedLayout(semantic)
+  const invocation=request.invocation, metadata=request.core.metadata
+  const expectedBase={formatVersion:13,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
+    journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},
+    seedLength:seed.seedLength,origin:'fork',parentSession:request.core.sourceSessionId,
+    ...(metadata.title === undefined ? {} : {title:metadata.title}),...(metadata.workspaceId === undefined ? {} : {workspaceId:metadata.workspaceId}),
+    ...(metadata.modelSelection === undefined ? {} : {modelSelection:metadata.modelSelection})}
+  const {semanticSeed:_,...base}=header
+  if (!same(base,expectedBase) || !same(stage.headerBase,expectedBase)
+    || semantic.operationId !== invocation.operationId || semantic.requestDigest !== invocation.requestDigest
+    || semantic.seedDigest !== seed.digest || semantic.dependencyDigest !== seed.dependencyDigest
+    || semantic.seedLength !== seed.seedLength || semantic.groupCount !== seed.groupCount || semantic.resultPageCount !== seed.resultPageCount
+    || !same(semantic.results,seed.results) || stage.headerBytes !== canonicalJsonData(header)+'\n'
+    || !Buffer.from(canonicalJsonData(stage)+'\n').equals(Buffer.from(bytes))) invalid()
+  return freezeJsonData(stage) as SelectedResultsHeaderStageV2
+}
+/** Verifies complete records against every stage, source and manifest commitment; no source callback is used. */
+export function reconstituteSelectedResultsStage(input: unknown, recordInput: unknown) {
+  const stageData=captureData(input)
+  const stage=parseSelectedResultsHeaderStage(Buffer.from(canonicalJsonData(stageData)+'\n'))
+  const records=captureData(recordInput)
+  if (!Array.isArray(records)) invalid()
+  const seed=semanticSeedBodyFromRecords(records)
+  if (seed.version !== 3 || seed.profile !== 'public-completed') throw new TypeError('Public selected seed required')
+  const compiled=compileSelectedResultsSemanticSeed({kind:'seed',seed,digest:stage.seed.digest,sourceObservationDigest:stage.seed.sourceObservation.digest})
+  const rebuilt=buildSelectedResultsHeader({invocation:stage.invocation,target:stage.originalTarget,metadata:stage.metadata,lineage:stage.lineage,seed:compiled},stage.captureReservation)
+  if (!same(compiled.records,records) || !same(rebuilt.stage,stage)) invalid()
+  return Object.freeze({stage,seed:freezeJsonData(compiled)})
 }

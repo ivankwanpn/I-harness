@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import { codecPage, codecRow, codecSeed } from '../../core-session/test/fixtures/selected-results.ts'
 import { compileSelectedResultsSemanticSeed } from '../src/semantic-seed.ts'
 import { createSelectedResultsIntent, readSelectedResultsCore } from '../src/selected-results-fork-contract.ts'
-import { buildSelectedResultsHeader } from '../src/coordinator/selected-results-header.ts'
+import { parseSelectedResultsHeaderStage, reconstituteSelectedResultsStage, buildSelectedResultsHeader } from '../src/coordinator/selected-results-header.ts'
+import { selectedResultsPreparationFacts } from '../src/coordinator/selected-results-preparation.ts'
 
 function fixture(pages: any[] = []) {
   const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{title:'雪'},results:'selected-results-v1'})
@@ -56,4 +57,59 @@ it('rejects child profile, forbidden descriptors and encoded header overflow',()
  const {intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}), invocation={...f.request.invocation,requestDigest}
  const reservation={...f.reservation,request:{invocation,core,requestIntent:intent}}
  expect(()=>buildSelectedResultsHeader({...f.request,invocation,metadata:core.metadata},reservation)).toThrow()
+})
+
+
+it('parses structural stage and reconstitutes complete records before deriving public facts',()=>{
+ const f=fixture([codecPage([codecRow()])]), built=buildSelectedResultsHeader(f.request,f.reservation)
+ const stage=parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes))
+ expect(stage).toEqual(built.stage)
+ const checked=reconstituteSelectedResultsStage(stage,f.request.seed.records)
+ expect(checked.stage).toEqual(stage)
+ const facts=selectedResultsPreparationFacts(stage,f.request.seed.records)
+ expect(facts.semantic).toEqual({version:3,profile:'public-completed',selection:{kind:'completed'},turns:{total:2,completed:[[1,2]],unframedPrefix:false},results:stage.seed.results})
+ expect(facts.manifestDigest).toBe(JSON.parse(stage.headerBytes).semanticSeed.manifestDigest)
+ expect(Object.isFrozen(facts.semantic.results)).toBe(true)
+})
+it('rejects malformed stage structure and canonical byte encodings',()=>{
+ const f=fixture(), built=buildSelectedResultsHeader(f.request,f.reservation), stage:any=built.stage
+ const bad=[(s:any)=>s.version=1,(s:any)=>s.kind='semantic-bootstrap-header',(s:any)=>delete s.captureReservation,(s:any)=>s.originalTarget.kind='resume',(s:any)=>s.metadata.title='other',(s:any)=>s.lineage.parentSession='other',(s:any)=>s.headerBase.formatVersion=12,(s:any)=>s.seed.groupCount=Number.MAX_SAFE_INTEGER,(s:any)=>s.seed.profile='child-history',(s:any)=>s.extra=1,(s:any)=>{const h=JSON.parse(s.headerBytes);h.semanticSeed.initialInputId='x';s.headerBytes=canonical(h)+'\n'},(s:any)=>{const h=JSON.parse(s.headerBytes);h.semanticSeed.seedDigest='0'.repeat(64);s.headerBytes=canonical(h)+'\n'}]
+ for(const edit of bad){const v=structuredClone(stage);edit(v);expect(()=>parseSelectedResultsHeaderStage(Buffer.from(canonical(v)+'\n'))).toThrow()}
+ expect(()=>parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes.trim()))).toThrow()
+ expect(()=>parseSelectedResultsHeaderStage(Buffer.from([0xff]))).toThrow()
+ expect(()=>parseSelectedResultsHeaderStage(new Uint8Array(262145))).toThrow()
+})
+it('requires the complete original records and rejects unbound header and record commitments',()=>{
+ const f=fixture([codecPage([codecRow()])]), built=buildSelectedResultsHeader(f.request,f.reservation), stage=parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes))
+ expect(()=>reconstituteSelectedResultsStage(stage,[])).toThrow()
+ const records:any=structuredClone(f.request.seed.records);records[1].page.rows[0].ref.encodedBytes++
+ expect(()=>reconstituteSelectedResultsStage(stage,records)).toThrow()
+ const changed:any=structuredClone(stage), h=JSON.parse(changed.headerBytes);h.semanticSeed.manifestDigest='0'.repeat(64);changed.headerBytes=canonical(h)+'\n'
+ const parsed=parseSelectedResultsHeaderStage(Buffer.from(canonical(changed)+'\n'))
+ expect(()=>reconstituteSelectedResultsStage(parsed,f.request.seed.records)).toThrow()
+ expect(()=>selectedResultsPreparationFacts(parsed,f.request.seed.records)).toThrow()
+})
+
+it('defers source and manifest claims to complete-record verification',()=>{
+ const f=fixture([codecPage([codecRow()])]), original=buildSelectedResultsHeader(f.request,f.reservation)
+ for(const edit of [
+  (s:any)=>s.seed.sourceObservation.digest='0'.repeat(64),
+  (s:any)=>{s.seed.dependencyDigest='0'.repeat(64);const h=JSON.parse(s.headerBytes);h.semanticSeed.dependencyDigest=s.seed.dependencyDigest;s.headerBytes=canonical(h)+'\n'},
+  (s:any)=>{s.invocation.createdAt='2026-10-29T00:00:00.000Z';s.captureReservation.request.invocation.createdAt=s.invocation.createdAt;s.headerBase.createdAt=s.invocation.createdAt;const h=JSON.parse(s.headerBytes);h.createdAt=s.invocation.createdAt;s.headerBytes=canonical(h)+'\n'}
+ ]) {
+  const s:any=structuredClone(original.stage);edit(s)
+  const parsed=parseSelectedResultsHeaderStage(Buffer.from(canonical(s)+'\n'))
+  expect(()=>reconstituteSelectedResultsStage(parsed,f.request.seed.records)).toThrow()
+  expect(()=>selectedResultsPreparationFacts(parsed,f.request.seed.records)).toThrow()
+ }
+})
+it('retains detached frozen structural and verified snapshots',()=>{
+ const f=fixture([codecPage([codecRow()])]), built=buildSelectedResultsHeader(f.request,f.reservation)
+ const bytes=Buffer.from(built.stageBytes), stage=parseSelectedResultsHeaderStage(bytes), records:any=structuredClone(f.request.seed.records)
+ const checked=reconstituteSelectedResultsStage(stage,records), facts=selectedResultsPreparationFacts(stage,records)
+ bytes.fill(0);records[1].page.rows[0].ref.encodedBytes++
+ expect(checked.seed.records[1]).toEqual(f.request.seed.records[1])
+ expect(Object.isFrozen(checked.seed.records[1])).toBe(true)
+ expect(Object.isFrozen(stage.captureReservation.request.core.metadata)).toBe(true)
+ expect(Object.isFrozen(facts.semantic.turns)).toBe(true)
 })
