@@ -1,3 +1,6 @@
+import { registerJobOutputInvocation, type JobOutputInvocation } from '../job-output-invocation.ts'
+import { SHIPPING_REPORT_POLICY, reportPageSchema } from '../report-policy.ts'
+import { nativeJobOutput, nativeOutputRefusal } from './native-job-output.ts'
 import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 import { userSteerForTool, waitForObservation } from "@i-harness/core-tools"
@@ -55,18 +58,22 @@ export function createListTool(deps: SubagentToolDeps): Tool {
 }
 
 export function createJobOutputTool(deps: SubagentToolDeps): Tool {
-  const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string; yielded?: true; yield_reason?: "user-steer" }> = {
+  const jobOutputTool: Tool = {
     name: "job_output",
-    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true; new user input can yield the wait while the same job continues. " + (deps.reportPolicy
-      ? "Returns a bounded text preview with structured status and digest/offset metadata for paging."
-      : "Every response ends with [status: ...]."),
-    inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
+    description: 'Read a background job. Native shell output uses bounded captured-byte text pages and raw frame references; continuations require the original job instance. wait:true can yield to user input. Legacy responses without report policy include a status footer.',
+    inputSchema: { type: 'object', properties: { ...reportPageSchema, job_id: { type: 'string' }, wait: { type: 'boolean' }, timeout_ms: { type: 'number' }, job_instance_id: { type: 'string' }, source_id: { type: 'string' } }, required: ['job_id'] },
     isReadOnly: true,
-    execute: async (args, exec) => {
+    execute: async (args, exec) => (await invoke(args as Record<string, unknown>, exec, deps.reportPolicy ?? SHIPPING_REPORT_POLICY)).value,
+  }
+  const invoke: JobOutputInvocation = async (input, exec, policy) => {
+      const args = { ...input } as Record<string, any>
+      policy = { ...policy }
       // Resolve and authorize the backend before installing any observation.
+      let legacy = false
       let read: () => { status: string; output: string; result?: import("../task/result.ts").RetainedTaskResult }
       let subscribe: (wake: (view: { status: string }) => void) => () => void
       if (deps.workflow && args.job_id.startsWith("workflow-")) {
+        if (args.job_instance_id !== undefined || args.source_id !== undefined) return { route: 'compat', value: nativeOutputRefusal('unsupported-selector') }
         const workflow = deps.workflow
         read = () => { const v = workflow.getOutput(args.job_id); return { status: v.status, output: v.stdout } }
         subscribe = wake => workflow.subscribeJob(args.job_id, wake)
@@ -76,6 +83,12 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
           if (!(error instanceof Error) || !/unknown job/i.test(error.message)) throw error
           subagent = false
         }
+        if (!subagent) {
+          legacy = true
+          const passive = deps.exec.getJobView?.(args.job_id)
+          if (passive?.nativeJob || deps.exec.observeJobOutput) return { route: 'native', value: await nativeJobOutput(deps.exec, passive, args, exec, policy) }
+        }
+        if (args.job_instance_id !== undefined || args.source_id !== undefined) return { route: 'compat', value: nativeOutputRefusal('unsupported-selector') }
         read = subagent ? () => deps.jobs.read(args.job_id) : () => { const v = deps.exec.getOutput(args.job_id); return { status: v.status, output: v.stdout } }
         subscribe = subagent ? wake => deps.jobs.subscribe(args.job_id, wake) : wake => deps.exec.subscribeJob(args.job_id, wake)
       }
@@ -89,14 +102,14 @@ export function createJobOutputTool(deps: SubagentToolDeps): Tool {
       exec.abortSignal?.throwIfAborted()
       const view = read()
       const entry = [...deps.table.entries().values()].find(row => row.jobId === args.job_id)
-      return { text: deps.reportPolicy ? view.output : `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status, ...(deps.reportPolicy ? { job_id: args.job_id,
+      return { route: 'compat', value: { ...(legacy ? { source: { kind: 'legacy-preview' } } : {}), text: deps.reportPolicy ? view.output : `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status, ...(deps.reportPolicy ? { job_id: args.job_id,
         ...(view.result ? { result_revision: view.result.revision, result_ref: view.result.kind === "retained" && view.result.envelope.retention.kind === "artifact" ? view.result.envelope.retention.ref : undefined, result_retention: view.result.kind === "pending" ? "pending" : view.result.envelope.retention.kind } : {}),
         ...(entry?.retention !== undefined ? { retention: entry.retention } : {}),
         ...(entry?.retentionError !== undefined ? { retention_error: entry.retentionError } : {}),
       } : {}),
-        ...(reason === "user-steer" && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
-    },
+        ...(reason === "user-steer" && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) } }
   }
+  registerJobOutputInvocation(jobOutputTool, invoke)
   return jobOutputTool
 }
 

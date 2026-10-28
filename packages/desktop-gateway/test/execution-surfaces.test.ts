@@ -1,3 +1,7 @@
+import { withExecCallerScope, type NativeExecService } from '@i-harness/exec'
+import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
+import { committedFactSeqs } from '@i-harness/core-session'
+import { createHash } from 'node:crypto'
 import { expect, it, vi } from "vitest"
 import { mkdtemp, rm, writeFile, readFile, readdir } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -14,25 +18,40 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
   const root = await mkdtemp(join(tmpdir(), "ih-saved-job-dto-")), sessionDir = join(root, "sessions"), script = join(root, "output.cjs")
   let coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" }); await coordinator.create({ sessionId: "other" })
-  await writeFile(script, 'process.stdout.write(process.argv[2] === "large" ? "QA_LIMIT_" + "x".repeat(150000) : "QA_JOB_OUTPUT\\n")')
+  await writeFile(script, 'process.stdout.write(process.argv[2] === "large" ? "QA_LIMIT_" + "x".repeat(150000) : "QA_JOB_OUTPUT\\n");process.stderr.write("QA_ERR\\n")')
   const live = createSessionService({ workspace: root, modelPolicy: "test-mock", approveAll: true, sandbox: "danger-full-access", codeMode: { mode: "mixed" }, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
   const assembly = await live.assemblyFor("s"), shell = process.platform === "win32" ? "pwsh" : "bash"
   let callNumber = 0
-  const execute = async (name: string, args: Record<string, unknown>) => {
-    if (kind === "tool") {
-      const callId = `actual-${++callNumber}`
-      await recordFixture(assembly.factOwner, { type: "tool/call", callId, name, args })
-      const result = await assembly.tools.execute({ name, args })
-      await recordFixture(assembly.factOwner, { type: "tool/result", callId, name, output: result.output })
-      return result.output as Record<string, unknown>
-    }
-    const result = await assembly.tools.execute({ name: "code_exec", args: { code: `await tools.${name}(${JSON.stringify(args)})`, yield_time_ms: 0 } })
-    const initial = result.output as { cell_id: string; status: string }
-    const observation = initial.status === "running" ? (await assembly.tools.execute({ name: "code_wait", args: { cell_id: initial.cell_id, yield_time_ms: 10000 } })).output as { status: string } : initial
-    expect(observation.status).toBe("completed")
-    const saved = assembly.session.events.findLast(event => event.type === "code/result" && event.cellId === initial.cell_id && event.name === name)
-    if (!saved || saved.type !== "code/result") throw new Error("Missing actual registry result")
-    return saved.output as Record<string, unknown>
+  const envelopes = new Map<string, import('@i-harness/core-session').ResultEnvelope>()
+  const direct = async (name: string, args: Record<string, unknown>, target = assembly, sessionId = "s") => {
+    const callId = `actual-${++callNumber}`, action = target.factOwner.beginAction()
+    let complete = false
+    const source = action.registerSettlementSource(async () => { if (!complete) throw new Error('Fixture result requires recovery') })
+    try {
+      const seq = committedFactSeqs(await action.facts.tools.call({ type: 'tool/call', callId, name, args }))[0]
+      const prepared = await target.tools.prepare({ name, args }, undefined, { sessionId, session: target.session, callId, callEventSeq: seq, settlementSource: source })
+      const output = await target.tools.dispatch(prepared)
+      const result = await target.tools.finalize(prepared, output)
+      committedFactSeqs(await source.tools.captureResult({ type: 'tool/result', callId, name, ...(result.envelope ? { envelope: result.envelope } : { output: result.output }) }).admit())
+      complete = true
+      await source.close()
+      if (result.envelope) envelopes.set(name, result.envelope)
+      if (result.program?.kind !== 'value') throw new Error('Expected genuine program value')
+      return result.program.value as Record<string, any>
+    } finally { action.finish() }
+  }
+  const execute = async (name: string, args: Record<string, unknown>): Promise<Record<string, any>> => {
+    if (kind === 'tool') return direct(name, args)
+    const initial = await direct('code_exec', { code: `text(JSON.stringify(await tools.${name}(${JSON.stringify(args)})))`, yield_time_ms: 0 })
+    const observation = initial.status === 'running' ? await direct('code_wait', { cell_id: initial.cell_id, yield_time_ms: 10000 }) : initial
+    expect(observation.status).toBe('completed')
+    const saved = assembly.session.events.findLast(event => event.type === 'code/result' && event.cellId === initial.cell_id && event.name === name)
+    if (!saved || saved.type !== 'code/result' || saved.envelope?.retention.kind !== 'inline') throw new Error('Missing genuine inline Code Mode result envelope')
+    envelopes.set(name, saved.envelope)
+    expect(saved.output).toBeUndefined()
+    const emitted = String(initial.text ?? '') + String(initial === observation ? '' : observation.text ?? '')
+    expect(JSON.parse(emitted)).toEqual(saved.envelope.retention.value)
+    return saved.envelope.retention.value as Record<string, any>
   }
   const command = (mode: string) => process.platform === "win32" ? `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' '${mode}'` : `'${process.execPath.replaceAll("'", "'\\''")}' '${script.replaceAll("'", "'\\''")}' '${mode}'`
   let cold: ReturnType<typeof createSessionService> | undefined
@@ -40,15 +59,76 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     const small = await execute(shell, { command: command("small"), background: true }), smallId = String(small.job_id)
     const snapshot = await execute("job_output", { job_id: smallId, wait: true, timeout_ms: 5000 })
     expect(snapshot).toMatchObject({ text: "QA_JOB_OUTPUT\n", status: "completed", truncated: false, offset_bytes: 0, next_offset_bytes: 14, total_bytes: 14,
-      digest: expect.stringMatching(/^[a-f0-9]{64}$/), full_result: { tool: "job_output", args: { job_id: smallId, offset_bytes: 0 } } })
+      digest: expect.stringMatching(/^[a-f0-9]{64}$/), full_result: { tool: "context_output_read", access: "catalog-required" }, text_result: { tool: "job_output", args: { job_id: smallId, job_instance_id: small.native_job.instanceId, offset_bytes: 14 } } })
     expect(await execute("job_output", { job_id: smallId })).toEqual(snapshot)
     const large = await execute(shell, { command: command("large"), background: true }), largeId = String(large.job_id)
     const largeSnapshot = await execute("job_output", { job_id: largeId, wait: true, timeout_ms: 5000 })
     expect(largeSnapshot.status).toBe("completed"); expect(largeSnapshot.truncated).toBe(true)
-    expect(Number(largeSnapshot.total_bytes)).toBeGreaterThan(131072)
+    expect(Number(largeSnapshot.total_bytes)).toBe(150009)
+    expect(largeSnapshot.digest).toBe(createHash("sha256").update("QA_LIMIT_" + "x".repeat(150000)).digest("hex"))
+    expect(snapshot.digest).toBe(createHash("sha256").update("QA_JOB_OUTPUT\n").digest("hex"))
     expect(String(largeSnapshot.text).length).toBeGreaterThan(0)
     expect(String(largeSnapshot.text).length).toBeLessThan(131072)
-    expect(largeSnapshot.full_result).toMatchObject({ tool: "job_output", args: { job_id: largeId, digest: largeSnapshot.digest } })
+    expect(largeSnapshot.full_result).toMatchObject({ tool: 'context_output_read', args: { ref: { codec: 'exec-frames-v1' } } })
+    expect(largeSnapshot.text_result).toMatchObject({ tool: 'job_output', args: { job_id: largeId, digest: largeSnapshot.digest, job_instance_id: large.native_job.instanceId } })
+    expect(largeSnapshot.full_result.args.viaCatalog).toBeUndefined()
+    expect(envelopes.get('job_output')?.dependencies?.kind).toBe('artifact-set')
+    const store = await acquireAssemblyResultStore({ workspace: root, coordinator, sessionId: 's' })
+    try {
+      if (!store.service) throw new Error('Expected original authenticated result store')
+      const native = assembly.ctx.services.get<NativeExecService>('exec/service')!
+      const original = native.getJobView(largeId).retained!
+      expect(original.retention).toEqual({ kind: 'artifact', ref: largeSnapshot.full_result.args.ref })
+      const recipient = await live.assemblyFor('other')
+      const originalTool = assembly.tools.get('job_output')!
+      recipient.tools.register({ name: 'j3_recipient', description: 'Trusted owner observation control', inputSchema: originalTool.inputSchema, isReadOnly: true,
+        execute: (args, exec) => withExecCallerScope({ sessionId: 's' }, () => originalTool.execute(args, exec)) })
+      const recipientValue = await direct('j3_recipient', { job_id: largeId }, recipient, 'other')
+      expect(recipientValue.full_result.args.viaCatalog).toBeUndefined()
+      const catalog = envelopes.get('j3_recipient')?.dependencies
+      if (catalog?.kind !== 'artifact-set') throw new Error('Expected finalized recipient membership catalog')
+      const catalogPage = await store.service.readResult({ sessionId: 'other' }, { ref: catalog.ref })
+      if (catalogPage.data.kind !== 'text' || !catalogPage.eof) throw new Error('Expected bounded actual catalog')
+      expect(JSON.parse(catalogPage.data.text).entries).toEqual([original])
+      const ref = largeSnapshot.full_result.args.ref
+      await expect(store.service.readExecResult({ sessionId: 'other' }, { ref })).rejects.toThrow()
+      await expect(store.service.readExecResult({ sessionId: 'foreign' }, { ref, viaCatalog: catalog.ref })).rejects.toThrow()
+      const decoded = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+      let cursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+      for (let pageNumber = 0; ; pageNumber++) {
+        if (pageNumber > 30) throw new Error('finite raw fixture ceiling')
+        const page = await store.service.readExecResult({ sessionId: 'other' }, { ref, viaCatalog: catalog.ref, cursor, maxBytes: 32768 })
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+        for (const part of page.frames) decoded[part.channel].push(Buffer.from(part.data, 'base64'))
+        if (page.eof) break
+        expect(page.nextCursor).not.toEqual(cursor); cursor = page.nextCursor!
+      }
+      const stdout = Buffer.concat(decoded.stdout), stderr = Buffer.concat(decoded.stderr)
+      expect(stdout).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+      expect(stderr).toEqual(Buffer.from('QA_ERR\n'))
+      expect(largeSnapshot.stderr_total_bytes).toBe(7)
+      expect(largeSnapshot.stderr_digest).toBe(createHash('sha256').update(stderr).digest('hex'))
+      expect(largeSnapshot.digest).toBe(createHash('sha256').update(stdout).digest('hex'))
+      expect(native.getJobView(largeId).retained).toEqual(original)
+      const archive: Buffer[] = []; let archiveOffset = 0
+      for (let n = 0; ; n++) {
+        if (n > 30) throw new Error('finite archive fixture ceiling')
+        const page = await store.service.readResult({ sessionId: 's' }, { ref, offset: archiveOffset })
+        archive.push(page.data.kind === 'text' ? Buffer.from(page.data.text) : Buffer.from(page.data.base64, 'base64'))
+        if (page.eof) break
+        expect(page.nextOffset).toBeGreaterThan(archiveOffset); archiveOffset = page.nextOffset!
+      }
+      expect(createHash('sha256').update(Buffer.concat(archive)).digest('hex')).toBe(ref.contentDigest)
+      let reconstructed = String(largeSnapshot.text), next = largeSnapshot.next_offset_bytes
+      for (let n = 0; next < 150009; n++) {
+        if (n > 30) throw new Error('finite text fixture ceiling')
+        const page = await execute('job_output', { ...largeSnapshot.text_result.args, offset_bytes: next })
+        expect(page.next_offset_bytes).toBeGreaterThan(next)
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(16384)
+        reconstructed += page.text; next = page.next_offset_bytes
+      }
+      expect(Buffer.from(reconstructed)).toEqual(stdout)
+    } finally { await store.release() }
     await recordFixture(assembly.factOwner, { type: "tool/call", callId: "wrong-launch", name: "list_dir", args: {} })
     await recordFixture(assembly.factOwner, { type: "tool/result", callId: "wrong-launch", name: shell, output: { ...small, job_id: "unmatched-job" } })
     await recordFixture(assembly.factOwner, { type: "tool/call", callId: "wrong-output", name: "list_dir", args: { job_id: smallId } })

@@ -10,6 +10,17 @@ import { createJobObservation } from "./observation.ts"
 import { view } from "./views.ts"
 import { createJobRetention } from './retention.ts'
 
+/** Detach one reader without canceling original settlement or another reader. */
+function joinReader<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
+    signal.addEventListener('abort', abort, { once: true })
+    void pending.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, cause => { signal.removeEventListener('abort', abort); reject(cause) })
+    if (signal.aborted) abort()
+  })
+}
+
 /** The sole job registry, ID allocator and service disposal owner. */
 export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): NativeExecService {
   const jobs = new Map<string, Job>()
@@ -150,15 +161,6 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       }
       current()
       const result = (source: import('../capture/frames.ts').ExecOutputSource) => { current(); return { view: view(job), nativeJob: job.nativeJob, source } }
-      const join = <T>(pending: Promise<T>): Promise<T> => {
-        if (!signal) return pending
-        return new Promise((resolve, reject) => {
-          const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason) }
-          signal.addEventListener('abort', abort, { once: true })
-          void pending.then(value => { signal.removeEventListener('abort', abort); resolve(value) }, cause => { signal.removeEventListener('abort', abort); reject(cause) })
-          if (signal.aborted) abort()
-        })
-      }
       const owner = options.resultRetention, frames = job.capture.frames
       if (!owner || !frames) return result({ kind: 'unavailable', reason: 'retention-unsupported' })
       // Pending is metadata only: registering the unfinished capture here
@@ -169,15 +171,15 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       let observing: Promise<import('../capture/frames.ts').ExecFrameObservation>
       try { observing = Promise.resolve(owner.observe(frames)).catch(() => ({ kind: 'recovery-required' as const })) }
       catch { observing = Promise.resolve({ kind: 'recovery-required' }) }
-      const observed = await join(observing)
+      const observed = await joinReader(observing, signal)
       current()
-      await join(record(job))
+      await joinReader(record(job), signal)
       current()
       if (observed.kind === 'recovery-required') return result(observed)
       if (observed.dependency.retention.kind === 'unavailable') return result({ kind: 'unavailable', reason: observed.dependency.retention.reason })
       if (!owner.summarize) return result({ kind: 'unavailable', reason: 'summary-unsupported' })
       try {
-        const source = await join(owner.summarize(frames, { signal }))
+        const source = await joinReader(owner.summarize(frames, { signal }), signal)
         return result(source)
       } catch {
         current()
@@ -199,13 +201,13 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       const owner = options.resultRetention, frames = job.capture.frames
       if (!owner?.readFrames || !frames) return { kind: 'unavailable', reason: 'frame-read-unsupported' }
       try {
-        const observed = await owner.observe(frames)
+        const observed = await joinReader(owner.observe(frames), signal)
         current()
-        await record(job)
+        await joinReader(record(job), signal)
         current()
         if (observed.kind !== 'ready') return observed
         if (observed.dependency.retention.kind === 'unavailable') return { kind: 'unavailable', reason: observed.dependency.retention.reason }
-        const result = await owner.readFrames(frames, { signal, cursor, maxBytes, textView })
+        const result = await joinReader(owner.readFrames(frames, { signal, cursor, maxBytes, textView }), signal)
         current()
         return result
       } catch (cause) { current(); throw cause }

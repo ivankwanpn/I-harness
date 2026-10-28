@@ -126,3 +126,56 @@ it('refuses stale native observation/frame selectors before original observer or
     expect(a.observers).toBe(0)
   } finally { f.release(); await f.exec.dispose() }
 })
+it('a frame reader abort detaches while another reader joins the same original settlement', async () => {
+  const a = adapter('summary-unsupported'), entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
+  const dependency = { kind: 'exec-frames' as const, sourceId: 'process:execution-1', retention: { kind: 'artifact' as const, ref: { version: 1 as const, id: 'ctxv1_' + 'a'.repeat(64), revision: 'b'.repeat(64), codec: 'exec-frames-v1' as const, encodedBytes: 9, contentDigest: 'c'.repeat(64), completeness: 'complete' as const } } }
+  const f = service({ ...a.owner, async readFrames() { entered.resolve(); await released.promise; return { kind: 'page', dependency, page: { ref: dependency.retention.ref, cursor: { recordOffset: 9, sliceOffset: 0 }, nextCursor: null, eof: true, frames: [] } } } })
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['controlled'] })
+    await completed(f, jobId)
+    const controller = new AbortController()
+    const canceled = f.exec.readJobOutputFrames(jobId, { jobInstanceId: nativeJob.instanceId, signal: controller.signal })
+    const surviving = f.exec.readJobOutputFrames(jobId, { jobInstanceId: nativeJob.instanceId })
+    await entered.promise
+    controller.abort(new Error('only this frame reader'))
+    await expect(canceled).rejects.toThrow('only this frame reader')
+    expect(f.exec.getJobView(jobId).status).toBe('completed')
+    released.resolve()
+    expect((await surviving).kind).toBe('page')
+  } finally { released.resolve(); f.release(); await f.exec.dispose() }
+})
+it.each(['access', 'dispose'] as const)('refuses a saved frame page on %s loss during a rejected await', async mode => {
+  const a = adapter('summary-unsupported'), entered = Promise.withResolvers<void>(), released = Promise.withResolvers<void>()
+  let authorized = true
+  const f = service({ ...a.owner, async readFrames() { entered.resolve(); await released.promise; throw new Error('ordinary read failure') } }, () => authorized)
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['controlled'] })
+    await completed(f, jobId)
+    const reading = withExecCallerScope({ sessionId: 'reader' }, () => f.exec.readJobOutputFrames(jobId, { jobInstanceId: nativeJob.instanceId }))
+    await entered.promise
+    if (mode === 'access') authorized = false
+    else await f.exec.dispose()
+    released.resolve()
+    await expect(reading).rejects.toThrow('no longer current or authorized')
+  } finally { authorized = true; released.resolve(); f.release(); await f.exec.dispose() }
+})
+it.each(['steer', 'abort'] as const)('genuine native job_output %s detaches its reader and leaves the selected original job running', async mode => {
+  const { createJobOutputTool } = await import('../../subagent/src/tools/status.ts')
+  const { createSession, Inbox } = await import('@i-harness/core-session')
+  const f = service(), session = createSession(), controller = new AbortController()
+  const tool = createJobOutputTool({ exec: f.exec, jobs: { read() { throw new Error('unknown job') } }, table: { entries: () => new Map() } } as any)
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['controlled'] })
+    const reading = tool.execute({ job_id: jobId, wait: true, timeout_ms: 1000 }, { session, abortSignal: controller.signal })
+    if (mode === 'steer') {
+      new Inbox(session).admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer' })
+      expect(await reading).toMatchObject({ native_job: nativeJob, status: 'running', yielded: true, yield_reason: 'user-steer', display_only: true })
+    } else {
+      controller.abort(new Error('only native observation'))
+      await expect(reading).rejects.toThrow('only native observation')
+    }
+    expect(f.exec.getJobView(jobId)).toMatchObject({ nativeJob, status: 'running' })
+    await completed(f, jobId)
+    expect(await tool.execute({ job_id: jobId }, { session })).toMatchObject({ native_job: nativeJob, status: 'completed', display_only: true })
+  } finally { f.release(); await f.exec.dispose() }
+})
