@@ -436,6 +436,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         view: state.view,
         async reconcile(key) {
+            const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
+            let outcome: 'settled' | 'unknown' | 'retained' = 'unknown';
+            try {
             let current: Pending | undefined, completed: ReturnType<typeof finish> | undefined;
             await ownership.withSessionOperation(id, async () => {
                 current = pending;
@@ -446,8 +449,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                     : await backend.reconcileOwnedBatch!(id, held, current.prefix, current.batch);
                 completed = finish(current, outcome);
             });
-            if (!current || !completed)
+            if (!current || !completed) {
+                outcome = 'settled';
                 return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+            }
             if (completed.observe)
                 state.observe(current.events, report);
             if (completed.cleanupDiagnostic) reportCleanup();
@@ -455,7 +460,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 quarantined = false;
                 capacity.resume();
             }
-            return completed.results[0]!;
+            const result = completed.results[0]!;
+            outcome = result.kind === 'unknown' || result.kind === 'conflict' || result.kind === 'recovery-required' ? 'retained' : 'settled';
+            return result;
+            } finally { if (outcome !== 'retained') token?.end(outcome); }
         },
         async drain() {
             await pump;
