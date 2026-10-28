@@ -29,7 +29,12 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const revoke=document.revokeNewWork
     document.revokeNewWork=()=>{markManagedEntryRevoked(entry);revoke()}
     const close=document.close
-    document.close=async()=>{await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)}}
+    document.close=async()=>{
+      const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+      let outcome:'settled'|'unknown'='unknown'
+      try {await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
+      finally {token?.end(outcome)}
+    }
     if(entry.revoked)document.revokeNewWork()
     if(!entry.bootstrap)resolved.set(id,document)
     return document
