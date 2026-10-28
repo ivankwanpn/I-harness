@@ -9,6 +9,7 @@ import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { registerJsonlProcessRead } from './backend/process-read.ts'
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
@@ -102,7 +103,7 @@ export function createJsonlBackend(root: string): PersistenceBackend {
     return { visibility: value.visibility, manifest: { documents: value.documents, files: value.files } }
   }
 
-  return {
+  const backend: PersistenceBackend = {
     ...createFactJournalBackend(filePath, assertNotDeleted),
     ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath),
     id: "jsonl",
@@ -384,6 +385,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
       for (const path of paths) await unlink(path).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error })
     },
   }
+  registerJsonlProcessRead(backend, { root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
+    async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } })
+  return backend
 }
 
 // C5 header-only read (profile on a large artifact): the header is always
