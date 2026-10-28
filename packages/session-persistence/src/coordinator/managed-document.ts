@@ -109,6 +109,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     const selectedListeners=new Set<()=>void>();
+    let selectedAdmissions=0;
     const invalidateSelected=()=>{for(const listener of [...selectedListeners]){selectedListeners.delete(listener);try{listener()}catch{}}};
     let pump: Promise<void> = Promise.resolve();
     let settlingFinished: Promise<void> | undefined;
@@ -134,8 +135,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     };
     const failQueued = () => {
         fenceFault();
-        invalidateSelected();
         quarantined = true;
+        invalidateSelected();
         capacity.stop('FACT_RECOVERY_REQUIRED');
         for (const entry of queue.splice(0)) {
             entry.ticket.release();
@@ -144,8 +145,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     };
     const failSource = () => {
         fenceFault();
-        invalidateSelected();
         sourceFault = true;
+        invalidateSelected();
         capacity.blockOptional('FACT_RECOVERY_REQUIRED');
         for (let index = queue.length - 1; index >= 0; index--) {
             const entry = queue[index]!;
@@ -295,6 +296,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             return { kind: 'not-issued', code: 'FACT_CANCELLED' };
         if (quarantined || (sourceFault || recoveryHolds.size > 0) && !authorization.required)
             return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+        selectedAdmissions++;
+        try {
         invalidateSelected();
         const ticket = await capacity.acquire(authorization.required ? undefined : authorization.action.signal, authorization.required);
         if (typeof ticket === 'string')
@@ -315,6 +318,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             queue.push({ group: capture.group, bytes, ticket, settleProcess: settle, resolve(outcome) { settle?.(outcome); resolve(outcome); }, authorization });
             schedule();
         });
+        } finally { selectedAdmissions--; }
     }
     async function admit(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false): Promise<FactOutcome> {
         const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'managed-append', managedOwner: owner });
@@ -345,8 +349,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
             let outcome: 'settled' | 'unknown' = 'unknown';
             try {
-                deliveryControl.retire();
                 closing = true;
+                invalidateSelected();
+                deliveryControl.retire();
                 capacity.revokeNewWork();
                 for (const source of inputSources) source.revoke();
                 for (const controller of actionControllers) controller.abort();
@@ -430,7 +435,6 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             if (entry) entry.closeRequested = true;
                         },
                         holdRecovery() {
-                            invalidateSelected();
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
                             recoveryHolds.add(source); capacity.holdOptional(source);
@@ -553,11 +557,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
             const authorization: Authorization = { action: { stopped: false, signal: guards.signal }, required: false, source: bootstrap, assertSource };
             if (pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+            selectedAdmissions++;
+            try {
             invalidateSelected();
             const ticket = await capacity.acquire(guards.signal);
             if (typeof ticket === 'string') return { kind: 'not-issued', code: ticket };
             try { assertAuthorized(authorization); } catch (error) { ticket.release(); return {kind:'not-issued',code:(error as {code?: 'FACT_CANCELLED'}).code ?? 'FACT_PRECONDITION_STALE'}; }
             return new Promise(resolve => { queue.push({ bootstrap: {phase, events, batchId: 'bootstrap:' + bootstrap.operationId + ':' + (phase === 'seed' ? 'seed' : 'complete')}, ticket, resolve, bytes: Buffer.byteLength(stringifyJsonData(events)!), authorization }); schedule(); });
+            } finally { selectedAdmissions--; }
         }
     });
     state.bindOwner(document);
@@ -618,7 +625,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         } });
         return result;
     }, retainSelected(onRevoke) {
-        if(queue.length||scheduled)throw new FactRecoveryRequiredError();
+        if(selectedAdmissions||queue.length||scheduled)throw new FactRecoveryRequiredError();
         const original=captureManagedReadyObservation(document,ownership),header=original.view.header;
         let revoked=false;
         const listener=()=>{if(revoked)return;revoked=true;onRevoke()};selectedListeners.add(listener);
