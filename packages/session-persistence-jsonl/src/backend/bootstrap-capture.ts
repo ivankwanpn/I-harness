@@ -1,8 +1,8 @@
-import { open, readdir, rename, stat, type FileHandle } from 'node:fs/promises'
+import { readdir, rename, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { types } from 'node:util'
 import { canonicalJsonData } from '@i-harness/core-session'
-import { isHeldFactOwner, parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
+import { parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
 import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
 export { bootstrapNamespace } from './bootstrap-stage.ts'
 import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
@@ -12,8 +12,7 @@ import { selectedBootstrapPaths } from './selected-results-route-path.ts'
 
 type SelectedCaptureInspection = {kind:'absent'} | {kind:'reserved';reservation:SelectedResultsReservationV1} | {kind:'materialized';route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2} | {kind:'conflict'|'unavailable'}
 
-type Resource = { handle: FileHandle; error?: unknown; consumed?: boolean }
-type Ledger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<Resource>; settled: boolean; diagnostics: unknown[] }
+import { createBootstrapCaptureIO, type BootstrapCaptureIO, type CaptureLedger as Ledger, type CaptureResource as Resource } from './bootstrap-capture-io.ts'
 // Capture caller containers without evaluating properties or proxy traps.
 function selectedFields<K extends string>(input:unknown,keys:readonly K[]):Record<K,unknown> {
   if(!input||typeof input!=='object'||types.isProxy(input))throw new TypeError('Invalid selected header operation')
@@ -40,38 +39,8 @@ function selectedByteSnapshot(input:unknown,limit:number):Buffer {
   selectedByteSet.call(snapshot,input)
   return snapshot
 }
-export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string) {
-  const ledgers = new WeakMap<object, Ledger>()
-  function scope(id: string, owner: HeldFactOwner) {
-    if (!isHeldFactOwner(owner) || owner.owner.sessionId !== id) throw new TypeError('Invalid capture IO owner')
-    owner.assertHeld()
-  }
-  function tracked<T>(id: string, owner: HeldFactOwner, work: (ledger: Ledger) => Promise<T>): Promise<T> {
-    scope(id, owner)
-    let ledger = ledgers.get(owner.owner)
-    if (!ledger) { ledger = { id, owner: owner.owner, pending: new Set(), handles: new Set(), settled: false, diagnostics: [] }; ledgers.set(owner.owner, ledger) }
-    ledger.settled = false
-    const actual = ledger, flight = Promise.resolve().then(() => work(actual))
-    actual.pending.add(flight)
-    void flight.finally(() => actual.pending.delete(flight)).catch(() => {})
-    return flight
-  }
-  async function acquire(ledger: Ledger, path: string, flags: string): Promise<Resource> {
-    const handle = await open(path, flags)
-    const resource: Resource = { handle }; ledger.handles.add(resource)
-    return resource
-  }
-  async function close(ledger: Ledger, resource: Resource) {
-    if (resource.consumed) throw resource.error
-    try { await resource.handle.close(); ledger.handles.delete(resource); resource.error = undefined }
-    catch (error) { resource.error = error; resource.consumed = resource.handle.fd < 0; throw error }
-  }
-  async function bytes(ledger: Ledger, path: string, limit: number, guard: () => void): Promise<Buffer | undefined> {
-    let resource: Resource
-    try { resource = await acquire(ledger, path, 'r') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
-    try { guard(); if ((await resource.handle.stat()).size > limit) throw new Error('Capture stage exceeds limit'); guard(); const value = await resource.handle.readFile(); guard(); return value }
-    finally { await close(ledger, resource) }
-  }
+export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string, captureIO: BootstrapCaptureIO = createBootstrapCaptureIO()) {
+  const { scope, tracked, acquire, close, bytes, settleBootstrapCaptureIO } = captureIO
   async function checkBootstrapCaptureRoot() {
     const info = await stat(rootPath)
     if (!info.isDirectory()) throw new Error('Capture storage root unavailable')
@@ -305,17 +274,6 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
   }
   const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,true)
   const reconcileSelectedHeader=(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,false)
-  async function settleBootstrapCaptureIO(id: string, owner: HeldFactOwner) {
-    scope(id, owner)
-    const ledger = ledgers.get(owner.owner)
-    if (!ledger || ledger.id !== id) throw new TypeError('Original capture IO owner required')
-    await Promise.allSettled([...ledger.pending])
-    const results = await Promise.allSettled([...ledger.handles].map(resource => close(ledger, resource)))
-    scope(id, owner)
-    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
-    if (errors.length) throw new AggregateError(errors, 'Original capture IO cleanup unresolved')
-    ledger.settled = true
-  }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
   return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }

@@ -9,6 +9,8 @@ import { createFactJournalBackend, preserveBootstrapBirth } from './backend/fact
 import { upgradeFactJournal } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
+import { createBootstrapCaptureIO } from './backend/bootstrap-capture-io.ts'
+import { createSelectedFactJournalBackend } from './backend/selected-fact-journal.ts'
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
 // session artifact at or under this size is read in full for the EXACT blank
@@ -16,8 +18,9 @@ import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
 
-export function createJsonlBackend(root: string): PersistenceBackend {
+export function createJsonlBackend(root: string): PersistenceBackend & {selectedJournal:ReturnType<typeof createSelectedFactJournalBackend>} {
   const rootPath = resolve(root)
+  const captureIO = createBootstrapCaptureIO()
   const artifactPath = (id: string, suffix: string): string => {
     const portableId = id.replace(/\\/g, "/")
     const candidate = resolve(rootPath, `${portableId}${suffix}`)
@@ -104,7 +107,9 @@ export function createJsonlBackend(root: string): PersistenceBackend {
 
   return {
     ...createFactJournalBackend(filePath, assertNotDeleted),
-    ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath),
+    ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO),
+    // Private owned cold lane; this is not selectedResultsBootstrap support.
+    selectedJournal: createSelectedFactJournalBackend(filePath, assertNotDeleted, captureIO),
     id: "jsonl",
     capabilities: { seekableRead: false, rawArtifacts: true },
     // M23: the coordinator's ownership lease defaults to the store root.

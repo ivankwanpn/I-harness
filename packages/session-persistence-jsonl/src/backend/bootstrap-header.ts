@@ -5,6 +5,7 @@ import { readBootstrapFactJournal } from '@i-harness/core-session/internal/boots
 import { isHeldFactOwner, parseBootstrapHeaderStage, parseBootstrapCaptureReservation, rawHeaderDigest, type HeldFactOwner, type BootstrapBackend, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
 import { parseHeader } from '../format.ts'
 import { createBootstrapCaptureBackend } from './bootstrap-capture.ts'
+import { createBootstrapCaptureIO, type BootstrapCaptureIO } from './bootstrap-capture-io.ts'
 import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
 export { bootstrapPaths } from './bootstrap-stage.ts'
 import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
@@ -46,8 +47,8 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {bootstrapRoutes:BootstrapRouteBackend} {
-  const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath)
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {bootstrapRoutes:BootstrapRouteBackend} {
+  const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO)
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
     scope(id,owner)
     const stage=parseBootstrapHeaderStage(operation.stageBytes)
