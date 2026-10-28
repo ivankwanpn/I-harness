@@ -24,9 +24,10 @@ beforeAll(() => {
     const capture = original(options), write = capture.write.bind(capture), complete = capture.complete.bind(capture)
     const state = { sourceId: options.sourceId, attempted: 0, written: 0, failed: [] as string[], completeness: undefined as string | undefined, channels: {} as Record<string, number> }
     captures.push(state)
-    capture.write = async part => {
+    capture.write = async (...args) => {
+      const [part] = args
       state.attempted += part.bytes.length; state.channels[part.channel] = (state.channels[part.channel] ?? 0) + part.bytes.length
-      try { await write(part); state.written += part.bytes.length }
+      try { await write(...args); state.written += part.bytes.length }
       catch (cause) { state.failed.push(String(cause).slice(0, 240)); throw cause }
     }
     capture.complete = value => { state.completeness = value; complete(value) }
