@@ -26,3 +26,11 @@ it('connects the genuine document witness to the original retained binding acros
  }finally{await claim.release()}
 })
 
+it('rejects a forged document or other ownership and revokes on close admission',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'witness-owner-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),claim=await ownership.pinOwnership('source')
+ try{
+  const document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{}),other=createOwnership({lockRoot:root},{lock:{enabled:true}})
+  expect(()=>retainSelectedSourceRead({...document},ownership,()=>{})).toThrow();expect(()=>retainSelectedSourceRead(document,other,()=>{})).toThrow()
+  let calls=0;const witness=retainSelectedSourceRead(document,ownership,()=>calls++);document.revokeNewWork();expect(calls).toBe(1);expect(()=>witness.assertCurrent()).toThrow();witness.unsubscribe();await document.close()
+ }finally{await claim.release()}
+})
