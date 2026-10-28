@@ -34,3 +34,17 @@ it('actual registered job output/list/wait and kill tools keep observation/contr
     expect(f.counts()).toEqual({ launches: 1, terminations: 1, releases: 1 })
   } finally { f.finish(); await f.exec.dispose() }
 })
+
+it('routes an explicitly selected shell job to the genuine native service despite a child id collision', async () => {
+  const { registerExec } = await import('@i-harness/exec')
+  const { createJobKillTool } = await import('../src/tools/cancel.ts')
+  const exec = registerExec(createContext())
+  const submitted = await exec.runBackground({ argv: [process.execPath, '-e', 'setTimeout(()=>{}, 5000)'] })
+  let childCancelled = false
+  const tool = createJobKillTool({ exec, jobs: { kill: () => { childCancelled = true; return 'cancellation-requested' } } } as never)
+  try {
+    const result = await tool.execute({ job_id: submitted.jobId, backend: 'shell', instance_id: submitted.nativeJob.instanceId }, {} as never)
+    expect(result).toEqual({ outcome: 'cancellation-requested' })
+    expect(childCancelled).toBe(false)
+  } finally { await exec.dispose() }
+})
