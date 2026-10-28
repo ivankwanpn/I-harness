@@ -30,3 +30,12 @@ it.each(['throw','accessor'] as const)('spends the reservation on %s and never c
  }finally{await claim.release()}
 })
 
+it('retries a proved not-issued reservation with the same original closure',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'b2-retry-')),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),claim=await ownership.pinOwnership('target'),held=heldFactOwner({sessionId:'target',incarnation:'three'},ownership,()=>claim.assertHeld());let tries=0
+ const issuer=issuingFactOwner(held,()=>{if(++tries===1)throw Object.assign(Error('stale'),{code:'FACT_PRECONDITION_STALE'});held.assertHeld()}),backend=createBootstrapCaptureBackend(id=>join(root,id+'.jsonl'),async()=>{},root)
+ try{
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}),invocation={version:1 as const,operationId:'op',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest},route={protocol:'public-results-v1' as const,request:{invocation,core,requestIntent:intent}}
+  let calls=0;const attempt=createSelectedCaptureAttempt(backend,issuer,route,async()=>{calls++;return {invocation,target:{kind:'new'},metadata:{},lineage:{origin:'fork',parentSession:'source'},seed:compileSelectedResultsSemanticSeed(codecSeed('public-completed'))}})
+  expect((await attempt.capture()).kind).toBe('not-issued');expect(calls).toBe(0);expect((await attempt.capture()).kind).toBe('captured');expect(calls).toBe(1);await backend.settleBootstrapCaptureIO('target',held)
+ }finally{await claim.release()}
+})

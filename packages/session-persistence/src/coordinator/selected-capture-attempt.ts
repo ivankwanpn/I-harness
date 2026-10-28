@@ -7,7 +7,7 @@ import { canonicalJsonData, isStrictFactData } from '@i-harness/core-session'
 
 type ReserveBackend={reserveSelectedCapture(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,bytes:Uint8Array):Promise<{kind:string}>}
 type Captured={kind:'captured';stage:ReturnType<typeof buildSelectedResultsHeader>['stage'];seed:ReturnType<typeof reconstituteSelectedResultsStage>['seed'];stageBytes:string;headerBytes:string}
-type State={kind:'initial'|'spent'|'unavailable'}|Captured
+type State={kind:'initial'|'spent'|'unavailable'|'not-issued'}|Captured
 /** Private capture retention only: does not create a lane or assert source authority. */
 export function createSelectedCaptureAttempt(backend:ReserveBackend,issuer:IssuingFactOwner,input:SelectedResultsRoute,capture:()=>Promise<unknown>) {
  if(!isHeldFactOwner(issuer)||typeof issuer.beforeIssue!=='function'||typeof capture!=='function')throw TypeError('Original capture owner required')
@@ -24,6 +24,7 @@ export function createSelectedCaptureAttempt(backend:ReserveBackend,issuer:Issui
     try {
      issuer.assertHeld()
      const result=await Reflect.apply(reserve,backend,[id,issuer,route,Buffer.from(bytes)]);issuer.assertHeld()
+     if(result.kind==='not-issued'){state=Object.freeze({kind:'not-issued'});flight=undefined;return state}
      if(result.kind!=='committed-new'){originalCapture=undefined;state=Object.freeze({kind:'unavailable'});return state}
      entered=true;state=Object.freeze({kind:'spent'})
      const callback=originalCapture!;originalCapture=undefined
