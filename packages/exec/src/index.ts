@@ -122,7 +122,9 @@ export interface ExecTransportRequest {
   sandbox?: SandboxExecutionPolicy
   abortSignal?: AbortSignal
 }
+export type NativeJobKillSelector = Readonly<{ jobInstanceId: string; sourceId?: string }>
 export interface ExecService {
+  readonly supportsNativeJobKill?: true
   run(cmd: ExecCommand): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
@@ -135,7 +137,7 @@ export interface ExecService {
   /** Passive metadata only: no observer registration or storage settlement. */
   getJobView?(jobId: string): BackgroundJobView
   listJobViews?(): BackgroundJobView[]
-  killJob(jobId: string, expected?: { instanceId: string; sourceId?: string }): Promise<"cancellation-requested" | "already-finished">
+  killJob(jobId: string, expected?: NativeJobKillSelector): Promise<"cancellation-requested" | "already-finished">
   launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution>
   cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement>
   dispose(): Promise<void>
@@ -150,6 +152,8 @@ export interface JobOutputObservation {
   source: import('./capture/frames.ts').ExecOutputSource
 }
 export interface NativeExecService extends ExecService {
+  readonly supportsNativeJobKill: true
+  killJob(jobId: string, expected?: NativeJobKillSelector): Promise<"cancellation-requested" | "already-finished">
   readJobOutputFrames(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
   observeJobOutput(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
   run(cmd: ExecCommand): Promise<ExecResult>
@@ -167,5 +171,3 @@ export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): Nat
   ctx.services.register("exec/service", service)
   return service
 }
-
-export { isNativeExecService } from './service.ts'

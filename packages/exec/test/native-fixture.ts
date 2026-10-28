@@ -7,6 +7,7 @@ import { createExecService, type ExecServiceOptions } from '../src/index.ts'
 export function nativeFixture(options: {
   root?: RootExit; observation?: TerminationObservation | 'unsupported'; liveTree?: boolean; holdOutput?: boolean;
   text?: string; resultRetention?: ExecServiceOptions['resultRetention'];
+  supervisor?: import('../src/index.ts').ExecutionSupervisor; canAccessOwner?: () => boolean;
 } = {}) {
   let launches = 0, terminations = 0, releases = 0
   const launched = Promise.withResolvers<void>(), outputStarted = Promise.withResolvers<void>(), outputEnd = Promise.withResolvers<void>(), tree = Promise.withResolvers<void>()
@@ -30,7 +31,7 @@ export function nativeFixture(options: {
     } } },
   }
   const exec = createExecService({ resultRetention: options.resultRetention, execution: {
-    defaultOwner: { sessionId: 'native-outcomes' }, selectBackend: () => backend, validateAuthority() {},
+    defaultOwner: { sessionId: 'native-outcomes' }, supervisor: options.supervisor, canAccessOwner: options.canAccessOwner, selectBackend: () => backend, validateAuthority() {},
     resolvePolicy: owner => compileExecutionPolicy({ mode: 'danger-full-access', owner, authority: { kind: 'unbound', revision: 'native-fixture', workspaceRoot: resolve('.') } }),
   } })
   return { exec, launched: launched.promise, outputStarted: outputStarted.promise, finish: () => { tree.resolve(); outputEnd.resolve() }, counts: () => ({ launches, terminations, releases }) }

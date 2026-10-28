@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext } from "@i-harness/core-plugin"
-import { registerExec, isNativeExecService, withExecCallerScope, type ExecService } from "../src/index.ts"
+import { registerExec, withExecCallerScope, type ExecService } from "../src/index.ts"
 import { SandboxUnavailableError, type SandboxProvider } from "@i-harness/sandbox"
 
 // Poll-wait helper: avoids raw fixed sleeps (flake-prone under parallel load).
@@ -117,20 +117,13 @@ describe("exec background jobs", () => {
     expect(await exec.killJob(jobId)).toBe("already-finished")
   }, 10_000)
 
-  it("recognizes only original native services for checked cancellation", async () => {
-    const exec = registerExec(createContext())
-    try {
-      expect(isNativeExecService(exec)).toBe(true)
-      expect(isNativeExecService({ ...exec })).toBe(false)
-    } finally { await exec.dispose() }
-  })
   it("rejects a stale native selector before cancelling the live job", async () => {
     const exec = registerExec(createContext())
     const { jobId, nativeJob } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
     try {
-      await expect(exec.killJob(jobId, { instanceId: "stale", sourceId: nativeJob.sourceId })).rejects.toThrow(/stale-instance/)
+      await expect(exec.killJob(jobId, { jobInstanceId: "stale", sourceId: nativeJob.sourceId })).rejects.toThrow(/stale-instance/)
       expect(exec.getOutput(jobId).status).toBe("running")
-      await expect(exec.killJob(jobId, { instanceId: nativeJob.instanceId, sourceId: nativeJob.sourceId })).resolves.toBe("cancellation-requested")
+      await expect(exec.killJob(jobId, { jobInstanceId: nativeJob.instanceId, sourceId: nativeJob.sourceId })).resolves.toBe("cancellation-requested")
     } finally { await exec.dispose() }
   }, 10000)
   it("getOutput for unknown job throws", () => {
