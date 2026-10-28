@@ -1,6 +1,29 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 
+type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
+type ClaimRecord = { id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
+const ownerClaims = new WeakMap<object, WeakMap<object, ClaimRecord>>()
+
+/** Internal prerequisite for the future acquired Documents owner; does not acquire a claim. */
+export function captureHeldOwnershipClaim(owner: Ownership, id: string, claim: Claim): Readonly<{ assertHeld(): void }> {
+  const record = ownerClaims.get(owner)?.get(claim)
+  if (!record || record.id !== id) throw new TypeError('Invalid ownership claim')
+  const check = () => {
+    for (const name of ['assertHeld', 'retainLive', 'release'] as const) {
+      const descriptor = Object.getOwnPropertyDescriptor(record.claim, name)
+      if (!descriptor || !('value' in descriptor) || descriptor.value !== record[name]) throw new TypeError('Changed ownership claim')
+    }
+    Reflect.apply(record.assertHeld, record.claim, [])
+  }
+  check()
+  const captured = Object.freeze({ assertHeld() {
+    if (this !== captured) throw new TypeError('Invalid ownership assertion receiver')
+    check()
+  } })
+  return captured
+}
+
 /** Claims belong to one slot incarnation; temporary cleanup cannot retire a live adopter. */
 export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, opts?: CoordinatorOptions) {
   const lockEnabled = opts?.lock?.enabled ?? false
@@ -8,6 +31,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   type Slot = { lock?: SessionLock; live: boolean; claims: Set<object>; acquiring?: Promise<void>; releasing?: Promise<void>; debt?: unknown }
   const slots = new Map<string, Slot>()
   const sessionOperations = new Map<string, Promise<void>>()
+  const claims = new WeakMap<object, ClaimRecord>()
 
   async function acquireLease(leaseId: string): Promise<SessionLock> {
     const raw = await acquireSessionLock({ lockPath: lockPathFor(resolvedLockRoot, leaseId), retryMs: opts?.acquireRetryMs, deadlineMs: opts?.acquireDeadlineMs })
@@ -60,7 +84,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     try { if (original.acquiring) await original.acquiring }
     catch (error) { original.claims.delete(claim); if (!original.claims.size && !original.live && slots.get(id) === original) slots.delete(id); throw error }
     let retired = false
-    return {
+    const result = {
       assertHeld() { if (retired || slots.get(id) !== original || !original.lock?.held || original.debt) throw new Error('Exclusive ownership claim is unavailable') },
       retainLive() { if (retired || !original.lock?.held || original.debt) throw new Error('Cannot retain a retired ownership claim'); original.live = true },
       async release() {
@@ -68,6 +92,8 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
         await dispose(id, original)
       },
     }
+    claims.set(result, { id, claim: result, assertHeld: result.assertHeld, retainLive: result.retainLive, release: result.release })
+    return result
   }
   async function ensureOwnership(id: string) {
     const claim = await borrowOwnership(id)
@@ -79,7 +105,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     slot.live = false
     await dispose(id, slot)
   }
-  return {
+  const owner = {
     assertHeld(id: string) { if (!lockEnabled || !slots.get(id)?.lock?.held || slots.get(id)?.debt) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership,
     pinOwnership: borrowOwnership, releaseOwnershipUnlocked,
@@ -87,5 +113,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     pendingOperations: () => [...sessionOperations.values()],
     releaseHeldLocks: () => [...slots.keys()].map(id => Promise.resolve().then(() => releaseOwnershipUnlocked(id))),
   }
+  ownerClaims.set(owner, claims)
+  return owner
 }
 export type Ownership = ReturnType<typeof createOwnership>
