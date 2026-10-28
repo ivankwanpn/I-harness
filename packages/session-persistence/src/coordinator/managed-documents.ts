@@ -8,11 +8,12 @@ import type { ManagedDocument } from './fact-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -22,7 +23,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined)
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined, processLatches)
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork

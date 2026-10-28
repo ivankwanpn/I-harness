@@ -9,6 +9,7 @@ import { createMutations } from '../src/coordinator/mutations.ts';
 import { createLoads } from '../src/coordinator/load.ts';
 import { createManagedDocuments } from '../src/coordinator/managed-documents.ts';
 import { createProcessReadLatches } from '../src/coordinator/process-read-latches.ts';
+import { subscribe } from '@i-harness/core-session';
 
 it('captures a genuine ready owner and delivers its immutable committed suffix once', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-process-')), backend = createJsonlBackend(root), options = { lock: { enabled: true } };
@@ -45,5 +46,23 @@ it('captures a genuine ready owner and delivers its immutable committed suffix o
         const foreign = createManagedDocuments(backend, foreignOwnership, loads.loadOwned, options, () => {}, mutations);
         expect(() => foreign.captureProcessRead(document, latch)).toThrow();
         registry.revoke('s'); expect(() => registry.captureProcessRead(document, latch)).toThrow();
+    } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
+});
+
+it('invalidates a cold reader before genuine managed admission reaches its queue', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-managed-latch-')), backend = createJsonlBackend(root), options = { lock: { enabled: true } };
+    const initial = createSessionCoordinator(backend, options); await initial.create({ sessionId: 's' }); await initial.close();
+    const ownership = createOwnership(backend, options), latches = createProcessReadLatches();
+    const mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations);
+    const registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches);
+    try {
+        const document = await registry.open('s');
+        const reader = latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' });
+        let observerCanCapture = false;
+        const unsubscribe = subscribe(document.view, () => { try { latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' }); observerCanCapture = true } catch {} });
+        const operation = document.metadata.admit({ type: 'plan/mode', mode: 'on' });
+        const denied = (() => { try { reader.assertCurrent(); return false } catch { return true } })();
+        expect((await operation).kind).toBe('committed'); expect(denied).toBe(true); expect(observerCanCapture).toBe(true); unsubscribe();
+        expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow();
     } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
 });

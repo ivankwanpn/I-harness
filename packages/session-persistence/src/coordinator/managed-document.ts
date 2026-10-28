@@ -15,6 +15,7 @@ import { createReceivedInputSource } from './received-input-source.ts';
 import { cancellationRetirementFor } from './received-input-cancellation.ts';
 import { ownBackendOutcome, sameBatchKey } from './fact-outcome.ts';
 import { createActionCaptures } from './action-captures.ts';
+import type { createProcessReadLatches } from './process-read-latches.ts';
 type Ticket = {
     release(): void;
 };
@@ -77,7 +78,7 @@ export function captureManagedReadyObservation(document: ManagedDocument, owners
 }
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>): ManagedDocument & {
     assertObservable(): void;
 } {
     const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
@@ -267,7 +268,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 schedule();
         });
     };
-    async function admit(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false): Promise<FactOutcome> {
+    async function admitCore(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false, settle?: (outcome: FactOutcome) => void): Promise<FactOutcome> {
         if (!bootstrapReady) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
         if (closed || closing && !authorization.required)
             return { kind: 'not-issued', code: 'FACT_CLOSED' };
@@ -291,9 +292,25 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
         const bytes = Buffer.byteLength(stringifyJsonData(capture.group)!);
         return new Promise(resolve => {
-            queue.push({ group: capture.group, bytes, ticket, resolve, authorization });
+            queue.push({ group: capture.group, bytes, ticket, resolve(outcome) { settle?.(outcome); resolve(outcome); }, authorization });
             schedule();
         });
+    }
+    async function admit(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false): Promise<FactOutcome> {
+        const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'managed-append', managedOwner: owner });
+        let settled = false;
+        const settle = (outcome: FactOutcome) => {
+            if (settled) return;
+            settled = true;
+            // Unknown/recovery-required remains owned by the original pending
+            // frame. No unrelated retry may retire its witness.
+            if (outcome.kind === 'committed' || outcome.kind === 'absent' || outcome.kind === 'not-issued') token?.end('settled');
+        };
+        try {
+            const outcome = await admitCore(draft, authorization, captured, settle);
+            settle(outcome);
+            return outcome;
+        } catch (error) { if (!settled) token?.end('unknown'); throw error; }
     }
     const rootAuthorization: Authorization = { action: { stopped: false }, required: false };
     const ports = createFactPorts(draft => admit(draft, rootAuthorization));
