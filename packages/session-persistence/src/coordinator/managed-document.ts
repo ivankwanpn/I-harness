@@ -322,13 +322,16 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
-            deliveryControl.retire();
-            closing = true;
-            capacity.revokeNewWork();
-            for (const source of inputSources)
-                source.revoke();
-            for (const controller of actionControllers)
-                controller.abort();
+            const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
+            let outcome: 'settled' | 'unknown' = 'unknown';
+            try {
+                deliveryControl.retire();
+                closing = true;
+                capacity.revokeNewWork();
+                for (const source of inputSources) source.revoke();
+                for (const controller of actionControllers) controller.abort();
+                outcome = 'settled';
+            } finally { token?.end(outcome); }
         },
         ...ports,
         registerReceivedInputSource(drain) {

@@ -66,6 +66,7 @@ it('invalidates a cold reader before genuine managed admission reaches its queue
         const operation = document.metadata.admit({ type: 'plan/mode', mode: 'on' });
         const denied = (() => { try { reader.assertCurrent(); return false } catch { return true } })();
         expect((await operation).kind).toBe('committed'); expect(denied).toBe(true); expect(observerCanCapture).toBe(true); unsubscribe();
-        expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow();
+        const beforeRevoke = latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' });
+        document.revokeNewWork(); expect(() => beforeRevoke.assertCurrent()).toThrow();
     } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
 });
