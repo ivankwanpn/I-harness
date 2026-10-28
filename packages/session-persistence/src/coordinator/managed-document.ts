@@ -97,6 +97,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const ownedActions = new WeakSet<object>();
     const sourceDispositions = new WeakMap<CapturedFactGroup, FactOutcome>();
     const recoveryHolds = new Set<object>();
+    const recoveryWitnesses = new Map<object, ReturnType<NonNullable<typeof processLatches>['beginMutation']>>();
+    let faultWitness: ReturnType<NonNullable<typeof processLatches>['beginMutation']> | undefined;
+    const fenceFault = () => { faultWitness ??= processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); };
+    const releaseRecoveryWitness = (source: object) => { const token = recoveryWitnesses.get(source); if (token) { recoveryWitnesses.delete(source); token.end('settled'); } };
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
     let pump: Promise<void> = Promise.resolve();
     let settlingFinished: Promise<void> | undefined;
@@ -121,6 +125,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     };
     const failQueued = () => {
+        fenceFault();
         quarantined = true;
         capacity.stop('FACT_RECOVERY_REQUIRED');
         for (const entry of queue.splice(0)) {
@@ -129,6 +134,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     };
     const failSource = () => {
+        fenceFault();
         sourceFault = true;
         capacity.blockOptional('FACT_RECOVERY_REQUIRED');
         for (let index = queue.length - 1; index >= 0; index--) {
@@ -414,14 +420,15 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         },
                         holdRecovery() {
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
+                            if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
                             recoveryHolds.add(source); capacity.holdOptional(source);
                             for (let index = queue.length - 1; index >= 0; index--) {
                                 const entry = queue[index]!; if (entry.authorization.required) continue;
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
                             }
                         },
-                        releaseRecovery() { recoveryHolds.delete(source); capacity.releaseOptional(source) },
-                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source) }, reconcilePending, checkpointOwner);
+                        releaseRecovery() { recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) },
+                    }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) }, reconcilePending, checkpointOwner);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
                     sourceDrains.set(source, { action, finished: () => finished, closeRequested: false });
