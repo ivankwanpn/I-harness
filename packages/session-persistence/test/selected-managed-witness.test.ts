@@ -9,8 +9,8 @@ it('notifies the real selected source witness when managed admission begins',asy
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-witness-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),claim=await ownership.pinOwnership('source')
  try{
   const session=createSession(),prefix={eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},document=createManagedDocument('source',session,prefix,backend,ownership,undefined,()=>{})
-  let revoked=0;const witness=retainSelectedSourceRead(document,ownership,()=>revoked++);expect(witness.view).toBe(document.view);witness.assertCurrent()
-  const write=document.metadata.enterPlan('proposal');await Promise.resolve();await Promise.resolve();expect(revoked).toBe(1);expect(()=>witness.assertCurrent()).toThrow();await write;witness.unsubscribe();await document.close().catch(()=>{})
+  let revoked=0,reentered=false;const witness=retainSelectedSourceRead(document,ownership,()=>{revoked++;try{retainSelectedSourceRead(document,ownership,()=>{});reentered=true}catch{}});expect(witness.view).toBe(document.view);witness.assertCurrent()
+  const write=document.metadata.enterPlan('proposal');await Promise.resolve();await Promise.resolve();expect(revoked).toBe(1);expect(reentered).toBe(false);expect(()=>witness.assertCurrent()).toThrow();await write;witness.unsubscribe();await document.close().catch(()=>{})
  }finally{await claim.release()}
 })
 it('connects the genuine document witness to the original retained binding across two uses',async()=>{
@@ -34,3 +34,4 @@ it('rejects a forged document or other ownership and revokes on close admission'
   let calls=0;const witness=retainSelectedSourceRead(document,ownership,()=>calls++);document.revokeNewWork();expect(calls).toBe(1);expect(()=>witness.assertCurrent()).toThrow();witness.unsubscribe();await document.close()
  }finally{await claim.release()}
 })
+
