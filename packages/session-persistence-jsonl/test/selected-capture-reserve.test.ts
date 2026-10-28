@@ -81,3 +81,24 @@ it('rejects mismatched reservation, target and copied issuer before mutation',as
  const x=await setup(),f=fixture(),other=structuredClone(f.route);other.request.invocation.operationId='other'
  try{await expect(x.backend.reserveSelectedCapture('target',x.issuer,other,f.bytes)).rejects.toThrow();await expect(x.backend.reserveSelectedCapture('other',x.issuer,f.route,f.bytes)).rejects.toThrow();await expect(x.backend.reserveSelectedCapture('target',{...x.issuer},f.route,f.bytes)).rejects.toThrow();expect((await x.backend.readSelectedCapture('target',x.held,f.route)).kind).toBe('absent');await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
 })
+
+it('prepares and reconciles selected header from original captured bytes',async()=>{
+ const x=await setup(),f=fixture(),path=join(x.root,'target.jsonl'),paths=selectedBootstrapPaths(path,f.route),stage=Buffer.from(f.built.stageBytes),header=Buffer.from(f.built.headerBytes),expectedStage=Buffer.from(stage),expectedHeader=Buffer.from(header)
+ try{
+  await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes)
+  const pending=x.backend.prepareSelectedHeader('target',x.issuer,f.route,{invocation:f.route.request.invocation,target:{kind:'new'},stageBytes:stage,headerBytes:header});stage.fill(0);header.fill(0)
+  expect((await pending).kind).toBe('committed');expect(await readFile(paths.stage)).toEqual(expectedStage);expect(await readFile(path)).toEqual(expectedHeader)
+  expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,{invocation:f.route.request.invocation,target:{kind:'new'},stageBytes:expectedStage,headerBytes:expectedHeader})).kind).toBe('committed')
+  await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})
+it('does not repair partial promotion or header during reconciliation',async()=>{
+ const x=await setup(),f=fixture(),path=join(x.root,'target.jsonl'),paths=selectedBootstrapPaths(path,f.route),op={invocation:f.route.request.invocation,target:{kind:'new' as const},stageBytes:Buffer.from(f.built.stageBytes),headerBytes:Buffer.from(f.built.headerBytes)}
+ try{
+  await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);const prefix=op.stageBytes.subarray(0,10);await writeFile(paths.promote,prefix)
+  expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('unknown');expect(await readFile(paths.promote)).toEqual(prefix)
+  expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('committed')
+  await writeFile(path,op.headerBytes.subarray(0,10));expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('unknown');expect(await readFile(path)).toEqual(op.headerBytes.subarray(0,10))
+  await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})

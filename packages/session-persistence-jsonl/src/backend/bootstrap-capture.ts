@@ -6,7 +6,7 @@ import { isHeldFactOwner, parseBootstrapCaptureReservation, parseBootstrapHeader
 import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
 export { bootstrapNamespace } from './bootstrap-stage.ts'
 import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
-import { captureSelectedResultsRoute, parseSelectedResultsReservation, type SelectedResultsRoute, type SelectedResultsReservationV1, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
+import { captureSelectedResultsRoute, parseSelectedResultsReservation, parseSelectedResultsHeaderStage, type SelectedResultsRoute, type SelectedResultsReservationV1, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
 import { selectedBootstrapPaths } from './selected-results-route-path.ts'
 
@@ -229,6 +229,52 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
       }catch(error){ledger.diagnostics.push(error);return {kind:'unknown'}}
     })
   }
+  function selectedOperation(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation) {
+    const route=captureSelectedResultsRoute(input)
+    if(types.isProxy(operation.stageBytes)||!(operation.stageBytes instanceof Uint8Array)||operation.stageBytes.length>262144||types.isProxy(operation.headerBytes)||!(operation.headerBytes instanceof Uint8Array)||operation.headerBytes.length>65536)throw new TypeError('Invalid selected header bytes')
+    const stageBytes=Buffer.from(operation.stageBytes),headerBytes=Buffer.from(operation.headerBytes),stage=parseSelectedResultsHeaderStage(stageBytes)
+    if(operation.target.kind!=='new'||canonicalJsonData(operation.invocation)!==canonicalJsonData(route.request.invocation)||id!==route.request.invocation.targetSessionId||canonicalJsonData(route.request)!==canonicalJsonData(stage.captureReservation.request)||!headerBytes.equals(Buffer.from(stage.headerBytes)))throw new TypeError('Selected header mismatch')
+    scope(id,owner)
+    return {route,stageBytes,headerBytes,reservationBytes:Buffer.from(canonicalJsonData(stage.captureReservation)+'\n')}
+  }
+  async function selectedHeader(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation,issue:boolean):Promise<HeaderOutcome> {
+    const captured=selectedOperation(id,owner,input,operation)
+    if(issue&&typeof (owner as IssuingFactOwner).beforeIssue!=='function')throw new TypeError('Invalid capture issuer')
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id),paths=selectedBootstrapPaths(path,captured.route),issuer=owner as IssuingFactOwner
+      try {
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const selected=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        assertLookupCleanup(ledger);guard()
+        if(selected.kind==='conflict')return {kind:'conflict'}
+        if(selected.kind!=='reserved'&&selected.kind!=='full')return {kind:'unknown'}
+        if(selected.kind==='reserved') {
+          if(!Buffer.from(selected.exactBytes).equals(captured.reservationBytes))return {kind:'conflict'}
+          const pending=selected.promotionBytes&&Buffer.from(selected.promotionBytes)
+          if(pending&&!captured.stageBytes.subarray(0,pending.length).equals(pending))return {kind:'conflict'}
+          if(!issue)return {kind:'unknown'}
+          const target=await bytes(ledger,path,65536,guard);if(target!==undefined)return {kind:'unknown'}
+          await writeExact(ledger,paths.promote,captured.stageBytes,issuer,pending)
+          const original=await bytes(ledger,paths.stage,262144,guard)
+          if(!original?.equals(captured.reservationBytes))return {kind:'conflict'}
+          guard();issuer.beforeIssue();await rename(paths.promote,paths.stage);guard()
+          if(!(await bytes(ledger,paths.stage,262144,guard))?.equals(captured.stageBytes))return {kind:'unknown'}
+        } else if(!Buffer.from(selected.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
+        const target=await bytes(ledger,path,65536,guard)
+        if(target&&!captured.headerBytes.subarray(0,target.length).equals(target))return {kind:'conflict'}
+        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target)
+        else {
+          if(!target||!target.equals(captured.headerBytes))return {kind:'unknown'}
+          const resource=await acquire(ledger,path,'r+')
+          try {guard();const actual=await resource.handle.readFile();guard();if(!actual.equals(captured.headerBytes))return {kind:'conflict'};await resource.handle.sync();guard()}finally{await close(ledger,resource)}
+        }
+        await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
+        return {kind:'committed',headerDigest:rawHeaderDigest(captured.headerBytes)}
+      }catch(error){ledger.diagnostics.push(error);return {kind:'unknown'}}
+    })
+  }
+  const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,true)
+  const reconcileSelectedHeader=(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,false)
   async function settleBootstrapCaptureIO(id: string, owner: HeldFactOwner) {
     scope(id, owner)
     const ledger = ledgers.get(owner.owner)
@@ -241,5 +287,5 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     ledger.settled = true
   }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
-  return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
+  return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }
