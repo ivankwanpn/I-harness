@@ -242,6 +242,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     if(issue&&typeof (owner as IssuingFactOwner).beforeIssue!=='function')throw new TypeError('Invalid capture issuer')
     return tracked(id,owner,async ledger=>{
       const guard=()=>scope(id,owner),path=filePath(id),paths=selectedBootstrapPaths(path,captured.route),issuer=owner as IssuingFactOwner
+      let issued=false
       try {
         guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
         const selected=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
@@ -254,15 +255,15 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
           if(pending&&!captured.stageBytes.subarray(0,pending.length).equals(pending))return {kind:'conflict'}
           if(!issue)return {kind:'unknown'}
           const target=await bytes(ledger,path,65536,guard);if(target!==undefined)return {kind:'unknown'}
-          await writeExact(ledger,paths.promote,captured.stageBytes,issuer,pending)
+          await writeExact(ledger,paths.promote,captured.stageBytes,issuer,pending,()=>{issued=true})
           const original=await bytes(ledger,paths.stage,262144,guard)
           if(!original?.equals(captured.reservationBytes))return {kind:'conflict'}
-          guard();issuer.beforeIssue();await rename(paths.promote,paths.stage);guard()
+          guard();issuer.beforeIssue();issued=true;await rename(paths.promote,paths.stage);guard()
           if(!(await bytes(ledger,paths.stage,262144,guard))?.equals(captured.stageBytes))return {kind:'unknown'}
         } else if(!Buffer.from(selected.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
         const target=await bytes(ledger,path,65536,guard)
         if(target&&!captured.headerBytes.subarray(0,target.length).equals(target))return {kind:'conflict'}
-        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target)
+        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target,()=>{issued=true})
         else {
           if(!target||!target.equals(captured.headerBytes))return {kind:'unknown'}
           const resource=await acquire(ledger,path,'r+')
@@ -270,7 +271,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         }
         await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
         return {kind:'committed',headerDigest:rawHeaderDigest(captured.headerBytes)}
-      }catch(error){ledger.diagnostics.push(error);return {kind:'unknown'}}
+      }catch(error){ledger.diagnostics.push(error);let code:unknown;try{code=error!==null&&(typeof error==='object'||typeof error==='function')?(error as NodeJS.ErrnoException).code:undefined}catch{};if(issue&&!issued&&(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE'))return {kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'};return {kind:'unknown'}}
     })
   }
   const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,true)

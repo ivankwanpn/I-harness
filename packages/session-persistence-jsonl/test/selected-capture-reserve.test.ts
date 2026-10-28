@@ -102,3 +102,13 @@ it('does not repair partial promotion or header during reconciliation',async()=>
   await x.backend.settleBootstrapCaptureIO('target',x.held)
  }finally{await x.close()}
 })
+
+it('preserves typed cancellation before selected promotion issue',async()=>{
+ const x=await setup(),f=fixture(),op={invocation:f.route.request.invocation,target:{kind:'new' as const},stageBytes:Buffer.from(f.built.stageBytes),headerBytes:Buffer.from(f.built.headerBytes)}
+ try{
+  await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes)
+  const cancelled=issuingFactOwner(x.held,()=>{throw Object.assign(new Error('cancelled'),{code:'FACT_CANCELLED'})})
+  expect(await x.backend.prepareSelectedHeader('target',cancelled,f.route,op)).toEqual({kind:'not-issued',reason:'cancelled'})
+  await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})
