@@ -50,6 +50,7 @@ import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/inter
 import { createRuntimeContext } from "@i-harness/runtime-context"
 import { createInstructionEnvironment, createProjectInstructionEnvironment, type InstructionEnvironment } from './context/instructions/index.ts'
 import { createMainInstructionManager } from './context/instructions/manager.ts'
+import { createChildInstructionHost } from './context/instructions/child-host.ts'
 import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mode"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
@@ -886,8 +887,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
             : { ok: false as const, denial: denialFor("fs", effective.mode, decision.reason, decision.sufficientMode) }
         }
   const fsToolsDeps = {
-    observeInstructionTarget: async (target: import('@i-harness/instructions').InstructionTarget, exec: import('@i-harness/core-tools').ToolExec) => exec.session === session
-      ? instructionManager!.observe(target) : { status: 'reference-only' as const, reason: 'outside-root' as const },
+    observeInstructionTarget: async (target: import('@i-harness/instructions').InstructionTarget, exec: import('@i-harness/core-tools').ToolExec) => childInstructionHost
+      ? childInstructionHost.observe(target, exec) : { status: 'unavailable' as const, reason: 'mapping-unavailable' as const },
     readPolicy: { maxOutputBytes: 64000 },
     workspace: opts.workspace,
     ...(rewindRecorder !== undefined
@@ -1064,6 +1065,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const runtimeContext = createRuntimeContext(session, createRuntimeContextSource(factOwner))
   let instructionEnvironment: InstructionEnvironment | undefined
   let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
+  let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined
+  let retireInstructionHost: (() => void) | undefined
+  let closeInstructionHost: (() => Promise<void>) | undefined
   runtimeContext.registerSection(
     "instructions",
     () => instructionManager?.text() ?? "",
@@ -1201,6 +1205,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   const retireExecutionSurface = () => {
     residentActivation.retire()
+    retireInstructionHost?.()
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
     offCodeModeSurface?.(); offCodeModeSurface = undefined
@@ -1230,6 +1235,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
     instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
+    childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+      available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
+      root: { session, factOwner, manager: instructionManager } })
+    retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
+    closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
       mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), opts.telemetry ? { onStatus: mcpStatusHook } : undefined))
     }
@@ -1286,6 +1296,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       createGenerationLifecycle(owner.view, sessionId, action, { enabled: opts.modelPolicy === 'test-mock', selectedClient }, dependencies)
     const subagent = registerSubagent(ctx, tools, {
       residentActivation: residentActivation.ticket,
+      createInstructionContext: childInstructionHost.create,
       results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
       generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
       factOwner,
@@ -1870,7 +1881,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Failed child/generation debt still borrows the original publication,
     // document, environment and result-store owners. Never release through it.
     if (!processCleanupFailures.length) {
-      await phase('runtime', () => runtimeContext.close())
+      await phase('instruction-host', () => closeInstructionHost?.())
+      if (cleanupDone.has('instruction-host')) await phase('runtime', () => runtimeContext.close())
       if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
       if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())
       if (cleanupDone.has('document')) await phase('environment', () => opts.instructionEnvironment ? undefined : instructionEnvironment?.close())

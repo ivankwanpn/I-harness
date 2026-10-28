@@ -42,6 +42,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   if (entry.dispose) return false // Never replace an original in-progress owner.
   executionController.signal.throwIfAborted()
   const record = new ResidentPreparation(deps, entry)
+  const createInstructionContext = deps.createInstructionContext
   const resolveModel = deps.resolveModel.bind(deps), mountCodeMode = deps.codeModeFactory?.bind(deps)
   entry.dispose = record.dispose
   let installed = false, codeModeMount: import('@i-harness/code-mode').CodeModeMount | undefined
@@ -52,6 +53,13 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   if (!executionCurrent() || !record.current()) return false
   executionController.signal.throwIfAborted()
   const childCtx = record.ctx = invokeOriginal(record, () => deps.parentCtx.scope.mount())
+  if (!executionCurrent() || !record.current()) return false
+  executionController.signal.throwIfAborted()
+  if (createInstructionContext) record.instruction = invokeOriginal(record, () => createInstructionContext({
+    session: record.view, factOwner, lifetime: { available: () => record.current() },
+  }))
+  if (!executionCurrent() || !record.current()) return false
+  executionController.signal.throwIfAborted()
   const childReg = createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry })
   record.registry = childReg
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
@@ -129,6 +137,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ...(childCoordinator && childSessionId ? { ensureWritableContext: ownedContextReadiness(childCoordinator, childSessionId, entry.session) } : {}),
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, factOwner, tools: childReg, model,
+    requestContext: record.instruction?.requestContext,
     budgetBinding,
     contextMetadata,
     modelToolSchemas,

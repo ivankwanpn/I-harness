@@ -211,6 +211,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
     residentActivation: opts.residentActivation,
+    createInstructionContext: opts.createInstructionContext,
     generationFactoryFor: opts.generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
     summaryFactory: opts.summaryFactory,
     results: opts.results,

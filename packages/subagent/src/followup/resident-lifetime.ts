@@ -116,6 +116,13 @@ export class ResidentPreparation implements RetainedResidentResource {
   phase: 'preparing' | 'installed' | 'retired' | 'closed' = 'preparing'
   private childContext?: import('@i-harness/core-plugin').PluginContext
   private codeMount?: import('@i-harness/code-mode').CodeModeMount
+  private instructionLease?: import('../child/instruction-context.ts').ChildInstructionContext
+  private retireInstruction?: () => void
+  private closeInstruction?: () => Promise<void>
+  private instructionRetired = false
+  private instructionClosed = false
+  private readonly path: string
+  private readonly offTable: () => void
   private unmountContext?: () => unknown
   private cancelMount?: (reason?: string) => Promise<void>
   private disposeMount?: () => Promise<void>
@@ -144,12 +151,17 @@ export class ResidentPreparation implements RetainedResidentResource {
   }
   readonly unmount = (): Promise<void> => this.dispose()
   constructor(readonly deps: SubagentToolDeps, readonly entry: ChildAgentEntry) {
+    this.path = entry.path
     this.view = entry.session; this.factOwner = entry.factOwner
     this.coordinator = deps.childSessions?.coordinator; this.sessionId = entry.sessionId
     this.closeDocument = this.coordinator?.closeManagedDocument.bind(this.coordinator)
     this.activationCurrent = deps.residentActivation?.current.bind(deps.residentActivation)
     this.bindFactOwner(this.factOwner)
     residentOwnerFor(deps).retain(this)
+    this.offTable = deps.table.subscribe(() => {
+      if (this.phase === 'closed' || this.permanent) return
+      if (deps.table.get(this.path) !== entry || entry.session !== this.view || entry.factOwner !== this.factOwner || entry.closing) this.retire()
+    })
   }
   bindFactOwner(owner: ChildAgentEntry['factOwner']): void {
     this.factOwner = owner
@@ -165,21 +177,37 @@ export class ResidentPreparation implements RetainedResidentResource {
     this.cancelMount = value?.cancel.bind(value)
     this.disposeMount = value?.dispose.bind(value)
   }
+  get instruction() { return this.instructionLease }
+  set instruction(value) {
+    this.instructionLease = value
+    this.retireInstruction = value?.retire.bind(value)
+    this.closeInstruction = value?.close.bind(value)
+    // An admitted factory may return after synchronous retirement callbacks.
+    // Retain that original before fencing and closing it.
+    if (this.phase === 'retired' || this.permanent) this.retireInstructions()
+  }
+  private retireInstructions(): void {
+    if (!this.retireInstruction || this.instructionRetired) return
+    this.instructionRetired = true
+    this.retireInstruction()
+  }
   current(): boolean {
     return !residentOwnerFor(this.deps).retired && (this.phase === 'preparing' || this.phase === 'installed')
-      && this.activationCurrent?.() !== false && this.deps.table.get(this.entry.path) === this.entry
-      && this.entry.session === this.view && this.entry.factOwner === this.factOwner && !this.entry.closing
-      && (this.phase !== 'installed' || !this.sessionId || this.deps.agents.get(this.sessionId) === this.agent)
+      && this.activationCurrent?.() !== false && this.deps.table.get(this.path) === this.entry
+      && this.entry.session === this.view && this.entry.factOwner === this.factOwner && this.factOwner?.view === this.view && !this.entry.closing
+      && this.entry.dispose === this.dispose
+      && (this.phase !== 'installed' || this.entry.toolRegistry === this.registry && (!this.sessionId || this.deps.agents.get(this.sessionId) === this.agent))
   }
   retire(): void {
     if (this.phase === 'closed' || this.permanent) return
     this.permanent = true; this.phase = 'retired'
-    if (this.deps.table.get(this.entry.path) === this.entry && this.entry.session === this.view && this.entry.factOwner === this.factOwner) {
-      this.deps.table.update(this.entry.path, this.entry, { closing: true }); this.entry.controller.abort()
+    this.retireInstructions()
+    if (this.deps.table.get(this.path) === this.entry && this.entry.session === this.view && this.entry.factOwner === this.factOwner) {
+      this.deps.table.update(this.path, this.entry, { closing: true }); this.entry.controller.abort()
     }
     this.revokeDocument?.()
   }
-  failed(): void { if (this.phase !== 'closed') this.phase = 'retired' }
+  failed(): void { if (this.phase !== 'closed') { this.phase = 'retired'; this.retireInstructions() } }
   close(): Promise<void> {
     if (inOriginalInvocation(this)) { this.retire(); return refusedReentry() }
     if (this.flight) return this.flight
@@ -198,12 +226,13 @@ export class ResidentPreparation implements RetainedResidentResource {
       try { await residentOwnerFor(this.deps).closeGenerations(this.entry) } catch (error) { failures.push(error) }
       if (failures.length) throw new AggregateError(failures, 'Original resident producer cleanup incomplete')
       await residentOwnerFor(this.deps).settleEntryResult(this.entry)
+      if (this.instruction && !this.instructionClosed) { await this.closeInstruction?.(); this.instructionClosed = true }
       this.resultLifetime = false
       if (this.permanent && this.sessionId && !this.documentClosed) { await this.closeDocument?.(this.sessionId); this.documentClosed = true }
       if (this.ctx && !this.contextClosed) { await this.unmountContext?.(); this.contextClosed = true }
       if (this.sessionId && this.deps.agents.get(this.sessionId) === this.agent) this.deps.agents.remove(this.sessionId)
       if (this.entry.dispose === this.dispose && !this.permanent) this.entry.dispose = undefined
-      this.phase = 'closed'; residentOwnerFor(this.deps).records.delete(this)
+      this.phase = 'closed'; this.offTable(); residentOwnerFor(this.deps).records.delete(this)
     }).then(attempt.resolve, attempt.reject)
     return attempt.promise
   }
