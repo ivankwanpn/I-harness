@@ -14,6 +14,11 @@ const scopes=new WeakMap<object,ScopeData>()
 const issuedBatches=new WeakMap<object,Map<string,{prefix:import('@i-harness/core-session').JournalPrefix;bytes:Buffer}>>()
 export type SelectedLaneScope=Readonly<{kind:'selected-lane'}>
 const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
+const byteLength=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'length')!.get!
+function snapshotBytes(input:unknown):Buffer {
+ if(types.isProxy(input)||!types.isUint8Array(input))throw TypeError('Invalid batch bytes')
+ const copy=Buffer.alloc(byteLength.call(input));Uint8Array.prototype.set.call(copy,input);return copy
+}
 function closed(input:unknown,keys:readonly string[]) {
  if(!input||typeof input!=='object'||types.isProxy(input)||!isStrictFactData(input))return false
  const fields=Object.getOwnPropertyDescriptors(input), actual=Reflect.ownKeys(input)
@@ -30,8 +35,8 @@ export function createSelectedLaneScope(owner:HeldFactOwner, route:SelectedResul
 function captureBatch(prefixInput:import('@i-harness/core-session').JournalPrefix,batchInput:import('@i-harness/core-session').EncodedFactBatch) {
  if(!batchInput||typeof batchInput!=='object'||types.isProxy(batchInput)||Reflect.ownKeys(batchInput).length!==2)throw new TypeError('Invalid batch inputs')
  const k=Object.getOwnPropertyDescriptor(batchInput,'key'),b=Object.getOwnPropertyDescriptor(batchInput,'bytes')
- if(!k||!('value' in k)||!k.enumerable||!b||!('value' in b)||!b.enumerable||types.isProxy(b.value)||!(b.value instanceof Uint8Array)||!closed(prefixInput,['eventCount','bodyBytes','prefixDigest'])||!closed(k.value,['batchId','firstSeq','count','previousPrefixDigest','batchDigest'])||!validJournalPrefix(prefixInput))throw new TypeError('Invalid batch inputs')
- const prefix=JSON.parse(canonicalJsonData(prefixInput)) as typeof prefixInput,key=JSON.parse(canonicalJsonData(k.value)) as typeof batchInput.key,bytes=Buffer.from(b.value),batch=decodeFactBatch(bytes)
+ if(!k||!('value' in k)||!k.enumerable||!b||!('value' in b)||!b.enumerable||!closed(prefixInput,['eventCount','bodyBytes','prefixDigest'])||!closed(k.value,['batchId','firstSeq','count','previousPrefixDigest','batchDigest'])||!validJournalPrefix(prefixInput))throw new TypeError('Invalid batch inputs')
+ const prefix=JSON.parse(canonicalJsonData(prefixInput)) as typeof prefixInput,key=JSON.parse(canonicalJsonData(k.value)) as typeof batchInput.key,bytes=snapshotBytes(b.value),batch=decodeFactBatch(bytes)
  if(!same(key,batch.key)||key.firstSeq!==prefix.eventCount||key.previousPrefixDigest!==prefix.prefixDigest)throw new TypeError('Invalid batch')
  return {prefix,key,bytes,batch}
 }

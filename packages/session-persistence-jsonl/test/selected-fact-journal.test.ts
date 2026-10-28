@@ -37,7 +37,7 @@ it('repairs only a complete checked birth with a genuine held owner and explicit
  const prefix=await readSelectedJournalPrefix(path,'target',held,scope,async()=>{})
  expect(prefix.eventCount).toBe(seed.records.length+1);expect(await readFile(path)).toEqual(raw)
  const issuer=issuingFactOwner(held,()=>held!.assertHeld()); const next=encodeFactBatch('ordinary',prefix.prefixDigest,[{type:'plan/mode',mode:'on',seq:prefix.eventCount}]); const denied=issuingFactOwner(held,()=>{throw Object.assign(Error('stale'),{code:'FACT_PRECONDITION_STALE'})}); expect(await appendSelectedOwnedBatch(path,'target',denied,scope,prefix,next,async()=>{})).toEqual({kind:'not-issued',code:'FACT_PRECONDITION_STALE'});expect(await readFile(path)).toEqual(raw); let fenceCalls=0; expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,prefix,next,async()=>{if(++fenceCalls===2)await writeFile(path,torn)})).kind).toBe('absent');expect(await readFile(path)).toEqual(torn);await writeFile(path,raw); faults.sync=true;expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,prefix,next,async()=>{})).kind).toBe('unknown');expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,prefix,next,async()=>{})).kind).toBe('committed')
- await writeFile(path,Buffer.from(built.headerBytes)); const initial={eventCount:0,bodyBytes:0,prefixDigest:meta.journal.legacyPrefixDigest}; const mutableFirst={key:{...first.key},bytes:Buffer.from(first.bytes)}; expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,initial,mutableFirst,async()=>{mutableFirst.bytes.fill(0);mutableFirst.key.batchId='changed'})).kind).toBe('committed')
+ await writeFile(path,Buffer.from(built.headerBytes)); const initial={eventCount:0,bodyBytes:0,prefixDigest:meta.journal.legacyPrefixDigest}; const mutableFirst={key:{...first.key},bytes:Buffer.from(first.bytes)};let accessorCalls=0;Object.defineProperty(mutableFirst.bytes,'length',{get(){accessorCalls++;throw Error('byte getter')}});Object.defineProperty(mutableFirst.bytes,Symbol.iterator,{get(){accessorCalls++;throw Error('byte iterator')}}); expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,initial,mutableFirst,async()=>{Uint8Array.prototype.fill.call(mutableFirst.bytes,0);mutableFirst.key.batchId='changed'})).kind).toBe('committed');expect(accessorCalls).toBe(0)
  expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,initial,first,async()=>{})).kind).toBe('committed')
  await writeFile(path,Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes.subarray(0,10))])); expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,initial,first,async()=>{})).kind).toBe('absent');expect(await readFile(path)).toEqual(Buffer.from(built.headerBytes));expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,initial,first,async()=>{})).kind).toBe('committed')
  const seedPrefix={eventCount:seed.records.length,bodyBytes:first.bytes.length,prefixDigest:decodeFactBatch(first.bytes).prefixDigest}; faults.close=true;expect(await appendSelectedOwnedBatch(path,'target',issuer,scope,seedPrefix,complete,async()=>{})).toMatchObject({kind:'committed',cleanupDiagnostic:'file-close-failed'}); expect(await readFile(path)).toEqual(raw)
@@ -54,6 +54,8 @@ it('repairs only a complete checked birth with a genuine held owner and explicit
  await expect(appendSelectedOwnedBatch(path,'target',issuer,scope,initial,first,async()=>{await coordinator.close()})).rejects.toThrow();expect(await readFile(path)).toEqual(partial)
  }finally{await coordinator.close()}
 })
+
+
 
 
 
