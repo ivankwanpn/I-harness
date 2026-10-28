@@ -1,8 +1,8 @@
 import { resolveSelectedBirth } from '../src/backend/selected-birth.ts'
 import { issuingFactOwner } from '../../session-persistence/src/coordinator/fact-owner.ts'
 import { it, expect, vi } from 'vitest'
-const faults=vi.hoisted(()=>({sync:false,close:false}))
-vi.mock('node:fs/promises',async importOriginal=>{const original=await importOriginal<typeof import('node:fs/promises')>();return {...original,open:async (...args:Parameters<typeof original.open>)=>{const handle=await original.open(...args);if(typeof args[0]!=='string'||!args[0].endsWith('target.jsonl')||args[1]!=='r+')return handle;return new Proxy(handle,{get(target,key){if(key==='sync')return async()=>{if(faults.sync){faults.sync=false;throw Error('injected sync failure')}return target.sync()};if(key==='close')return async()=>{await target.close();if(faults.close){faults.close=false;throw Error('injected close failure')}};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value}})}}})
+const faults=vi.hoisted(()=>({sync:false,close:false,leaked:undefined as undefined|{close():Promise<void>}}))
+vi.mock('node:fs/promises',async importOriginal=>{const original=await importOriginal<typeof import('node:fs/promises')>();return {...original,open:async (...args:Parameters<typeof original.open>)=>{const handle=await original.open(...args);if(typeof args[0]!=='string'||!args[0].endsWith('target.jsonl')||args[1]!=='r+')return handle;return new Proxy(handle,{get(target,key){if(key==='sync')return async()=>{if(faults.sync){faults.sync=false;throw Error('injected sync failure')}return target.sync()};if(key==='close')return async()=>{if(faults.close){faults.close=false;faults.leaked=target;throw Error('injected close failure')}await target.close()};const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value}})}}})
 import { mkdtemp, writeFile, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { encodeFactBatch, decodeFactBatch } from '@i-harness/core-session'
@@ -17,7 +17,7 @@ import { createSelectedLaneScope, readSelectedJournalPrefix, appendSelectedOwned
 function selectedSeed() {
  const exported=codecSeed('public-completed',[codecPage([codecRow()])]);exported.seed.groups=[{extent:{kind:'framed',first:1,last:1},items:[{kind:'summary',scope:'turn',extent:{kind:'framed',first:1,last:1},origins:[{origin:0,seq:1,part:'message'}],sourceProvenance:[{origin:0,kind:'summary',authority:'derived',scope:'turn'}],messages:[{role:'user',content:'summary'}]}]}];exported.seed.passive.codeStore.groups=[0];return sealCodecSeed(exported.seed)
 }
-it('repairs only a complete checked birth with a genuine held owner and explicit scope', async () => {
+it('checks selected owned IO and exposes untracked close debt with a genuine owner', async () => {
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'lane-')), path=join(root,'target.jsonl'), backend=createJsonlBackend(root)
  let held:IssuingFactOwner|undefined; const append=backend.appendOwnedBatch!;backend.appendOwnedBatch=async(...args)=>{held=args[1];return append(...args)}
  const coordinator=createSessionCoordinator(backend,{lock:{enabled:true}})
@@ -36,13 +36,15 @@ it('repairs only a complete checked birth with a genuine held owner and explicit
  const scope=createSelectedLaneScope(held,route,built.stage)
  const prefix=await readSelectedJournalPrefix(path,'target',held,scope,async()=>{})
  expect(prefix.eventCount).toBe(seed.records.length+1);expect(await readFile(path)).toEqual(raw)
+ const foreignPath=path+'.bootstrap-'+'a'.repeat(64)+'.stage';await writeFile(foreignPath,'x');await writeFile(path,torn);await expect(readSelectedJournalPrefix(path,'target',held,scope,async()=>{})).rejects.toThrow();expect(await readFile(path)).toEqual(torn);await unlink(foreignPath);await writeFile(path,raw)
+ await expect(readSelectedJournalPrefix(path,'target',{...held} as any,scope,async()=>{})).rejects.toThrow();expect(await readFile(path)).toEqual(raw)
  const issuer=issuingFactOwner(held,()=>held!.assertHeld()); const next=encodeFactBatch('ordinary',prefix.prefixDigest,[{type:'plan/mode',mode:'on',seq:prefix.eventCount}]); const denied=issuingFactOwner(held,()=>{throw Object.assign(Error('stale'),{code:'FACT_PRECONDITION_STALE'})}); expect(await appendSelectedOwnedBatch(path,'target',denied,scope,prefix,next,async()=>{})).toEqual({kind:'not-issued',code:'FACT_PRECONDITION_STALE'});expect(await readFile(path)).toEqual(raw); let fenceCalls=0; expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,prefix,next,async()=>{if(++fenceCalls===2)await writeFile(path,torn)})).kind).toBe('absent');expect(await readFile(path)).toEqual(torn);await writeFile(path,raw); faults.sync=true;expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,prefix,next,async()=>{})).kind).toBe('unknown');expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,prefix,next,async()=>{})).kind).toBe('committed')
  await writeFile(path,Buffer.from(built.headerBytes)); const initial={eventCount:0,bodyBytes:0,prefixDigest:meta.journal.legacyPrefixDigest}; const mutableFirst={key:{...first.key},bytes:Buffer.from(first.bytes)};let accessorCalls=0;Object.defineProperty(mutableFirst.bytes,'length',{get(){accessorCalls++;throw Error('byte getter')}});Object.defineProperty(mutableFirst.bytes,Symbol.iterator,{get(){accessorCalls++;throw Error('byte iterator')}}); expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,initial,mutableFirst,async()=>{Uint8Array.prototype.fill.call(mutableFirst.bytes,0);mutableFirst.key.batchId='changed'})).kind).toBe('committed');expect(accessorCalls).toBe(0)
  expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,initial,first,async()=>{})).kind).toBe('committed')
  await writeFile(path,Buffer.concat([Buffer.from(built.headerBytes),Buffer.from(first.bytes.subarray(0,10))])); expect((await reconcileSelectedOwnedBatch(path,'target',held,scope,initial,first,async()=>{})).kind).toBe('absent');expect(await readFile(path)).toEqual(Buffer.from(built.headerBytes));expect((await appendSelectedOwnedBatch(path,'target',issuer,scope,initial,first,async()=>{})).kind).toBe('committed')
- const seedPrefix={eventCount:seed.records.length,bodyBytes:first.bytes.length,prefixDigest:decodeFactBatch(first.bytes).prefixDigest}; faults.close=true;expect(await appendSelectedOwnedBatch(path,'target',issuer,scope,seedPrefix,complete,async()=>{})).toMatchObject({kind:'committed',cleanupDiagnostic:'file-close-failed'}); expect(await readFile(path)).toEqual(raw)
+ const seedPrefix={eventCount:seed.records.length,bodyBytes:first.bytes.length,prefixDigest:decodeFactBatch(first.bytes).prefixDigest}; faults.close=true;expect(await appendSelectedOwnedBatch(path,'target',issuer,scope,seedPrefix,complete,async()=>{})).toMatchObject({kind:'committed',cleanupDiagnostic:'file-close-failed'}); expect(faults.leaked).toBeDefined();console.log('diagnostic: close failure left original handle outside settlement; test closes it');await faults.leaked!.close();faults.leaked=undefined;expect(await readFile(path)).toEqual(raw)
  const ack=await confirmSelectedFrames(path,'target',held,scope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}],async()=>{}); expect(ack.kind).toBe('committed'); if(ack.kind==='committed')expect(ack.receipts.map(r=>r.key.batchId)).toEqual(['bootstrap:op:seed','bootstrap:op:complete'])
- faults.close=true;expect((await confirmSelectedFrames(path,'target',held,scope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}],async()=>{})).kind).toBe('unknown');expect(await readFile(path)).toEqual(raw)
+ faults.close=true;expect((await confirmSelectedFrames(path,'target',held,scope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}],async()=>{})).kind).toBe('unknown');expect(faults.leaked).toBeDefined();console.log('diagnostic: close failure left original handle outside settlement; test closes it');await faults.leaked!.close();faults.leaked=undefined;expect(await readFile(path)).toEqual(raw)
  const resolved=await resolveSelectedBirth(path,'target',async()=>{});if(!resolved)throw Error('Missing birth');const coldScope=createSelectedLaneScope(held,resolved.route,resolved.stage);expect(await confirmSelectedFrames(path,'target',held,coldScope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}],async()=>{})).toEqual(ack)
  const foreign=encodeFactBatch('bootstrap:other:complete',seedPrefix.prefixDigest,decodeFactBatch(complete.bytes).events);expect((await confirmSelectedFrames(path,'target',held,scope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:foreign}],async()=>{})).kind).toBe('conflict')
  await writeFile(path,torn);expect((await confirmSelectedFrames(path,'target',held,scope,[{prefix:initial,batch:first},{prefix:seedPrefix,batch:complete}],async()=>{})).kind).toBe('unknown');expect(await readFile(path)).toEqual(torn)
@@ -54,6 +56,9 @@ it('repairs only a complete checked birth with a genuine held owner and explicit
  await expect(appendSelectedOwnedBatch(path,'target',issuer,scope,initial,first,async()=>{await coordinator.close()})).rejects.toThrow();expect(await readFile(path)).toEqual(partial)
  }finally{await coordinator.close()}
 })
+
+
+
 
 
 
