@@ -9,6 +9,9 @@ import { assertOutsideForkController, closeForkControllerAdmission } from './for
 import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
 import { createProcessReadLatches } from './coordinator/process-read-latches.ts'
 import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
+import { captureBootstrapInvocation } from './coordinator/bootstrap-header.ts'
+import type { BootstrapOutcome, BootstrapInvocation } from './coordinator/bootstrap-types.ts'
+import { types as utilTypes } from 'node:util'
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
@@ -32,26 +35,35 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       try { await admission.join(); const result = await run(); outcome = 'settled'; return result } finally { admission.finish() }
     } catch (error) { outcome = 'unknown'; throw error } finally { token?.end(outcome) }
   }
+  function trackBootstrap(input: unknown, wrapped: boolean, run: () => Promise<BootstrapOutcome>) {
+    let invocation: BootstrapInvocation
+    try {
+      if (input && typeof input === 'object' && utilTypes.isProxy(input)) return run()
+      const value = wrapped && input && typeof input === 'object' ? Object.getOwnPropertyDescriptor(input, 'invocation')?.value : input
+      invocation = captureBootstrapInvocation(value)
+    } catch { return run() }
+    return managed.trackBootstrapInvocation(invocation, run)
+  }
   const coordinator: SessionCoordinator = {
     ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
-    bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
-    resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
+    bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return trackBootstrap(request,true,()=>observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards))) },
+    resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return trackBootstrap(invocation,false,()=>observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload))) },
     ...(managed.captureSupported()?{
       inspectBootstrapCapture:managed.inspectBootstrapCapture,
       bootstrapSemanticTargetWithCapture(request:import('./coordinator/bootstrap-types.ts').BootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withBootstrapCapture(request,guards,capture,managed.bootstrapSemanticTargetWithCapture)
+        return trackBootstrap(request,true,()=>observations.withBootstrapCapture(request,guards,capture,managed.bootstrapSemanticTargetWithCapture))
       },
     }:{}),
     ...(managed.childSupported()?{
       inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
       bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withChildBootstrapCapture(request,guards,capture,managed.bootstrapChildTargetWithCapture)
+        return trackBootstrap(request,true,()=>observations.withChildBootstrapCapture(request,guards,capture,managed.bootstrapChildTargetWithCapture))
       },
       resumeChildTarget(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,payload?:import('./coordinator/bootstrap-types.ts').BootstrapRequest){
         if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withChildBootstrapResume(request,guards,payload,managed.resumeChildTarget)
+        return trackBootstrap(request,true,()=>observations.withChildBootstrapResume(request,guards,payload,managed.resumeChildTarget))
       },
     }:{}),    inspectBootstrap: managed.inspectBootstrap,
     ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
