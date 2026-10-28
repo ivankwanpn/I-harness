@@ -122,3 +122,5 @@ export { semanticSeedResultRefs, iterateSelectedResultRefs, sameManagedArtifactR
 export * from './events/delivery.ts'
 export { readDeliveries, validateDeliveryFrame } from './conversation/delivery.ts'
 export type { DeliveryState, DeliveryActionOrigin, DeliveryOriginLookup } from './conversation/delivery.ts'
+
+export { validateResultsSummary } from './conversation/selected-results-codec.ts'
