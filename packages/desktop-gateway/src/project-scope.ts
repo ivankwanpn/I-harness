@@ -480,7 +480,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         if (!moveOptions.assertIdle) throw new Error("Idle project move inspection is unavailable")
         if (expectedOwner !== undefined) identifier(expectedOwner)
         if (projectId !== undefined) identifier(projectId)
-        const alreadyOwned = coordinator.ownerOf(id)
+        // A reader pin holds the native lock without adopting a live writer.
+        const alreadyOwned = coordinator.hasLiveOwnership?.(id) ?? coordinator.ownerOf(id)
         await coordinator.adoptOwnership(id)
         try {
         // A second broker/process may have committed ownership since this

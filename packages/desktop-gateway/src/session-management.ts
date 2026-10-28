@@ -177,7 +177,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         return fence.exclusive(sessionId, async () => {
           // Recovery writes filesystem artifacts, so hold the durable lease in
           // addition to the local fence. Read-only snapshots hold no lease.
-          const borrowed = recoverInterrupted && !coordinator.ownerOf(sessionId)
+          const borrowed = recoverInterrupted && !(coordinator.hasLiveOwnership?.(sessionId) ?? coordinator.ownerOf(sessionId))
           if (recoverInterrupted) await coordinator.adoptOwnership(sessionId)
           try {
             if (recoverInterrupted) {

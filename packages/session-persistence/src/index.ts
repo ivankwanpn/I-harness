@@ -140,6 +140,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     putDocumentStrict: documents.putDocumentStrict,
     getDocument: documents.getDocument,
     ownerOf: ownership.ownerOf,
+    hasLiveOwnership: ownership.hasLiveOwnership,
     adoptOwnership: mutations.adoptOwnership,
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }

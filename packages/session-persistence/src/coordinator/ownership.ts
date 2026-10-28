@@ -110,6 +110,10 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership,
     pinOwnership: borrowOwnership, releaseOwnershipUnlocked,
     ownerOf: (id: string) => slots.get(id)?.lock?.held === true,
+    hasLiveOwnership(id: string) {
+      const slot = slots.get(id)
+      return slot?.live === true && slot.lock?.held === true && slot.debt === undefined && !slot.releasing
+    },
     pendingOperations: () => [...sessionOperations.values()],
     releaseHeldLocks: () => [...slots.keys()].map(id => Promise.resolve().then(() => releaseOwnershipUnlocked(id))),
   }

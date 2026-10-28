@@ -163,6 +163,8 @@ export interface SessionCoordinator {
   getDocument(key: string): Promise<unknown | undefined>
   /** Whether this coordinator holds the session's write ownership lease (M23, opt-in lock). */
   ownerOf(sessionId: string): boolean
+  /** An adopted live owner, excluding temporary observation pins and disposal debt. */
+  hasLiveOwnership?(sessionId: string): boolean
   /**
    * Acquire the session's ownership lease and hold it until close() — the CLI
    * resume path calls this after a successful load(). Throws
