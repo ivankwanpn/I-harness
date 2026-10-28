@@ -159,12 +159,14 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       }
       const owner = options.resultRetention, frames = job.capture.frames
       if (!owner || !frames) return result({ kind: 'unavailable', reason: 'retention-unsupported' })
-      // Begin inside the genuine caller before any await or finalizer. Handle
-      // rejection immediately, including a running caller that returns pending.
+      // Pending is metadata only: registering the unfinished capture here
+      // would make this caller's finalizer require native EOF/recovery.
+      if (job.status === 'running') return result({ kind: 'pending' })
+      // Terminal observation begins inside the genuine caller before any
+      // await or finalizer, with its rejection handled immediately.
       let observing: Promise<import('../capture/frames.ts').ExecFrameObservation>
       try { observing = Promise.resolve(owner.observe(frames)).catch(() => ({ kind: 'recovery-required' as const })) }
       catch { observing = Promise.resolve({ kind: 'recovery-required' }) }
-      if (job.status === 'running') return result({ kind: 'pending' })
       const observed = await join(observing)
       current()
       await join(record(job))

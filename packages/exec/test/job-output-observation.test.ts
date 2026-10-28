@@ -61,15 +61,17 @@ function adapter(kind: 'unavailable' | 'recovery-required' | 'summary-unsupporte
     get observers() { return observers }, hold(promise: Promise<void>) { block = promise } }
 }
 
-it.each(['unavailable', 'recovery-required', 'summary-unsupported'] as const)('isolated callback %s leaves native status completed and starts registration synchronously', async kind => {
+it.each(['unavailable', 'recovery-required', 'summary-unsupported'] as const)('isolated callback %s leaves native status completed and starts terminal registration synchronously', async kind => {
   const a = adapter(kind), f = service(a.owner)
   try {
     const { jobId } = await f.exec.runBackground({ argv: ['controlled'] })
     const pending = f.exec.observeJobOutput(jobId)
-    expect(a.observers).toBe(1)
+    expect(a.observers).toBe(0)
     expect((await pending).source).toEqual({ kind: 'pending' })
     await completed(f, jobId)
-    const observation = await f.exec.observeJobOutput(jobId)
+    const observing = f.exec.observeJobOutput(jobId)
+    expect(a.observers).toBe(1)
+    const observation = await observing
     expect(observation.view.status).toBe('completed')
     expect(observation.source).toEqual(kind === 'recovery-required' ? { kind } : { kind: 'unavailable', reason: kind === 'unavailable' ? 'quota' : 'summary-unsupported' })
   } finally {

@@ -37,17 +37,29 @@ it('summarizes the genuine original 150009-byte background capture through a reg
         startupAt = Date.now()
         yield { type: 'tool_call', call: { id: 'actual-background', name: 'pwsh', args: { command, background: true } } }
       } else if (call === 3) {
-        yield { type: 'tool_call', call: { id: 'read-background-1', name: 'j2_observe', args: { job_id: jobId } } }
+        yield { type: 'tool_call', call: { id: 'read-background-pending', name: 'j2_observe', args: { job_id: jobId } } }
       } else if (call === 5) {
+        yield { type: 'tool_call', call: { id: 'read-background-1', name: 'j2_observe', args: { job_id: jobId } } }
+      } else if (call === 7) {
         yield { type: 'tool_call', call: { id: 'read-background-2', name: 'j2_observe', args: { job_id: jobId } } }
       } else yield { type: 'text/chunk', text: 'done' }
       yield { type: 'end' }
     }) })
+  const registeredObservers: { producer: ToolExec; synchronousDependencies: number }[] = []
   assembly.tools.register({ name: 'j2_observe', description: 'J2 port control', inputSchema: { type: 'object', properties: { job_id: { type: 'string' } } }, isReadOnly: true,
-    execute: async args => assembly.ctx.services.get<NativeExecService>('exec/service')!.observeJobOutput((args as { job_id: string }).job_id) })
+    execute: args => {
+      const producer = currentToolResultProducer()
+      if (!producer) throw new Error('Expected genuine registered observer')
+      const observation = assembly.ctx.services.get<NativeExecService>('exec/service')!.observeJobOutput((args as { job_id: string }).job_id)
+      // Measure synchronously before the first await/finalizer, rather than
+      // inferring registration from an eventually available catalog.
+      registeredObservers.push({ producer, synchronousDependencies: toolResultDependencies(producer).length })
+      return observation
+    } })
   let cold: ReturnType<typeof createContextOutputService> | undefined, startupProducer: ToolExec | undefined
   let recipientAssembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
   let originalStore: Awaited<ReturnType<typeof acquireAssemblyResultStore>> | undefined
+  let primaryFailure = false
   assembly.ctx.on('tools/post-execute', input => { if ((input as { name: string }).name === 'pwsh') startupProducer = currentToolResultProducer() })
   try {
     await assembly.agent.run('start one real background command')
@@ -69,6 +81,29 @@ it('summarizes the genuine original 150009-byte background capture through a reg
     expect(receipt.native_job?.instanceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(startup.status).toBe('running')
     expect(startup.retained).toBeUndefined()
+
+    originalStore = await acquireAssemblyResultStore({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings })
+    const pendingReads = vi.spyOn(originalStore.service!, 'readExecResult')
+    const pendingGrants = vi.spyOn(originalStore.service!, 'grant')
+    const nativeCancellation = vi.spyOn(exec, 'killJob')
+    try {
+      // The original worker is still held at its release-file gate. This
+      // complete registered turn must finalize before releasing native EOF.
+      await assembly.agent.run('observe pending metadata while the original producer remains open')
+      const pendingEvent = assembly.session.events.find(event => event.type === 'tool/result' && event.callId === 'read-background-pending')
+      if (pendingEvent?.type !== 'tool/result' || pendingEvent.envelope?.retention.kind !== 'inline') throw new Error('Expected successfully finalized registered pending metadata')
+      expect(pendingEvent.envelope.execution).toEqual({ outcome: 'succeeded', dispatch: 'dispatched' })
+      expect(pendingEvent.envelope.retention.value).toMatchObject({ nativeJob: receipt.native_job, view: { status: 'running' }, source: { kind: 'pending' } })
+      expect((pendingEvent.envelope.retention.value as unknown as JobOutputObservation).source).toEqual({ kind: 'pending' })
+      expect(pendingEvent.envelope.dependencies).toBeUndefined()
+      expect(registeredObservers).toHaveLength(1)
+      expect(registeredObservers[0]!.synchronousDependencies).toBe(0)
+      expect(toolResultDependencies(registeredObservers[0]!.producer)).toHaveLength(0)
+      expect(pendingReads).not.toHaveBeenCalled()
+      expect(pendingGrants).not.toHaveBeenCalled()
+      expect(nativeCancellation).not.toHaveBeenCalled()
+      expect(exec.getJobView(jobId)).toMatchObject({ nativeJob: receipt.native_job, status: 'running' })
+    } finally { pendingReads.mockRestore(); pendingGrants.mockRestore(); nativeCancellation.mockRestore() }
 
     // No further getOutput/listJobs call asks for output before completion;
     // the subscriber verifies automatic original capture settlement.
@@ -119,10 +154,11 @@ it('summarizes the genuine original 150009-byte background capture through a reg
     const records = body.subarray(9).toString().split('\n').filter(Boolean).map(line => JSON.parse(line))
     const decoded = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
     for (const part of records) decoded[part.channel as 'stdout' | 'stderr'].push(Buffer.from(part.data, 'base64'))
+    expect(Buffer.concat(decoded.stdout).length, JSON.stringify({ ref: dependency.retention.ref, diagnostics: terminal.outputDiagnostics,
+      records: records.map(part => ({ channel: part.channel, frame: part.frame, offset: part.offset, end: part.end, bytes: Buffer.from(part.data, 'base64').length })) })).toBe(150009)
     expect(Buffer.concat(decoded.stdout)).toEqual(expected[0]!.bytes)
     expect(Buffer.concat(decoded.stderr)).toEqual(expected[1]!.bytes)
     expect(expected[0]!.bytes.length).toBe(150009)
-    originalStore = await acquireAssemblyResultStore({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings })
     const originalRead = originalStore.service!.readExecResult.bind(originalStore.service!)
     let releaseScan!: () => void, enteredScan!: () => void, scanSignal: AbortSignal | undefined
     const scanGate = new Promise<void>(done => { releaseScan = done }), scanEntered = new Promise<void>(done => { enteredScan = done })
@@ -174,6 +210,9 @@ it('summarizes the genuine original 150009-byte background capture through a reg
       if (result?.type !== 'tool/result' || !result.envelope) throw new Error('Expected the registered J2 observer result for ' + callId)
       const value = result.envelope.retention.kind === 'inline' ? result.envelope.retention.value as unknown as JobOutputObservation : undefined
       expect(value?.source).toMatchObject({ kind: 'retained-summary', summary: { stdout: { bytes: 150009 }, totalRawBytes: 150012 } })
+      expect(value?.nativeJob).toEqual(startup.nativeJob)
+      expect(registeredObservers.at(-1)!.synchronousDependencies).toBe(1)
+      expect(toolResultDependencies(registeredObservers[0]!.producer)).toHaveLength(0)
       const dependencies = result.envelope.dependencies
       expect(dependencies, 'Registered J2 observer must bind this actual native source').toMatchObject({ kind: 'artifact-set', count: 1 })
       const catalog = JSON.parse((await bytesOf((dependencies as { ref: ManagedArtifactRef }).ref)).toString()) as ResultDependencyCatalog
@@ -226,12 +265,19 @@ it('summarizes the genuine original 150009-byte background capture through a reg
     expect(exec.getOutput(jobId).retained).toMatchObject({ retention: { kind: 'artifact', ref: { id: dependency.retention.ref.id } } })
     revoked = false
     expect((await bytesOf(dependency.retention.ref)).equals(body)).toBe(true)
+  } catch (cause) {
+    primaryFailure = true
+    throw cause
   } finally {
     await writeFile(releasePath, '')
     await cold?.close()
     await recipientAssembly?.dispose()
     await originalStore?.release()
-    await assembly.dispose()
+    try { await assembly.dispose() }
+    catch (cause) {
+      if (!primaryFailure) throw cause
+      console.error('Secondary cleanup failure after the preserved primary assertion/dispatch failure:', cause)
+    }
     await coordinator.close()
     await rm(root, { recursive: true, force: true })
   }
