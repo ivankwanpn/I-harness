@@ -17,6 +17,10 @@ import { registerExec } from '@i-harness/exec'
 import { createJobRegistry } from '../src/jobs.ts'
 import { createRoleRegistry } from '../src/roles.ts'
 import { createTaskRegistry } from '../src/task-protocol.ts'
+import { createRuntimeContext } from '../../runtime-context/src/index.ts'
+import { createRuntimeContextSource } from '../../session-executor/src/lifecycle/action-facts.ts'
+import { decodeFactBatch } from '@i-harness/core-session'
+import { driveFollowups } from '../src/followup/drive.ts'
 
 function dependencies(table: SubagentToolDeps['table'], parentSession: SubagentToolDeps['parentSession']): SubagentToolDeps {
   const parentCtx = createContext()
@@ -28,7 +32,7 @@ function dependencies(table: SubagentToolDeps['table'], parentSession: SubagentT
 
 async function managedFixture() {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'cap-'))
-  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
   const document = await coordinator.openManagedDocument('child')
   await document.delivery.record({ type: 'subagent/inbox', messageId: 'saved', message: 'saved', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
@@ -36,8 +40,67 @@ async function managedFixture() {
   table.add(entry.path, entry)
   const deps = dependencies(table, document.view)
   const input = document.view.events[0] as Extract<typeof document.view.events[number], { type: 'subagent/inbox' }>
-  return { coordinator, document, table, entry, deps, input }
+  return { backend, coordinator, document, table, entry, deps, input }
 }
+
+it.each([undefined, false].flatMap(failure => [true, false].map(preexisting => ({ failure, preexisting }))))('shares original runtime pin failure $failure with delayed inbox cleanup and external disposal (preexisting=$preexisting)', async ({ failure, preexisting }) => {
+  const f = await managedFixture(), pinEntered = Promise.withResolvers<void>(), releasePin = Promise.withResolvers<void>()
+  await f.document.delivery.record({ type: 'subagent/inbox', messageId: 'queued', message: 'different genuine inbox', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
+  const preparation = new ResidentPreparation(f.deps, f.entry)
+  f.entry.dispose = preparation.dispose; preparation.setupExit.resolve()
+  const runtime = createRuntimeContext(f.document.view, createRuntimeContextSource(f.document))
+  runtime.registerSection('instructions', () => 'original publication')
+  let pinCalls = 0, prerequisiteCalls = 0, runtimeCloses = 0, allowPin = false, publications = 0
+  preparation.instruction = { requestContext: {} as ChildInstructionContext['requestContext'], retire() {},
+    async settleOriginals() { prerequisiteCalls++; await runtime.settleOriginals() },
+    async close() { runtimeCloses++; await runtime.close() } }
+  const originalIntent = captureFollowupGenerationIntent(f.deps, f.entry, f.input), original = beginFollowupExecution(originalIntent, Promise.resolve())!
+  await openFollowupGeneration(f.deps, f.entry, f.input, f.entry.controller, originalIntent)
+  original.exitBody(); f.entry.lastInboxSeq = f.input.seq
+  const append = f.backend.appendOwnedBatch!
+  f.backend.appendOwnedBatch = async (...args) => {
+    const result = await append(...args)
+    if (decodeFactBatch(args[3].bytes).events.some(event => event.type === 'runtime/context')) { publications++; return { kind: 'unknown', key: args[3].key } }
+    return result
+  }
+  await expect(runtime.render(undefined, () => ({ async release() { pinCalls++; pinEntered.resolve(); await releasePin.promise; if (!allowPin) throw failure } }))).rejects.toBeDefined()
+  const drive = () => driveFollowups({ table: f.table, agents: f.deps.agents, jobs: f.deps.jobs,
+    captureGeneration: (entry, input) => captureFollowupGenerationIntent(f.deps, entry, input),
+    openGeneration: (entry, input, controller, intent, current) => openFollowupGeneration(f.deps, entry, input, controller, intent, current),
+  }, f.entry, 'child')
+  // Exercise both an original finally begun BEFORE any outer scope, and an
+  // original prerequisite first admitted by B's predecessor cleanup scope.
+  let a: Promise<void>, driving: Promise<void>
+  if (preexisting) {
+    a = original.close(); void a.catch(() => {})
+    await pinEntered.promise; driving = drive()
+  } else {
+    driving = drive(); await pinEntered.promise; a = original.close()
+  }
+  const aOutcome = a.then(() => undefined, value => value)
+  const driveOutcome = driving.then(() => ({ rejected: false }), value => ({ rejected: true, value }))
+  // Let B admit its predecessor scope while A's original pin is held.
+  await new Promise<void>(resolve => setImmediate(resolve))
+  const disposing = residentOwnerFor(f.deps).close(), disposeOutcome = disposing.then(() => ({ rejected: false }), value => ({ rejected: true, value }))
+  releasePin.resolve()
+  await aOutcome
+  // Acknowledgment arriving now cannot authorize B's delayed same-attempt call.
+  allowPin = true
+  const result = await disposeOutcome, b = await driveOutcome
+  try {
+    expect(result.rejected).toBe(true); expect(b.rejected).toBe(true)
+    const leaves = (value: unknown): unknown[] => value instanceof AggregateError ? value.errors.flatMap(leaves) : [value]
+    expect(leaves('value' in result ? result.value : undefined)).toContain(failure)
+    expect(leaves('value' in b ? b.value : undefined)).toContain(failure)
+    expect([prerequisiteCalls, pinCalls, runtimeCloses, publications]).toEqual([1, 1, 0, 1])
+    expect(f.document.view.events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
+    await residentOwnerFor(f.deps).close()
+    expect([prerequisiteCalls, pinCalls, runtimeCloses, publications]).toEqual([2, 2, 1, 1])
+    await residentOwnerFor(f.deps).close()
+    expect([prerequisiteCalls, pinCalls, runtimeCloses]).toEqual([2, 2, 1])
+    console.info('same-attempt-original-pin', JSON.stringify({ failure: String(failure), prerequisiteCalls, pinCalls, runtimeCloses, publications }))
+  } finally { allowPin = true; releasePin.resolve(); await residentOwnerFor(f.deps).close(); await f.coordinator.close(); await f.deps.parentCtx.scope.unmount() }
+})
 
 it.each(['lease', 'document'] as const)('retains managed debt when the original %s settlement capability is missing', async missing => {
   const f = await managedFixture(), finished = f.document.settleFinishedActions

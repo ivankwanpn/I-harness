@@ -28,19 +28,23 @@ class ResidentLifetime {
   readonly records = new Set<RetainedResidentResource>()
   private readonly results = new WeakMap<NonNullable<ChildAgentEntry['resultCapture']>, () => Promise<unknown>>()
   private flight?: Promise<void>
-  private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>> }
+  private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>>; publications: Map<ResidentPreparation, Promise<void>> }
   /** Keep rejected generation joins alive through every alias participating
    * in one external close. A later explicit close gets a fresh attempt. */
   beginCleanupAttempt(): () => void {
     if (!this.cleanupAttempt) {
       const generations = new Map<RetainedResidentResource, Promise<void>>()
+      const publications = new Map<ResidentPreparation, Promise<void>>()
       // A normal finally may already own the flight before a direct entry
       // disposer starts. Snapshot that admission without starting new work.
       for (const record of this.records) {
         const original = record.generationCleanup
         if (record.kind === 'generation' && original) generations.set(record, original)
+        // A normal finally may already be settling this preparation before
+        // the outer scope exists. Preserve that outcome across delayed records.
+        if (record instanceof ResidentPreparation && record.publicationSettlement) publications.set(record, record.publicationSettlement)
       }
-      this.cleanupAttempt = { borrowers: 0, generations }
+      this.cleanupAttempt = { borrowers: 0, generations, publications }
     }
     const attempt = this.cleanupAttempt
     attempt.borrowers++
@@ -57,6 +61,18 @@ class ResidentLifetime {
     let original = attempt.generations.get(record)
     if (!original) { original = close(); attempt.generations.set(record, original) }
     return original
+  }
+  joinPublicationSettlement(record: ResidentPreparation, settle: () => Promise<void>): Promise<void> {
+    const scope = this.cleanupAttempt
+    if (!scope) return settle()
+    const original = scope.publications.get(record)
+    if (original) return original
+    const attempt = Promise.withResolvers<void>()
+    // Admission precedes callbacks, and rejection remains in the scope until
+    // its final borrower exits. A later explicit attempt gets a new map.
+    scope.publications.set(record, attempt.promise)
+    void Promise.resolve().then(settle).then(attempt.resolve, attempt.reject)
+    return attempt.promise
   }
   retain(record: RetainedResidentResource): void {
     if (this.retired) throw Object.assign(new Error('Resident owner retired'), { code: 'FACT_CLOSED' })
@@ -124,6 +140,7 @@ export class ResidentPreparation implements RetainedResidentResource {
   private retireInstruction?: () => void
   private closeInstruction?: () => Promise<void>
   private settleInstruction?: () => Promise<void>
+  private publicationFlight?: Promise<void>
   private settleDocument?: () => Promise<void>
   private instructionRetired = false
   private instructionClosed = false
@@ -194,10 +211,20 @@ export class ResidentPreparation implements RetainedResidentResource {
     // Retain that original before fencing and closing it.
     if (this.phase === 'retired' || this.permanent) this.retireInstructions()
   }
-  async settleOriginals(): Promise<void> {
-    if (!this.instructionLease) return
-    if (!this.settleInstruction) throw Object.assign(new Error('Original instruction settlement capability unavailable'), { code: 'GENERATION_UNSUPPORTED' })
-    await this.settleInstruction()
+  get publicationSettlement(): Promise<void> | undefined { return this.publicationFlight }
+  settleOriginals(): Promise<void> {
+    return residentOwnerFor(this.deps).joinPublicationSettlement(this, () => {
+      if (this.publicationFlight) return this.publicationFlight
+      const attempt = Promise.withResolvers<void>()
+      this.publicationFlight = attempt.promise
+      void attempt.promise.then(() => { this.publicationFlight = undefined }, () => { this.publicationFlight = undefined })
+      void Promise.resolve().then(async () => {
+        if (!this.instructionLease) return
+        if (!this.settleInstruction) throw Object.assign(new Error('Original instruction settlement capability unavailable'), { code: 'GENERATION_UNSUPPORTED' })
+        await this.settleInstruction()
+      }).then(attempt.resolve, attempt.reject)
+      return attempt.promise
+    })
   }
   async settleFinishedActions(): Promise<void> {
     if (isNondurableSession(this.view)) return
