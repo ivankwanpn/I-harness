@@ -150,3 +150,6 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
 export { ownedContextReadiness } from "./context-readiness.ts"
 export type { HeldFactOwner, IssuingFactOwner, BackendFactOutcome, OwnedFactBackend, ManagedDocument } from './coordinator/fact-types.ts'
 export { isHeldFactOwner } from './coordinator/fact-owner.ts'
+
+export type { HeldTaskDocumentScope, TaskDocumentWitness, TaskDocumentAck, TaskObservation, Confirmation, RawTaskObservation, TaskDocumentBackendSession, OpenTaskDocumentSession } from './coordinator/task-document-types.ts'
+export { isHeldTaskDocumentScope } from './coordinator/task-document-scope.ts'
