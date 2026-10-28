@@ -45,11 +45,16 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   async function closeOne(id:string) {
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
+    const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+    let outcome:'settled'|'unknown'='unknown'
+    try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
     else {await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    outcome='settled'
+    } finally { token?.end(outcome) }
   }
   const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches)
   return {

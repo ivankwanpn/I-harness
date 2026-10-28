@@ -80,6 +80,18 @@ it('permanently invalidates a managed reader across a recovery-hold ABA', async 
     } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
 });
 
+it('keeps the registry close witness through its initial flight and settlement', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-registry-close-')), backend = createJsonlBackend(root), options = { lock: { enabled: true } };
+    const initial = createSessionCoordinator(backend, options); await initial.create({ sessionId: 's' }); await initial.close();
+    const ownership = createOwnership(backend, options), latches = createProcessReadLatches(), mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations);
+    const registry = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, latches);
+    try {
+        await registry.open('s'); const closing = registry.closeOne('s');
+        expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).toThrow();
+        await closing; expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow();
+    } finally { await registry.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }); }
+});
+
 it('invalidates a cold reader before genuine managed admission reaches its queue', async () => {
     const root = await mkdtemp(join(tmpdir(), 'ih-managed-latch-')), backend = createJsonlBackend(root), options = { lock: { enabled: true } };
     const initial = createSessionCoordinator(backend, options); await initial.create({ sessionId: 's' }); await initial.close();
