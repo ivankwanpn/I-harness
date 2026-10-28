@@ -10,14 +10,15 @@ import { recordFixture } from "./managed-fixture.ts"
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "ih-currentness-"))
-  const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { lock: { enabled: true } })
+  const backend = createJsonlBackend(join(root, "sessions"))
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   await coordinator.create({ sessionId: "s" })
   const doc = await coordinator.openManagedDocument("s")
   await recordFixture(doc, { type: "code/cell", cellId: "old", sessionId: "s", state: "started", source: "old source" })
   await recordFixture(doc, { type: "code/cell", cellId: "new", sessionId: "s", state: "completed", source: "new source" })
   await coordinator.flush("s")
-  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", coordinator, sessionFor: createDurableSessionLoader(coordinator) })
-  return { root, coordinator, service, read: createDesktopExecution(coordinator, service).read, async close() { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" }, coordinator, sessionFor: createDurableSessionLoader(coordinator) })
+  return { root, backend, doc, coordinator, service, read: createDesktopExecution(coordinator, service).read, async close() { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
 function latch() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve }); return { promise, release } }
 
@@ -125,3 +126,65 @@ it("propagates falsey assertion reasons and refuses missing snapshots without lo
     await expect(createDesktopExecution(f.coordinator, f.service).stop("s", "new")).rejects.toThrow(/cold|owner/)
   } finally { await f.close() }
 })
+
+it("reads a reopened cold journal without entering writable, recovery, or model paths", async () => {
+  const f = await fixture()
+  await f.service.close(); await f.coordinator.close()
+  const backend = createJsonlBackend(join(f.root, "sessions"))
+  const repair = vi.spyOn(backend, "repair").mockImplementation(async () => { throw new Error("repair") })
+  const upgrade = vi.spyOn(backend as Required<typeof backend>, "upgradeSessionFormat").mockImplementation(async () => { throw new Error("upgrade") })
+  const append = vi.spyOn(backend, "append").mockImplementation(async () => { throw new Error("append") })
+  const replace = vi.spyOn(backend as Required<typeof backend>, "replaceEvents").mockImplementation(async () => { throw new Error("replace") })
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  const load = vi.spyOn(coordinator, "load").mockImplementation(async () => { throw new Error("load") })
+  const loadOwned = vi.spyOn(coordinator, "loadOwned").mockImplementation(async () => { throw new Error("loadOwned") })
+  const sessionFor = vi.fn(async () => { throw new Error("sessionFor") })
+  const stream = vi.fn(async function* () { throw new Error("model"); yield { type: "end" as const } })
+  const service = createSessionService({ workspace: f.root, coordinator, sessionFor, model: { stream } })
+  const assemblyFor = vi.spyOn(service, "assemblyFor")
+  const bytes = await readFile(join(f.root, "sessions", "s.jsonl"))
+  try {
+    const view = await createDesktopExecution(coordinator, service).read("s")
+    expect(view.cells.map(cell => cell.id)).toEqual(["new", "old"])
+    expect(service.hasAssembly("s")).toBe(false)
+    for (const trap of [repair, upgrade, append, replace, load, loadOwned, sessionFor, stream, assemblyFor]) expect(trap).not.toHaveBeenCalled()
+    expect(await readFile(join(f.root, "sessions", "s.jsonl"))).toEqual(bytes)
+  } finally { await service.close(); await coordinator.close(); await rm(f.root, { recursive: true, force: true }) }
+})
+
+it("keeps omitted-callback pagination and per-cell content bounds", async () => {
+  const f = await fixture()
+  try {
+    for (let i = 0; i < 11; i++) await recordFixture(f.doc, { type: "code/cell", cellId: `page-${i}`, sessionId: "s", state: "completed", source: `source-${i}` })
+    await recordFixture(f.doc, { type: "code/cell", cellId: "bounded", sessionId: "s", state: "completed", source: "s".repeat(65530) })
+    for (let i = 0; i < 101; i++) {
+      await recordFixture(f.doc, { type: "code/output", cellId: "bounded", content: { type: "text", text: "output" } })
+      await recordFixture(f.doc, { type: "code/call", cellId: "bounded", callId: `call-${i}`, name: "fixture", args: "arguments" })
+    }
+    await f.coordinator.flush("s")
+    const page = await f.read("s")
+    expect(page).toMatchObject({ total: 14, offset: 0, hasMore: true })
+    expect(page.cells.map(cell => cell.id)).toEqual(["bounded", ...Array.from({ length: 9 }, (_, i) => `page-${10-i}`)])
+    const cell = page.cells[0]!
+    expect(cell.output).toHaveLength(100); expect(cell.calls).toHaveLength(100); expect(cell.truncated).toBe(true)
+    expect(cell.source.length + cell.output.reduce((n, item) => n + item.text.length, 0) + cell.calls.reduce((n, item) => n + item.args.length, 0)).toBe(65536)
+    const tail = await f.read("s", { offset: 10, limit: 20 })
+    expect(tail.cells.map(cell => cell.id)).toEqual(["page-1", "page-0", "new", "old"])
+    expect(tail.hasMore).toBe(false)
+  } finally { await f.close() }
+})
+
+it("flushes only after the real live owner has stopped the cell", async () => {
+  const f = await fixture()
+  try {
+    const owner = await f.service.assemblyFor("s")
+    const started = await owner.tools.execute({ name: "code_exec", args: { code: "await new Promise(resolve => setTimeout(resolve, 20000))", yield_time_ms: 0 } })
+    const cellId = (started.output as { cell_id: string }).cell_id
+    const order: string[] = []
+    const originalStop = owner.stopCodeCell!.bind(owner), originalFlush = f.coordinator.flush.bind(f.coordinator)
+    vi.spyOn(owner as typeof owner & { stopCodeCell: NonNullable<typeof owner.stopCodeCell> }, "stopCodeCell").mockImplementation(async id => { order.push("stop-start"); await originalStop(id); order.push("stop-end") })
+    vi.spyOn(f.coordinator, "flush").mockImplementation(async id => { order.push("flush"); return originalFlush(id) })
+    expect(await createDesktopExecution(f.coordinator, f.service).stop("s", cellId)).toEqual({ stopped: true, cellId })
+    expect(order).toEqual(["stop-start", "stop-end", "flush"])
+  } finally { await f.close() }
+}, 15000)
