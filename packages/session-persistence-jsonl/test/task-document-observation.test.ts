@@ -190,3 +190,137 @@ it('does not treat a failed close on an invalidated handle as a later successful
   await expect(session.settleResources()).rejects.toBe(0)
   expect(closes).toBe(1)
 }))
+
+it('confirms only its exact live witness and reuses the ack', async () => fixture(async ({ root, path, scope, revoke }) => {
+  await writeFile(path, ' { "version": 1 }\n')
+  let opens = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => { opens++; return open(p, flags) })
+  const observed = await session.observe()
+  if (observed.kind !== 'present') throw new Error('missing')
+  const other = createTaskDocumentObservation(root, path, scope)
+  const foreign = await other.observe()
+  if (foreign.kind !== 'present') throw new Error('missing')
+  for (const witness of [{}, { ...observed.witness }, foreign.witness]) await expect(session.confirm(witness as typeof observed.witness)).rejects.toThrow()
+  expect(opens).toBe(1)
+  const result = await session.confirm(observed.witness)
+  expect(result.kind).toBe('confirmed')
+  expect(await session.confirm(observed.witness)).toEqual(result)
+  expect(opens).toBe(2)
+  revoke()
+  await expect(session.confirm(observed.witness)).rejects.toThrow()
+  await session.settleResources()
+  await other.settleResources()
+}))
+
+it.each(['bytes', 'replacement'])('detects %s changes to the original file', async change => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{"v":1}')
+  const session = createTaskDocumentObservation(root, path, scope)
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  if (change === 'bytes') await writeFile(path, '{ "v":1}')
+  else { await rename(path, `${path}.old`); await writeFile(path, '{"v":1}') }
+  expect((await session.confirm(observation.witness)).kind).toBe('conflict')
+  await session.settleResources()
+}))
+
+it('retries an unknown sync on the original witness without replaying observation', async () => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{"version":2}')
+  let opens = 0, syncs = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    opens++
+    const h = await open(p, flags), sync = h.sync
+    if (flags === 'r+') h.sync = async function () { if (++syncs === 1) throw 0; return Reflect.apply(sync, h, []) }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  expect(await session.confirm(observation.witness)).toMatchObject({ kind: 'unknown', cause: 0, cleanupPending: false })
+  expect((await session.confirm(observation.witness)).kind).toBe('confirmed')
+  expect(await session.observe()).toBe(observation)
+  expect({ opens, syncs }).toEqual({ opens: 3, syncs: 2 })
+  await session.settleResources()
+}))
+
+it('retains acknowledgement when close fails and only retries the original close', async () => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{}')
+  let opens = 0, closes = 0, syncs = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    opens++
+    const h = await open(p, flags), close = h.close, sync = h.sync
+    if (flags === 'r+') {
+      h.sync = async function () { syncs++; return Reflect.apply(sync, h, []) }
+      h.close = async function () { if (++closes === 1) throw 0; return Reflect.apply(close, h, []) }
+    }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  const first = await session.confirm(observation.witness)
+  expect(first).toMatchObject({ kind: 'confirmed', cleanupPending: true })
+  await session.settleResources()
+  const second = await session.confirm(observation.witness)
+  expect(second).toMatchObject({ kind: 'confirmed', cleanupPending: false })
+  if (first.kind !== 'confirmed' || second.kind !== 'confirmed') throw new Error('not confirmed')
+  expect(second.ack).toBe(first.ack)
+  await session.settleResources()
+  expect({ opens, closes, syncs }).toEqual({ opens: 2, closes: 2, syncs: 1 })
+}))
+
+it('joins concurrent confirmation and settlement, and denies a revoked close result', async () => fixture(async ({ root, path, scope, releaseLease }) => {
+  await writeFile(path, '{}')
+  const closing = gate(), finish = gate()
+  let opens = 0, closes = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    opens++
+    const h = await open(p, flags), close = h.close
+    if (flags === 'r+') h.close = async function () { closes++; closing.release(); await finish.promise; return Reflect.apply(close, h, []) }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  const first = session.confirm(observation.witness), second = session.confirm(observation.witness)
+  expect(first).toBe(second)
+  const disposition = first.then(() => 'success', () => 'revoked')
+  const settled = session.settleResources()
+  await closing.promise
+  await releaseLease()
+  finish.release()
+  expect(await disposition).toBe('revoked')
+  await settled
+  expect({ opens, closes }).toEqual({ opens: 2, closes: 1 })
+}))
+
+it('confirms unchanged literal v2 bytes across bounded chunks', async () => fixture(async ({ root, path, scope }) => {
+  const raw = `{ "version": 2, "payload": "${'x'.repeat(150000)}" }\n`
+  await writeFile(path, raw)
+  let maxRead = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    const h = await open(p, flags), read = h.read
+    if (flags === 'r+') h.read = (async function (...args: Parameters<typeof read>) { maxRead = Math.max(maxRead, Number((args as unknown[])[2])); return Reflect.apply(read, h, args) }) as typeof read
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  expect((await session.confirm(observation.witness)).kind).toBe('confirmed')
+  expect(maxRead).toBeLessThanOrEqual(65536)
+  expect(await (await import('node:fs/promises')).readFile(path, 'utf8')).toBe(raw)
+  await session.settleResources()
+}))
+
+it('denies confirmation revoked while sync is held', async () => fixture(async ({ root, path, scope, releaseLease }) => {
+  await writeFile(path, '{}')
+  const syncing = gate(), finish = gate()
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    const h = await open(p, flags), sync = h.sync
+    if (flags === 'r+') h.sync = async function () { syncing.release(); await finish.promise; return Reflect.apply(sync, h, []) }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  const pending = session.confirm(observation.witness).then(() => 'success', () => 'revoked')
+  await syncing.promise
+  await releaseLease()
+  finish.release()
+  expect(await pending).toBe('revoked')
+  await session.settleResources()
+}))

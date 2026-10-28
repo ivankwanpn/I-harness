@@ -1,11 +1,11 @@
 import { lstat, open } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
-import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation } from '@i-harness/session-persistence'
+import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
 
 const LIMIT = 64 * 1024 * 1024
 const CHUNK = 64 * 1024
-type Opener = (path: string, flags: 'r') => Promise<FileHandle>
+type Opener = (path: string, flags: 'r' | 'r+') => Promise<FileHandle>
 type Resource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
 
 /** Private raw observation owner. Confirmation and Documents admission are separate future owners. */
@@ -19,6 +19,9 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
   const resources = new Set<Resource>()
   let flight: Promise<Readonly<{ kind: 'absent' }> | RawTaskObservation> | undefined
   let cleanup: Promise<void> | undefined
+  let confirming: Promise<Confirmation> | undefined
+  let ack: TaskDocumentAck | undefined
+  let conflict = false
   // This record is private to the session and is installed only when the
   // original observation can actually be returned to its caller.
   type Original = { witness: RawTaskObservation['witness']; bytes: Buffer; file: Awaited<ReturnType<typeof lstat>>; root: Awaited<ReturnType<typeof lstat>> }
@@ -105,17 +108,86 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     confirmationInput(body.value.witness)
     return body.value
   }
+  class Changed extends Error {}
+  async function confirmOriginal(input: Original, priorCleanup: Promise<void> | undefined): Promise<Confirmation> {
+    if (priorCleanup) await priorCleanup
+    if (resources.size) throw new Error('Task document cleanup pending')
+    let resource: Resource | undefined
+    let outcome: Confirmation
+    try {
+      guard()
+      const rootNow = await directories()
+      const pathNow = await lstat(filePath); guard()
+      if (!sameDirectory(input.root, rootNow) || !pathNow.isFile() || pathNow.isSymbolicLink() || !same(input.file, pathNow)) throw new Changed()
+      const handle = await opener(filePath, 'r+')
+      resource = { handle, close: handle.close, failed: false }
+      resources.add(resource)
+      const verify = async () => {
+        guard()
+        const stat = await handle.stat(); guard()
+        if (!stat.isFile() || !same(input.file, stat)) throw new Changed()
+        const chunk = Buffer.alloc(Math.min(CHUNK, Math.max(1, input.bytes.length)))
+        let offset = 0
+        while (offset < input.bytes.length) {
+          const n = Math.min(chunk.length, input.bytes.length - offset)
+          const result = await handle.read(chunk, 0, n, offset); guard()
+          if (!result.bytesRead || !chunk.subarray(0, result.bytesRead).equals(input.bytes.subarray(offset, offset + result.bytesRead))) throw new Changed()
+          offset += result.bytesRead
+        }
+        const eof = await handle.read(chunk, 0, 1, offset); guard()
+        if (eof.bytesRead) throw new Changed()
+        const after = await handle.stat(); guard()
+        const pathAfter = await lstat(filePath); guard()
+        const rootAfter = await directories()
+        if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || !same(input.file, after) || !same(input.file, pathAfter) || !sameDirectory(input.root, rootAfter)) throw new Changed()
+      }
+      await verify()
+      guard()
+      await handle.sync(); guard()
+      await verify()
+      guard()
+      ack = Object.freeze({}) as TaskDocumentAck
+      outcome = { kind: 'confirmed', ack, durability: 'file-synced-process-restart-v1', cleanupPending: false }
+    } catch (cause) {
+      if (cause instanceof Changed || (cause as NodeJS.ErrnoException)?.code === 'ENOENT') { conflict = true; outcome = { kind: 'conflict', cleanupPending: false } }
+      else outcome = { kind: 'unknown', cause, cleanupPending: false }
+    }
+    if (resource) {
+      try { await closeResource(resource) }
+      catch (cause) {
+        if (outcome.kind === 'unknown') outcome = { kind: 'unknown', cause: new AggregateError([outcome.cause, cause], 'Task document confirmation and close failed'), cleanupPending: true }
+        else outcome = { ...outcome, cleanupPending: true }
+      }
+    }
+    guard()
+    return Object.freeze(outcome)
+  }
   const session = Object.freeze({
     observe(): Promise<Readonly<{ kind: 'absent' }> | RawTaskObservation> {
       if (this !== session) return Promise.reject(new TypeError('Invalid observation receiver'))
       try { guard() } catch (error) { return Promise.reject(error) }
       return flight ??= Promise.resolve().then(read)
     },
+    confirm(witness: TaskDocumentWitness): Promise<Confirmation> {
+      if (this !== session) return Promise.reject(new TypeError('Invalid confirmation receiver'))
+      let input: Original
+      try { input = confirmationInput(witness) } catch (error) { return Promise.reject(error) }
+      if (confirming) return confirming
+      if (ack) return Promise.resolve(Object.freeze({ kind: 'confirmed', ack, durability: 'file-synced-process-restart-v1', cleanupPending: resources.size > 0 }))
+      if (conflict) return Promise.resolve(Object.freeze({ kind: 'conflict', cleanupPending: resources.size > 0 }))
+      const priorCleanup = cleanup
+      const attempt = Promise.resolve().then(() => confirmOriginal(input, priorCleanup))
+      confirming = attempt
+      void attempt.finally(() => { if (confirming === attempt) confirming = undefined }).catch(() => {})
+      return attempt
+    },
     settleResources(): Promise<void> {
       if (this !== session) return Promise.reject(new TypeError('Invalid observation receiver'))
       if (cleanup) return cleanup
+      const admittedConfirmation = confirming
       const attempt = Promise.resolve().then(async () => {
         if (flight) await flight.catch(() => {})
+        if (admittedConfirmation) await admittedConfirmation.catch(() => {})
         let failed = false, cause: unknown
         for (const resource of resources) try { await closeResource(resource) } catch (error) { if (!failed) { failed = true; cause = error } }
         if (failed) throw cause
@@ -125,5 +197,5 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       return attempt
     },
   })
-  return session
+  return session satisfies TaskDocumentBackendSession
 }
