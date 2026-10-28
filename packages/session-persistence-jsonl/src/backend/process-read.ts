@@ -74,7 +74,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             await ports.checkDeleted('document', key); const doc = ports.document(key);
             if (!same(root, await ancestors(doc))) bad();
             try { const captured = await file(doc); documents.set(key, Object.freeze({ kind: 'present', value: freezeJsonData(JSON.parse(decoder.decode(captured.bytes))) })); witnesses.set(key, captured.witness); }
-            catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; if (!same(root, await ancestors(doc))) bad(); await ports.checkDeleted('document', key); documents.set(key, Object.freeze({ kind: 'absent' })); }
+            catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error; if (!same(root, await ancestors(doc))) bad(); await ports.checkDeleted('document', key); documents.set(key, Object.freeze({ kind: 'absent' })); }
         }
         let finished = false, checking = false, failed = false;
         async function cheap() {
@@ -86,7 +86,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 await ports.checkDeleted('document', key); const doc = ports.document(key), witness = witnesses.get(key);
                 if (!same(root, await ancestors(doc))) bad();
                 try { const info = await lstat(doc, { bigint: true }); if (!witness || !info.isFile() || info.isSymbolicLink() || !same(witness.identity, identity(info))) bad(); }
-                catch (error) { if (witness || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+                catch (error) { if (witness || (error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error; }
             }
             ports.assertOriginal();
         }
@@ -109,7 +109,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
                 for (const key of keys) {
                     await ports.checkDeleted('document', key); const witness = witnesses.get(key), doc = ports.document(key);
                     if (witness) await verify(witness, root);
-                    else { if (!same(root, await ancestors(doc))) bad(); try { await lstat(doc, { bigint: true }); bad(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; } }
+                    else { if (!same(root, await ancestors(doc))) bad(); try { await lstat(doc, { bigint: true }); bad(); } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error; } }
                 }
                 // Verification and its resource closes can yield. Recheck the
                 // original namespace, tombstones, paths and absent documents

@@ -7,10 +7,11 @@ import { lookupJsonlProcessRead } from '../src/backend-factory.ts';
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session';
 import * as observationModule from '../src/backend/process-read.ts';
 
-const closeInterposition = vi.hoisted(() => ({ path: '', invalidIdentity: false, run: undefined as undefined | (() => Promise<void>) }));
+const closeInterposition = vi.hoisted(() => ({ path: '', invalidIdentity: false, statFailure: undefined as undefined | { path: string; value: unknown }, run: undefined as undefined | (() => Promise<void>) }));
 vi.mock('node:fs/promises', async importOriginal => {
     const actual = await importOriginal<typeof import('node:fs/promises')>();
     return { ...actual, lstat: async (...args: Parameters<typeof actual.lstat>) => {
+        if (closeInterposition.statFailure?.path === String(args[0])) throw closeInterposition.statFailure.value;
         const stat = await actual.lstat(...args);
         return closeInterposition.invalidIdentity ? Object.assign(stat, { ino: 0n }) : stat;
     }, open: async (...args: Parameters<typeof actual.open>) => {
@@ -21,6 +22,16 @@ vi.mock('node:fs/promises', async importOriginal => {
         }
         return handle;
     } };
+});
+
+for (const cause of [null, undefined]) it(`preserves a thrown ${String(cause)} document failure instead of treating it as absence`, async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-falsey-doc-')), backend = createJsonlBackend(root);
+    try {
+        await backend.create('s', { sessionId: 's', formatVersion: CURRENT_FORMAT_VERSION, createdAt: '2026-01-01T00:00:00.000Z' });
+        await backend.putDocument('task-s', { value: 'original' });
+        closeInterposition.statFailure = { path: join(root, 'task-s.doc.jsonl'), value: cause };
+        await expect(lookupJsonlProcessRead(backend)!.capture('s', ['task-s'])).rejects.toBe(cause);
+    } finally { closeInterposition.statFailure = undefined; await rm(root, { recursive: true, force: true }); }
 });
 
 it('refuses a store reached through a junction above its configured root', async () => {
