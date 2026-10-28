@@ -19,11 +19,18 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
   const resources = new Set<Resource>()
   let flight: Promise<Readonly<{ kind: 'absent' }> | RawTaskObservation> | undefined
   let cleanup: Promise<void> | undefined
-  // Kept in this owner for the later original-byte confirmation; never returned.
-  let originalBytes: Buffer | undefined
+  // This record is private to the session and is installed only when the
+  // original observation can actually be returned to its caller.
+  type Original = { witness: RawTaskObservation['witness']; bytes: Buffer; file: Awaited<ReturnType<typeof lstat>>; root: Awaited<ReturnType<typeof lstat>> }
+  let original: Original | undefined
   function guard() {
     if (!isHeldTaskDocumentScope(scope) || scope.assertActive !== assert) throw new TypeError('Changed task document scope')
     Reflect.apply(assert, scope, [])
+  }
+  function confirmationInput(witness: RawTaskObservation['witness']): Original {
+    guard()
+    if (!original || witness !== original.witness) throw new TypeError('Invalid task document witness')
+    return original
   }
   async function closeResource(resource: Resource) {
     if (resource.failed && resource.handle.fd < 0) throw resource.cause
@@ -61,7 +68,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     const handle = await opener(filePath, 'r')
     const resource: Resource = { handle, close: handle.close, failed: false }
     resources.add(resource)
-    let body: { ok: true; value: RawTaskObservation } | { ok: false; cause: unknown }
+    let body: { ok: true; value: RawTaskObservation; original: Original } | { ok: false; cause: unknown }
     try {
       guard()
       const opened = await handle.stat(); guard()
@@ -81,9 +88,8 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       if (!same(before, afterHandle) || !same(before, afterPath) || !sameDirectory(rootBefore, rootAfter)) throw new Error('Changed task document')
       const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       freeze(value)
-      originalBytes = bytes
       const witness = Object.freeze({}) as RawTaskObservation['witness']
-      body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }) }
+      body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }), original: { witness, bytes, file: before, root: rootBefore } }
     } catch (cause) { body = { ok: false, cause } }
     try { await closeResource(resource) }
     catch (cause) {
@@ -95,6 +101,8 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     if (!body.ok) throw body.cause
     // Closure is already recorded; revocation during close cannot expose a value.
     guard()
+    original = body.original
+    confirmationInput(body.value.witness)
     return body.value
   }
   const session = Object.freeze({
@@ -111,7 +119,6 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
         let failed = false, cause: unknown
         for (const resource of resources) try { await closeResource(resource) } catch (error) { if (!failed) { failed = true; cause = error } }
         if (failed) throw cause
-        void originalBytes
       })
       cleanup = attempt
       void attempt.finally(() => { if (cleanup === attempt) cleanup = undefined }).catch(() => {})
