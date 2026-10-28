@@ -23,7 +23,7 @@ export interface SessionWriteBehindOptions {
  * write, failure retention, and explicit quiescence barrier.
  */
 export class SessionWriteBehind {
-  private pending: SessionEvent[] = []
+  private pending: { event: SessionEvent; witness?: { end(outcome: 'settled' | 'unknown'): void } }[] = []
   private timer: ReturnType<typeof setTimeout> | undefined
   private active: Promise<void> | undefined
   private barrier: Promise<void> | undefined
@@ -38,9 +38,9 @@ export class SessionWriteBehind {
   }
 
   /** Copy one event into the persistence-owned queue and start a fixed deadline. */
-  enqueue(event: SessionEvent): void {
+  enqueue(event: SessionEvent, witness?: { end(outcome: 'settled' | 'unknown'): void }): void {
     const wasEmpty = this.pending.length === 0
-    this.pending.push(structuredClone(event))
+    this.pending.push({ event: structuredClone(event), witness })
     if (this.barrier !== undefined) return
     if (this.automaticPaused) {
       this.automaticPaused = false
@@ -122,7 +122,7 @@ export class SessionWriteBehind {
     const batch = this.pending.splice(0)
     this.cancelTimer()
     this.deadlineExpired = false
-    const operation = Promise.resolve().then(() => this.options.write(batch))
+    const operation = Promise.resolve().then(() => this.options.write(batch.map(item => item.event)))
     const active = operation
       .catch((error: unknown) => {
         this.pending = batch.concat(this.pending)
@@ -132,6 +132,7 @@ export class SessionWriteBehind {
         if (background) this.options.reportBackgroundFailure(error)
         throw error
       })
+      .then(() => { for (const item of batch) item.witness?.end('settled') })
       .finally(() => {
         this.active = undefined
       })
