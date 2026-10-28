@@ -112,3 +112,45 @@ it('preserves typed cancellation before selected promotion issue',async()=>{
   await x.backend.settleBootstrapCaptureIO('target',x.held)
  }finally{await x.close()}
 })
+
+function headerOperation(f:ReturnType<typeof fixture>){return {invocation:f.route.request.invocation,target:{kind:'new' as const},stageBytes:Buffer.from(f.built.stageBytes),headerBytes:Buffer.from(f.built.headerBytes)}}
+async function diskSnapshot(root:string){const names=(await readdir(root)).sort();return Promise.all(names.map(async name=>[name,await readFile(join(root,name)).catch(()=>undefined)] as const))}
+it('repeats exact preparation and snapshots route as well as byte inputs',async()=>{
+ const x=await setup(),f=fixture(),route=structuredClone(f.route),sourceCallback=vi.fn(),op={...headerOperation(f),sourceCallback},original=headerOperation(f)
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);const flight=x.backend.prepareSelectedHeader('target',x.issuer,route,op);route.request.invocation.operationId='changed';op.stageBytes.fill(0);op.headerBytes.fill(0)
+ const first=await flight;expect(first.kind).toBe('committed');const before=await diskSnapshot(x.root);expect(await x.backend.prepareSelectedHeader('target',x.issuer,f.route,original)).toEqual(first);expect(await diskSnapshot(x.root)).toEqual(before);expect(sourceCallback).not.toHaveBeenCalled();await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{await x.close()}
+})
+it('missing original stage refuses preparation and reconciliation without mutation',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f)
+ try{const before=await diskSnapshot(x.root);expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('unknown');expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('unknown');expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it('refuses changed promotion prefix without repair',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),paths=selectedBootstrapPaths(join(x.root,'target.jsonl'),f.route)
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);await writeFile(paths.promote,'bad prefix');const before=await diskSnapshot(x.root);expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('conflict');expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('conflict');expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it('refuses changed header prefix without repair',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),path=join(x.root,'target.jsonl')
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('committed');await writeFile(path,'wrong');const before=await diskSnapshot(x.root);expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('conflict');expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('conflict');expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it('rejects wrong request, route and header before any mutation',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),route=structuredClone(f.route),request=structuredClone(op.invocation);route.request.invocation.operationId='other';request.operationId='other'
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);const before=await diskSnapshot(x.root)
+ for(const [r,o] of [[route,op],[f.route,{...op,invocation:request}],[f.route,{...op,headerBytes:Buffer.from('wrong')}]] as const){await expect(x.backend.prepareSelectedHeader('target',x.issuer,r,o)).rejects.toThrow();await expect(x.backend.reconcileSelectedHeader('target',x.held,r,o)).rejects.toThrow()}
+ expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it('refuses publication artifact with reservation unchanged',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),paths=selectedBootstrapPaths(join(x.root,'target.jsonl'),f.route)
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);await writeFile(paths.publish,'foreign publication');const before=await diskSnapshot(x.root);expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('conflict');expect((await x.backend.reconcileSelectedHeader('target',x.held,f.route,op)).kind).toBe('conflict');expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it.each([null,undefined,false,0,''])('falsey selected header beforeIssue remains unknown: %s',async fault=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f)
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes);const before=await diskSnapshot(x.root),issuer=issuingFactOwner(x.held,()=>{throw fault});expect((await x.backend.prepareSelectedHeader('target',issuer,f.route,op)).kind).toBe('unknown');expect(await diskSnapshot(x.root)).toEqual(before);await x.backend.settleBootstrapCaptureIO('target',x.held)}finally{await x.close()}
+})
+it('retains falsey sync and retryable close debt on original selected header ledger',async()=>{
+ const x=await setup(),f=fixture(),op=headerOperation(f),native=await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');let failClose=true
+ try{await x.backend.reserveSelectedCapture('target',x.issuer,f.route,f.bytes)
+ vi.mocked(open).mockImplementation(async(...args)=>{const h=await native.open(...args);if(args[1]!=='wx'||!String(args[0]).endsWith('.promote'))return h;return new Proxy(h,{get(t,k){if(k==='sync')return async()=>{throw false};if(k==='close')return async()=>{if(failClose)throw false;return t.close()};const v=Reflect.get(t,k);return typeof v==='function'?v.bind(t):v}})})
+ expect((await x.backend.prepareSelectedHeader('target',x.issuer,f.route,op)).kind).toBe('unknown');await expect(x.backend.settleBootstrapCaptureIO('target',{...x.held})).rejects.toThrow();await expect(x.backend.settleBootstrapCaptureIO('target',x.held)).rejects.toThrow();failClose=false;await x.backend.settleBootstrapCaptureIO('target',x.held)
+ }finally{failClose=false;vi.mocked(open).mockImplementation(native.open);await x.close()}
+})
