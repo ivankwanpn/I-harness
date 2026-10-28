@@ -10,6 +10,7 @@ export interface ChildInstructionContextInput {
 /** Session lifetime ownership; caller retains its document and plugin context. */
 export interface ChildInstructionContext {
   readonly requestContext: SessionRequestContext
+  settleOriginals(): Promise<void>
   retire(): void
   close(): Promise<void>
 }

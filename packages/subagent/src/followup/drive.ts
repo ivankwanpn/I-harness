@@ -71,6 +71,8 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
           if (waitActivation && !await waitActivation(gateSignal, pendingStop)) return
         } finally { off() }
         if (!executionCurrent()) return
+        await execution?.settlePredecessors(executionCurrent)
+        if (!executionCurrent()) return
         const previous = entry.resultCapture
         if (execution) await execution.settlePrevious(previous)
         else await previous?.settle()
@@ -89,10 +91,10 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
         if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
         if (!executionCurrent()) return
         if (resultStore?.forSource) {
-          execution?.admitSource()
+          execution?.admitSource(executionCurrent)
           const source = resultStore
-          resultStore = await (execution ? execution.invoke(() => source.forSource!(undefined, executionCurrent)) : source.forSource!(undefined, executionCurrent))
-          if (execution) execution.source = resultStore
+          resultStore = await (execution ? execution.invoke(() => source.forSource!(undefined, execution.resultCurrent.bind(execution))) : source.forSource!(undefined, executionCurrent))
+          if (execution) execution.retainSource(resultStore)
         }
         if (!executionCurrent()) return
         if (!isNondurableSession(entry.session) && !openGeneration) throw Object.assign(new Error('Managed child wake requires its generation owner'), { code: 'GENERATION_UNSUPPORTED' })

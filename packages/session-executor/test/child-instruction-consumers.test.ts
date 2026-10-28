@@ -227,6 +227,98 @@ it('installs one exact cold-resident lease before physical issue and routes actu
   } finally { await f.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
 }, 20000)
 
+it('interrupts an active physical turn and admits a distinct genuine inbox with the same original lease', async () => {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const requests: string[] = []
+  const server = createServer(async (request, response) => {
+    let body = ''; for await (const chunk of request) body += chunk
+    requests.push(body)
+    if (requests.length === 1) { entered.resolve(); await release.promise }
+    if (!response.destroyed) {
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'next real response' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)
+    }
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address(); if (!address || typeof address === 'string') throw Error('Missing loopback fixture')
+  const f = await cold(createOpenAICompatibleClient({ model: 'active-fixture', apiKey: 'fixture-loopback', baseUrl: `http://127.0.0.1:${address.port}` }), 1, undefined, false, true)
+  try {
+    f.release(); const assembly = await f.constructing; await entered.promise
+    const entry = f.entries[0]!, original = entry.controller, lease = observed.leases[0]!, owner = entry.factOwner, view = entry.session
+    expect(entry.status).toBe('running'); expect(original.signal.aborted).toBe(false)
+    expect(view.events.filter(event => event.type === 'context/action' && event.op === 'close')).toHaveLength(0)
+    expect(requests).toHaveLength(1)
+    await assembly.tools.get('interrupt_agent')!.execute({ target: entry.path }, {})
+    expect(original.signal.aborted).toBe(true)
+    release.resolve(); await entry.followupChain
+    expect(view.events.filter(event => event.type === 'context/action' && event.op === 'close')).toMatchObject([{ disposition: 'stopped' }])
+    expect(lease.input.lifetime.available()).toBe(true); expect(lease.closes).toBe(0)
+    await assembly.tools.get('followup_task')!.execute({ target: entry.path, message: 'distinct genuine inbox after active interruption' }, {})
+    await entry.followupChain
+    expect(requests).toHaveLength(2); expect(observed.leases).toHaveLength(1)
+    expect(entry.controller).not.toBe(original); expect(entry.controller.signal.aborted).toBe(false)
+    expect(entry.factOwner).toBe(owner); expect(entry.session).toBe(view)
+    expect(view.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual(['saved inbox 0', 'distinct genuine inbox after active interruption'])
+    const opens = view.events.filter(event => event.type === 'context/action' && event.op === 'open')
+    expect(opens).toHaveLength(2); expect(opens[0]!.actionId).not.toBe(opens[1]!.actionId)
+    expect(observed.handoffs).toHaveLength(1)
+    expect(observed.handoffs[0]!.physicalExecutionReceipt).toMatchObject({ version: 1, sendId: expect.any(String) })
+    console.info('active-interruption-original-owner', JSON.stringify({ session: entry.sessionId, owner: observed.generations[0]?.action.owner, originalActions: opens, requests: requests.length, leases: observed.leases.length, receipt: observed.handoffs[0]!.physicalExecutionReceipt }))
+  } finally { release.resolve(); await f.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+}, 20000)
+
+it.each(['acknowledge', 'retire', 'late-source-failure'] as const)('holds a queued genuine inbox before new effects until its exact predecessor close and finished sources acknowledge (%s)', async mode => {
+  const firstRequest = Promise.withResolvers<void>(), responseGate = Promise.withResolvers<void>(), recoveryEntered = Promise.withResolvers<void>(), acknowledgment = Promise.withResolvers<void>()
+  let requests = 0, closeKey: BatchKey | undefined, closeCaptures = 0
+  const server = createServer(async (request, response) => {
+    for await (const chunk of request) { void chunk }
+    if (++requests === 1) { firstRequest.resolve(); await responseGate.promise }
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'physical result' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`)
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address(); if (!address || typeof address === 'string') throw Error('Missing loopback address')
+  const f = await cold(createOpenAICompatibleClient({ model: 'queued-fixture', apiKey: 'fixture-loopback', baseUrl: `http://127.0.0.1:${address.port}` }))
+  const append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!, entry = f.entries[0]!
+  const document = entry.factOwner as import('@i-harness/session-persistence').ManagedDocument
+  const settleFinished = document.settleFinishedActions.bind(document)
+  const finished = vi.spyOn(document, 'settleFinishedActions')
+  let failFinished = mode === 'late-source-failure'
+  finished.mockImplementation(async function () { if (failFinished) throw undefined; return settleFinished.call(entry.factOwner) })
+  f.backend.appendOwnedBatch = async (...args) => {
+    const result = await append(...args)
+    if (!closeKey && args[0] === 'child0' && decodeFactBatch(args[3].bytes).events.some(event => event.type === 'context/action' && event.op === 'close')) { closeKey = args[3].key; closeCaptures++; return { kind: 'unknown', key: closeKey } }
+    return result
+  }
+  f.backend.reconcileOwnedBatch = async (...args) => {
+    if (closeKey?.batchId === args[3].key.batchId) { recoveryEntered.resolve(); await acknowledgment.promise }
+    return reconcile(...args)
+  }
+  try {
+    f.release(); const assembly = await f.constructing; await firstRequest.promise
+    const originalController = entry.controller, lease = observed.leases[0]!, originalOwner = entry.factOwner
+    await assembly.tools.get('followup_task')!.execute({ target: entry.path, message: 'queued distinct genuine inbox' }, {})
+    responseGate.resolve(); await recoveryEntered.promise
+    expect(requests).toBe(1); expect(entry.controller).toBe(originalController)
+    expect(observed.generations.reduce((sum, row) => sum + row.opens, 0)).toBe(1)
+    expect(finished).not.toHaveBeenCalled(); expect(lease.closes).toBe(0)
+    if (mode === 'retire') f.sub.table.update(entry.path, entry, { closing: true })
+    acknowledgment.resolve(); await entry.followupChain
+    expect(observed.leases).toHaveLength(1); expect(entry.factOwner).toBe(originalOwner); expect(closeCaptures).toBe(1)
+    if (mode === 'acknowledge') {
+      expect(requests).toBe(2); expect(entry.controller).not.toBe(originalController)
+      expect(finished).toHaveBeenCalledTimes(1)
+      expect(entry.session.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual(['saved inbox 0', 'queued distinct genuine inbox'])
+      expect(entry.session.events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(2)
+    } else {
+      expect(requests).toBe(1); expect(entry.controller).toBe(originalController)
+      expect(entry.session.events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
+      expect(entry.session.events.filter(event => event.type === 'user/message').map(event => event.text)).toEqual(['saved inbox 0'])
+      if (mode === 'late-source-failure') expect(finished).toHaveBeenCalledTimes(1)
+    }
+  } finally { failFinished = false; responseGate.resolve(); acknowledgment.resolve(); await f.close(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+}, 20000)
+
 it.each(['mapping', 'reconcile'] as const)('joins the actual resident original held %s after synchronous retire and preserves its dependencies', async phase => {
   const f = await cold(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
   let restore = () => {}, operation: Promise<unknown> | undefined, closing: Promise<void> | undefined
@@ -411,11 +503,12 @@ it('keeps an actual parent file mapping inside the original assembly host finite
   } finally { release.resolve(); restoreMapping(); await reading?.catch(() => {}); await closing; await f.close() }
 }, 20000)
 
-it('OPEN active generation publication unknown retains its original lease and generation recovery debt', async () => {
+it('recovers the original active generation after unknown publication without replay or replacement', async () => {
   const f = await cold(), append = f.backend.appendOwnedBatch!, reconcile = f.backend.reconcileOwnedBatch!
   let unknown: BatchKey | undefined, acknowledged = false, publications = 0
   let body: { occurred: false } | { occurred: true; value: unknown } = { occurred: false }
   const settlements: { operation: string; kind: string; code?: string }[] = []
+  const closeCaptures: { event: import('@i-harness/core-session').GenerationActionEvent; handle: object; reconciles: number }[] = []
   const entry = f.entries[0]!, begin = entry.factOwner!.beginAction.bind(entry.factOwner)
   entry.factOwner!.beginAction = (...args) => {
     const action = begin(...args), register = action.registerSettlementSource.bind(action)
@@ -423,6 +516,11 @@ it('OPEN active generation publication unknown retains its original lease and ge
       const source = register(...input), capture = source.generation.capture.bind(source.generation)
       source.generation.capture = event => {
         const original = capture(event), admit = original.admit.bind(original)
+        if (event.type === 'context/action' && event.op === 'close') {
+          const row = { event, handle: original, reconciles: 0 }, reconcile = original.reconcile.bind(original)
+          closeCaptures.push(row)
+          original.reconcile = async function () { expect(this).toBe(original); row.reconciles++; return reconcile() }
+        }
         original.admit = async () => { const outcome = await admit(); settlements.push({ operation: `${event.type}/${event.op}`, kind: outcome.kind, ...('code' in outcome ? { code: outcome.code } : {}) }); return outcome }
         return original
       }
@@ -445,6 +543,10 @@ it('OPEN active generation publication unknown retains its original lease and ge
     for (let attempt = 0; attempt < 2; attempt++) {
       if (attempt === 1) acknowledged = true
       attempts.push(await assembly.dispose().then(() => ({ rejected: false }), error => ({ rejected: true, leaves: leaves(error) })))
+      if (attempt === 0) {
+        expect(attempts[0]!.rejected).toBe(true)
+        expect([original.drains, lease.closes, close.mock.calls.length, observed.hostCloses]).toEqual([0, 0, 0, 0])
+      }
     }
     console.info('OPEN-active-generation-publication', JSON.stringify({ root: f.root, unknown, acknowledged, publications, requests: f.requests(),
       inbox: entry.session.events.find(event => event.type === 'subagent/inbox'), owner: original.action.owner,
@@ -455,6 +557,13 @@ it('OPEN active generation publication unknown retains its original lease and ge
     // Required recovery remains the acceptance oracle; no manual runtime,
     // coordinator or foreign capture reconciliation is used to clear the debt.
     expect(attempts[1]!.rejected).toBe(false)
+    expect(closeCaptures).toHaveLength(1); expect(closeCaptures[0]!.reconciles).toBe(1)
+    expect(publications).toBe(1); expect(f.requests()).toBe(0); expect(observed.leases).toHaveLength(1)
+    expect(observed.agents.filter(options => options.session === entry.session)).toHaveLength(1)
+    expect(entry.session.events.filter(event => event.type === 'subagent/inbox')).toHaveLength(1)
+    expect(entry.session.events.filter(event => event.type === 'context/action' && event.op === 'open')).toHaveLength(1)
+    const installed = entry.session.events.find(event => event.type === 'context/action' && event.op === 'close')!
+    expect(installed).toMatchObject(closeCaptures[0]!.event)
   } catch (error) { body = { occurred: true, value: error }; throw error }
   finally {
     acknowledged = true

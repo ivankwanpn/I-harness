@@ -17,6 +17,7 @@ import { createChildInstructionHost } from '../src/context/instructions/child-ho
 import { rmWorkspaceSync } from './helpers.ts'
 vi.mock('node:fs/promises', async original => ({ ...await original<typeof import('node:fs/promises')>() }))
 const seams = vi.hoisted(() => ({ sectionFault: false, closeFault: false, fault: undefined as unknown, gate: undefined as Promise<void> | undefined,
+  publicationFault: false, publicationGate: undefined as Promise<void> | undefined, publicationCalls: 0,
   failRuntimeIndex: undefined as number | undefined,
   runtimes: [] as { attempts: number; closed: boolean }[], managers: [] as { attempts: number; closed: boolean }[],
   originalClose: undefined as (() => void) | undefined, succeeded: 0, beforeSucceeded: undefined as (() => void) | undefined }))
@@ -24,7 +25,11 @@ vi.mock('@i-harness/runtime-context', async original => {
   const api = await original<typeof import('@i-harness/runtime-context')>()
   return { ...api, createRuntimeContext(...args: Parameters<typeof api.createRuntimeContext>) {
     const runtime = api.createRuntimeContext(...args), entry = { attempts: 0, closed: false }, index = seams.runtimes.length; seams.runtimes.push(entry)
-    return { ...runtime, registerSection(...section: Parameters<typeof runtime.registerSection>) {
+    return { ...runtime, async settleOriginals() {
+      seams.publicationCalls++; await seams.publicationGate
+      if (seams.publicationFault) throw seams.fault
+      await runtime.settleOriginals()
+    }, registerSection(...section: Parameters<typeof runtime.registerSection>) {
       const result = runtime.registerSection(...section); if (seams.sectionFault) throw seams.fault; return result
     }, async close() { entry.attempts++; seams.originalClose?.(); await seams.gate; if (seams.closeFault && (seams.failRuntimeIndex === undefined || seams.failRuntimeIndex === index)) throw seams.fault; await runtime.close(); entry.closed = true } }
   } }
@@ -37,7 +42,7 @@ vi.mock('../src/context/instructions/manager.ts', async original => {
       async close() { entry.attempts++; await manager.close(); entry.closed = true } }
   } }
 })
-afterEach(() => { seams.sectionFault = false; seams.closeFault = false; seams.failRuntimeIndex = undefined; seams.fault = undefined; seams.gate = undefined; seams.runtimes = []; seams.managers = []; seams.originalClose = undefined; seams.succeeded = 0; seams.beforeSucceeded = undefined })
+afterEach(() => { seams.publicationFault = false; seams.publicationGate = undefined; seams.publicationCalls = 0; seams.sectionFault = false; seams.closeFault = false; seams.failRuntimeIndex = undefined; seams.fault = undefined; seams.gate = undefined; seams.runtimes = []; seams.managers = []; seams.originalClose = undefined; seams.succeeded = 0; seams.beforeSucceeded = undefined })
 const turn = () => new Promise<void>(resolve => setImmediate(resolve))
 async function fixture() {
   const cwd = await mkdtemp(join(tmpdir(), 'ic-l-')), childDir = join(cwd, 'nested'); await mkdir(childDir)
@@ -53,6 +58,24 @@ async function fixture() {
   } }
 }
 
+it.each([undefined, null, false, 0, ''])('shares original nonretiring publication failure %s with concurrent lease close before a later explicit retry', async failure => {
+  const f = await fixture(), lease = f.host.create(f.input), gate = Promise.withResolvers<void>()
+  seams.publicationFault = true; seams.fault = failure; seams.publicationGate = gate.promise
+  try {
+    const publication = lease.settleOriginals(), alias = lease.settleOriginals(), closing = lease.close()
+    expect(publication).toBe(alias)
+    await turn(); expect(seams.publicationCalls).toBe(1)
+    expect(seams.runtimes[0]!.attempts).toBe(0)
+    gate.resolve()
+    for (const attempt of [publication, alias, closing]) await expect(attempt).rejects.toBe(failure)
+    expect(seams.runtimes[0]!.attempts).toBe(0); expect(seams.managers[0]!.attempts).toBe(0)
+    seams.publicationFault = false
+    await lease.settleOriginals(); await lease.close()
+    expect(seams.publicationCalls).toBe(2); expect(seams.runtimes[0]!.attempts).toBe(1)
+    expect(seams.managers[1]!.attempts).toBe(1)
+  } finally { gate.resolve(); seams.publicationFault = false; await f.close() }
+})
+
 it('host close joins original root and child mappings after synchronous retirement without closing borrowed owners', async () => {
   const f = await fixture(), lease = f.host.create(f.input), original = fs.realpath
   const gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(); let calls = 0
@@ -64,6 +87,8 @@ it('host close joins original root and child mappings after synchronous retireme
     const a = f.host.observe({ path: f.childDir, kind: 'directory' }, { session: f.session })
     const b = f.host.observe({ path: f.childDir, kind: 'directory' }, { session: f.child })
     await entered.promise
+    // Do not wait for this manager mapping to reach a runtime render.
+    await lease.settleOriginals()
     let closed = false; const closing = f.host.close().then(() => { closed = true })
     await turn(); expect(closed).toBe(false); expect(seams.runtimes[0]!.attempts).toBe(0)
     expect(lease.requestContext.capture()).toBeUndefined(); expect(lease.requestContext.current(undefined)).toBe(false)

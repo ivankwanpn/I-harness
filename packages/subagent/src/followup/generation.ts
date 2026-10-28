@@ -46,6 +46,9 @@ class OriginalGeneration implements RetainedResidentResource {
   rawNext?: Promise<void>
   controller?: AbortController
   source?: import('../task/result.ts').TaskResultStore
+  private originalResultSource?: import('../task/result.ts').TaskResultStore
+  private sourceAdmissionCurrent?: () => boolean
+  private resultSourceAccepted = false
   previousResult?: ChildAgentEntry['resultCapture']
   private previousSettlement?: OriginalResult
   private resultSettlement?: OriginalResult
@@ -53,6 +56,12 @@ class OriginalGeneration implements RetainedResidentResource {
   private lifecycle?: AgentGenerationLifecycle
   private generation?: NonNullable<AgentInputOptions['generation']>
   private closeOriginalGeneration?: NonNullable<AgentInputOptions['generation']>['close']
+  private recoverOriginalGeneration?: () => Promise<void>
+  private originalCloseInvoked?: () => boolean
+  private settlePublication?: () => Promise<void>
+  private preparationBound = false
+  private closeInvocationOccurred = false
+  private cleanupAttemptOccurred = false
   private drainOriginalLifecycle?: AgentGenerationLifecycle['drain']
   private finishOriginalAction?: ManagedAction<ProducerFactOutcome>['finish']
   private generationClosed = false
@@ -114,7 +123,22 @@ class OriginalGeneration implements RetainedResidentResource {
     if (this.cleanupAcknowledged && this.previousSettlement?.acknowledged !== false && this.resultSettlement?.acknowledged !== false
       && (fenced || (this.entry.lastInboxSeq ?? -1) >= (this.input.seq ?? 0))) residentOwnerFor(this.deps).records.delete(this)
   }
-  admitSource(): void { this.sourceAdmitted = true }
+  admitSource(current?: () => boolean): void { this.sourceAdmitted = true; this.sourceAdmissionCurrent = current }
+  retainSource(source: import('../task/result.ts').TaskResultStore): void {
+    if (this.originalResultSource) throw new TypeError('Original result source already acquired')
+    this.originalResultSource = source; this.source = source
+    this.resultSourceAccepted = this.sourceAdmissionCurrent?.() !== false
+  }
+  resultCurrent(): boolean {
+    // Terminal retention belongs to this admitted original, including after
+    // Stop or table removal. It does not confer new execution permission.
+    return this.sourceAdmitted && (this.originalResultSource ? this.resultSourceAccepted : this.sourceAdmissionCurrent?.() !== false)
+      && this.entry.session === this.view && this.entry.factOwner === this.ownerAtCapture
+      && this.ownerAtCapture?.view === this.view
+      && this.view.events.some(event => event.type === 'subagent/inbox' && event.seq === this.input.seq && event.messageId === this.input.messageId)
+      && (!this.originalResultSource || this.source === this.originalResultSource)
+      && (this.resultSettlement ? !this.resultSettlement.acknowledged : !this.cleanupAcknowledged)
+  }
   preparationCleanup(): Promise<void> | undefined { return residentOwnerFor(this.deps).preparationCleanup(this.entry) }
   async open(controller: AbortController, current: () => boolean): Promise<FollowupGeneration> {
     if (this.openAttempted || this.retired) throw Object.assign(new Error('Original generation is closed'), { code: 'GENERATION_CLOSED' })
@@ -135,6 +159,8 @@ class OriginalGeneration implements RetainedResidentResource {
       const origin = { kind: 'delegated-input' as const, ref: 'inbox' as const, seq: this.input.seq!, messageId: this.input.messageId }
       this.generation = await invokeOriginal(this, () => this.lifecycle!.open('main', origin, { signal: controller.signal, start: this.intent.start, timeoutMs: this.intent.timeoutMs, maxAttempts: this.intent.maxAttempts }))
       this.closeOriginalGeneration = this.generation.close.bind(this.generation)
+      this.recoverOriginalGeneration = this.generation.recoverClose?.bind(this.generation)
+      this.originalCloseInvoked = this.generation.originalCloseInvoked?.bind(this.generation)
       return { options: { generation: this.generation, delegatedOrigin: origin, provenance: this.input.provenance! }, close: () => this.close() }
     } finally { this.opening = false; this.openingExit.resolve() }
   }
@@ -151,13 +177,38 @@ class OriginalGeneration implements RetainedResidentResource {
     void invokeOriginal(this, async () => {
       if (this.hasBody) await this.bodyExit.promise
       if (this.opening) await this.openingExit.promise
-      if (this.generation && !this.generationClosed) { await this.closeOriginalGeneration!(this.controller?.signal.aborted ? 'stopped' : 'failed'); this.generationClosed = true }
+      const laterAttempt = this.cleanupAttemptOccurred
+      this.cleanupAttemptOccurred = true
+      if (!this.preparationBound) {
+        const preparation = residentOwnerFor(this.deps).preparation(this.entry, this.view, this.ownerAtCapture)
+        this.settlePublication = preparation?.settleOriginals.bind(preparation)
+        this.preparationBound = true
+      }
+      await this.settlePublication?.()
+      if (this.generation && !this.generationClosed) {
+        const invoked = this.originalCloseInvoked ? this.originalCloseInvoked() : this.closeInvocationOccurred
+        if (laterAttempt && invoked && this.recoverOriginalGeneration) await this.recoverOriginalGeneration()
+        else { this.closeInvocationOccurred = true; await this.closeOriginalGeneration!(this.controller?.signal.aborted ? 'stopped' : 'failed') }
+        this.generationClosed = true
+      }
       if (this.lifecycle && !this.lifecycleDrained) { await this.drainOriginalLifecycle!(); this.lifecycleDrained = true }
       if (this.action && !this.actionFinished) { this.finishOriginalAction!(); this.actionFinished = true }
       this.cleanupAcknowledged = true
       this.releaseIfClean()
     }).then(attempt.resolve, attempt.reject)
     return attempt.promise
+  }
+  async settlePredecessors(current: () => boolean): Promise<void> {
+    const owner = residentOwnerFor(this.deps), finish = owner.beginCleanupAttempt()
+    try {
+      const predecessors = owner.generations(this.entry).filter(record => record instanceof OriginalGeneration && record !== this && record.view === this.view && record.ownerAtCapture === this.ownerAtCapture)
+      for (const record of predecessors) { await record.close(); if (!current()) return }
+      const preparation = owner.preparation(this.entry, this.view, this.ownerAtCapture)
+      if (preparation) {
+        await preparation.settleOriginals(); if (!current()) return
+        await preparation.settleFinishedActions()
+      }
+    } finally { finish() }
   }
 }
 

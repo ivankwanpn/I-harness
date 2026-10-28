@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ChildAgentEntry } from '../agent-table.ts'
 import type { SubagentToolDeps } from '../tools/types.ts'
+import { isNondurableSession } from '@i-harness/core-session'
 
 export interface RetainedResidentResource {
   readonly entry: ChildAgentEntry
@@ -73,6 +74,9 @@ class ResidentLifetime {
     return original ? original() : handle.settle()
   }
   generations(entry: ChildAgentEntry): RetainedResidentResource[] { return [...this.records].filter(r => r.kind === 'generation' && r.entry === entry) }
+  preparation(entry: ChildAgentEntry, view: ChildAgentEntry['session'], owner: ChildAgentEntry['factOwner']): ResidentPreparation | undefined {
+    for (const record of this.records) if (record instanceof ResidentPreparation && record.entry === entry && record.view === view && record.factOwner === owner) return record
+  }
   async closeGenerations(entry: ChildAgentEntry): Promise<void> {
     const results = await Promise.allSettled(this.generations(entry).map(record => record.close()))
     const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
@@ -119,6 +123,8 @@ export class ResidentPreparation implements RetainedResidentResource {
   private instructionLease?: import('../child/instruction-context.ts').ChildInstructionContext
   private retireInstruction?: () => void
   private closeInstruction?: () => Promise<void>
+  private settleInstruction?: () => Promise<void>
+  private settleDocument?: () => Promise<void>
   private instructionRetired = false
   private instructionClosed = false
   private readonly path: string
@@ -167,6 +173,7 @@ export class ResidentPreparation implements RetainedResidentResource {
     this.factOwner = owner
     const document = owner as import('@i-harness/session-persistence').ManagedDocument | undefined
     if (!this.revokeDocument && this.coordinator && document?.view === this.view && typeof document.revokeNewWork === 'function') this.revokeDocument = document.revokeNewWork.bind(document)
+    if (!this.settleDocument && document?.view === this.view && typeof document.settleFinishedActions === 'function') this.settleDocument = document.settleFinishedActions.bind(document)
   }
   get ctx() { return this.childContext }
   set ctx(value) { this.childContext = value; this.unmountContext = value?.scope.unmount.bind(value.scope) }
@@ -182,9 +189,20 @@ export class ResidentPreparation implements RetainedResidentResource {
     this.instructionLease = value
     this.retireInstruction = value?.retire.bind(value)
     this.closeInstruction = value?.close.bind(value)
+    this.settleInstruction = typeof value?.settleOriginals === 'function' ? value.settleOriginals.bind(value) : undefined
     // An admitted factory may return after synchronous retirement callbacks.
     // Retain that original before fencing and closing it.
     if (this.phase === 'retired' || this.permanent) this.retireInstructions()
+  }
+  async settleOriginals(): Promise<void> {
+    if (!this.instructionLease) return
+    if (!this.settleInstruction) throw Object.assign(new Error('Original instruction settlement capability unavailable'), { code: 'GENERATION_UNSUPPORTED' })
+    await this.settleInstruction()
+  }
+  async settleFinishedActions(): Promise<void> {
+    if (isNondurableSession(this.view)) return
+    if (!this.settleDocument) throw Object.assign(new Error('Original document settlement capability unavailable'), { code: 'GENERATION_UNSUPPORTED' })
+    await this.settleDocument()
   }
   private retireInstructions(): void {
     if (!this.retireInstruction || this.instructionRetired) return

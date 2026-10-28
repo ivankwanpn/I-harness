@@ -329,16 +329,17 @@ it.each(['prior-failure', 'normal-finally-overlap', 'entry-alias-overlap'].flatM
       originalLifecycle = lifecycle
       const open = lifecycle.open.bind(lifecycle), drain = lifecycle.drain.bind(lifecycle)
       lifecycle.open = async (...args) => {
-        const generation = await open(...args), close = generation.close.bind(generation)
-        generation.close = async (...closeArgs) => {
-          // Physical acceptance owns its own disposition. Inject the failure
-          // only at the driver's subsequent original cleanup boundary.
-          if (closeArgs[0] === 'accepted') { await close(...closeArgs); return }
+        const generation = await open(...args), close = generation.close.bind(generation), recover = generation.recoverClose!.bind(generation)
+        const cleanup = async (work: () => Promise<void>) => {
           closes++; generationEntered.resolve()
           if (mode !== 'prior-failure' && closes === 1) await releaseGeneration.promise
           if (fail) { if (closes === (mode === 'prior-failure' ? 2 : 1)) rejected.resolve(); throw failure }
-          await close(...closeArgs)
+          await work()
         }
+        // The fixture fault belongs to producer cleanup, through either of its
+        // explicit original entry points. Acceptance keeps its own disposition.
+        generation.close = (...closeArgs) => closeArgs[0] === 'accepted' ? close(...closeArgs) : cleanup(() => close(...closeArgs))
+        generation.recoverClose = () => cleanup(recover)
         return generation
       }
       lifecycle.drain = async () => { drains++; await drain() }

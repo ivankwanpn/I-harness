@@ -40,6 +40,10 @@ export class InstructionSlot {
   private manager: Manager | undefined
   private runtimeClosed = false
   private managerClosed = false
+  private settleRuntime?: () => Promise<void>
+  private closeRuntime?: () => Promise<void>
+  private closeManager?: () => Promise<void>
+  private publicationFlight?: Promise<void>
 
   constructor(readonly session: SessionView, readonly factOwner: FactOwner, private readonly lifetimeAvailable: () => boolean, private readonly owner: SlotOwner) {
     const context: SessionRequestContext = {
@@ -58,7 +62,7 @@ export class InstructionSlot {
       },
       close: () => this.close(),
     }
-    this.lease = { requestContext: context, retire: () => this.retire(), close: () => this.close() }
+    this.lease = { requestContext: context, settleOriginals: () => this.settleOriginals(), retire: () => this.retire(), close: () => this.close() }
   }
 
   available(): boolean { return !this.constructing && this.live() }
@@ -78,10 +82,13 @@ export class InstructionSlot {
     try {
       if (!this.live()) throw unavailable()
       this.runtime = createRuntimeContext(this.session, createRuntimeContextSource(this.factOwner))
+      this.settleRuntime = this.runtime.settleOriginals.bind(this.runtime)
+      this.closeRuntime = this.runtime.close.bind(this.runtime)
       this.manager = createMainInstructionManager({ ...options,
         available: () => this.live(),
         publish: (signal, retain) => this.runtime!.render(signal, retain),
       })
+      this.closeManager = this.manager.close.bind(this.manager)
       this.runtime.registerSection('instructions', this.manager.text)
       if (!this.live()) throw unavailable()
       return this.lease
@@ -113,6 +120,16 @@ export class InstructionSlot {
     return this.deliver(this.attempt(false))
   }
 
+  private settleOriginals(): Promise<void> {
+    if (this.constructing || this.owner.invoking()) return observedRejection(reentrantClose())
+    if (this.publicationFlight) return this.publicationFlight
+    if (!this.settleRuntime) return observedRejection(unavailable())
+    const attempt = Promise.withResolvers<void>(); this.publicationFlight = attempt.promise
+    void attempt.promise.then(() => { this.publicationFlight = undefined }, () => { this.publicationFlight = undefined })
+    void Promise.resolve().then(() => this.owner.invoke(this.settleRuntime!)).then(attempt.resolve, attempt.reject)
+    return attempt.promise
+  }
+
   private deliver(flight: CleanupFlight): Promise<void> {
     const delivered = flight.work.catch(error => { flight.reported = true; throw error })
     void delivered.catch(() => {})
@@ -120,6 +137,7 @@ export class InstructionSlot {
   }
 
   private attempt(automatic: boolean): CleanupFlight {
+    const publication = this.publicationFlight
     const deferred = Promise.withResolvers<void>()
     const flight: CleanupFlight = { work: deferred.promise, reported: false, automatic, slot: this }
     this.flight = flight
@@ -135,10 +153,11 @@ export class InstructionSlot {
       await Promise.allSettled(originals.map(original => original.work))
       if (this.constructing) throw reentrantClose()
       if (this.runtime && !this.runtimeClosed) {
-        await this.owner.invoke(() => this.runtime!.close()); this.runtimeClosed = true
+        await publication
+        await this.owner.invoke(this.closeRuntime!); this.runtimeClosed = true
       }
       if (this.manager && !this.managerClosed) {
-        await this.owner.invoke(() => this.manager!.close()); this.managerClosed = true
+        await this.owner.invoke(this.closeManager!); this.managerClosed = true
       }
     }).then(deferred.resolve, deferred.reject)
     return flight

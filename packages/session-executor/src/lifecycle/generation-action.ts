@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { generationLimits, type GenerationAcceptanceDraft, type GenerationActionEvent, type GenerationActionState, type GenerationAttemptEvent, type GenerationCandidate, type GenerationEvent, type GenerationLane, type SessionEvent, type SessionView } from '@i-harness/core-session'
 import { modelExecutionSource, assertOwnedPreparedTerminal, createGenerationControl, generationError, NO_GENERATION_RETRY, type ExecutionConfirmation, type GenerationControl, type GenerationReservation, type ModelClient, type PreparedModelRequest } from '@i-harness/llm-seam'
 import { isMockClient, mockExecutionClient, mockPreparedClient } from '@i-harness/llm-mock'
 import type { AgentGenerationAction } from '@i-harness/core-agent'
 import type { generationClock } from './generation-clock.ts'
 import type { GenerationIssue } from '@i-harness/llm-seam'
+import type { OriginalGenerationCloseSettlement } from './generation-close-settlement.ts'
 
 type Reserved = Extract<GenerationAttemptEvent, { op: 'reserve' }>
 type Settlement = Extract<GenerationAttemptEvent, { op: 'settle' }> | Extract<GenerationActionEvent, { op: 'close' | 'local-settle' }>
@@ -14,6 +16,7 @@ export interface GenerationActionDocument {
   read(actionId: string): GenerationActionState | undefined
   append(events: readonly GenerationEvent[], current: () => boolean): Promise<void>
   settle(event: Settlement): Promise<void>
+  captureClose(event: Extract<GenerationActionEvent, { op: 'close' }>): OriginalGenerationCloseSettlement
   phase(recovery: Extract<SessionEvent, { type: 'context/recovery' }>, phase: Omit<Extract<GenerationActionEvent, { op: 'phase' }>, 'seq' | 'recoverySeq'>, current: () => boolean): Promise<void>
 }
 export interface GenerationActionPolicy {
@@ -31,6 +34,10 @@ export class OwnedGenerationAction implements AgentGenerationAction {
   private latestIssued: { attemptId: string; confirmation: GenerationIssue } | undefined
   private pending = false
   private closing: Promise<void> | undefined
+  private closeFlight: Promise<void> | undefined
+  private closeSettlement?: OriginalGenerationCloseSettlement
+  private closeCaptureFailure: { value: unknown } | undefined
+  private readonly closeInvocation = new AsyncLocalStorage<{ active: boolean }>()
   private adopted = false
   private localIdentity: object | undefined
   private latestLocal: string | undefined
@@ -169,13 +176,37 @@ export class OwnedGenerationAction implements AgentGenerationAction {
     return { ...this.envelope(), type: 'context/action', op: 'accepted', executionDomain: 'physical', attemptId: this.latestIssued.attemptId, sendId: confirmation.sendId }
   }
   async close(disposition: Extract<GenerationActionEvent, { op: 'close' }>['disposition']) {
+    if (this.closeInvocation.getStore()?.active) throw generationError('GENERATION_UNCERTAIN')
+    if (this.closing) return this.closing
     const current = this.state()
     if (!current || current.closed) { this.clock.close(); return }
-    this.closing ??= (async () => {
-      try { await this.document.settle({ ...this.envelope(), type: 'context/action', op: 'close', disposition }) }
-      finally { this.clock.close() }
-    })()
+    const attempt = Promise.withResolvers<void>()
+    this.closing = attempt.promise
+    this.closeFlight = attempt.promise
+    void attempt.promise.then(() => { this.closeFlight = undefined }, () => { this.closeFlight = undefined })
+    void Promise.resolve().then(() => this.invokeClose(async () => {
+      try {
+        try { this.closeSettlement = this.document.captureClose({ ...this.envelope(), type: 'context/action', op: 'close', disposition }) }
+        catch (value) { this.closeCaptureFailure = { value }; throw value }
+        await this.closeSettlement.settle()
+      } finally { this.clock.close() }
+    })).then(attempt.resolve, attempt.reject)
     return this.closing
+  }
+  recoverClose(): Promise<void> {
+    if (this.closeInvocation.getStore()?.active) return Promise.reject(generationError('GENERATION_UNCERTAIN'))
+    if (!this.closing) return Promise.reject(generationError('GENERATION_UNCERTAIN'))
+    if (this.closeFlight) return this.closeFlight
+    if (this.closeCaptureFailure) return Promise.reject(this.closeCaptureFailure.value)
+    const attempt = Promise.withResolvers<void>(); this.closeFlight = attempt.promise
+    void attempt.promise.then(() => { this.closeFlight = undefined }, () => { this.closeFlight = undefined })
+    void Promise.resolve().then(() => this.invokeClose(() => this.closeSettlement!.settle())).then(attempt.resolve, attempt.reject)
+    return attempt.promise
+  }
+  originalCloseInvoked(): boolean { return this.closing !== undefined }
+  private invokeClose(work: () => Promise<void>): Promise<void> {
+    const invocation = { active: true }
+    return this.closeInvocation.run(invocation, async () => { try { await work() } finally { invocation.active = false } })
   }
   async phase(recovery: Extract<SessionEvent, { type: 'context/recovery' }>) {
     const current = this.current()
