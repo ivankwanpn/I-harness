@@ -69,7 +69,7 @@ export function createJobKillTool(deps: SubagentToolDeps): Tool {
         if (args.source_id !== undefined && selected.sourceId !== args.source_id) throw new Error('stale-source')
         return { outcome: await deps.exec.killJob(args.job_id, { jobInstanceId: args.job_instance_id, ...(args.source_id !== undefined ? { sourceId: args.source_id } : {}) }) }
       }
-      if (args.job_instance_id !== undefined || args.source_id !== undefined) throw new Error("Native selectors require shell backend")
+      if (args.job_instance_id !== undefined || args.source_id !== undefined) throw new Error(args.backend === undefined ? "unsupported-selector" : "Native selectors require shell backend")
       if (args.backend === "child") return { outcome: deps.jobs.kill(args.job_id) }
       if (args.backend === "workflow") {
         if (!deps.workflow) throw new Error("Workflow cancellation unavailable")
