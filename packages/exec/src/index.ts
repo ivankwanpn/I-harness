@@ -167,3 +167,5 @@ export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): Nat
   ctx.services.register("exec/service", service)
   return service
 }
+
+export { isNativeExecService } from './service.ts'

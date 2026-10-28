@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext } from "@i-harness/core-plugin"
-import { registerExec, withExecCallerScope, type ExecService } from "../src/index.ts"
+import { registerExec, isNativeExecService, withExecCallerScope, type ExecService } from "../src/index.ts"
 import { SandboxUnavailableError, type SandboxProvider } from "@i-harness/sandbox"
 
 // Poll-wait helper: avoids raw fixed sleeps (flake-prone under parallel load).
@@ -117,6 +117,13 @@ describe("exec background jobs", () => {
     expect(await exec.killJob(jobId)).toBe("already-finished")
   }, 10_000)
 
+  it("recognizes only original native services for checked cancellation", async () => {
+    const exec = registerExec(createContext())
+    try {
+      expect(isNativeExecService(exec)).toBe(true)
+      expect(isNativeExecService({ ...exec })).toBe(false)
+    } finally { await exec.dispose() }
+  })
   it("rejects a stale native selector before cancelling the live job", async () => {
     const exec = registerExec(createContext())
     const { jobId, nativeJob } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
