@@ -6,6 +6,7 @@ import type { BindingObservations } from './binding-observation.ts'
 import { ensureWritableFormatUnlocked } from "./writable-format.ts"
 import { preflightBatchShape } from "../format/validation.ts"
 import { createConversationIndexes } from "./conversation-index.ts"
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 export function createMutations(
   backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta" | "read" | "id" | "upgradeSessionFormat">,
@@ -15,6 +16,7 @@ export function createMutations(
   report: (error: unknown) => void,
   assertManagedMutation: (id: string) => void = () => {},
   observations?: BindingObservations,
+  processLatches?: ReturnType<typeof createProcessReadLatches>,
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
@@ -98,17 +100,25 @@ export function createMutations(
     },
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
-      await withSessionOperation(sessionId, async () => {
-        assertManagedMutation(sessionId)
-        await ensureOwnership(sessionId) // acquire-at-first-use (M23)
-        await appendUnlocked(sessionId, events)
-      })
+      const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: [], kind: 'other' })
+      let outcome: 'settled' | 'unknown' = 'unknown'
+      try {
+        await withSessionOperation(sessionId, async () => {
+          assertManagedMutation(sessionId)
+          await ensureOwnership(sessionId) // acquire-at-first-use (M23)
+          await appendUnlocked(sessionId, events)
+        })
+        outcome = 'settled'
+      } finally { token?.end(outcome) }
     },
     enqueue(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
       preflightBatchShape(CURRENT_FORMAT_VERSION, events)
       const wb = writeBehindFor(sessionId)
-      for (const ev of events) wb.enqueue(ev)
+      for (const ev of events) {
+        const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: [], kind: 'other' })
+        try { wb.enqueue(ev, token) } catch (error) { token?.end('settled'); throw error }
+      }
     },
     async updateMeta(sessionId: string, patch: Partial<SessionMeta>) {
       assertWritable(sessionId)
