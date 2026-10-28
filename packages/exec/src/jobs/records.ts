@@ -1,6 +1,7 @@
 import type { ExecutionSettlement, StopReason } from "@i-harness/sandbox"
+import { randomUUID } from 'node:crypto'
 import type { ExecutionSupervisor } from "../execution-supervisor.ts"
-import type { ExecExecutionHost, ExecService, ExecServiceOptions } from "../index.ts"
+import type { ExecExecutionHost, NativeExecService, ExecServiceOptions, NativeJobIdentity } from "../index.ts"
 import type { Capture } from "../capture/contracts.ts"
 import type { Job } from "./contracts.ts"
 import { createCaptureFactory } from "../capture/output.ts"
@@ -10,16 +11,25 @@ import { view } from "./views.ts"
 import { createJobRetention } from './retention.ts'
 
 /** The sole job registry, ID allocator and service disposal owner. */
-export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): ExecService {
+export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): NativeExecService {
   const jobs = new Map<string, Job>()
   const captureJobs = new WeakMap<Capture, Job>()
+  const captureInstances = new WeakMap<Capture, string>()
   let nextJob = 0
   let disposed = false
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
   const createCapture = createCaptureFactory(options, supervisor, launchTransport)
   const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture))
-  const makeCapture: typeof createCapture = async (...args) => retention.track(await createCapture(...args))
+  const makeCapture: typeof createCapture = async (...args) => {
+    // Allocate synchronously before admission/native launch, including foreground
+    // captures which may later promote. Failed launches publish no identity.
+    const instanceId = randomUUID()
+    if ([...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
+    const capture = await createCapture(...args)
+    captureInstances.set(capture, instanceId)
+    return retention.track(capture)
+  }
   const { observe, record } = retention
 
   const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed, observe })
@@ -30,9 +40,16 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     return supervisor.cancel(id, reason)
   }
 
-  function registerJob(capture: Capture): string {
+  function registerJob(capture: Capture): NativeJobIdentity {
+    const existing = captureJobs.get(capture)
+    if (existing) return existing.nativeJob
+    const instanceId = captureInstances.get(capture)
+    if (!instanceId) throw new Error('Missing original native job instance')
+    if ([...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
     const id = "bash-" + (++nextJob)
-    const job: Job = { id, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
+    const nativeJob: NativeJobIdentity = Object.freeze({ version: 1, instanceId, jobId: id,
+      ownerSessionId: capture.execution.policy.owner.sessionId, sourceId: `process:${capture.execution.id}` })
+    const job: Job = { id, instanceId, nativeJob, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
     jobs.set(id, job)
     captureJobs.set(capture, job)
     void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
@@ -64,7 +81,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       await record(job)
       publish(job)
     })
-    return id
+    return nativeJob
   }
 
   function publish(job: Job): void {
@@ -93,8 +110,14 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
   }
 
   return {
-    run: run as ExecService["run"],
-    async runBackground(command) { const capture = await makeCapture(command, undefined, true); return { jobId: registerJob(capture) } },
+    run: run as NativeExecService["run"],
+    async runBackground(command) { const capture = await makeCapture(command, undefined, true); const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } },
+    getJobView(jobId) {
+      const job = jobs.get(jobId)
+      if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+      return view(job)
+    },
+    listJobViews() { return [...jobs.values()].filter(job => canAccess(job.owner)).map(view) },
     getOutput(jobId) {
       const job = jobs.get(jobId)
       if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)

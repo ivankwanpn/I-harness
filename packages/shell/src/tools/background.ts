@@ -1,4 +1,4 @@
-import type { PromotedRun } from "@i-harness/exec"
+import type { NativeJobIdentity, PromotedRun } from "@i-harness/exec"
 
 /**
  * W10: exec handed a FOREGROUND command back as a job because it outlived the
@@ -18,7 +18,7 @@ export function promotedResult(
   promoted: PromotedRun,
   tool: "bash" | "pwsh" | "shell",
   deadlineMs: number | undefined,
-): { stdout: string; job_id: string; promoted: true; ran_foreground_ms: number } {
+): { stdout: string; job_id: string; native_job?: NativeJobIdentity; promoted: true; ran_foreground_ms: number } {
   // The deadline is named only when the host declared one: a mount without
   // `timeoutMs` has no deadline to explain, and quoting 120_000 here would be
   // asserting a number this layer never saw.
@@ -27,6 +27,7 @@ export function promotedResult(
     : ` A foreground ${tool} call is killed at ${deadlineMs}ms and its work is lost, so the harness promotes instead of waiting for that.`
   return {
     job_id: promoted.jobId,
+    ...(promoted.nativeJob === undefined ? {} : { native_job: promoted.nativeJob }),
     promoted: true,
     ran_foreground_ms: promoted.ranForegroundMs,
     stdout:

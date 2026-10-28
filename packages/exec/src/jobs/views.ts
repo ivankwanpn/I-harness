@@ -1,13 +1,13 @@
-import type { BackgroundJobView } from "../index.ts"
+import type { NativeBackgroundJobView } from "../index.ts"
 import type { Job } from "./contracts.ts"
 import { clean } from "../capture/completion.ts"
 import { execOutputReader, registerRetainedOutput } from "../retained-output.ts"
 
-export function view(job: Job): BackgroundJobView {
+export function view(job: Job): NativeBackgroundJobView {
   const { stdout, stderr } = job.capture.output()
   const receipt = job.capture.execution.handle.receipt
-  const result: BackgroundJobView = {
-    id: job.id, status: job.status, stdout: clean(stdout.text), stderr: clean(job.failure ?? stderr.text),
+  const result: NativeBackgroundJobView = {
+    id: job.id, nativeJob: job.nativeJob, status: job.status, stdout: clean(stdout.text), stderr: clean(job.failure ?? stderr.text),
     ...(job.capture.lifetime === undefined ? {} : { lifetime: job.capture.lifetime }),
     ...(stdout.truncated || stderr.truncated ? { stdoutSpillPath: stdout.spillPath, stderrSpillPath: stderr.spillPath,
       truncated: { stdout: stdout.truncated, stderr: stderr.truncated } } : {}),

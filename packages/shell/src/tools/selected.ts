@@ -65,7 +65,10 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
       const sandbox = ladder.policy
       const spec = { argv, ...boundShellEnvironment(selected), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
-        if (args.background === true) return { job_id: (await deps.exec.runBackground(spec)).jobId }
+        if (args.background === true) {
+          const result = await deps.exec.runBackground(spec)
+          return { job_id: result.jobId, ...(result.nativeJob === undefined ? {} : { native_job: result.nativeJob }) }
+        }
         const command = { ...spec, abortSignal: exec.abortSignal }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)

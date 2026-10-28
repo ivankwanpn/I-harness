@@ -58,10 +58,17 @@ interface ExecPromotionWake {
   subscribe(listener: () => void): () => void
 }
 export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake }
-export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
+/** Original prelaunch provenance, never an authorization capability. */
+export type NativeJobIdentity = Readonly<{ version: 1; instanceId: string; jobId: string; ownerSessionId: string; sourceId: string }>
+export interface BackgroundRun { jobId: string; nativeJob?: NativeJobIdentity }
+export interface NativeBackgroundRun extends BackgroundRun { nativeJob: NativeJobIdentity }
+export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
+export interface NativePromotedRun extends PromotedRun { nativeJob: NativeJobIdentity }
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
+  /** Absent only for legacy/custom service implementations; never synthesized. */
+  nativeJob?: NativeJobIdentity
   /** WSL jobs end and clean descendants when their root command exits. */
   lifetime?: ExecutionLifetime
   id: string; status: BackgroundJobStatus; stdout: string; stderr: string; exitCode?: number
@@ -119,17 +126,34 @@ export interface ExecService {
   run(cmd: ExecCommand): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
-  runBackground(cmd: ExecCommand): Promise<{ jobId: string }>
+  runBackground(cmd: ExecCommand): Promise<BackgroundRun>
   getOutput(jobId: string): BackgroundJobView
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
+  /** Passive metadata only: no observer registration or storage settlement. */
+  getJobView?(jobId: string): BackgroundJobView
+  listJobViews?(): BackgroundJobView[]
   killJob(jobId: string): Promise<"cancellation-requested" | "already-finished">
   launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution>
   cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement>
   dispose(): Promise<void>
 }
 
-export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): ExecService {
+/** The original registry guarantees provenance; structural compatibility ports
+ * above also accept legacy/custom implementations with no native identity. */
+export interface NativeBackgroundJobView extends BackgroundJobView { nativeJob: NativeJobIdentity }
+export interface NativeExecService extends ExecService {
+  run(cmd: ExecCommand): Promise<ExecResult>
+  run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
+  run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | NativePromotedRun>
+  runBackground(cmd: ExecCommand): Promise<NativeBackgroundRun>
+  getOutput(jobId: string): NativeBackgroundJobView
+  listJobs(): NativeBackgroundJobView[]
+  getJobView(jobId: string): NativeBackgroundJobView
+  listJobViews(): NativeBackgroundJobView[]
+}
+
+export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): NativeExecService {
   const service = createExecService(deps)
   ctx.services.register("exec/service", service)
   return service

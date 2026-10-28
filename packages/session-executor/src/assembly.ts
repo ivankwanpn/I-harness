@@ -373,7 +373,7 @@ export interface SessionAssembly {
   /** Cancels only an owned live cell without competing with its model observer. */
   stopCodeCell?(cellId: string): Promise<void>
   /** The real assembly-local exec registry and exact owner-filtered workflow store. */
-  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string }[]
+  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string; nativeJob?: import('@i-harness/exec').NativeJobIdentity }[]
   /** Retry durable parent messages only after the host publishes its lane. */
   drainParentNotifications?(ordinaryOnly?: boolean): Promise<void>
   /** Original retained source settlement only: no recipient admission/wake. */
@@ -1760,7 +1760,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         await codeModeMount.terminateCell(cellId)
       } } : {}),
       backgroundJobs: () => [
-        ...execService.listJobs().map(job => ({ id: job.id, kind: "shell" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
+        ...assemblyExec.listJobViews().map(job => {
+          const output = backgroundOutput(job.stdout, job.stderr)
+          return { id: job.id, kind: "shell" as const, status: job.status, ...output,
+            outputTruncated: output.outputTruncated || !!job.truncated?.stdout || !!job.truncated?.stderr,
+            ownerSessionId: job.owner, nativeJob: job.nativeJob }
+        }),
         ...workflowMount!.executor.listJobs().filter(job => job.owner === opts.sessionId).map(job => ({ id: job.id, kind: "workflow" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
       ],
       // M49 Task 12: the projection owns NO registry object — rows only. The

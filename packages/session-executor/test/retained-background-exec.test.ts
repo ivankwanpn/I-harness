@@ -1,10 +1,10 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createHash } from 'node:crypto'
 import { createSessionCoordinator } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import type { BackgroundJobView, ExecService } from '@i-harness/exec'
+import type { BackgroundJobView, ExecService, NativeJobIdentity } from '@i-harness/exec'
 import { contextWorkspaceLocation, createContextOutputService } from '@i-harness/context-output'
 import type { ManagedArtifactRef, ResultDependencyCatalog } from '@i-harness/core-session'
 import { currentToolResultProducer, toolResultDependencies, type ToolExec } from '@i-harness/core-tools'
@@ -28,7 +28,7 @@ it('settles one background frame dependency automatically and binds the shipping
   const command = '& "' + process.execPath + '" "' + workerPath + '" "' + releasePath + '"'
   const coordinator = createSessionCoordinator(createJsonlBackend(resolve(root, 'sessions')), { lock: { enabled: true } }), { id } = await coordinator.create()
   let sends = 0, startupAt = 0, revoked = false, jobId: string | undefined
-  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings,
+  const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: id, contextOutputSettingsPath: settings, shellRetention: { maxBytes: 4 },
     model: controlledModel(async function* () {
       const call = ++sends
       if (call === 1) {
@@ -49,7 +49,7 @@ it('settles one background frame dependency automatically and binds the shipping
     expect(Date.now() - startupAt).toBeLessThan(10_000)
     const event = assembly.session.events.find(event => event.type === 'tool/result' && event.callId === 'actual-background')
     if (event?.type !== 'tool/result') throw new Error('Expected the real background tool result')
-    const receipt = event.envelope?.retention.kind === 'inline' ? event.envelope.retention.value as { job_id?: string } : undefined
+    const receipt = event.envelope?.retention.kind === 'inline' ? event.envelope.retention.value as { job_id?: string; native_job?: NativeJobIdentity } : undefined
     if (!receipt?.job_id) throw new Error('Expected a background job id receipt: ' + JSON.stringify(event.envelope?.retention))
     jobId = receipt.job_id
     // The startup receipt is not an observer of the unfinished capture.
@@ -58,6 +58,8 @@ it('settles one background frame dependency automatically and binds the shipping
     expect(toolResultDependencies(startupProducer!)).toHaveLength(0)
     const exec = assembly.ctx.services.get<ExecService>('exec/service')!
     const startup = exec.getOutput(jobId)
+    expect(receipt.native_job).toEqual(startup.nativeJob)
+    expect(receipt.native_job?.instanceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(startup.status).toBe('running')
     expect(startup.retained).toBeUndefined()
 
@@ -72,6 +74,12 @@ it('settles one background frame dependency automatically and binds the shipping
     })
     await writeFile(releasePath, '')
     const terminal = await completed
+    const observingList = vi.spyOn(exec, 'listJobs').mockImplementation(() => { throw new Error('metadata projection must be passive') })
+    try {
+      expect(terminal.truncated?.stdout).toBe(true)
+      expect(assembly.backgroundJobs!().find(job => job.id === jobId)).toMatchObject({ nativeJob: receipt.native_job, outputTruncated: true })
+    }
+    finally { observingList.mockRestore() }
     expect(toolResultDependencies(startupProducer!), 'Passive completion must not mutate the finalized startup producer').toHaveLength(0)
     expect(terminal.status, JSON.stringify({ stdout: terminal.stdout, stderr: terminal.stderr })).toBe('completed')
     expect(terminal.exitCode).toBe(0)
