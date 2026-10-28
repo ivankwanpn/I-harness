@@ -21,11 +21,12 @@ it('reserves once and retains the original captured request for passive warm ins
 })
 
 
-it('spends the reservation if the original capture throws and never calls it again',async()=>{
+it.each(['throw','accessor'] as const)('spends the reservation on %s and never calls the capture again',async mode=>{
  const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'b2-spent-')),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),claim=await ownership.pinOwnership('target'),held=heldFactOwner({sessionId:'target',incarnation:'two'},ownership,()=>claim.assertHeld()),issuer=issuingFactOwner(held,()=>held.assertHeld()),backend=createBootstrapCaptureBackend(id=>join(root,id+'.jsonl'),async()=>{},root)
  try {
   const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}),invocation={version:1 as const,operationId:'op',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest},route={protocol:'public-results-v1' as const,request:{invocation,core,requestIntent:intent}}
-  let calls=0;const attempt=createSelectedCaptureAttempt(backend,issuer,route,async()=>{calls++;throw Error('source lost')})
-  expect((await attempt.capture()).kind).toBe('spent');expect((await attempt.capture()).kind).toBe('spent');expect(attempt.inspect().kind).toBe('spent');expect(calls).toBe(1);await backend.settleBootstrapCaptureIO('target',held)
+  let calls=0,reads=0;const attempt=createSelectedCaptureAttempt(backend,issuer,route,async()=>{calls++;if(mode==='throw')throw Error('source lost');return Object.defineProperty({},'seed',{enumerable:true,get(){reads++;throw Error('getter')}})})
+  expect((await attempt.capture()).kind).toBe('spent');expect((await attempt.capture()).kind).toBe('spent');expect(attempt.inspect().kind).toBe('spent');expect(calls).toBe(1);expect(reads).toBe(0);await backend.settleBootstrapCaptureIO('target',held)
  }finally{await claim.release()}
 })
+
