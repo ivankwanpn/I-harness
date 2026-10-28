@@ -15,6 +15,9 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
   const jobs = new Map<string, Job>()
   const captureJobs = new WeakMap<Capture, Job>()
   const captureInstances = new WeakMap<Capture, string>()
+  // Only pending/captured ownership lives here. Publication transfers the token
+  // to the existing job registry; terminal foreground observations release it.
+  const pendingInstances = new Set<string>()
   let nextJob = 0
   let disposed = false
 
@@ -25,14 +28,30 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     // Allocate synchronously before admission/native launch, including foreground
     // captures which may later promote. Failed launches publish no identity.
     const instanceId = randomUUID()
-    if ([...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
-    const capture = await createCapture(...args)
-    captureInstances.set(capture, instanceId)
-    return retention.track(capture)
+    if (pendingInstances.has(instanceId) || [...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
+    pendingInstances.add(instanceId)
+    try {
+      const capture = await createCapture(...args)
+      captureInstances.set(capture, instanceId)
+      return retention.track(capture)
+    } catch (error) { pendingInstances.delete(instanceId); throw error }
   }
   const { observe, record } = retention
 
-  const run = createJobObservation({ makeCapture, registerJob, isDisposed: () => disposed, observe })
+  const run = createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })
+
+  function releaseCapture(capture: Capture): void {
+    if (captureJobs.has(capture)) return
+    const instanceId = captureInstances.get(capture)
+    const release = () => { if (instanceId && !captureJobs.has(capture)) pendingInstances.delete(instanceId) }
+    // Observation failures can precede native settlement. Keep their token
+    // reserved until the exact original capture settles; incomplete cleanup
+    // stays owned until successful service disposal.
+    void capture.complete.then(release, async () => {
+      try { if ((await capture.execution.handle.settled).kind === 'settled') release() }
+      catch { /* The original native owner still holds unresolved cleanup. */ }
+    })
+  }
 
   function cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement> {
     const execution = supervisor.list().find(entry => entry.id === id)
@@ -44,7 +63,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     const existing = captureJobs.get(capture)
     if (existing) return existing.nativeJob
     const instanceId = captureInstances.get(capture)
-    if (!instanceId) throw new Error('Missing original native job instance')
+    if (!instanceId || !pendingInstances.has(instanceId)) throw new Error('Missing original native job instance')
     if ([...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
     const id = "bash-" + (++nextJob)
     const nativeJob: NativeJobIdentity = Object.freeze({ version: 1, instanceId, jobId: id,
@@ -52,6 +71,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     const job: Job = { id, instanceId, nativeJob, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
     jobs.set(id, job)
     captureJobs.set(capture, job)
+    pendingInstances.delete(instanceId)
     void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
     void capture.execution.handle.settled.then(settlement => {
       job.settlement = settlement
@@ -178,6 +198,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
         await host.dispose?.()
       } finally { for (const job of jobs.values()) job.listeners.clear() }
       if (unresolved.length) throw Object.assign(new Error("Result retention still requires recovery: " + unresolved.join(",")), { code: "ARTIFACT_RECOVERY_REQUIRED" })
+      pendingInstances.clear()
     },
   }
 }

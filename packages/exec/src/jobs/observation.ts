@@ -6,12 +6,13 @@ import { registerExecResultOutcome, transferExecutionMetadata } from '../retaine
 interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
   registerJob(capture: Capture): NativeJobIdentity
+  releaseCapture(capture: Capture): void
   isDisposed(): boolean
   observe?(capture: Capture): Promise<ExecResult['retentionFailure']>
 }
 
 /** Promotion changes observation of one capture; it never launches again. */
-export function createJobObservation({ makeCapture, registerJob, isDisposed, observe }: JobObservation) {
+export function createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed, observe }: JobObservation) {
   async function observed(capture: Capture, result: ExecResult): Promise<ExecResult> {
     const retentionFailure = await observe?.(capture)
     if (!retentionFailure) return result
@@ -37,7 +38,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
     const threshold = runOptions && "backgroundAfterMs" in runOptions ? runOptions.backgroundAfterMs : undefined
     const wake = runOptions?.promotionWake
     const capture = await makeCapture(command, streaming, false, threshold !== undefined)
-    if (threshold === undefined && wake === undefined) return capture.complete.then(result => observed(capture, result), async cause => { await observe?.(capture); throw cause })
+    if (threshold === undefined && wake === undefined) return capture.complete.then(result => observed(capture, result), async cause => { await observe?.(capture); throw cause }).finally(() => releaseCapture(capture))
     const started = Date.now()
     return new Promise<ExecResult | NativePromotedRun>((resolve, reject) => {
       let finished = false
@@ -79,7 +80,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
         }, threshold)
         checkWake()
       } catch (error) { finish({ error }) }
-    })
+    }).finally(() => releaseCapture(capture))
   }
 
   return run
