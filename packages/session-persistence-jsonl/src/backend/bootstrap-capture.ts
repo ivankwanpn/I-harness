@@ -5,6 +5,10 @@ import { isHeldFactOwner, parseBootstrapCaptureReservation, parseBootstrapHeader
 import { bootstrapPathsForRoute, bootstrapNamespace, lookupBootstrapStage } from './bootstrap-stage.ts'
 export { bootstrapNamespace } from './bootstrap-stage.ts'
 import { captureBootstrapCaptureRoute, parseOwnedCaptureReservation, encodeOwnedCaptureReservation, routeForReservation, type BootstrapCaptureRoute, type OwnedCaptureInspection } from '@i-harness/session-persistence'
+import { captureSelectedResultsRoute, type SelectedResultsRoute, type SelectedResultsReservationV1, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
+import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
+
+type SelectedCaptureInspection = {kind:'absent'} | {kind:'reserved';reservation:SelectedResultsReservationV1} | {kind:'materialized';route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2} | {kind:'conflict'|'unavailable'}
 
 type Resource = { handle: FileHandle; error?: unknown; consumed?: boolean }
 type Ledger = { id: string; owner: HeldFactOwner['owner']; pending: Set<Promise<unknown>>; handles: Set<Resource>; settled: boolean; diagnostics: unknown[] }
@@ -70,6 +74,24 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     })
   }
   const readBootstrapCapture=(id:string,owner:HeldFactOwner,request:BootstrapCaptureRequest)=>readCapture(id,owner,{protocol:'public',request}) as Promise<BootstrapCaptureInspection>;
+  async function readSelectedCapture(id:string,owner:HeldFactOwner,input:SelectedResultsRoute):Promise<SelectedCaptureInspection> {
+    const route=captureSelectedResultsRoute(input)
+    if(id!==route.request.invocation.targetSessionId)throw new TypeError('Capture target mismatch')
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id)
+      try {
+        guard();await checkBootstrapCaptureRoot();guard();await assertNotDeleted('session',id);guard()
+        const selected=await lookupSelectedBootstrapStage(path,{kind:'route',route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        guard();assertLookupCleanup(ledger)
+        let target=false;try{await stat(path);target=true}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error}
+        guard();await assertNotDeleted('session',id);guard();await checkBootstrapCaptureRoot();guard()
+        if(selected.kind==='reserved')return target?{kind:'unavailable'}:{kind:'reserved',reservation:selected.reservation}
+        if(selected.kind==='full')return {kind:'materialized',route:selected.route,stage:selected.stage}
+        if(selected.kind==='absent')return target?{kind:'unavailable'}:{kind:'absent'}
+        return {kind:selected.kind}
+      }catch(error){ledger.diagnostics.push(error);if(ledger.handles.size)throw error;return {kind:'unavailable'}}
+    })
+  }
   async function writeExact(ledger: Ledger, path: string, expected: Uint8Array, owner: IssuingFactOwner, existing: Buffer | undefined, onIssue: () => void = () => {}) {
     const guard = () => scope(ledger.id, owner), before = () => { guard(); owner.beforeIssue(); onIssue() }
     if (existing && (existing.length > expected.length || !existing.equals(Buffer.from(expected.subarray(0, existing.length))))) throw new Error('BOOTSTRAP_CONFLICT')
@@ -183,5 +205,5 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     ledger.settled = true
   }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
-  return { readCapture, reserveCapture, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
+  return { readCapture, reserveCapture, readSelectedCapture, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }
