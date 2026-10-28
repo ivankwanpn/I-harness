@@ -9,7 +9,7 @@ import { assertOutsideForkController, closeForkControllerAdmission } from './for
 import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
 import { createProcessReadLatches } from './coordinator/process-read-latches.ts'
 import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
-export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage): SessionCoordinator {
+export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
@@ -108,6 +108,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
+  if (processLatches) onConstruct?.({ managed, latches: processLatches })
   return coordinator
 }
 
