@@ -103,6 +103,9 @@ export async function createArtifactWriter(authority: WriterAuthority, recoverEm
           issue.cause = cause; issue.candidate = true
         }
       } : undefined)
+      // Physical progress belongs to the exact admitted record even when an
+      // explicit reconciliation, rather than this continuation, applied it.
+      if (failedIssue?.admitted === admitted) failedIssue.applied = true
       pending = undefined; ordinal++
       if (issue) issue.applied = true
       continuation?.applied()

@@ -344,3 +344,46 @@ it('a stale rejection cannot claim the next record and one encoding preserves sp
     capture.complete('complete'); expect((await capture.settle()).kind).toBe('ready')
   } finally { await f.close() }
 })
+
+it.each([false, true])('queued explicit reconciliation records physical completion without acknowledging claimed continuation (cleanup failure=%s)', async cleanupFailure => {
+  const f = await writerFixture(), acquire = locking.acquireSessionLock
+  const cleanupCause = Error('INJECTED reconciliation lease retirement failure')
+  let failRetirement = cleanupFailure, renames = 0
+  try {
+    fault.rename = f.fail
+    await expect(f.sink.write(Buffer.from('original'))).rejects.toBe(f.cause)
+    const spy = vi.spyOn(locking, 'acquireSessionLock').mockImplementation(async options => {
+      const lease = await acquire(options)
+      return { get held() { return lease.held }, async release() {
+        if (failRetirement) { failRetirement = false; throw cleanupCause }
+        await lease.release()
+      } }
+    })
+    fault.rename = async () => { renames++ }
+    // Both operations are queued synchronously before either executes. The
+    // continuation legitimately claims the original pending record but the
+    // earlier explicit reconciliation alone physically applies its metadata.
+    const reconciliation = f.sink.reconcileWrite()
+    const continuation = f.sink.continueFailedWrite!(f.cause, () => true)
+    expect(await reconciliation).toBe(cleanupFailure ? 'recovery-required' : 'ready')
+    expect(await continuation).toEqual({ kind: 'unresolved', progress: 'record-applied', reason: 'original-unavailable' })
+    expect(f.mutations()).toBe(2) // original issue + reconciliation; no recovery application
+    expect(renames).toBe(1)
+    expect(await readFile(resolve(f.directory, 'body'), 'utf8')).toBe('original')
+    expect(f.authority.operation.encodedBytes).toBe(8)
+    expect(await f.sink.continueFailedWrite!(f.cause, () => true)).toMatchObject({ kind: 'not-eligible' })
+    if (cleanupFailure) {
+      await expect(f.owner.mutate(async () => {})).rejects.toThrow(/unresolved/)
+      await f.owner.cleanup(async () => {}) // retires the same original lease debt
+    }
+    spy.mockRestore()
+    // The next genuine write proves ordinal advancement occurred once; the
+    // committed digest proves neither original body nor digest was replayed.
+    await f.sink.write(Buffer.from('-later'))
+    const expected = Buffer.from('original-later')
+    expect(await readFile(resolve(f.directory, 'body'))).toEqual(expected)
+    expect(await f.sink.finish('producer-incomplete')).toMatchObject({ kind: 'committed', ref: {
+      encodedBytes: expected.length, contentDigest: createHash('sha256').update(expected).digest('hex'), completeness: 'producer-incomplete',
+    } })
+  } finally { await f.close() }
+})
