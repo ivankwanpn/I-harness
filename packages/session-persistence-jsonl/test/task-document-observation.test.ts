@@ -324,3 +324,70 @@ it('denies confirmation revoked while sync is held', async () => fixture(async (
   expect(await pending).toBe('revoked')
   await session.settleResources()
 }))
+
+it('compares equal-size semantically equal bytes when original mtime is restored', async () => fixture(async ({ root, path, scope }) => {
+  const original = '{"a":1, "b":2}', changed = '{"b":2, "a":1}'
+  expect(changed.length).toBe(original.length)
+  expect(JSON.parse(changed)).toEqual(JSON.parse(original))
+  await writeFile(path, original)
+  const stable = new Date('2020-01-02T03:04:05.000Z')
+  await utimes(path, stable, stable)
+  const before = await lstat(path)
+  const session = createTaskDocumentObservation(root, path, scope)
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  await writeFile(path, changed)
+  await utimes(path, stable, stable)
+  const after = await lstat(path)
+  expect({ dev: after.dev, ino: after.ino, size: after.size, mtimeMs: after.mtimeMs }).toEqual({ dev: before.dev, ino: before.ino, size: before.size, mtimeMs: before.mtimeMs })
+  expect((await session.confirm(observation.witness)).kind).toBe('conflict')
+  await session.settleResources()
+}))
+
+it('rejects replacement after sync before final path validation', async () => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{}')
+  let syncCompleted = false
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    const h = await open(p, flags), sync = h.sync
+    if (flags === 'r+') h.sync = async function () {
+      await Reflect.apply(sync, h, [])
+      syncCompleted = true
+      await rename(path, `${path}.old`)
+      await writeFile(path, '{}')
+    }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  const result = await session.confirm(observation.witness)
+  expect(syncCompleted).toBe(true)
+  expect(result.kind).toBe('conflict')
+  await session.settleResources()
+}))
+
+it('retains falsey confirmation body and close causes through same-owner settlement', async () => fixture(async ({ root, path, scope }) => {
+  await writeFile(path, '{}')
+  let opens = 0, observationReads = 0, confirmationReads = 0, closes = 0
+  const session = createTaskDocumentObservation(root, path, scope, async (p, flags) => {
+    opens++
+    const h = await open(p, flags), read = h.read, close = h.close
+    if (flags === 'r') h.read = (async function (...args: Parameters<typeof read>) { observationReads++; return Reflect.apply(read, h, args) }) as typeof read
+    else {
+      h.read = (async () => { confirmationReads++; throw false }) as typeof read
+      h.close = async function () { if (++closes === 1) throw 0; return Reflect.apply(close, h, []) }
+    }
+    return h
+  })
+  const observation = await session.observe()
+  if (observation.kind !== 'present') throw new Error('missing')
+  const result = await session.confirm(observation.witness)
+  expect(result.kind).toBe('unknown')
+  if (result.kind !== 'unknown') throw new Error('expected unknown')
+  expect(result.cleanupPending).toBe(true)
+  expect(result.cause).toBeInstanceOf(AggregateError)
+  expect((result.cause as AggregateError).errors).toEqual([false, 0])
+  await session.settleResources()
+  await session.settleResources()
+  expect(await session.observe()).toBe(observation)
+  expect({ opens, observationReads, confirmationReads, closes }).toEqual({ opens: 2, observationReads: 2, confirmationReads: 1, closes: 2 })
+}))
