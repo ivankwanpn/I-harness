@@ -43,6 +43,8 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     return rootStat
   }
   const same = (a: Awaited<ReturnType<typeof lstat>>, b: Awaited<ReturnType<typeof lstat>>) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
+  // Entries may change on unrelated keys without replacing their directory owner.
+  const sameDirectory = (a: Awaited<ReturnType<typeof lstat>>, b: Awaited<ReturnType<typeof lstat>>) => a.isDirectory() && b.isDirectory() && !a.isSymbolicLink() && !b.isSymbolicLink() && a.dev === b.dev && a.ino === b.ino
   function freeze(value: unknown): void {
     if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
   }
@@ -52,14 +54,14 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     const rootBefore = await directories()
     let before: Awaited<ReturnType<typeof lstat>>
     try { before = await lstat(filePath) }
-    catch (error) { guard(); if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') { const rootAfter = await directories(); if (!same(rootBefore, rootAfter)) throw new Error('Changed root'); return Object.freeze({ kind: 'absent' as const }) } throw error }
+    catch (error) { guard(); if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') { const rootAfter = await directories(); if (!sameDirectory(rootBefore, rootAfter)) throw new Error('Changed root'); return Object.freeze({ kind: 'absent' as const }) } throw error }
     guard()
     if (!before.isFile() || before.isSymbolicLink()) throw new Error('Task document is not a regular file')
     if (before.size > LIMIT) throw new Error('Task document too large')
     const handle = await opener(filePath, 'r')
     const resource: Resource = { handle, close: handle.close, failed: false }
     resources.add(resource)
-    let outcome: Readonly<{ kind: 'absent' }> | RawTaskObservation
+    let body: { ok: true; value: RawTaskObservation } | { ok: false; cause: unknown }
     try {
       guard()
       const opened = await handle.stat(); guard()
@@ -76,14 +78,24 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       const afterHandle = await handle.stat(); guard()
       const afterPath = await lstat(filePath); guard()
       const rootAfter = await directories()
-      if (!same(before, afterHandle) || !same(before, afterPath) || !same(rootBefore, rootAfter)) throw new Error('Changed task document')
+      if (!same(before, afterHandle) || !same(before, afterPath) || !sameDirectory(rootBefore, rootAfter)) throw new Error('Changed task document')
       const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       freeze(value)
       originalBytes = bytes
       const witness = Object.freeze({}) as RawTaskObservation['witness']
-      outcome = Object.freeze({ kind: 'present' as const, value, witness })
-    } finally { await closeResource(resource) }
-    return outcome
+      body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }) }
+    } catch (cause) { body = { ok: false, cause } }
+    try { await closeResource(resource) }
+    catch (cause) {
+      // Single failures retain their literal cause; simultaneous failures retain
+      // body then cleanup causes, independently of subsequent resource settlement.
+      if (!body.ok) throw new AggregateError([body.cause, cause], 'Task document observation and close failed')
+      throw cause
+    }
+    if (!body.ok) throw body.cause
+    // Closure is already recorded; revocation during close cannot expose a value.
+    guard()
+    return body.value
   }
   const session = Object.freeze({
     observe(): Promise<Readonly<{ kind: 'absent' }> | RawTaskObservation> {
