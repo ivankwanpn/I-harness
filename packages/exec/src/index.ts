@@ -12,7 +12,7 @@ export { createExecutionSupervisor } from "./execution-supervisor.ts"
 export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader, execResultOutcome } from "./retained-output.ts"
-export type { ExecFrameObservation, ExecFrameWriteOptions, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecRawSummary, ExecOutputSource } from './capture/frames.ts'
+export type { ExecOutputFramePage, ExecFrameRead, ExecFrameQuery, JobOutputSelectors, JobOutputFrameQuery, ExecFrameObservation, ExecFrameWriteOptions, ExecFramePart, ExecFrameCapture, ExecResultRetention, ExecRawSummary, ExecOutputSource } from './capture/frames.ts'
 
 export interface ExecCommand {
   /** Assigned by trusted tool registration, never exposed as model permission input. */
@@ -128,7 +128,8 @@ export interface ExecService {
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
   runBackground(cmd: ExecCommand): Promise<BackgroundRun>
   getOutput(jobId: string): BackgroundJobView
-  observeJobOutput?(jobId: string, options?: { signal?: AbortSignal }): Promise<JobOutputObservation>
+  readJobOutputFrames?(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
+  observeJobOutput?(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   /** Passive metadata only: no observer registration or storage settlement. */
@@ -149,7 +150,8 @@ export interface JobOutputObservation {
   source: import('./capture/frames.ts').ExecOutputSource
 }
 export interface NativeExecService extends ExecService {
-  observeJobOutput(jobId: string, options?: { signal?: AbortSignal }): Promise<JobOutputObservation>
+  readJobOutputFrames(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
+  observeJobOutput(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
   run(cmd: ExecCommand): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | NativePromotedRun>

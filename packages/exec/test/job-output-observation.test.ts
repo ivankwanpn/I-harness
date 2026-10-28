@@ -113,3 +113,16 @@ it.each(['revoked', 'disposed'] as const)('isolated awaiting observation rejects
     await expect(pending).rejects.toThrow('no longer current or authorized')
   } finally { release?.(); f.release(); authorized = true; await f.exec.dispose() }
 })
+it('refuses stale native observation/frame selectors before original observer or frame reads', async () => {
+  const a = adapter('summary-unsupported'), f = service(a.owner)
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['controlled'] })
+    await completed(f, jobId)
+    await expect(f.exec.observeJobOutput(jobId, { jobInstanceId: 'old' })).rejects.toThrow('stale-instance')
+    await expect(f.exec.observeJobOutput(jobId, { sourceId: 'old' })).rejects.toThrow('stale-source')
+    await expect(f.exec.readJobOutputFrames(jobId, { jobInstanceId: 'old' })).rejects.toThrow('stale-instance')
+    expect(a.observers).toBe(0)
+    expect(await f.exec.readJobOutputFrames(jobId, { jobInstanceId: nativeJob.instanceId })).toEqual({ kind: 'unavailable', reason: 'frame-read-unsupported' })
+    expect(a.observers).toBe(0)
+  } finally { f.release(); await f.exec.dispose() }
+})

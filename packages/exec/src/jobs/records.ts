@@ -134,13 +134,15 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     async runBackground(command) { const capture = await makeCapture(command, undefined, true); const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } },
     getJobView(jobId) {
       const job = jobs.get(jobId)
-      if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
       return view(job)
     },
     listJobViews() { return [...jobs.values()].filter(job => canAccess(job.owner)).map(view) },
-    async observeJobOutput(jobId, { signal } = {}) {
+    async observeJobOutput(jobId, { signal, jobInstanceId, sourceId } = {}) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error('unknown job: ' + jobId)
+      if (jobInstanceId !== undefined && jobInstanceId !== job.instanceId) throw new Error('stale-instance')
+      if (sourceId !== undefined && sourceId !== job.nativeJob.sourceId) throw new Error('stale-source')
       const instance = job.instanceId
       const current = () => {
         signal?.throwIfAborted()
@@ -182,9 +184,35 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
         return result({ kind: 'unavailable', reason: 'read-unavailable' })
       }
     },
+    async readJobOutputFrames(jobId, query) {
+      const { signal, jobInstanceId, sourceId, maxBytes, textView } = query, cursor = query.cursor ? { ...query.cursor } : undefined
+      const job = jobs.get(jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error('unknown job')
+      if (jobInstanceId !== job.instanceId) throw new Error('stale-instance')
+      if (sourceId !== undefined && sourceId !== job.nativeJob.sourceId) throw new Error('stale-source')
+      const current = () => {
+        signal?.throwIfAborted()
+        if (disposed || jobs.get(jobId) !== job || job.instanceId !== jobInstanceId || !canAccess(job.owner)) throw new Error('Job frame read no longer current or authorized')
+      }
+      current()
+      if (job.status === 'running') return { kind: 'unavailable', reason: 'output-pending' }
+      const owner = options.resultRetention, frames = job.capture.frames
+      if (!owner?.readFrames || !frames) return { kind: 'unavailable', reason: 'frame-read-unsupported' }
+      try {
+        const observed = await owner.observe(frames)
+        current()
+        await record(job)
+        current()
+        if (observed.kind !== 'ready') return observed
+        if (observed.dependency.retention.kind === 'unavailable') return { kind: 'unavailable', reason: observed.dependency.retention.reason }
+        const result = await owner.readFrames(frames, { signal, cursor, maxBytes, textView })
+        current()
+        return result
+      } catch (cause) { current(); throw cause }
+    },
     getOutput(jobId) {
       const job = jobs.get(jobId)
-      if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
       // A genuine reader inside its own prepared call registers the same
       // original source here; outside one this remains a passive retry.
       if (job.status !== "running") void observe(job.capture)
@@ -192,7 +220,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     },
     subscribeJob(jobId, listener) {
       const job = jobs.get(jobId)
-      if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
       job.listeners.add(listener)
       return () => { job.listeners.delete(listener) }
     },
@@ -201,7 +229,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     },
     async killJob(jobId) {
       const job = jobs.get(jobId)
-      if (!job || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
+      if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
       if (await settledAfterRetirement(job)) return "already-finished"
       if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
       let settlement: ExecutionSettlement

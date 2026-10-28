@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { currentToolResultProducer, registerToolResultDependency, type ToolExec, type ToolResultDependency } from '@i-harness/core-tools'
 import { createExecFrameCapture } from '@i-harness/output-retention'
 import type { ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
-import { summarizeExecFrames, type ExecFrameSummary } from '@i-harness/context-output'
+import { resultPageFailure, summarizeExecFrames, type ExecFrameSummary } from '@i-harness/context-output'
 import { sameManagedArtifactRef, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ExecFrameCapture, ExecFrameObservation, ExecResultRetention } from '@i-harness/exec'
 import { resultSourceBinding } from './result-sources.ts'
@@ -76,6 +76,23 @@ export function createExecResultRetention(service: ContextOutputService | undefi
   }
   return {
     previewBytes,
+    async readFrames(capture, query) {
+      const { signal, maxBytes, textView } = query, cursor = query.cursor ? { ...query.cursor } : undefined
+      signal?.throwIfAborted()
+      const origin = origins.get(capture)
+      if (!captures.has(capture) || !origin || !service) return { kind: 'unavailable', reason: 'unsupported-owner' }
+      const settled = await capture.settle()
+      signal?.throwIfAborted()
+      if (settled.kind !== 'ready') return settled
+      const dependency = settled.dependency
+      if (dependency.retention.kind === 'unavailable') return { kind: 'unavailable', reason: dependency.retention.reason }
+      const ref = Object.freeze({ ...dependency.retention.ref })
+      try {
+        const page = await service.readExecResult({ sessionId: origin, signal }, { ref, cursor, maxBytes, textView })
+        signal?.throwIfAborted()
+        return { kind: 'page', dependency, page }
+      } catch (cause) { signal?.throwIfAborted(); return resultPageFailure(cause) }
+    },
     async summarize(capture, { signal } = {}) {
       signal?.throwIfAborted()
       // No caller-supplied ref/owner is accepted by this trusted port.

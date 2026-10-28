@@ -12,3 +12,5 @@ export type { ExecFramePage } from './artifact/exec-reader.ts'
 export { summarizeExecFrames, type ExecFrameSummary } from './artifact/exec-summary.ts'
 export { readManagedResultPage, parseResultPageQuery, resultPageFailure } from './result-page.ts'
 export type { ResultPageQuery, ResultPageResult } from './result-page.ts'
+
+export { readExecTextWindow, ExecTextWindowError } from './artifact/exec-text-window.ts'

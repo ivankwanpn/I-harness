@@ -1,5 +1,5 @@
 import type { ExecutionOwner } from '@i-harness/sandbox'
-import type { ResultCompleteness, ResultDependency } from '@i-harness/core-session'
+import type { ExecFrameCursor, ManagedArtifactRef, ResultCompleteness, ResultDependency } from '@i-harness/core-session'
 
 export interface ExecFramePart { channel: 'stdout' | 'stderr'; frame: number; offset: number; end: boolean; bytes: Uint8Array }
 export interface ExecFrameWriteOptions { continuationAllowed(): boolean }
@@ -28,6 +28,7 @@ export type ExecOutputSource =
   | { kind: 'unavailable'; reason: string }
   | { kind: 'recovery-required' }
 export interface ExecResultRetention {
+  readFrames?(capture: ExecFrameCapture, query: ExecFrameQuery): Promise<ExecFrameRead>
   readonly previewBytes?: number
   begin(input: { sourceId: string; owner: Readonly<ExecutionOwner> }): ExecFrameCapture
   /** Passive owner settlement. Commits the original capture without claiming
@@ -46,3 +47,12 @@ export interface ExecResultRetention {
    * Cancellation belongs to this reader, never the native execution. */
   summarize?(capture: ExecFrameCapture, options?: { signal?: AbortSignal }): Promise<Exclude<ExecOutputSource, { kind: 'pending' }>>
 }
+
+export interface ExecOutputFramePage {
+  ref: ManagedArtifactRef; cursor: ExecFrameCursor; nextCursor: ExecFrameCursor | null; eof: boolean
+  frames: { channel: 'stdout' | 'stderr'; frame: number; offset: number; end: boolean; data: string; text?: { kind: 'utf8-view'; text: string } }[]
+}
+export interface ExecFrameQuery { cursor?: ExecFrameCursor; maxBytes?: number; textView?: boolean; signal?: AbortSignal }
+export type ExecFrameRead = { kind: 'page'; dependency: ResultDependency; page: ExecOutputFramePage } | { kind: 'unavailable'; reason: string } | { kind: 'recovery-required' }
+export interface JobOutputSelectors { jobInstanceId?: string; sourceId?: string; signal?: AbortSignal }
+export interface JobOutputFrameQuery extends ExecFrameQuery { jobInstanceId: string; sourceId?: string }
