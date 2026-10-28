@@ -30,6 +30,3 @@ it('uses the independent domain hash for all paths and separates old keys',()=>{
  expect(paths.stage).not.toBe(bootstrapPaths('target.jsonl',invocation).stage)
  expect(key).not.toBe(childBootstrapPathKey(invocation))
 })
-
-
-

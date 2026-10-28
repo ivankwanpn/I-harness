@@ -44,7 +44,7 @@ it.each(['empty','torn','oversize','publish','foreign','mixed'] as const)('refus
 })
 it('returns no value after currentness loss at any asynchronous boundary',async()=>{
  const {route}=fixture()
- for(let fail=1;fail<=5;fail++){let calls=0;const io={assertCurrent(){if(++calls===fail)throw Error('lost')},async namespace(){return []},async read(){return undefined}}
+ for(let fail=1;fail<=10;fail++){let calls=0;const io={assertCurrent(){if(++calls===fail)throw Error('lost')},async namespace(){return []},async read(){return undefined}}
  expect((await lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},io)).kind).toBe('unavailable')}
 })
 it('binds full request and immutable header while accepting mutable metadata',async()=>{
@@ -89,4 +89,60 @@ it('denies orphan promotion, old reservation and a selected stage under the wron
  await rm(paths.stage);await writeFile(path+'.bootstrap-'+ 'a'.repeat(64)+'.stage',built.stageBytes)
  expect((await lookupSelectedBootstrapStage(path,{kind:'header',meta:JSON.parse(built.headerBytes)},io)).kind).toBe('conflict')
  }finally{await rm(root,{recursive:true,force:true})}
+})
+
+function gate(){let release!:()=>void;const promise=new Promise<void>(resolve=>{release=resolve});return {promise,release}}
+it.each(['kind','meta','nested','read-kind','read-nested'] as const)('captures the original header before IO: %s mutation cannot select a birth',async mode=>{
+ const {built,route}=fixture(),path='target.jsonl',paths=selectedBootstrapPaths(path,route),meta=JSON.parse(built.headerBytes)
+ if(mode.endsWith('nested'))meta.semanticSeed.manifestDigest='0'.repeat(64)
+ else meta.sessionId='another-birth'
+ const expectation:any={kind:'header',meta},entered=gate(),held=gate()
+ const io={assertCurrent(){},async namespace(){if(!mode.startsWith('read-')){entered.release();await held.promise}return [paths.stage]},async read(p:string){if(p===paths.stage&&mode.startsWith('read-')){entered.release();await held.promise}return p===paths.stage?Buffer.from(built.stageBytes):undefined}}
+ const pending=lookupSelectedBootstrapStage(path,expectation,io);await entered.promise
+ if(mode.endsWith('kind'))expectation.kind='route'
+ else if(mode==='meta')expectation.meta=JSON.parse(built.headerBytes)
+ else meta.semanticSeed.manifestDigest=JSON.parse(built.headerBytes).semanticSeed.manifestDigest
+ held.release();expect((await pending).kind).toBe('conflict')
+})
+it.each(['namespace','stage','promotion','publication'] as const)('retains original currentness and IO methods while %s is held',async boundary=>{
+ const {route}=fixture(),entered=gate(),held=gate();let current=true,checks=0,reads=0,names=0
+ const io={assertCurrent(){expect(this).toBe(io);checks++;if(!current)throw Error('revoked')},async namespace(){expect(this).toBe(io);names++;if(boundary==='namespace'){entered.release();await held.promise}return []},async read(){expect(this).toBe(io);reads++;if(reads===['stage','promotion','publication'].indexOf(boundary)+1){entered.release();await held.promise}return undefined}}
+ const pending=lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},io);await entered.promise
+ const previousReads=reads;current=false;io.assertCurrent=()=>{};io.read=async()=>undefined;io.namespace=async()=>[]
+ held.release();expect((await pending).kind).toBe('unavailable');expect(reads).toBe(previousReads);expect(names).toBe(1);expect(checks).toBeGreaterThan(1)
+})
+it('keeps original receiver and methods when replacements occur without revocation',async()=>{
+ const {route}=fixture(),entered=gate(),held=gate();let reads=0,checks=0
+ const io={assertCurrent(){expect(this).toBe(io);checks++},async namespace(){expect(this).toBe(io);entered.release();await held.promise;return []},async read(){expect(this).toBe(io);reads++;return undefined}}
+ const pending=lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},io);await entered.promise
+ io.assertCurrent=()=>{throw Error('replacement assertion')};io.read=async()=>undefined;io.namespace=async()=>[]
+ held.release();expect((await pending).kind).toBe('absent');expect(reads).toBe(3);expect(checks).toBe(10)
+})
+it('denies accessors without invoking them and ignores unrelated mutable metadata getters',async()=>{
+ const {route,built}=fixture();let calls=0,namespaceCalls=0
+ const io={assertCurrent(){},async namespace(){namespaceCalls++;return []},async read(){return undefined}}
+ for(const expectation of [Object.defineProperty({},'kind',{get(){calls++;return 'route'}}),{kind:'header',get meta(){calls++;return JSON.parse(built.headerBytes)}},{kind:'header',meta:Object.defineProperty(JSON.parse(built.headerBytes),'semanticSeed',{get(){calls++;return {}}})}])expect((await lookupSelectedBootstrapStage('target.jsonl',expectation as any,io)).kind).toBe('unavailable')
+ for(const key of ['assertCurrent','namespace','read']){const malicious=Object.defineProperty({...io},key,{get(){calls++;return ()=>{}}});expect((await lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},malicious)).kind).toBe('unavailable')}
+ expect(calls).toBe(0);expect(namespaceCalls).toBe(0)
+ const meta=JSON.parse(built.headerBytes);Object.defineProperty(meta,'title',{get(){calls++;throw Error('unrelated')}})
+ const paths=selectedBootstrapPaths('target.jsonl',route)
+ expect((await lookupSelectedBootstrapStage('target.jsonl',{kind:'header',meta},{...io,async namespace(){return [paths.stage]},async read(p){return p===paths.stage?Buffer.from(built.stageBytes):undefined}})).kind).toBe('full');expect(calls).toBe(0)
+})
+it.each(['reservation','full','reservation-namespace','full-namespace'] as const)('owns %s observations before later awaits and after return',async mode=>{
+ const {route,reservation,built}=fixture(),path='target.jsonl',paths=selectedBootstrapPaths(path,route)
+ const stage=Buffer.from(mode.startsWith('full')?built.stageBytes:encodeSelectedResultsReservation(reservation)),expected=Buffer.from(stage),names=[paths.stage]
+ const result=await lookupSelectedBootstrapStage(path,{kind:'route',route},{assertCurrent(){},async namespace(){return names},async read(p){if(p===paths.stage){if(mode.endsWith('namespace'))names.push(paths.publish);return stage}if(p===paths.promote&&!mode.endsWith('namespace'))stage.fill(120);return undefined}})
+ expect(result.kind).toBe(mode.startsWith('full')?'full':'reserved')
+ if(result.kind==='full'||result.kind==='reserved'){expect(Buffer.from(result.exactBytes)).toEqual(expected);stage.fill(0);names.length=0;expect(Buffer.from(result.exactBytes)).toEqual(expected);expect(Object.isFrozen(result.kind==='full'?result.stage:result.reservation)).toBe(true)}
+})
+it('owns raw promotion bytes before publication await and after return',async()=>{
+ const {route,reservation}=fixture(),path='target.jsonl',paths=selectedBootstrapPaths(path,route),promotion=Buffer.from('{raw'),expected=Buffer.from(promotion)
+ const result=await lookupSelectedBootstrapStage(path,{kind:'route',route},{assertCurrent(){},async namespace(){return [paths.stage,paths.promote]},async read(p){if(p===paths.stage)return encodeSelectedResultsReservation(reservation);if(p===paths.promote)return promotion;promotion.fill(120);return undefined}})
+ expect(result.kind).toBe('reserved');if(result.kind==='reserved'){expect(Buffer.from(result.promotionBytes!)).toEqual(expected);promotion.fill(0);expect(Buffer.from(result.promotionBytes!)).toEqual(expected)}
+})
+it('uses the original assertion immediately before return after publication boundary succeeds',async()=>{
+ const {route}=fixture(),entered=gate(),held=gate();let checks=0,current=true
+ const io={assertCurrent(){expect(this).toBe(io);checks++;if(!current)throw Error('lost at finish');if(checks===9){current=false;io.assertCurrent=()=>{}}},async namespace(){return []},async read(p:string){if(p.endsWith('.publish')){entered.release();await held.promise}return undefined}}
+ const pending=lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},io);await entered.promise;held.release()
+ expect((await pending).kind).toBe('unavailable');expect(checks).toBe(10)
 })
