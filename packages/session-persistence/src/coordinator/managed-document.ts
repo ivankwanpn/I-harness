@@ -55,12 +55,18 @@ export interface ManagedReadyObservation {
     readonly prefix: Readonly<JournalPrefix>;
     assertCurrent(): void;
 }
-const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation }>();
+export type SelectedSourceRead = ManagedReadyObservation & { readonly header: SessionView['header']; unsubscribe():void };
+const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; retainSelected(onRevoke:()=>void):SelectedSourceRead }>();
 /** Private original-factory observation. No caller-shaped document/owner can issue it. */
 export function captureManagedReadyObservation(document: ManagedDocument, ownership: Ownership): ManagedReadyObservation {
     const original = readyOwners.get(document);
     if (!original || original.ownership !== ownership) throw new FactRecoveryRequiredError();
     return original.capture();
+}
+export function retainSelectedSourceRead(document:ManagedDocument,ownership:Ownership,onRevoke:()=>void):SelectedSourceRead {
+    const original=readyOwners.get(document);
+    if(!original||original.ownership!==ownership||typeof onRevoke!=='function')throw new FactRecoveryRequiredError();
+    return original.retainSelected(onRevoke);
 }
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
@@ -83,6 +89,8 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     const sourceDispositions = new WeakMap<CapturedFactGroup, FactOutcome>();
     const recoveryHolds = new Set<object>();
     let prefix = initialPrefix, pending: Pending | undefined, closing = false, closed = false, scheduled = false, quarantined = false, sourceFault = false;
+    const selectedListeners=new Set<()=>void>();
+    const invalidateSelected=()=>{for(const listener of [...selectedListeners]){selectedListeners.delete(listener);try{listener()}catch{}}};
     let pump: Promise<void> = Promise.resolve();
     let settlingFinished: Promise<void> | undefined;
     const held = heldFactOwner(owner, ownership, () => {
@@ -106,6 +114,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     };
     const failQueued = () => {
+        invalidateSelected();
         quarantined = true;
         capacity.stop('FACT_RECOVERY_REQUIRED');
         for (const entry of queue.splice(0)) {
@@ -114,6 +123,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     };
     const failSource = () => {
+        invalidateSelected();
         sourceFault = true;
         capacity.blockOptional('FACT_RECOVERY_REQUIRED');
         for (let index = queue.length - 1; index >= 0; index--) {
@@ -262,6 +272,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             return { kind: 'not-issued', code: 'FACT_CANCELLED' };
         if (quarantined || (sourceFault || recoveryHolds.size > 0) && !authorization.required)
             return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+        invalidateSelected();
         const ticket = await capacity.acquire(authorization.required ? undefined : authorization.action.signal, authorization.required);
         if (typeof ticket === 'string')
             return { kind: 'not-issued', code: ticket };
@@ -293,6 +304,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
+            invalidateSelected();
             deliveryControl.retire();
             closing = true;
             capacity.revokeNewWork();
@@ -378,6 +390,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                             if (entry) entry.closeRequested = true;
                         },
                         holdRecovery() {
+                            invalidateSelected();
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             recoveryHolds.add(source); capacity.holdOptional(source);
                             for (let index = queue.length - 1; index >= 0; index--) {
@@ -477,6 +490,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
             const authorization: Authorization = { action: { stopped: false, signal: guards.signal }, required: false, source: bootstrap, assertSource };
             if (pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };
+            invalidateSelected();
             const ticket = await capacity.acquire(guards.signal);
             if (typeof ticket === 'string') return { kind: 'not-issued', code: ticket };
             try { assertAuthorized(authorization); } catch (error) { ticket.release(); return {kind:'not-issued',code:(error as {code?: 'FACT_CANCELLED'}).code ?? 'FACT_PRECONDITION_STALE'}; }
@@ -484,7 +498,13 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     });
     state.bindOwner(document);
-    readyOwners.set(document, { ownership, capture() {
+    readyOwners.set(document, { ownership, retainSelected(onRevoke) {
+        if(queue.length||scheduled)throw new FactRecoveryRequiredError();
+        const original=captureManagedReadyObservation(document,ownership),header=original.view.header;
+        let revoked=false;
+        const listener=()=>{if(revoked)return;revoked=true;onRevoke()};selectedListeners.add(listener);
+        return Object.freeze({...original,header,assertCurrent(){if(revoked)throw new FactRecoveryRequiredError();original.assertCurrent()},unsubscribe(){revoked=true;selectedListeners.delete(listener)}});
+    }, capture() {
         const view = state.view, events = view.events, eventCount = events.length, originalPrefix = prefix, header = view.header;
         const assertCurrent = () => {
             if (!bootstrapReady || pending || quarantined || document.view !== view || state.view !== view || view.events !== events || events.length !== eventCount

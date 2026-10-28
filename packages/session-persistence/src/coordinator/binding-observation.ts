@@ -30,7 +30,7 @@ export function createBindingObservations(
   type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
   type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
   type ScopeKind = { kind: 'fork'; target: BootstrapInvocation } | { kind: 'existing-read' }
-  type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean } & ScopeKind
+  type Scope = { ids: Set<string>; keys: Set<string>; state: 'acquiring'|'active'|'revoked'|'releasing'|'done'; pins: Pin[]; locks: Lock[]; done: Promise<void>; signal?: AbortSignal; cleanup?: () => Promise<void>; callbackFinished: boolean; revoke?: () => void } & ScopeKind
   type Captured = { ids: string[]; existing: string[]; signal?: AbortSignal } & ScopeKind
   const scopes = new Set<Scope>(), context = new AsyncLocalStorage<readonly Scope[]>()
   const cleanupErrors = new WeakMap<object, ObservationCleanupHandle>()
@@ -146,7 +146,7 @@ export function createBindingObservations(
     for (const id of ids) { pendingIds.set(id, (pendingIds.get(id) ?? 0) + 1); if (deleted) deletedIds.add(id) }
     for (const key of keys) { pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1); if (deleted) deletedKeys.add(key) }
     const affected = [...scopes].filter(scope => !allowed.includes(scope) && intersects(scope, ids, keys))
-    for (const scope of affected) scope.state = 'revoked'
+    for (const scope of affected) { if(scope.revoke)scope.revoke();else scope.state = 'revoked' }
     let finished = false
     return {
       async join() { const settled = await Promise.allSettled(affected.map(scope => scope.done)); const errors = settled.flatMap(x => x.status === 'rejected' ? [x.reason] : []); if (errors.length) throw new AggregateError(errors, 'Observation cleanup is unresolved') },
@@ -157,7 +157,7 @@ export function createBindingObservations(
     refuseSelf([], [], true)
     closed = true
     const affected = [...scopes]
-    for (const scope of affected) scope.state = 'revoked'
+    for (const scope of affected) { if(scope.revoke)scope.revoke();else scope.state = 'revoked' }
     return async () => {
       const results = await Promise.allSettled(affected.map(async scope => {
         // A subsequent close retries the same disposal capability only after
@@ -326,7 +326,44 @@ export function createBindingObservations(
     if (failed) throw callbackError
     return result as T
   }
-  return { withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  async function acquireSelectedBindingRead(request: ExistingSessionBindingObservationRequest) {
+    let ids:string[]
+    try {
+      if(!request||utilTypes.isProxy(request)||Object.getPrototypeOf(request)!==Object.prototype||Reflect.ownKeys(request).length!==1)throw Error('request')
+      const field=Object.getOwnPropertyDescriptor(request,'sessionIds'),value=field&&'value'in field?field.value:undefined
+      if(!field?.enumerable||!Array.isArray(value)||utilTypes.isProxy(value)||Object.getPrototypeOf(value)!==Array.prototype||value.length<1||value.length>64||Reflect.ownKeys(value).length!==value.length+1)throw Error('ids')
+      ids=[];for(let i=0;i<value.length;i++){const d=Object.getOwnPropertyDescriptor(value,String(i));if(!d||!('value'in d)||!d.enumerable||typeof d.value!=='string'||!d.value.length||d.value.length>256||/[\\/\u0000-\u001f\u007f]/.test(d.value)||d.value.includes('..'))throw Error('id');ids.push(d.value)}
+      if(new Set(ids).size!==ids.length)throw Error('duplicate');ids.sort()
+    }catch(cause){throw new Failure('invalid',{cause})}
+    if(!ownership.lockEnabled||!ownership.pinOwnership||!ownership.withSessionOperation||!backend.profile||!backend.readDocumentObserved)throw new Failure('unsupported')
+    const keys=ids.map(bindingKey).sort();refuseSelf(ids,keys)
+    if(closed)throw new Failure('revoked');if(ids.some(id=>deletedIds.has(id))||keys.some(k=>deletedKeys.has(k)))throw new Failure('deleted');if(ids.some(id=>pendingIds.has(id))||keys.some(k=>pendingKeys.has(k)))throw new Failure('conflict')
+    const done=Promise.withResolvers<void>(),acquired=Promise.withResolvers<void>(),listeners=new Set<()=>void>()
+    const scope:Scope={kind:'existing-read',ids:new Set(ids),keys:new Set(keys),state:'acquiring',pins:[],locks:[],done:done.promise,callbackFinished:false};scope.done.catch(()=>{});scopes.add(scope)
+    let active=0,drain=Promise.withResolvers<void>(),cleanupFlight:Promise<void>|undefined
+    const guard=()=>{if(closed||scope.state!=='active')throw new Failure('revoked');for(const pin of scope.pins)pin.assertHeld();if(scope.locks.some(lock=>!lock.held))throw new Failure('revoked')}
+    const cleanup=async()=>{await acquired.promise;if(active)await drain.promise;scope.callbackFinished=true;scope.state='releasing';const errors:unknown[]=[]
+      for(const lock of [...scope.locks].reverse())try{await lock.release();scope.locks.splice(scope.locks.indexOf(lock),1)}catch(e){errors.push(e)}
+      for(const pin of [...scope.pins].reverse())try{await pin.release();scope.pins.splice(scope.pins.indexOf(pin),1)}catch(e){errors.push(e)}
+      if(errors.length)throw new AggregateError(errors,'Failed to release binding observation');scope.state='done';scope.callbackFinished=true;scopes.delete(scope)
+    }
+    scope.cleanup=()=>{if(cleanupFlight)return cleanupFlight;const flight=cleanup();cleanupFlight=flight;void flight.finally(()=>{if(cleanupFlight===flight)cleanupFlight=undefined}).catch(()=>{});return flight}
+    const retire=()=>{if(scope.state==='done'||scope.state==='releasing'||scope.state==='revoked')return;scope.state='revoked';for(const listener of listeners)try{listener()}catch{};void scope.cleanup!().then(done.resolve,done.reject)}
+    scope.revoke=retire
+    const metadata=new Map<string,SessionMeta>(),bindings=new Map<string,ObservedDocument>()
+    try{
+      const acquiringGuard=()=>{if(closed||scope.state!=='acquiring')throw new Failure('revoked');for(const pin of scope.pins)pin.assertHeld();if(scope.locks.some(lock=>!lock.held))throw new Failure('revoked')}
+      for(const id of ids){scope.pins.push(await ownership.pinOwnership(id));acquiringGuard()}
+      for(const key of keys){scope.locks.push(await ownership.acquireLease(`doc:${key}`));acquiringGuard()}
+      for(const id of ids){await ownership.withSessionOperation(id,async()=>{acquiringGuard();const profile=await backend.profile!(id);acquiringGuard();if(profile.meta.sessionId!==id||profile.meta.archived===true)throw new Failure('unavailable');metadata.set(id,capture(profile.meta))});acquiringGuard()}
+      for(const id of ids){const value=await backend.readDocumentObserved!(bindingKey(id));acquiringGuard();bootstrapFields(value,['kind'],value.kind==='present'?['value']:[]);if(value.kind!=='present'&&value.kind!=='absent')throw new Failure('unavailable');bindings.set(id,capture(value))}
+      scope.state='active';acquired.resolve()
+    }catch(error){retire();acquired.resolve();try{await scope.cleanup!()}catch(cleanupError){throw new AggregateError([error,cleanupError],'Selected binding cleanup failed')}throw normalize(error)}
+    const observation:ExistingSessionBindingObservation=Object.freeze({assertCurrent:guard,metadata(id:string){guard();if(!metadata.has(id))throw new Failure('invalid');return metadata.get(id)!},binding(id:string){guard();if(!bindings.has(id))throw new Failure('invalid');return bindings.get(id)!}})
+    return Object.freeze({observation,assertCurrent:guard,onRevoke(listener:()=>void){guard();listeners.add(listener);return()=>{listeners.delete(listener)}},async use<T>(work:()=>Promise<T>){guard();active++;let entered=true;const entry=Object.create(scope) as Scope;Object.defineProperty(entry,'state',{get(){return entered?scope.state:'done'}});try{const result=await context.run([...(context.getStore()??[]),entry],work);guard();return result}finally{entered=false;if(!--active){drain.resolve();drain=Promise.withResolvers<void>()}}},async release(){refuseSelf(ids,keys);if(scope.state==='done')return;retire();try{await scope.cleanup!()}catch(cause){const error=new AggregateError([cause],'Selected binding cleanup failed');cleanupErrors.set(error,Object.freeze({async retry(){refuseSelf(ids,keys);if(scope.state!=='done')await scope.cleanup!()}}));throw error}}})
+  }
+  return { acquireSelectedBindingRead, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>
+
