@@ -1,5 +1,6 @@
 import { parseResultPageQuery, readManagedResultPage, resultPageFailure, type ResultPageQuery, type ResultPageResult } from '@i-harness/context-output'
 import { acquireResultReadStore, type ResultStoreOptions } from '../lifecycle/result-store.ts'
+import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
 
 /** Lifecycle joins only. Committed identity, pins and source remain store-owned. */
 export function createResultPageReader(options: ResultStoreOptions, available: (sessionId: string) => boolean) {
@@ -47,12 +48,16 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
           throw cause
         }
         assertScope()
-        if (lease.service && available(sessionId)) result = await readManagedResultPage(lease.service, { sessionId }, query)
+        if (lease.service && available(sessionId)) {
+          const service = lease.service
+          result = 'withProcessReadContext' in lease ? await lease.withProcessReadContext(() => readManagedResultPage(service, { sessionId }, query)) : await readManagedResultPage(service, { sessionId }, query)
+        }
+        if ('kind' in result && lookupProcessReadContext(options.coordinator!, sessionId)) { try { lookupProcessReadContext(undefined!, sessionId) } catch {} }
         assertScope()
-      } catch (cause) { result = resultPageFailure(cause) }
+      } catch (cause) { try { lookupProcessReadContext(undefined!, sessionId) } catch {} result = resultPageFailure(cause) }
       finally {
         try { await lease?.release() }
-        catch (cause) { if (lease) retainCleanup(sessionId, lease.release); result = resultPageFailure(cause) }
+        catch (cause) { try { lookupProcessReadContext(undefined!, sessionId) } catch {} if (lease) retainCleanup(sessionId, lease.release); result = resultPageFailure(cause) }
       }
       // A denial has no body to revoke. Preserve its typed reason after release;
       // only a successfully read page needs the final currentness checks.

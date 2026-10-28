@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
-import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, createContextOutputService, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService, type LegacyReadObservationRunner } from '@i-harness/context-output'
+import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService, type LegacyReadObservationRunner } from '@i-harness/context-output'
 import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { createResultObservationScope, createLegacyReadObservationRunner, type ResultObservationScope } from './result-observation.ts'
+import { createProcessAwareResultService, lookupProcessResultService } from './process-result-service.ts'
+import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
 
 export interface ResultReadScope { projectId?: string; scope?: { id: string; roots: string[] }; revision: string }
 export type ResultReadScopeResolver = (sessionId: string) => Promise<(() => ResultReadScope) | undefined>
@@ -19,6 +21,7 @@ interface StoreEntry {
   retirement?: { complete: boolean; flight?: Promise<void>; failure?: unknown }
   sourceFor(sessionId: string): Promise<ContextCapture['source']>; observeDeletion(coordinator: SessionCoordinator): void; stopObserving(): void
   observations: ResultObservationScope
+  bridge: ReturnType<typeof createProcessAwareResultService>
 }
 const stores = new Map<string, Promise<StoreEntry>>()
 
@@ -35,7 +38,15 @@ export function acquireResultReadStore(options: ResultStoreOptions & { readCalle
   return acquireResultStore({ ...options, projectContext: undefined, executionCallerAvailable: options.readCallerAvailable }, 'reader', readScope)
 }
 async function acquireResultStore(options: ResultStoreOptions, mode: Registration['mode'], readScope?: () => ResultReadScope) {
-  if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, withLegacyReadObservation: options.contextOutputLegacyReadObservation, observations: undefined, release: async () => {} }
+  if (options.contextOutput) return { service: options.contextOutput, sourceFor: options.contextOutputSourceFor, withLegacyReadObservation: options.contextOutputLegacyReadObservation, observations: undefined, release: async () => {},
+    async withProcessReadContext<T>(run: () => Promise<T>) {
+      const coordinator = options.coordinator, id = options.sessionId!
+      const context = lookupProcessReadContext(coordinator!, id)
+      if (!context) return run()
+      const bridge = lookupProcessResultService(options.contextOutput!)
+      if (!bridge || !coordinator) { try { lookupProcessReadContext(undefined!, id) } catch {} throw new Error('PROCESS_READ_UNAVAILABLE') }
+      return bridge.withPage(coordinator, id, () => options.executionCallerAvailable?.() !== false, run)
+    } }
   if (!options.coordinator?.storageRoot || !options.sessionId) return { service: undefined, sourceFor: undefined, withLegacyReadObservation: undefined, observations: undefined, release: async () => {} }
   const location = await contextWorkspaceLocation(options.workspace, options.coordinator.storageRoot)
   const key = JSON.stringify([contextPathKey(location.serviceRoot), location.workspaceKey])
@@ -98,21 +109,17 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         if (scope) selected.lastScopeId = scope.id
         return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
       }
-      const service = createContextOutputService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
+      const bridge = createProcessAwareResultService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
+        coordinatorFor: () => [...registrations].at(-1)?.coordinator, sourceFor,
         documentDeletions: listener => { deletionListeners.add(listener); return () => { deletionListeners.delete(listener) } },
-        authorizeResult: async (access, metadata) => {
-          try {
-            if (metadata.workspaceId !== location.workspaceKey || !metadata.owner.source || (await sourceFor(access.sessionId)).sourceId !== metadata.owner.source.sourceId) return false
-            if (!metadata.visibleVia && access.sessionId === metadata.owner.sessionId) return true
-            const observed = observations.current(access.sessionId)
+        genericVisible: async (sessionId, expected) => {
+            const observed = observations.current(sessionId)
             const coordinator = [...registrations].at(-1)?.coordinator
             if (!coordinator?.snapshot) return false
-            const snapshot = observed?.view ?? (await coordinator.snapshot(access.sessionId)).session, cuts = rewindCuts(snapshot)
+            const snapshot = observed?.view ?? (await coordinator.snapshot(sessionId)).session, cuts = rewindCuts(snapshot)
             observed?.assertCurrent()
-            const expected = metadata.visibleVia ?? metadata.ref
             return semanticSeedResultRefs(snapshot).some(ref => sameManagedArtifactRef(ref, expected)) || snapshot.events.some(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq)
               && managedResultRefs(event).some(ref => sameManagedArtifactRef(ref, expected)))
-          } catch { return false }
         },
         authorize: async (access, ref) => {
           if (!ref.source) return access.sessionId === ref.sessionId
@@ -120,7 +127,8 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
           observations.current(access.sessionId)?.assertCurrent()
           return ref.workspaceId === location.workspaceKey && source.sourceId === ref.source.sourceId
         } })
-      const entry: StoreEntry = { service, registrations, users: 0, sourceFor, observations,
+      const service = bridge.service
+      const entry: StoreEntry = { service, bridge, registrations, users: 0, sourceFor, observations,
         observeDeletion(coordinator) {
           if (deletionSources.has(coordinator) || !coordinator.onDocumentDeleted) return
           deletionSources.set(coordinator, coordinator.onDocumentDeleted(async (id, manifest) => { for (const listener of deletionListeners) await listener([id, ...manifest.documents]) }))
@@ -159,7 +167,7 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
     const retirement = entry.retirement!
     if (retirement.complete) return
     if (!retirement.flight) retirement.flight = Promise.resolve().then(async () => {
-      await entry.service.close()
+      entry.bridge.retireBridge(); await entry.service.close()
       entry.stopObserving()
       retirement.complete = true
       if (stores.get(key) === pending) stores.delete(key)
@@ -207,7 +215,11 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
         }
       },
     })
-    return { service: entry.service, sourceFor, withLegacyReadObservation, observations: entry.observations, release }
+    return { service: entry.service, sourceFor, withLegacyReadObservation, observations: entry.observations, release,
+      async withProcessReadContext<T>(run: () => Promise<T>) {
+        const available = () => !released && !entry.retirement && entry.registrations.has(registration) && registration.mode === 'reader' && registration.available?.() !== false
+        return entry.bridge.withPage(registration.coordinator, registration.sessionId, available, run)
+      } }
   } catch (cause) {
     try { await release() }
     catch (cleanupCause) {

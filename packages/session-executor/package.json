@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./internal/process-result-service": "./src/lifecycle/process-result-service.ts"
   },
   "scripts": {
     "test": "vitest run",

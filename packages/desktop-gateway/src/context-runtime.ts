@@ -1,10 +1,12 @@
 import {join} from 'node:path'
 import {types} from 'node:util'
-import {createContextOutputService,contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope} from '@i-harness/context-output'
+import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope} from '@i-harness/context-output'
 import {isStrictFactData,sameManagedArtifactRef,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort} from '@i-harness/session-persistence'
 import type {SessionProjectContext,ResultReadScopeResolver} from '@i-harness/session-executor'
+import {createProcessAwareResultService} from '@i-harness/session-executor/internal/process-result-service'
+import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
 
@@ -38,32 +40,34 @@ export async function createNativeContextRuntime(options:{
     const sourceId=contextSourceIdentity(workspaceKey,canonical,scope)
     return{sourceId,readonly:true}
   }
-  const contextOutput=createContextOutputService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,
+  const bridge=createProcessAwareResultService({root:contextOutputServiceRoot(options.storageRoot),workspaceId:workspaceKey,config:options.contextConfig,
+    coordinatorFor:()=>options.coordinator as SessionCoordinator,sourceFor,guardedRead,
     ...(options.coordinator.onDocumentDeleted?{documentDeletions:listener=>options.coordinator.onDocumentDeleted!((id,manifest)=>listener([id,...manifest.documents]))}:{}),
-    authorizeResult:async(access,metadata)=>{
-      try{
-        if(metadata.workspaceId!==workspaceKey||!metadata.owner.source||(await sourceFor(access.sessionId)).sourceId!==metadata.owner.source.sourceId)return false
-        const visibleRef=metadata.visibleVia??metadata.ref
-        return !metadata.visibleVia&&access.sessionId===metadata.owner.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>'version' in visible&&sameManagedArtifactRef(visible,visibleRef)))
-      }catch{return false}
-    },
+    genericVisible:async(sessionId,ref)=>Boolean((await options.visibleRefsFor?.(sessionId))?.some(visible=>'version' in visible&&sameManagedArtifactRef(visible,ref))),
     authorize:async(access,ref)=>{
       try{
         if(ref.workspaceId!==workspaceKey||!ref.source||(await sourceFor(access.sessionId)).sourceId!==ref.source.sourceId)return false
         return access.sessionId===ref.sessionId||Boolean((await options.visibleRefsFor?.(access.sessionId))?.some(visible=>!('version' in visible)&&visible.id===ref.id))
       }catch{return false}
     }})
+  const contextOutput=bridge.service
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
   async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{
+    const process=lookupProcessReadContext(options.coordinator as SessionCoordinator,sessionId)
+    process?.assertCurrent()
     if(closed)throw new Error('Native context is closed')
     const getter=await options.resultReadScopeFor?.(sessionId)
+    process?.assertCurrent()
     const captured=getter?.() ?? await options.projectFor(sessionId)
+    process?.assertCurrent()
     const assertCurrent=async()=>{
       if(closed)throw new Error('Native context is closed')
       const {meta}=await options.coordinator.profile(sessionId)
+      process?.assertCurrent()
       if(meta.archived)throw new Error('Native context session is archived')
       const current=getter?.() ?? await options.projectFor(sessionId)
+      process?.assertCurrent()
       if(closed||current.revision!==captured.revision)throw new Error('Result read scope changed')
     }
     await assertCurrent()
@@ -71,9 +75,6 @@ export async function createNativeContextRuntime(options:{
     await assertCurrent()
     return page
   }
-  const readResult=contextOutput.readResult.bind(contextOutput),readExecResult=contextOutput.readExecResult.bind(contextOutput)
-  contextOutput.readResult=(access,args)=>guardedRead(access.sessionId,()=>readResult(access,args))
-  contextOutput.readExecResult=(access,args)=>guardedRead(access.sessionId,()=>readExecResult(access,args))
   function prepareBootstrapTransfer(input:BootstrapProjectCapture,sourceAccess:ContextAccess|undefined):{targetPreparation:BootstrapTargetPreparationPort;dependencies:BootstrapDependencyPort;close():void}{
     if(closed||!prepareProject)throw new Error('Bootstrap project preparation unavailable')
     const capture=captureBootstrapProject(input)
@@ -177,7 +178,7 @@ export async function createNativeContextRuntime(options:{
       if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
     },
     async close(){
-      if(closed)return;closed=true;if(timer)clearInterval(timer)
+      if(closed)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
       await codeRetrieval.cancel();await refreshing
       await Promise.all([contextOutput.close(),codeRetrieval.close()])
     },
