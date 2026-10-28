@@ -31,6 +31,7 @@ type Authorization = {
     assertSource?: () => void;
 };
 type Entry = {
+    settleProcess?: (outcome: FactOutcome) => void;
     group?: CapturedFactGroup;
     bootstrap?: { phase: 'seed' | 'completion'; events: readonly import('@i-harness/core-session').SessionEvent[]; batchId: string };
     ticket: Ticket;
@@ -40,6 +41,7 @@ type Entry = {
     authorization: Authorization;
 };
 type Pending = {
+    processReconciliation?: { token: ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']> | undefined; users: number };
     batch: ReturnType<typeof encodeFactBatch>;
     prefix: JournalPrefix;
     entries: Entry[];
@@ -164,6 +166,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 const seqs = entry.seqs!;
                 entry.ticket.release();
                 const outcome = Object.freeze({ kind: 'committed' as const, receipt, seqs });
+                entry.settleProcess?.(outcome);
                 if (entry.group) sourceDispositions.set(entry.group, outcome);
                 return outcome;
             });
@@ -176,6 +179,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             for (const entry of current.entries) {
                 entry.ticket.release();
                 if (entry.group) sourceDispositions.set(entry.group, outcome);
+                entry.settleProcess?.(outcome);
             }
         }
         return { results: current.entries.map(() => outcome), observe: false };
@@ -291,7 +295,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
         const bytes = Buffer.byteLength(stringifyJsonData(capture.group)!);
         return new Promise(resolve => {
-            queue.push({ group: capture.group, bytes, ticket, resolve(outcome) { settle?.(outcome); resolve(outcome); }, authorization });
+            queue.push({ group: capture.group, bytes, ticket, settleProcess: settle, resolve(outcome) { settle?.(outcome); resolve(outcome); }, authorization });
             schedule();
         });
     }
@@ -300,10 +304,9 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         let settled = false;
         const settle = (outcome: FactOutcome) => {
             if (settled) return;
-            settled = true;
             // Unknown/recovery-required remains owned by the original pending
             // frame. No unrelated retry may retire its witness.
-            if (outcome.kind === 'committed' || outcome.kind === 'absent' || outcome.kind === 'not-issued') token?.end('settled');
+            if (outcome.kind === 'committed' || outcome.kind === 'absent' || outcome.kind === 'not-issued') { settled = true; token?.end('settled'); }
         };
         try {
             const outcome = await admitCore(draft, authorization, captured, settle);
@@ -436,8 +439,12 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         view: state.view,
         async reconcile(key) {
-            const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
-            let outcome: 'settled' | 'unknown' | 'retained' = 'unknown';
+            const original = pending && sameBatchKey(key, pending.batch.key) ? pending : undefined;
+            const witness = original
+                ? original.processReconciliation ??= { token: processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }), users: 0 }
+                : { token: processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }), users: 0 };
+            witness.users++;
+            let outcome: 'settled' | 'unknown' = 'unknown';
             try {
             let current: Pending | undefined, completed: ReturnType<typeof finish> | undefined;
             await ownership.withSessionOperation(id, async () => {
@@ -461,9 +468,14 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 capacity.resume();
             }
             const result = completed.results[0]!;
-            outcome = result.kind === 'unknown' || result.kind === 'conflict' || result.kind === 'recovery-required' ? 'retained' : 'settled';
+            outcome = result.kind === 'unknown' || result.kind === 'conflict' || result.kind === 'recovery-required' ? 'unknown' : 'settled';
             return result;
-            } finally { if (outcome !== 'retained') token?.end(outcome); }
+            } finally {
+                witness.users--;
+                // One original frame owns one reconciliation witness, including
+                // concurrent callers and repeated uncertain attempts.
+                if (!witness.users && (!original || pending !== original)) witness.token?.end(outcome);
+            }
         },
         async drain() {
             await pump;

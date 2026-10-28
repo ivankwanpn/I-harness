@@ -35,18 +35,23 @@ describe("SessionWriteBehind", () => {
     gate.resolve(); await flushing
     expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
   })
-  it('retains each write-attempt witness with the batch across retries', async () => {
+  it('bounds callback witnesses by retained work through repeated failures and coalescing', async () => {
     const latches = createProcessReadLatches(), ended: number[] = []
-    let attempts = 0
+    let attempts = 0, fail = true
+    const batches: string[][] = []
     const controller = new SessionWriteBehind({ maxDelayMs: 1000,
       beginWrite: () => { const index = ++attempts, token = latches.beginMutation({ sessionIds: ['s'], documentKeys: [], kind: 'other' });
         return { end(outcome) { ended.push(index); token.end(outcome) } } },
-      write: async () => { if (attempts === 1) throw new Error('retry') }, reportBackgroundFailure: () => {} })
+      write: async events => { batches.push(events.map(event => event.type)); if (fail) throw new Error('retry') }, reportBackgroundFailure: () => {} })
     controller.enqueue({ type: 'turn/start' })
-    await expect(controller.flush()).rejects.toThrow('retry')
+    for (let retry = 0; retry < 5; retry++) await expect(controller.flush()).rejects.toThrow('retry')
     expect(ended).toEqual([])
+    expect(attempts).toBe(1)
+    controller.enqueue({ type: 'turn/end' })
+    fail = false
     await controller.flush()
-    expect(ended).toEqual([1, 2])
+    expect(ended).toEqual([1])
+    expect(batches).toEqual([...Array.from({ length: 5 }, () => ['turn/start']), ['turn/start', 'turn/end']])
     expect(() => latches.capture({ sessionId: 's', documentKeys: [], mode: 'cold' })).not.toThrow()
   })
   it("uses one fixed window from the first queued event and owns its copy", async () => {

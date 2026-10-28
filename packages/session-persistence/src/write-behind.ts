@@ -26,7 +26,7 @@ export interface SessionWriteBehindOptions {
  * write, failure retention, and explicit quiescence barrier.
  */
 export class SessionWriteBehind {
-  private pending: { event: SessionEvent; witnesses: MutationWitness[] }[] = []
+  private pending: { event: SessionEvent; witnesses: MutationWitness[]; callbackWitness?: MutationWitness }[] = []
   private timer: ReturnType<typeof setTimeout> | undefined
   private active: Promise<void> | undefined
   private barrier: Promise<void> | undefined
@@ -126,8 +126,9 @@ export class SessionWriteBehind {
     this.cancelTimer()
     this.deadlineExpired = false
     const operation = Promise.resolve().then(() => {
-      const witness = this.options.beginWrite?.()
-      if (witness) batch[0]!.witnesses.push(witness)
+      // The callback owns this retained prefix across attempts. Reusing its
+      // original witness bounds debt by queued work rather than retry history.
+      batch[0]!.callbackWitness ??= this.options.beginWrite?.()
       return this.options.write(batch.map(item => item.event))
     })
     const active = operation
@@ -139,7 +140,7 @@ export class SessionWriteBehind {
         if (background) this.options.reportBackgroundFailure(error)
         throw error
       })
-      .then(() => { for (const item of batch) for (const witness of item.witnesses) witness.end('settled') })
+      .then(() => { for (const item of batch) { for (const witness of item.witnesses) witness.end('settled'); item.callbackWitness?.end('settled') } })
       .finally(() => {
         this.active = undefined
       })
