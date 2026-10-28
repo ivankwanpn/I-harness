@@ -69,6 +69,19 @@ it('selected shell refuses a structural legacy service that has no checked capab
   } finally { await f.dispose() }
 })
 
+it.each(['instance', 'source'] as const)('registered %s selector without backend reports unsupported-selector before cancellation', async selector => {
+  const f = fixture()
+  try {
+    const { jobId, nativeJob } = await f.exec.runBackground({ argv: ['fixture'] })
+    f.jobs.registerJob('root', 'subagent', 'collision', jobId)
+    const args = { job_id: jobId, ...(selector === 'instance' ? { job_instance_id: nativeJob!.instanceId } : { source_id: nativeJob!.sourceId }) }
+    await expect(f.invoke(args)).rejects.toThrow(/^unsupported-selector$/)
+    expect(f.exec.getJobView!(jobId).status).toBe('running')
+    expect(f.jobs.read(jobId).status).toBe('running')
+    expect(f.native.counts().terminations).toBe(0)
+  } finally { await f.dispose() }
+})
+
 it.each([undefined, 'child'] as const)('keeps original child routing for backend %s and does not cancel a same-id native job', async backend => {
   const f = fixture()
   try {
