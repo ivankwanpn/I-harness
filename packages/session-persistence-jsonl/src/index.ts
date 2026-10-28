@@ -1,1 +1,1 @@
-export { createJsonlBackend } from './backend-factory.ts'
+export { createJsonlBackend, createJsonlSessionCoordinator } from './backend-factory.ts'

@@ -10,6 +10,8 @@ import { upgradeFactJournal } from './backend/format-upgrade.ts'
 import { createBootstrapHeaderBackend, bootstrapArtifacts } from './backend/bootstrap-header.ts'
 import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
+import { assembleSessionCoordinatorWithProcessStorage } from '@i-harness/session-persistence/internal/process-read-assembly'
+import type { CoordinatorOptions, SessionCoordinator } from '@i-harness/session-persistence'
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
@@ -18,6 +20,13 @@ export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
   try { owner.assertOriginal(); return owner.capability } catch { return undefined }
+}
+export function createJsonlSessionCoordinator(root: string, options?: CoordinatorOptions): SessionCoordinator {
+  const backend = createJsonlBackend(root)
+  const owner = processReadOwners.get(backend)!
+  return assembleSessionCoordinatorWithProcessStorage(backend, options, {
+    capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) },
+  })
 }
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a

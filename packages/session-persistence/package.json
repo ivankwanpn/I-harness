@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./fork-contract": "./src/fork-contract.ts"
+    "./fork-contract": "./src/fork-contract.ts",
+    "./internal/process-read-assembly": "./src/process-read-assembly.ts"
   },
   "scripts": {
     "test": "vitest run",

@@ -95,7 +95,7 @@ export function createJsonlProcessReadCapability(ports: Ports) {
             get size() { return documents.size }, get: documents.get.bind(documents), has: documents.has.bind(documents),
             entries: documents.entries.bind(documents), keys: documents.keys.bind(documents), values: documents.values.bind(documents),
             [Symbol.iterator]: documents[Symbol.iterator].bind(documents),
-            forEach(callback: (value: { kind: 'absent' } | { kind: 'present'; value: unknown }, key: string) => void) { documents.forEach((value, key) => callback(value, key)); },
+            forEach(callback: (value: { kind: 'absent' } | { kind: 'present'; value: unknown }, key: string, map: ReadonlyMap<string, { kind: 'absent' } | { kind: 'present'; value: unknown }>) => void, thisArg?: unknown) { documents.forEach((value, key) => callback.call(thisArg, value, key, readonlyDocuments)); },
         });
         return { initial: freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events: decoded.events }), documents: readonlyDocuments,
             async check() {
