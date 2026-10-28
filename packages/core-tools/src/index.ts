@@ -13,6 +13,8 @@ export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
+export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, ToolPrepareIdentity } from './types.ts'
+export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation } from './instructions.ts'
 export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { waitForObservation, userSteerForTool, type UserSteerSource } from "./observation.ts"
@@ -24,16 +26,19 @@ export { registerContextRemaining } from "./context-remaining.ts"
 export type { ContextRemainingOptions } from "./context-remaining.ts"
 
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
-export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry } = {}): ToolRegistry {
+export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean } = {}): ToolRegistry {
   if (options.inheritResultRetention && !registryRetention.has(options.inheritResultRetention)) throw new Error('Original tool registry unavailable')
   const retention = options.resultRetention ?? (options.inheritResultRetention ? registryRetention.get(options.inheritResultRetention) : undefined)
   const catalog = createCatalog()
   installPreExecuteDecision(ctx)
-  const prepareCall = createPreparer(ctx, catalog, () => registry)
-  const prepare: ToolRegistry['prepare'] = async (...args) => {
-    const prepared = await prepareCall(...args)
+  const preparer = createPreparer(ctx, catalog, () => registry, options.instructionsRequired)
+  const prepareCaptured: ToolRegistry['prepareCaptured'] = async (...args) => {
+    const prepared = await preparer.prepareCaptured(...args)
     await retention?.prepare?.(prepared)
     return prepared
+  }
+  const prepare: ToolRegistry['prepare'] = async (...args) => {
+    return prepareCaptured(preparer.capture(args[0], args[2]), args[1])
   }
   const dispatch = createDispatcher(ctx, catalog.get, () => registry)
   const { finalize, resultFinalization } = createFinalizer(ctx, retention)
@@ -51,6 +56,10 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
     get: catalog.get,
     unregister: catalog.unregister,
     schemas: catalog.schemas,
+    capture: preparer.capture,
+    inspectCapture: preparer.inspectCapture,
+    bindNativeInstructions: preparer.bindNativeInstructions,
+    prepareCaptured,
     prepare,
     dispatch,
     finalize,

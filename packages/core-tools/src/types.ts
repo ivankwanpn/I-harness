@@ -11,6 +11,7 @@ export interface Tool<Args = unknown, Output = unknown> {
   inputSchema: unknown
   outputSchema?: unknown
   execute(args: Args, exec: ToolExec): Promise<Output>
+  captureNativePlan?(args: Args): NativePlan
   timeoutMs?: number
   isConcurrencySafe?: boolean
   isReadOnly?: boolean
@@ -28,6 +29,21 @@ export interface Tool<Args = unknown, Output = unknown> {
   /** Presentation of the captured command binding for foreign hook adapters. */
   commandDialect?(args: Args): "posix" | "powershell" | "cmd" | undefined
 }
+
+export interface NativeTarget {
+  readonly path: string
+  readonly kind: 'file' | 'directory'
+  readonly mode: 'read' | 'mutate'
+}
+export interface NativePlan<P = unknown> {
+  readonly targets: readonly NativeTarget[]
+  readonly operation: P
+}
+export interface CapturedToolCall { readonly kind: 'captured-tool-call' }
+export interface AcceptedInstructionCall { readonly kind: 'accepted-instruction-call' }
+export interface NativeBoundary { readonly target: string; readonly operation: 'mkdir' | 'write' | 'temp-write' | 'rename' | 'unlink' }
+export interface NativeMutation { assertCurrent(): void; before(boundary: NativeBoundary): void; settle(): void }
+export interface ToolPrepareIdentity { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: 'code'; settlementSource?: SettlementFacts<ProducerFactOutcome>; modelGeneration?: ToolModelGeneration }
 
 export interface PreparedToolIdentity {
   binding: string
@@ -212,7 +228,11 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code"; settlementSource?: SettlementFacts<ProducerFactOutcome>; modelGeneration?: ToolModelGeneration }): Promise<PreparedCall>
+  capture(call: ToolCall, identity?: ToolPrepareIdentity): CapturedToolCall
+  inspectCapture(capture: CapturedToolCall): Readonly<{ call: ToolCall; identity: ToolPrepareIdentity; native?: NativePlan; concurrencySafe: boolean }>
+  prepareCaptured(capture: CapturedToolCall, signal?: AbortSignal, origin?: AcceptedInstructionCall): Promise<PreparedCall>
+  bindNativeInstructions(capture: CapturedToolCall, origin: AcceptedInstructionCall, authority: NativeMutation): void
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: ToolPrepareIdentity): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   resultFinalization?(prepared: PreparedCall): import('./registry/result-finalization.ts').ResultFinalization | undefined
