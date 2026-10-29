@@ -18,6 +18,7 @@ import { createSelectedMetadata } from './legacy/selected-metadata.ts'
 
 type SelectedMetadataOwner=Awaited<ReturnType<typeof createSelectedMetadata>>
 type SelectedCleanup={retry():Promise<void>}
+type SelectedAcquisitionDebt={failure:unknown;store:ContextStore;settled:boolean;cleanup:SelectedCleanup}
 type SelectedMetadataRecord=SelectedMetadataOwner & {cleanupForError(error:unknown):SelectedCleanup|undefined}
 const selectedMetadataOwners=new WeakMap<ContextOutputService,{acquire(observation:LegacyReadObservation):Promise<SelectedMetadataOwner>;cleanupForError(error:unknown):SelectedCleanup|undefined}>()
 /** Private core-service association; wrappers must forward this original closure. */
@@ -84,7 +85,9 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const selectedReaders=new Set<SelectedMetadataRecord>()
   const selectedReaderIds=new WeakMap<SelectedMetadataOwner,string>()
   const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke()}
-  let selectedAcquisitionDebt:{failure:unknown;retry():Promise<void>}|undefined
+  const selectedAcquisitionDebts=new Set<SelectedAcquisitionDebt>()
+  let closedSelectedStore:ContextStore|undefined
+  const acknowledgeSelectedAcquisitions=(original:ContextStore)=>{for(const debt of selectedAcquisitionDebts)if(debt.store===original){debt.settled=true;selectedAcquisitionDebts.delete(debt)}}
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
     mutate: mutateIndex })
@@ -123,7 +126,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
           store = next
           return next
         } catch (failure) {
-          try { await next.close(lease); candidate = undefined }
+          try { await next.close(lease);closedSelectedStore=next;acknowledgeSelectedAcquisitions(next);candidate = undefined }
           catch (cleanup) { failedOpeningCleanup = new AggregateError([failure, cleanup], 'Legacy store opening and original cleanup failed') }
           if (!(failure instanceof Error && failure.name === 'AbortError')) {
             error = failure instanceof Error ? failure.message : String(failure)
@@ -432,7 +435,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
           try { await artifacts.close(); artifactsClosed = true } catch (failure) { failures.push(failure) }
         }
         if (candidate && !selectedReaders.size) {
-          try { await gate.exclusive(undefined, lease => candidate!.close(lease)); candidate = undefined; store = undefined; selectedAcquisitionDebt=undefined } catch (failure) { failures.push(failure) }
+          try { const original=candidate;await gate.exclusive(undefined, async lease => {await original.close(lease);closedSelectedStore=original;acknowledgeSelectedAcquisitions(original)}); candidate = undefined; store = undefined } catch (failure) { failures.push(failure) }
         }
         if (artifactsClosed && !candidate && !selectedReaders.size) {
           try { await owner.close() } catch (failure) { failures.push(failure) }
@@ -443,22 +446,24 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
-  selectedMetadataOwners.set(service,{cleanupForError(error){if(selectedAcquisitionDebt&&selectedAcquisitionDebt.failure===error)return selectedAcquisitionDebt;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
+  selectedMetadataOwners.set(service,{cleanupForError(error){for(const debt of selectedAcquisitionDebts)if(debt.failure===error)return debt.cleanup;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
     assertOpen()
     const sessionField=Object.getOwnPropertyDescriptor(observation,'sessionId');if(!sessionField||!('value' in sessionField)||typeof sessionField.value!=='string')throw Error('Invalid metadata source')
     const sessionId=sessionField.value
-    if(selectedAcquisitionDebt)throw selectedAcquisitionDebt.failure
+    const outstanding=selectedAcquisitionDebts.values().next().value
+    if(outstanding)throw outstanding.failure
+    let acquisitionStore:ContextStore|undefined
     const withRead=<T>(work:(current:ContextStore)=>Promise<T>)=>run(undefined,async signal=>{
       if(!store)await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease,revokeSelectedAuthorities));await current.acquireLifetime(signal)})
-      return gate.shared(signal,async lease=>{gate.assertLease(lease);assertOpen();const current=store??candidate;if(!current)throw Error('Original metadata store unavailable');return work(current)})
+      return gate.shared(signal,async lease=>{gate.assertLease(lease);assertOpen();const current=store??candidate;if(!current)throw Error('Original metadata store unavailable');if(acquisitionStore&&acquisitionStore!==current)throw Error('Original metadata store changed');acquisitionStore=current;return work(current)})
     })
     let selected!:SelectedMetadataRecord
-    const settle=(original:ContextStore,stillOwed:()=>boolean=()=>true)=>gate.exclusive(undefined,async lease=>{gate.assertLease(lease,'exclusive');if(!stillOwed())return;if((store??candidate)!==original)throw Error('Original metadata store changed');await original.joinLegacyFiles()})
+    const settle=(original:ContextStore,stillOwed:()=>boolean=()=>true)=>gate.exclusive(undefined,async lease=>{gate.assertLease(lease,'exclusive');if(!stillOwed())return;if(closedSelectedStore===original){acknowledgeSelectedAcquisitions(original);return}if((store??candidate)!==original)throw Error('Original metadata store changed');await original.joinLegacyFiles();acknowledgeSelectedAcquisitions(original)})
     let originalReader:SelectedMetadataOwner
     try { originalReader=await createSelectedMetadata(observation,withRead,settle,assertOpen,()=>selectedReaders.delete(selected)) }
     catch(error) {
-      const original=store??candidate
-      if(original)try{await settle(original)}catch(cleanup){const debt={failure:new AggregateError([error,cleanup],'Original selected metadata cleanup unresolved'),async retry(){if(selectedAcquisitionDebt!==debt)return;await settle(original,()=>selectedAcquisitionDebt===debt);if(selectedAcquisitionDebt===debt)selectedAcquisitionDebt=undefined}};selectedAcquisitionDebt=debt;throw debt.failure}
+      const original=acquisitionStore??store??candidate
+      if(original)try{await settle(original)}catch(cleanup){const debt:SelectedAcquisitionDebt={store:original,settled:false,failure:new AggregateError([error,cleanup],'Original selected metadata cleanup unresolved'),cleanup:Object.freeze({async retry(){if(debt.settled)return;await settle(original,()=>!debt.settled)}})};selectedAcquisitionDebts.add(debt);throw debt.failure}
       throw error
     }
     let failed=false,closeError:unknown
