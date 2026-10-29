@@ -126,3 +126,34 @@ it('notifies when the original watched source changes without invoking publicati
     unsubscribe()
   } finally { await manager.close(); await environment.close(); rmWorkspaceSync(cwd) }
 })
+
+it('reads cold instruction state without constructing an assembly or model', async () => {
+  const { createSessionService } = await import('../src/index.ts')
+  let calls = 0
+  const model = { async *stream() { calls++; yield { type: 'end' as const } } }
+  const cwd = await mkdtemp(join(tmpdir(), 'ih-i6-cold-'))
+  const service = createSessionService({ workspace: cwd, model: model as never })
+  try {
+    expect(service.instructionState!('never-mounted')).toEqual({ state: 'not-published' })
+    expect(await service.refreshInstructions!('never-mounted')).toEqual({ state: 'not-published' })
+    expect(service.hasAssembly('never-mounted')).toBe(false); expect(calls).toBe(0)
+  } finally { await service.close(); rmWorkspaceSync(cwd) }
+}, 15000)
+
+it('observes the actual live service publication and stops delivering after unsubscribe', async () => {
+  const { createSessionService } = await import('../src/index.ts')
+  const { createLoopbackProvider } = await import('../../core-agent/test/helpers/provider-loopback.ts')
+  const { createOpenAICompatibleClient } = await import('../../llm-openai-compatible/src/index.ts')
+  const cwd = await mkdtemp(join(tmpdir(), 'ih-i6-live-')); await writeFile(join(cwd, 'AGENTS.md'), 'SERVICE_LIVE_RULE')
+  const server = await createLoopbackProvider('/v1/chat/completions', [async response => { response.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'done' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`) }])
+  const model = createOpenAICompatibleClient({ apiKey: 'fixture', model: 'fixture', baseUrl: server.baseUrl }), service = createSessionService({ workspace: cwd, model })
+  let notices = 0; const unsubscribe = service.onInstructionsChanged!('live', undefined, () => notices++)
+  try {
+    expect(service.instructionState!('live').state).toBe('not-published')
+    await service.submit('live', 'hello', new AbortController().signal)
+    expect(service.instructionState!('live')).toMatchObject({ state: 'ready', publication: { sources: [{ path: join(cwd, 'AGENTS.md'), state: 'loaded' }] } })
+    expect(server.requests).toHaveLength(1); expect(JSON.stringify(server.requests[0]!.body)).toContain('SERVICE_LIVE_RULE')
+    expect(notices).toBeGreaterThan(0); unsubscribe(); const prior = notices
+    await service.refreshInstructions!('live'); await Promise.resolve(); expect(notices).toBe(prior); expect(server.requests).toHaveLength(1)
+  } finally { unsubscribe(); await service.close(); await server.close(); rmWorkspaceSync(cwd) }
+}, 15000)

@@ -322,3 +322,4 @@ export function createMainInstructionManager(options: { session?: SessionView; e
     return classified
   } })
 }
+export type InstructionDiagnostics = ReturnType<typeof createMainInstructionManager>['diagnostics']

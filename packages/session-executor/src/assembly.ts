@@ -359,6 +359,7 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  instructionDiagnostics?(childSessionId?: string): import('./context/instructions/manager.ts').InstructionDiagnostics | undefined
   onExecutionSurfaceChanged?(listener: () => void): () => void
   executionSurfaceState?(): "available" | "unavailable" | "retired"
   settleRuntimeContextPublications(): Promise<void>
@@ -1745,6 +1746,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return {finish}
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      instructionDiagnostics: childSessionId => {
+        if (disposing) return undefined
+        if (!childSessionId) return instructionManager?.diagnostics
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ['running', 'waiting'].includes(row.status))
+        return entry?.factOwner && !entry.closing && !entry.controller.signal.aborted ? childInstructionHost?.diagnosticsFor(entry.session, entry.factOwner) : undefined
+      },
       liveChildSession: childObservation.liveSession,
       liveChildBudget: childSessionId => {
         const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ["running", "waiting"].includes(row.status))
