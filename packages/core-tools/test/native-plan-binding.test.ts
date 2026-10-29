@@ -131,5 +131,5 @@ it('checks captured targets and invokes the bound mutation callback with its ori
   registry.bindNativeInstructions(capture, origin, authority)
   const prepared = await registry.prepareCaptured(capture, undefined, origin)
   await registry.dispatch(prepared)
-  expect(events).toEqual([authority, 'assert', authority, { target: path, operation: 'write' }, authority, 'settle'])
+  expect(events).toEqual([authority, 'assert', authority, 'assert', authority, { target: path, operation: 'write' }, authority, 'settle'])
 })

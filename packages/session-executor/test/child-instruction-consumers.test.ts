@@ -60,7 +60,7 @@ vi.mock('../src/context/instructions/child-host.ts', async original => {
       const row = { input, lease, retires: 0, closes: 0, succeeded: 0 }; observed.leases.push(row)
       lease.retire = function () { expect(this).toBe(lease); row.retires++; retire() }
       lease.close = async function () { expect(this).toBe(lease); row.closes++; await observed.holdLease?.(); await close() }
-      lease.requestContext.succeeded = (...args) => { succeeded(...args); row.succeeded++; observed.handoffs.push(args[0]) }
+      lease.requestContext.succeeded = (...args) => { const batch = succeeded(...args); row.succeeded++; observed.handoffs.push(args[0]); return batch }
       return lease
     }
     host.close = async function () { expect(this).toBe(host); observed.hostCloses++; await observed.holdHost?.(); await closeHost() }

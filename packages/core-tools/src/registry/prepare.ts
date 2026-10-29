@@ -6,13 +6,13 @@ import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type To
 import { freezeArguments } from "../approval/arguments.ts"
 import { captureToolCall, ordinaryJson } from '../approval/capture-call.ts'
 import { isAbsolute, win32 } from 'node:path'
-import { bindNativeExecution } from '../instructions.ts'
+import { bindNativeExecution, registerCaptureOwner, instructionReplan } from '../instructions.ts'
 import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation, AcceptedInstructionCall } from '../types.ts'
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
 
-export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false) {
+export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean) {
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
   const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
@@ -48,6 +48,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     }
     const handle: CapturedToolCall = Object.freeze({ kind: 'captured-tool-call' })
     captures.set(handle, { call, identity: Object.freeze({ ...identity }), tool, executeBinding, bindingGeneration, bindingValidation, native, concurrencySafe: tool.isConcurrencySafe === true, used: false })
+    registerCaptureOwner(handle, getRegistry())
     return handle
   }
   function inspectCapture(handle: CapturedToolCall) {
@@ -57,6 +58,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
   function bindNativeInstructions(handle: CapturedToolCall, origin: AcceptedInstructionCall, authority: NativeMutation) {
     const entry = owned(handle)
     if (entry.used || entry.origin || !entry.native || !origin || !authority) throw new Error('Invalid native instruction binding')
+    if (instructionsRequired && (!verifyOrigin || !verifyOrigin(origin, handle))) throw new Error('Foreign accepted instruction origin')
     function bind(name: keyof NativeMutation) {
       for (let current: object | null = authority; current; current = Object.getPrototypeOf(current)) {
         const descriptor = Object.getOwnPropertyDescriptor(current, name)
@@ -75,9 +77,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     entry.used = true
     if (!entry.bindingValidation()) throw new Error('Captured tool binding changed')
     if (entry.origin !== undefined && entry.origin !== origin) throw new Error('Native instruction origin mismatch')
-    // The mounted bridge must remain fail-closed until the manager can verify
-    // accepted origins and install its source-bound preflight capability.
-    if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate')) throw new Error('Native instruction origin unavailable')
+    if (instructionsRequired && entry.native?.targets.some(t => t.mode === 'mutate') && (!entry.authority || !origin || entry.origin !== origin || !verifyOrigin?.(origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
     const { call, identity, tool, executeBinding, bindingGeneration, bindingValidation } = entry
     assertToolSettlementScope(identity.session, identity.settlementSource)
     const commandDialect = tool.commandDialect?.(call.args)
@@ -174,6 +174,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
         const reason = ctx.checkGuards('tools/execute', { name: call.name, args: call.args })
         if (reason !== undefined) throw new Error(`guard denied: ${reason}`)
         entry.authority?.assertCurrent()
+        if (instructionsRequired && entry.native!.targets.some(t => t.mode === 'mutate') && (!entry.origin || !verifyOrigin?.(entry.origin, handle))) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'revoked', currentFingerprint: '' })
       }
       bindNativeExecution(exec, entry.native, Object.freeze({
         assertCurrent,

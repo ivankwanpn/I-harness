@@ -63,7 +63,7 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
       })
     },
     close: () => source.close(),
-    async handoff(operation: (takeOwnership: () => import('./request-context.ts').RequestContextPin | undefined) => Promise<void>) {
+    async handoff(operation: (takeOwnership: () => import('./request-context.ts').RequestContextPin | undefined) => Promise<void>, afterUntransferred?: () => Promise<void>) {
       source.assertHeld()
       let primary: unknown, failed = false
       let closing: Promise<void> | undefined
@@ -84,6 +84,10 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
       catch (saving) {
         if (failed) throw savingFailure(primary, [saving], 'Unstarted tool result settlement failed')
         throw saving
+      }
+      if (!handedOff) {
+        try { await afterUntransferred?.() }
+        catch (saving) { if (failed) throw savingFailure(primary, [saving], 'Instruction batch settlement failed'); throw saving }
       }
       if (failed) throw primary
     },

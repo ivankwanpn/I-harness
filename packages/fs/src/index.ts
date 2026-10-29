@@ -1,7 +1,7 @@
 import { readFile, writeFile, readdir, mkdir } from "node:fs/promises"
 import { filesystemApprovalIdentity } from "./approval-identity.ts"
 import { resolve, relative, isAbsolute, dirname } from "node:path"
-import { nativeMutation, nativeOperation, nativePlanValidationFailure } from "@i-harness/core-tools"
+import { nativeMutation, nativeOperation, nativePlanValidationFailure, isInstructionReplan, declareInstructionReplan, declareToolResultOutcome, type InstructionReplanError } from "@i-harness/core-tools"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { FsToolFailure } from "./error.ts"
 import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
@@ -39,6 +39,13 @@ export function resolvePath(workspace: string, path: string): string {
     }
   }
   return resolved
+}
+
+function replanOutput(exec: ToolExec, error: InstructionReplanError, target: string, entered: boolean) {
+  const effects = entered ? { effectsUnknown: [target] } : { notApplied: [target] }
+  declareInstructionReplan(exec, error, effects)
+  declareToolResultOutcome(exec, entered ? 'unknown' : 'failed')
+  return { error: error.message, ...error.data, ...effects }
 }
 
 /**
@@ -322,6 +329,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     execute: async (_args, exec: ToolExec) => softFail(async () => {
       const { target, args: { path, text, sandbox_permissions, justification } } = nativeOperation<{ target: string; args: { path: string; text: string; sandbox_permissions?: string; justification?: string } }>(exec)
       const mutation = nativeMutation(exec)
+      let entered = false
       try {
       // M62: the ladder runs ONCE here, before any guard invocation — never
       // inside `guardWrite`, which apply_patch calls per hunk. The resolved
@@ -336,6 +344,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         : {}
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       mutation.before({ target, operation: 'mkdir' })
+      entered = true
       await mkdir(dirname(target), { recursive: true })
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       mutation.before({ target, operation: 'write' })
@@ -350,6 +359,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         if (beforeText !== undefined) out.change = createTextDiff(path, beforeText, text)
       }
       return out
+      } catch (error) { if (isInstructionReplan(error)) return replanOutput(exec, error, target, entered); throw error
       } finally { mutation.settle() }
     }),
   }
@@ -400,6 +410,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     execute: async (_args, exec: ToolExec) => softFail(async () => {
       const { target, args: { path, old_string, new_string, replace_all = false, observedMtimeMs, sandbox_permissions, justification } } = nativeOperation<{ target: string; args: { path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string } }>(exec)
       const mutation = nativeMutation(exec)
+      let entered = false
       try {
       const ladder = await resolveWriteCall(deps, exec, "edit", { sandbox_permissions, justification }, `write to ${target}`)
       if (ladder.kind === "refused") return ladder.failure
@@ -446,7 +457,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         }
       }
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
-      await writeFileAtomic(target, finalText, undefined, boundary => { guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot); mutation.before(boundary) })
+      await writeFileAtomic(target, finalText, undefined, boundary => { guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot); mutation.before(boundary); entered = true })
       return {
         ok: true,
         path,
@@ -457,6 +468,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         ...(preImageRef !== undefined ? { preImageRef } : {}),
         ...(deps.rewind !== undefined ? { isNewFile: false } : {}),
       }
+      } catch (error) { if (isInstructionReplan(error)) return replanOutput(exec, error, target, entered); throw error
       } finally { mutation.settle() }
     }),
   }
@@ -507,10 +519,10 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
           return rel === null ? { blobId: null, isNewFile: false } : recorder.take(rel, before)
         },
       }
-      const { applied, errors } = await applyPatch(resolved, hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot), boundary => mutation.before(boundary))
+      const { applied, errors, replan } = await applyPatch(resolved, hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot), boundary => mutation.before(boundary))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
-      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {
+      const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string; instruction_replan?: import('@i-harness/core-tools').InstructionReplanData } = {
         ok: errors.length === 0,
         applied,
         errors,
@@ -519,6 +531,12 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       if (applied.length === 1 && withChange.length === 1) result.change = withChange[0]!.change
       else if (applied.length > 1 && withChange.length === applied.length) result.changes = withChange.map((entry) => entry.change!)
       if (withChange.length < applied.length) result.rawPatch = patch_content
+      if (replan) {
+        const effects = { applied: applied.map(item => item.path), notApplied: replan.remaining, ...(replan.entered ? { effectsUnknown: [errors.at(-1)!.path] } : {}) }
+        declareInstructionReplan(exec, replan.error, effects)
+        declareToolResultOutcome(exec, replan.entered ? 'unknown' : 'failed')
+        result.instruction_replan = { ...replan.error.data, ...effects }
+      }
       return result
       } finally { mutation.settle() }
     }),

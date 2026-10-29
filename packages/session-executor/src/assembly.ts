@@ -1233,7 +1233,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // The original mount guard must own the asynchronous policy/watch lifetime
     // before any dependent setup can reject. Earlier config getters acquire none.
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
-    instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+    instructionManager = createMainInstructionManager({ session, environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
     childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,

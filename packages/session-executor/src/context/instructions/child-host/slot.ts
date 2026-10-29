@@ -84,7 +84,7 @@ export class InstructionSlot {
       this.runtime = createRuntimeContext(this.session, createRuntimeContextSource(this.factOwner))
       this.settleRuntime = this.runtime.settleOriginals.bind(this.runtime)
       this.closeRuntime = this.runtime.close.bind(this.runtime)
-      this.manager = createMainInstructionManager({ ...options,
+      this.manager = createMainInstructionManager({ ...options, session: this.session,
         available: () => this.live(),
         publish: (signal, retain) => this.runtime!.render(signal, retain),
       })

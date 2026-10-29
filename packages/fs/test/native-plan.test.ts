@@ -1,8 +1,8 @@
 import { expect, it, vi } from 'vitest'
 import * as patchModule from '../src/patch.ts'
 import { createContext } from '../../core-plugin/src/index.ts'
-import { createToolRegistry, isNativePlanValidationError } from '@i-harness/core-tools'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createToolRegistry, isNativePlanValidationError, instructionReplan, instructionReplanDisposition } from '@i-harness/core-tools'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFsTools } from '../src/index.ts'
@@ -90,4 +90,33 @@ it('parses a patch once across capture and dispatch', async () => {
     expect(parser).toHaveBeenCalledTimes(1)
     expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('hello\n')
   } finally { parser.mockRestore(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('returns a truthful dispatched replan when an atomic edit is fenced after a temp write', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-edit-replan-')), target = join(root, 'file.txt')
+  try {
+    await writeFile(target, 'old')
+    const registry = createToolRegistry(createContext()); for (const tool of createFsTools({ workspace: root })) registry.register(tool)
+    const capture = registry.capture({ name: 'edit', args: { path: target, old_string: 'old', new_string: 'new' } }), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
+    registry.bindNativeInstructions(capture, origin, { assertCurrent() {}, before(boundary) { if (boundary.operation === 'rename') throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'changed-dependency', currentFingerprint: 'current' }) }, settle() {} })
+    const prepared = await registry.prepareCaptured(capture, undefined, origin), result = await registry.dispatch(prepared)
+    expect(result).toMatchObject({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', effectsUnknown: [target] })
+    expect(instructionReplanDisposition(prepared)).toMatchObject({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', effectsUnknown: [target] })
+    expect(await readFile(target, 'utf8')).toBe('old'); expect(await readdir(root)).toEqual(['file.txt'])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+it('preserves applied patch hunks and unknown partial effects when a later rename replans', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-patch-replan-')), paths = ['a.txt', 'b.txt', 'c.txt'].map(name => join(root, name))
+  try {
+    for (const path of paths) await writeFile(path, 'old\n')
+    const registry = createToolRegistry(createContext()); for (const tool of createFsTools({ workspace: root })) registry.register(tool)
+    const patch = ['*** Begin Patch', ...['a.txt', 'b.txt', 'c.txt'].flatMap(path => [`*** Update File: ${path}`, '@@', '-old', '+new']), '*** End Patch', ''].join('\n')
+    const capture = registry.capture({ name: 'apply_patch', args: { patch_content: patch } }), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
+    registry.bindNativeInstructions(capture, origin, { assertCurrent() {}, before(boundary) { if (boundary.target === paths[1] && boundary.operation === 'rename') throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'changed-dependency', currentFingerprint: 'current' }) }, settle() {} })
+    const prepared = await registry.prepareCaptured(capture, undefined, origin), output = await registry.dispatch(prepared)
+    expect(output).toMatchObject({ ok: false, applied: [{ path: 'a.txt' }], instruction_replan: { applied: ['a.txt'], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] } })
+    expect(instructionReplanDisposition(prepared)).toMatchObject({ applied: ['a.txt'], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] })
+    expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(['new\n', 'old\n', 'old\n'])
+  } finally { await rm(root, { recursive: true, force: true }) }
 })

@@ -21,7 +21,7 @@ it('actual held summary retains its original instruction view and cannot publish
   let held = 0, ready = true, reconciles = 0, succeeded = 0
   const token = Object.freeze({ kind: 'instruction-request' as const, version: 1 as const })
   const requestContext: SessionRequestContext = { async reconcile() { reconciles++ }, capture: () => token, current: value => ready && value === token,
-    retain() { held++; let released = false; return { async release() { if (!released) { held--; released = true } } } }, succeeded() { succeeded++ }, promotedHumanRequest() {}, async close() {} }
+    retain() { held++; let released = false; return { async release() { if (!released) { held--; released = true } } } }, succeeded() { succeeded++; return undefined }, promotedHumanRequest() {}, async close() {} }
   const model = createOpenAICompatibleClient({ model: 'fixture', apiKey: 'owned-loopback', baseUrl: server.baseUrl }), ctx = createContext()
   const agent = createAgentWithSummary(ctx, { session: document.view, factOwner: document, sessionId: id, tools: createToolRegistry(ctx), model, systemPrompt: 's', requestContext, budget: { contextWindow: 100000 }, maxOutputTokens: 1024,
     compact: { contextWindow: 100000, auto: false, retainTokens: 0, summarizationModel: model, summaryLimits: { contextWindow: 100000 }, prune: false },

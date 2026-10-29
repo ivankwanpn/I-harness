@@ -3,6 +3,7 @@ import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../
 import { beginRetainedDispatch } from './retained-outcome.ts'
 import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
+import { assertNativeInstructions, isInstructionReplan } from '../instructions.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -38,6 +39,11 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
         validatePrepared(prepared)
+        try { assertNativeInstructions(prepared.exec) }
+        catch (error) {
+          if (isInstructionReplan(error)) throw error
+          throw Object.assign(new Error(error instanceof Error ? error.message : String(error), { cause: error }), { policyRefusal: true as const })
+        }
         dispatchResultStarted(prepared.exec)
         const result = await withToolResultProducer(prepared.exec, () => invokePrepared(prepared))
         dispatchResultReturned(prepared.exec)

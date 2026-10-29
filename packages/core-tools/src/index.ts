@@ -15,8 +15,9 @@ export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
-export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, ToolPrepareIdentity } from './types.ts'
-export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation } from './instructions.ts'
+export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, AcceptedCallDescriptor, AcceptedInstructionBatch, InstructionBatchEntry, ToolPrepareIdentity } from './types.ts'
+export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition } from './instructions.ts'
+export type { InstructionReplanData } from './instructions.ts'
 export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { waitForObservation, userSteerForTool, type UserSteerSource } from "./observation.ts"
@@ -28,12 +29,19 @@ export { registerContextRemaining } from "./context-remaining.ts"
 export type { ContextRemainingOptions } from "./context-remaining.ts"
 
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
-export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean } = {}): ToolRegistry {
+const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean }>()
+export function registryRequiresInstructionOrigin(registry: ToolRegistry): boolean { return registryInstructions.get(registry)?.required === true }
+export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean } = {}): ToolRegistry {
   if (options.inheritResultRetention && !registryRetention.has(options.inheritResultRetention)) throw new Error('Original tool registry unavailable')
   const retention = options.resultRetention ?? (options.inheritResultRetention ? registryRetention.get(options.inheritResultRetention) : undefined)
   const catalog = createCatalog()
   installPreExecuteDecision(ctx)
-  const preparer = createPreparer(ctx, catalog, () => registry, options.instructionsRequired)
+  const inherited = options.inheritResultRetention ? registryInstructions.get(options.inheritResultRetention) : undefined
+  const verifierDescriptor = Object.getOwnPropertyDescriptor(options, 'instructionOriginVerifier')
+  if (verifierDescriptor && (!('value' in verifierDescriptor) || typeof verifierDescriptor.value !== 'function')) throw new TypeError('Invalid instruction origin verifier')
+  const verify = inherited?.verify ?? (verifierDescriptor && 'value' in verifierDescriptor ? verifierDescriptor.value.bind(options) : undefined)
+  const required = inherited?.required === true || options.instructionsRequired === true
+  const preparer = createPreparer(ctx, catalog, () => registry, required, verify)
   const prepareCaptured: ToolRegistry['prepareCaptured'] = async (...args) => {
     const prepared = await preparer.prepareCaptured(...args)
     await retention?.prepare?.(prepared)
@@ -86,5 +94,6 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
     deferredToolCount: catalog.deferredToolCount,
   }
   registryRetention.set(registry, retention)
+  registryInstructions.set(registry, { required, verify })
   return registry
 }

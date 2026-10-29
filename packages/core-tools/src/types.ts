@@ -41,6 +41,13 @@ export interface NativePlan<P = unknown> {
 }
 export interface CapturedToolCall { readonly kind: 'captured-tool-call' }
 export interface AcceptedInstructionCall { readonly kind: 'accepted-instruction-call' }
+export interface AcceptedCallDescriptor { readonly callId: string; readonly eventSeq?: number; readonly call: ToolCall }
+export interface InstructionBatchEntry { readonly registry: ToolRegistry; readonly capture: CapturedToolCall; readonly origin: AcceptedInstructionCall }
+export interface AcceptedInstructionBatch {
+  bind(index: number, capture: CapturedToolCall): AcceptedInstructionCall
+  preflight(calls: readonly InstructionBatchEntry[], signal?: AbortSignal): Promise<void>
+  release(): Promise<void>
+}
 export interface NativeBoundary { readonly target: string; readonly operation: 'mkdir' | 'write' | 'temp-write' | 'rename' | 'unlink' }
 export interface NativeMutation { assertCurrent(): void; before(boundary: NativeBoundary): void; settle(): void }
 export interface ToolPrepareIdentity { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: 'code'; settlementSource?: SettlementFacts<ProducerFactOutcome>; modelGeneration?: ToolModelGeneration }

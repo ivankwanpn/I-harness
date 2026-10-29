@@ -1,17 +1,36 @@
 import { resolve } from 'node:path'
 import type { AuthorityState } from '@i-harness/sandbox'
-import type { InstructionTarget, InstructionSnapshot } from '@i-harness/instructions'
+import { resolveInstructionCanonical, type InstructionTarget, type InstructionSnapshot, type OwnedInstructionWrite } from '@i-harness/instructions'
 import type { SessionRequestContext, InstructionRequestEvidence, SuccessfulInstructionHandoff } from '@i-harness/core-agent'
+import { captureLegacyFact, type SessionView } from '@i-harness/core-session'
+import { capturedToolRegistry, instructionReplan, isInstructionReplan, type AcceptedInstructionBatch, type AcceptedInstructionCall, type CapturedToolCall, type InstructionBatchEntry, type NativeMutation, type NativeBoundary } from '@i-harness/core-tools'
 import type { InstructionEnvironment } from './contracts.ts'
 import { instructionView, type InstructionView } from './views.ts'
 import { classifyInstructionTarget, contained, instructionTargetKey, orderedInstructionTargets } from './targets.ts'
 
 type Evidence = { view: InstructionView; authority: string; policy: string; snapshot: InstructionSnapshot; selection: number }
+const acceptedOrigins = new WeakMap<AcceptedInstructionCall, { capture: CapturedToolCall; current(): boolean }>()
+/** Read-only validation of a handle minted by its original accepted batch. */
+export function isOriginalAcceptedInstructionOrigin(origin: AcceptedInstructionCall, capture: CapturedToolCall): boolean {
+  const entry = origin && acceptedOrigins.get(origin)
+  return !!entry && entry.capture === capture && entry.current()
+}
 const unavailable = () => Object.assign(new Error('Observed instructions unavailable'), { code: 'CONTEXT_INPUT_STALE' })
+function captureMethod<T extends (...args: any[]) => any>(owner: object, name: string): T {
+  for (let object: object | null = owner; object; object = Object.getPrototypeOf(object)) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, name)
+    if (descriptor) {
+      if (!('value' in descriptor) || typeof descriptor.value !== 'function') break
+      return descriptor.value.bind(owner) as T
+    }
+  }
+  throw new TypeError(`Invalid ${name} capability`)
+}
 
-export function createMainInstructionManager(options: { environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
+export function createMainInstructionManager(options: { session?: SessionView; environment: InstructionEnvironment; cwd: string; authority: () => AuthorityState; available: () => boolean; publish: (signal: AbortSignal | undefined, retain: () => import('@i-harness/core-agent').RequestContextPin) => Promise<void> }) {
   const tokens = new WeakMap<InstructionRequestEvidence, Evidence>(), views = new Set<InstructionView>()
   const cleanupDebt = new Set<InstructionView>()
+  const outstanding = new Set<{ requested: boolean; release(): Promise<void> }>()
   let closed = false, text = '', key: string | undefined, active: InstructionView | undefined, token: InstructionRequestEvidence | undefined
   let selection = 0, pending: Map<string, InstructionTarget> | undefined, consumed = new Map<string, InstructionTarget>(), mappingUnavailable = false
   const retire = async (view: InstructionView) => {
@@ -84,13 +103,130 @@ export function createMainInstructionManager(options: { environment: Instruction
     succeeded(handoff: SuccessfulInstructionHandoff) {
       const evidence = tokens.get(handoff.evidence)
       if (!evidence || handoff.candidate.instructions !== handoff.evidence) throw new TypeError('Unknown instruction evidence')
+      if (!options.session) { if (pending && evidence.selection === selection) { consumed = pending; pending = undefined }; return undefined } // Explicitly unmounted controlled contexts have no accepted-call owner.
+      const session = options.session, accepted = session.events[handoff.acceptedSeq], receipt = handoff.physicalExecutionReceipt
+      if (closed || !accepted || accepted.type !== 'model/exchange-accepted' || accepted.seq !== handoff.acceptedSeq || accepted.actionId !== receipt.actionId || accepted.attemptId !== receipt.attemptId || !['committed', 'memory-committed'].includes(handoff.outcome?.kind) || !Array.isArray(handoff.outcome.seqs) || !handoff.outcome.seqs.includes(handoff.acceptedSeq) || !Array.isArray(handoff.calls) || accepted.callSeqs.length !== handoff.calls.length) throw new TypeError('Invalid accepted instruction exchange')
+      const copied = captureLegacyFact(handoff.calls)
+      if (copied.kind !== 'captured') throw new TypeError('Invalid accepted call data')
+      const calls = copied.value
+      for (let index = 0; index < calls.length; index++) {
+        const call = calls[index]!, event = call.eventSeq === undefined ? undefined : session.events[call.eventSeq]
+        if (!event || event.type !== 'tool/call' || accepted.callSeqs[index] !== call.eventSeq || event.seq !== call.eventSeq || event.callId !== call.callId || event.name !== call.call.name || JSON.stringify(event.args) !== JSON.stringify(call.call.args)) throw new TypeError('Accepted call identity mismatch')
+      }
+      const pin = evidence.view.retain(), bindings = new Map<number, { capture: CapturedToolCall; origin: AcceptedInstructionCall }>()
+      let released = false, preflightStarted = false, flight: Promise<void> | undefined
+      const owner = { requested: false, release() {
+        owner.requested = true
+        if (released) return Promise.resolve()
+        if (flight) return flight
+        flight = pin.release().then(() => { released = true; outstanding.delete(owner) }, error => { flight = undefined; throw error })
+        return flight
+      } }
+      outstanding.add(owner)
       if (pending && evidence.selection === selection) { consumed = pending; pending = undefined }
+      const batch: AcceptedInstructionBatch = Object.freeze({
+        bind(index: number, capture: CapturedToolCall) {
+          if (closed || released || owner.requested || !Number.isSafeInteger(index) || index < 0 || index >= calls.length) throw new Error('Accepted instruction batch unavailable')
+          const prior = bindings.get(index)
+          if (prior) { if (prior.capture !== capture) throw new Error('Accepted call already bound'); return prior.origin }
+          if (preflightStarted) throw new Error('Accepted instruction batch admission closed')
+          const descriptor = calls[index]!, registry = capturedToolRegistry(capture)
+          const inspect = captureMethod<typeof registry.inspectCapture>(registry, 'inspectCapture'), inspected = inspect(capture)
+          if (inspected.identity.session !== session || inspected.identity.callId !== descriptor.callId || inspected.identity.callEventSeq !== descriptor.eventSeq || JSON.stringify(inspected.call) !== JSON.stringify(descriptor.call)) throw new Error('Captured call does not match accepted call')
+          const origin: AcceptedInstructionCall = Object.freeze({ kind: 'accepted-instruction-call' })
+          bindings.set(index, { capture, origin })
+          acceptedOrigins.set(origin, { capture, current: () => !closed && !released && !owner.requested && bindings.get(index)?.origin === origin })
+          return origin
+        },
+        async preflight(entries: readonly InstructionBatchEntry[], signal?: AbortSignal) {
+          if (closed || released || owner.requested || preflightStarted) throw new Error('Accepted instruction batch unavailable')
+          preflightStarted = true
+          if (entries.length !== bindings.size || new Set(entries.map(entry => entry.origin)).size !== entries.length || new Set(entries.map(entry => entry.capture)).size !== entries.length) throw new Error('Incomplete accepted call set')
+          const selected = entries.map(entry => {
+            if (capturedToolRegistry(entry.capture) !== entry.registry || ![...bindings.values()].some(binding => binding.capture === entry.capture && binding.origin === entry.origin)) throw new Error('Foreign accepted call')
+            const inspect = captureMethod<typeof entry.registry.inspectCapture>(entry.registry, 'inspectCapture')
+            const install = captureMethod<typeof entry.registry.bindNativeInstructions>(entry.registry, 'bindNativeInstructions')
+            return { ...entry, inspection: inspect(entry.capture), install }
+          })
+          const mutations = selected.flatMap((entry, ownerIndex) => (entry.inspection.native?.targets ?? []).filter(target => target.mode === 'mutate').map(target => ({ ownerIndex, target })))
+          const fail = (reason: 'unseen-rules' | 'changed-dependency' | 'unavailable' | 'mixed-mutation' | 'revoked', splitRequired = false) => instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason, currentFingerprint: evidence.view.service.snapshot().fingerprint, ...(splitRequired ? { splitRequired: true as const } : {}) })
+          const check = () => {
+            try {
+              const before = options.environment.policy.current()
+              if (closed || released || owner.requested || before.kind !== 'ready' || before.generation !== evidence.policy || authority().identity !== evidence.authority) throw fail('revoked')
+              const after = options.environment.policy.current()
+              if (closed || released || owner.requested || after.kind !== 'ready' || after.generation !== evidence.policy) throw fail('revoked')
+            } catch (error) { if (isInstructionReplan(error)) throw error; throw fail('revoked') }
+          }
+          signal?.throwIfAborted(); check()
+          if (!mutations.length) return
+          // Retain target selection before any asynchronous resolver work so a
+          // rejected batch still informs the next normal request.
+          for (const { target } of mutations) {
+            const value: InstructionTarget = { path: target.path, kind: target.kind }, id = instructionTargetKey(value)
+            if (!pending && consumed.has(id)) continue
+            if (!pending) { pending = new Map(); selection++ }
+            if (!pending.has(id)) { pending.set(id, Object.freeze(value)); selection++ }
+          }
+          try {
+            signal?.throwIfAborted(); check()
+            const targets = mutations.map(({ target }) => ({ path: target.path, kind: target.kind }))
+            await evidence.view.service.prepare(targets)
+            signal?.throwIfAborted(); check()
+            const canonical = await Promise.all(mutations.map(({ target }) => resolveInstructionCanonical(target.path)))
+            signal?.throwIfAborted(); check()
+            const normalized = (path: string) => process.platform === 'win32' ? path.toLowerCase() : path
+            const snapshot = evidence.view.service.snapshot()
+            const candidates = snapshot.candidates.flatMap(candidate => candidate.canonicalPath ? [normalized(candidate.canonicalPath)] : [])
+            for (let i = 0; i < mutations.length; i++) for (let j = i + 1; j < mutations.length; j++) {
+              if (normalized(canonical[i]!) === normalized(canonical[j]!)) throw fail('mixed-mutation', true)
+              for (const [candidateIndex, otherIndex] of [[i, j], [j, i]] as const) {
+                if (!candidates.includes(normalized(canonical[candidateIndex]!))) continue
+                const relation = evidence.view.service.relation(canonical[candidateIndex]!, mutations[otherIndex]!.target)
+                if (relation !== 'independent') throw fail('mixed-mutation', true)
+              }
+            }
+            let admitted = false
+            const installations: { entry: typeof selected[number]; authority: NativeMutation }[] = []
+            for (let index = 0; index < selected.length; index++) {
+              const entry = selected[index]!, local = mutations.map((item, ordinal) => ({ ...item, canonical: canonical[ordinal]! })).filter(item => item.ownerIndex === index)
+              if (!local.length) continue
+              const proof = evidence.view.service.proveApplicable(evidence.snapshot, local.map(item => ({ path: item.target.path, kind: item.target.kind })))
+              const candidatePaths = local.filter(item => candidates.includes(normalized(item.canonical))).map(item => item.canonical)
+              let own: OwnedInstructionWrite | undefined
+              const assertCurrent = () => { if (!admitted) throw fail('unavailable'); check(); try { evidence.view.service.assertApplicable(proof, own) } catch { throw fail('changed-dependency') } }
+              const authority: NativeMutation = Object.freeze({
+                assertCurrent,
+                before(boundary: NativeBoundary) {
+                  assertCurrent()
+                  const candidate = local.find(item => item.target.path === boundary.target && candidates.includes(normalized(item.canonical)))
+                  if (candidate && !own) {
+                    try { own = evidence.view.service.beginOwnedWrite(proof, candidatePaths); assertCurrent() }
+                    catch (error) { if (isInstructionReplan(error)) throw error; throw fail('changed-dependency') }
+                  }
+                },
+                settle() { if (own) { evidence.view.service.settleOwnedWrite(own); own = undefined } },
+              })
+              installations.push({ entry, authority })
+            }
+            check()
+            for (const { entry, authority } of installations) entry.install(entry.capture, entry.origin, authority)
+            admitted = true
+          } catch (error) {
+            if (signal?.aborted || isInstructionReplan(error)) throw error
+            throw fail('unseen-rules')
+          }
+        },
+        release: owner.release,
+      })
+      return batch
     },
     promotedHumanRequest() { if (pending || consumed.size || mappingUnavailable) { pending = undefined; consumed = new Map(); mappingUnavailable = false; selection++ } },
     async close() {
       closed = true
+      const releases = await Promise.allSettled([...outstanding].filter(owner => owner.requested).map(owner => owner.release()))
       const results = await Promise.allSettled([...views].map(async view => { await view.close(); views.delete(view); cleanupDebt.delete(view) }))
-      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+      const failures = [...releases, ...results].flatMap(result => result.status === 'rejected' ? [result.reason] : [])
       if (failures.length) throw new AggregateError(failures, 'Instruction manager cleanup incomplete')
     },
   }

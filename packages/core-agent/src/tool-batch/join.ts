@@ -1,12 +1,13 @@
 import { resolveBatchFacts } from "./facts.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { SessionView as Session } from "@i-harness/core-session"
-import type { ToolRegistry } from "@i-harness/core-tools"
+import { isInstructionReplan, instructionReplan, registryRequiresInstructionOrigin, type ToolRegistry, type CapturedToolCall, type AcceptedInstructionCall } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import { createBatchCancellation, finishCancelledBatch, finishCheckpointFailure } from "./cancel.ts"
 import { createBatchRecords } from "./record.ts"
 import { createStartCall } from "./dispatch.ts"
 import { prepareLiveBatch, bindLiveBatchSource, markLiveBatchClosed } from './live-continuation.ts'
+import { recordPreparationFailure } from './prepare.ts'
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
 //   - start order = model order (groups walk the batch left-to-right);
@@ -47,7 +48,9 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   const records = createBatchRecords(ctx, session, tools, batch, opts, () => cancellation)
   const cancellation = createBatchCancellation(opts)
   const inFlight = new Map<number, Promise<number>>()
-  const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) })
+  const captured = new Map<number, { capture: CapturedToolCall; origin?: AcceptedInstructionCall; concurrencySafe: boolean }>()
+  const replan: { value?: import('@i-harness/core-tools').InstructionReplanData } = {}
+  const startCall = createStartCall(session, tools, batch, opts, records, cancellation, (index, promise) => { inFlight.set(index, promise) }, index => captured.get(index), replan)
   const finished = Promise.withResolvers<void>()
   const source = opts.registerFactSource!(async () => { await finished.promise; await records.drainSettled() })
   const closeSource = source.close.bind(source)
@@ -59,13 +62,41 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   let executionFailure: unknown
   let executionFailed = false
   try {
-  const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
+  const captureWholeBatch = !!opts.instructionBatch || registryRequiresInstructionOrigin(tools)
+  if (captureWholeBatch) {
+    const entries: import('@i-harness/core-tools').InstructionBatchEntry[] = []
+    let missingOriginMutation = false
+    for (let index = 0; index < batch.length; index++) {
+      const call = batch[index]!
+      try {
+        const capture = tools.capture({ name: call.name, args: call.args }, { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq, settlementSource: opts.settlementSource, modelGeneration: opts.modelGeneration?.(call, cancellation.batchSignal) })
+        const origin = opts.instructionBatch?.bind(index, capture), inspected = tools.inspectCapture(capture)
+        captured.set(index, { capture, origin, concurrencySafe: inspected.concurrencySafe })
+        if (origin) entries.push({ registry: tools, capture, origin })
+        else if (inspected.native?.targets.some(target => target.mode === 'mutate')) missingOriginMutation = true
+      } catch (error) { recordPreparationFailure(index, call, error, records, cancellation) }
+    }
+    try {
+      if (missingOriginMutation) throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'missing-origin', currentFingerprint: '' })
+      await opts.instructionBatch?.preflight(entries, cancellation.batchSignal)
+    }
+    catch (error) {
+      if (!isInstructionReplan(error)) throw error
+      for (let index = 0; index < batch.length; index++) if (!records.getSlot(index)) {
+        const call = batch[index]!
+        records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: error.data })
+      }
+      await records.commitReady()
+      return
+    }
+  }
+  const isExclusive = (index: number): boolean => captureWholeBatch ? captured.get(index)?.concurrencySafe !== true : tools.get(batch[index]!.name)?.isConcurrencySafe !== true
   // Partition into groups (batch-index runs): maximal runs of parallel-safe
   // calls; each exclusive call is a singleton group.
   const groups: number[][] = []
   let current: number[] = []
   for (let i = 0; i < batch.length; i += 1) {
-    if (isExclusive(batch[i]!.name)) {
+    if (isExclusive(i)) {
       if (current.length > 0) {
         groups.push(current)
         current = []
@@ -81,9 +112,9 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
     let gi = 0
     while (gi < indices.length || inFlight.size > 0) {
       cancellation.observeAbort()
-      if (cancellation.aborted || cancellation.stopped) break
-      while (gi < indices.length && inFlight.size < opts.maxParallel && !cancellation.aborted && !cancellation.stopped) {
-        await startCall(indices[gi]!)
+      if (cancellation.aborted || cancellation.stopped || replan.value) break
+      while (gi < indices.length && inFlight.size < opts.maxParallel && !cancellation.aborted && !cancellation.stopped && !replan.value) {
+        if (!records.getSlot(indices[gi]!)) await startCall(indices[gi]!)
         gi += 1
         await records.commitReady()
         cancellation.observeAbort()
@@ -99,7 +130,7 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
   try {
     for (const group of groups) {
       await runGroup(group)
-      if (cancellation.stopped || cancellation.aborted) break
+      if (cancellation.stopped || cancellation.aborted || replan.value) break
     }
   } catch (err) {
     cancellation.recordOuterFailure(err)
@@ -118,6 +149,13 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
     throw cancellation.firstRefusal
   }
   if (cancellation.hasFlushError) return await finishCheckpointFailure(session, batch, records, cancellation)
+  if (replan.value) {
+    for (let index = 0; index < batch.length; index++) if (!records.getSlot(index)) {
+      const call = batch[index]!
+      records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: replan.value })
+    }
+    await records.commitReady()
+  }
   } catch (error) { executionFailed = true; executionFailure = error; throw error }
   finally {
     finished.resolve()
