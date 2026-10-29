@@ -64,3 +64,16 @@ it('manual refresh republishes the live original source and never sends a model 
     expect(texts).toHaveLength(2); expect(texts[1]).toContain('SECOND_RULE')
   } finally { await manager.close(); await environment.close(); rmWorkspaceSync(cwd) }
 })
+
+it('notifies when the original watched source changes without invoking publication', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'ih-i6-source-event-')), path = join(cwd, 'AGENTS.md'); await writeFile(path, 'OLD_RULE')
+  const environment = createProjectInstructionEnvironment(), manager = createMainInstructionManager({ cwd, environment, authority: () => ({ kind: 'unbound', revision: '1', workspaceRoot: cwd }), available: () => true, publish: async () => { publications++ } })
+  let publications = 0
+  try {
+    await manager.reconcile(); const event = Promise.withResolvers<void>()
+    const unsubscribe = manager.diagnostics.subscribe(() => { if (manager.diagnostics.read().state !== 'ready') event.resolve() })
+    await writeFile(path, 'NEW_RULE'); await event.promise
+    expect(manager.diagnostics.read().state).not.toBe('ready'); expect(publications).toBe(1)
+    unsubscribe()
+  } finally { await manager.close(); await environment.close(); rmWorkspaceSync(cwd) }
+})
