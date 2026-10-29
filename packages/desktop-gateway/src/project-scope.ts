@@ -8,6 +8,7 @@ import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 import { captureBootstrapProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
+import type { BindingObservations } from '../../session-persistence/src/coordinator/binding-observation.ts'
 export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
 export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
 
@@ -46,8 +47,11 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const observed = new Set<string>()
   const pendingChanges = new Set<string>()
   const scopeUpdates = new Map<string, number>()
+  const retainedSources = new Set<{ ids:Set<string>;revoke():void }>()
+  const invalidateRetained = (ids?:readonly string[]) => { for (const source of [...retainedSources]) if(!ids||ids.some(id=>source.ids.has(id)))source.revoke() }
   let referenceUpdates = 0
   function trackScopes<T>(ids: readonly string[], job: Promise<T>): Promise<T> {
+    invalidateRetained()
     for (const id of ids) scopeUpdates.set(id, (scopeUpdates.get(id) ?? 0) + 1)
     return job.finally(() => { for (const id of ids) { const count = scopeUpdates.get(id)! - 1; if (count) scopeUpdates.set(id, count); else scopeUpdates.delete(id) } })
   }
@@ -92,10 +96,11 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     return { bound: true, ...(Object.hasOwn(document, 'projectId') ? { projectId: identifier(document.projectId) } : {}) }
   }
   function observeBinding(id: string, value: Binding) {
-    if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1)
+    if (canonicalJsonData(bindings.get(id)) !== canonicalJsonData(value)) { invalidateRetained([id]); bindingRevisions.set(id, (bindingRevisions.get(id) ?? 0) + 1) }
     bindings.set(id, value)
   }
   function serial<T>(id: string, work: () => Promise<T>): Promise<T> {
+    invalidateRetained([id])
     const job = (operations.get(id) ?? Promise.resolve()).catch(() => undefined).then(work)
     operations.set(id, job)
     void job.finally(() => { if (operations.get(id) === job) operations.delete(id) }).catch(() => undefined)
@@ -148,6 +153,11 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   async function projectFor(id: string): Promise<string | undefined> {
     return (await resolveOwner(id)).projectId
   }
+  async function observedResultGetter(id:string,captured:BindingObservation) {
+    await resolveOwner(id,undefined,true);captured.assertCurrent();observed.add(id)
+    const get=()=>{captured.assertCurrent();const projectId=liveOwner(id),context=projectId?projects.get(projectId):undefined;return {...(projectId?{projectId}:{}),...(context?{scope:{id:context.id,name:context.name,primaryRoot:context.primaryRoot!,roots:[...context.roots]}}:{}),revision:`${authority(id).revision}:binding:${bindingRevisions.get(id)??0}`}}
+    get();return get
+  }
   function scopeSchema(value: unknown): ConfirmedProjectScope {
     if (!object(value)) throw new Error("Invalid project scope")
     const id = identifier(value.id)
@@ -193,6 +203,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     return { kind: "bound", revision, primaryRoot: scope.primaryRoot, roots: [...scope.roots], references: [...references] }
   }
   async function changed(projectIds: readonly string[], publish = true): Promise<void> {
+    if(projectIds.length)invalidateRetained()
     for (const id of projectIds) {
       if (publish) revisions.set(id, (revisions.get(id) ?? 0) + 1)
       pendingChanges.add(id)
@@ -202,6 +213,26 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     for (const id of projectIds) pendingChanges.delete(id)
   }
   return {
+    async retainSelectedBindingRead(sessionIds:readonly string[],binding:Awaited<ReturnType<BindingObservations['acquireSelectedBindingRead']>>,sourceId:string) {
+      assertOpen();binding.assertCurrent()
+      if(!sessionIds.length||sessionIds.length>32||new Set(sessionIds).size!==sessionIds.length||!sessionIds.includes(sourceId))throw Error('Invalid held project lineage')
+      const ids=new Set(sessionIds.map(identifier)),observation=binding.observation
+      let active=true,uses=0,drain=Promise.withResolvers<void>(),dependent:{revoke():void;close():Promise<void>}|undefined,used=false
+      const revoke=()=>{active=false;dependent?.revoke()}
+      const item={ids,revoke:()=>binding.revoke()}
+      const dependency={revoke,async close(){revoke();if(uses)await drain.promise;if(dependent)await dependent.close();retainedSources.delete(item)}}
+      try {
+        binding.installRetirementDependency(dependency)
+        for(const id of ids){if(operations.has(id)||loading.has(id))throw Error('Project binding operation pending');const meta=observation.metadata(id),doc=observation.binding(id),value=parseBinding(doc.kind==='present'?doc.value:undefined);observeBinding(id,value);if(!value.bound&&meta.parentSession&&['subagent','team'].includes(meta.origin??''))parents.set(id,identifier(meta.parentSession));else parents.delete(id)}
+        retainedSources.add(item)
+        const stamp=()=>canonicalJsonData([...ids].map(id=>[id,bindingRevisions.get(id)??0,authority(id).revision,liveOwner(id)??null])),original=stamp()
+        const assertCurrent=()=>{assertOpen();binding.assertCurrent();if(!active||original!==stamp())throw Error('Project binding observation changed');for(const id of ids){if(operations.has(id)||loading.has(id))throw Error('Project binding operation pending');const projectId=liveOwner(id);if(referenceFailure||referenceUpdates||scopeUpdates.has(projectId??'')||pendingChanges.has(projectId??''))throw Error('Project scope changed');assertAvailable(projectId)}}
+        const captured:BindingObservation={ids,observation,assertCurrent}
+        const getter=await bindingObservations.run([...(bindingObservations.getStore()??[]),captured],async()=>{assertCurrent();for(const id of ids)await ensureVisible(id);return observedResultGetter(sourceId,captured)})
+        assertCurrent();getter()
+        return Object.freeze({sourceGetter:getter,assertCurrent,attachResult(result:{revoke():void;close():Promise<void>}){assertCurrent();if(used||dependent)throw Error('Result dependency already bound');dependent=result},async use<T>(work:()=>Promise<T>){assertCurrent();used=true;uses++;let entered=true;const entry:BindingObservation={ids,observation,assertCurrent(){if(!entered)throw Error('Project observation expired');assertCurrent()}};try{return await bindingObservations.run([...(bindingObservations.getStore()??[]),entry],async()=>{assertCurrent();const value=await work();assertCurrent();return value})}finally{entered=false;if(!--uses){drain.resolve();drain=Promise.withResolvers<void>()}}},revoke:()=>binding.revoke(),close:()=>binding.release()})
+      }catch(error){binding.revoke();try{await binding.release()}catch(cleanup){throw cleanup}throw error}
+    },
     prepareBootstrapInheritance(input: BootstrapProjectCapture): BootstrapProjectPreparation {
       const capture = captureBootstrapProject(input), id = capture.invocation.targetSessionId
       const projectId = capture.requestIntent.project.kind === 'project' ? capture.requestIntent.project.projectId : undefined
@@ -330,6 +361,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     },
     /** Host-confirmed source registrations impose restrictions only. */
     configureReferences(paths: readonly string[]): Promise<void> {
+      invalidateRetained()
       const requested = [...paths]
       referenceRevision++
       referenceUpdates++
@@ -443,6 +475,10 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     projectFor,
     /** Only a target's own durable binding can avoid ancestor traversal. */
     async resultReadScopeFor(id: string): Promise<(() => import('@i-harness/session-executor').ResultReadScope) | undefined> {
+      const captured = currentObservation(id)
+      if (captured) {
+        return observedResultGetter(id,captured)
+      }
       const meta = await ensureVisible(id)
       if (meta.archived) throw new Error('Session is archived')
       await operations.get(id)
@@ -553,6 +589,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     },
     close(): Promise<void> {
       if (closing) return closing
+      invalidateRetained()
       closed = true
       projects.clear()
       closing = Promise.allSettled([catalogTail, ...operations.values(), ...loading.values()]).then(async () => {
