@@ -57,3 +57,7 @@ it('joins iterator return and owner close on the same pending original step',asy
  const next=iterator.next().catch(error=>error);await entered.promise;let returned=false,closed=false;const returning=iterator.return!().then(()=>{returned=true}),closing=owner.close().then(()=>{closed=true});await Promise.resolve();expect(returned).toBe(false);expect(closed).toBe(false);leave.resolve();await next;await returning;await closing;expect(returned&&closed).toBe(true)
  }finally{io.delay=undefined;io.entered=undefined;await f.close()}
 })
+it('refuses retained metadata once the original canonical grant expires',async()=>{
+ const f=await legacyFixture();let clock:ReturnType<typeof vi.spyOn>|undefined
+ try{expect((await f.run()).kind).toBe('ready');const owner=await acquireSelectedMetadata(f.service(),await f.observation()),iterator=owner.reader.legacy()[Symbol.asyncIterator]();clock=vi.spyOn(Date,'now').mockReturnValue(f.visible.expiresAt+1);await expect(iterator.next()).rejects.toThrow();clock.mockRestore();clock=undefined;await owner.close()}finally{clock?.mockRestore();await f.close()}
+})
