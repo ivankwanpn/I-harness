@@ -52,7 +52,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
-    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
     outcome='settled'
     } finally { token?.end(outcome) }
   }
