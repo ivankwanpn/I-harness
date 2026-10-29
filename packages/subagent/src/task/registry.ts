@@ -71,7 +71,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
-      await save()
+      const originalSave = persistence.captureSave()
+      if (originalSave) { await originalSave.done; originalSave.assertHandoff() }
+      else await save()
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
         task.retentionError = task.result.envelope.retention.reason

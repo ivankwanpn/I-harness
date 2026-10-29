@@ -11,7 +11,7 @@ import type { createProcessReadLatches } from './process-read-latches.ts'
 
 type Parent = { id: string; assertCurrent(): void }
 export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
-type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; close(): Promise<void>; retryClose(): Promise<void> }
+type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; stageWrite(witness: TaskDocumentWitness, snapshot: unknown): TaskDocumentWrite; assertHandoff(): void; close(): Promise<void>; retryClose(): Promise<void> }
 type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
 const methodContext = new AsyncLocalStorage<MethodContext>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
@@ -56,7 +56,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     const isAborted = () => signal !== undefined && Reflect.apply(signalAborted, signal, [])
     if (isAborted()) throw new Error('TASK_DOCUMENT_CANCELLED')
     ownership.assertOutsideSessionOperation(captured.id); assertConfiguration(); captured.assertCurrent()
-    let revoked = false, closed = false, acquire: Promise<void>, pin: Awaited<ReturnType<Ownership['pinOwnership']>> | undefined, lease: Awaited<ReturnType<Ownership['acquireLease']>> | undefined
+    let revoked = false, externallyRevoked = false, closed = false, acquire: Promise<void>, pin: Awaited<ReturnType<Ownership['pinOwnership']>> | undefined, lease: Awaited<ReturnType<Ownership['acquireLease']>> | undefined
     let session: ReturnType<OpenTaskDocumentSession> | undefined, observation: Promise<TaskObservation> | undefined, observedReady = false, confirmation: Promise<Confirmation> | undefined, confirmationPending = false, retrying: Promise<Confirmation> | undefined, witness: TaskDocumentWitness | undefined
     let lastConfirmation: Confirmation | undefined, staged: TaskDocumentWrite | undefined, staging = false, stageConsumed = false, writeFlight: Promise<TaskWriteOutcome> | undefined, writeResult: TaskWriteOutcome | undefined
     let writeAdmission: ReturnType<ReturnType<typeof admission.registerOwnedDocumentOperation>['beginOwnedWrite']> | undefined, processToken: ReturnType<NonNullable<typeof processLatches>['beginMutation']> | undefined
@@ -87,12 +87,12 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     const inSelf = () => { for (let context = methodContext.getStore(); context; context = context.parent) if (context.record === record) return true; return false }
     const runMethod = <T>(run: () => T) => methodContext.run({ record, owner: admission.taskContextIdentity, ownership, id: captured.id, key: `task-${captured.id}`, parent: methodContext.getStore() }, run)
     const close = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); revoked = true; return cleanupAttempt() }
-    const abort = () => { revoked = true; methodContext.exit(() => { void close().catch(() => {}) }) }
+    const abort = () => { externallyRevoked = true; revoked = true; methodContext.exit(() => { void close().catch(() => {}) }) }
     const retryClose = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); if (closed) return Promise.resolve(); if (cleanupPending) return cleanup!; cleanup = undefined; return close() }
     const record = { finite: async () => { if (inSelf()) fail(); await acquire.catch(() => {}); await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {}); if (cleanup) await cleanup; if (ioDebt || writeResult?.kind === 'unknown') throw new Error('Task document IO requires cleanup') }, close, retryClose }
     records.add(record)
     let registration: ReturnType<typeof admission.registerOwnedDocumentOperation>
-    try { registration = admission.registerOwnedDocumentOperation(captured.id, `task-${captured.id}`, { revoke() { revoked = true }, close, retryClose, assertOutside() { if (inSelf()) fail() } }); remove = () => registration.unregister() }
+    try { registration = admission.registerOwnedDocumentOperation(captured.id, `task-${captured.id}`, { revoke() { externallyRevoked = true; revoked = true }, close, retryClose, assertOutside() { if (inSelf()) fail() } }); remove = () => registration.unregister() }
     catch (error) { records.delete(record); throw error }
     acquire = enqueue(async () => {
       active(); pin = await pinOwnership(captured.id); releasePin = method(pin, 'release'); active()
@@ -150,6 +150,13 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
           staged = writer; return writer
         })
         } finally { staging = false }
+      },
+      assertHandoff() {
+        if (this !== operation) throw new TypeError('Invalid task operation receiver')
+        // Disposal may finish after external revocation. Only this original
+        // record and still-ready parent can authorize consuming its stored ack.
+        if (!closed || externallyRevoked || writeResult?.kind !== 'committed') fail()
+        assertConfiguration(); captured.assertCurrent()
       },
       close() { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); return close() },
       retryClose() { if (this !== operation) return Promise.reject(new TypeError('Invalid task operation receiver')); return retryClose() },
