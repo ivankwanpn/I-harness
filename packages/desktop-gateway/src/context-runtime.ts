@@ -113,12 +113,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     void flight.finally(()=>selectedAcquisitions.delete(flight)).catch(()=>{});return flight
   }
   async function acquireSelectedSource(sessionId:string) {
-    assertAvailable();if(!options.retainSelectedProjectRead)throw Error('Selected source unavailable')
+    assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');if(!options.retainSelectedProjectRead)throw Error('Selected source unavailable')
     const coordinator=options.coordinator as SessionCoordinator,original=selectedSourceFor(coordinator)
-    await coordinator.flush(sessionId);assertAvailable();const document=await coordinator.openManagedDocument(sessionId);assertAvailable()
+    await coordinator.flush(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const document=await coordinator.openManagedDocument(sessionId);assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved')
     let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,revoked=false
     const witness=original.retain(document,()=>{revoked=true;binding?.revoke()})
-    const current=()=>{assertAvailable();if(revoked)throw Error('Selected source revoked');witness.assertCurrent();binding?.assertCurrent()}
+    const current=()=>{assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');if(revoked)throw Error('Selected source revoked');witness.assertCurrent();binding?.assertCurrent()}
     try{
       const ids=await discoverResultLineage(coordinator,sessionId,current);current()
       binding=await original.acquire({sessionIds:ids});current();assertResultLineage(binding.observation,ids,sessionId)
