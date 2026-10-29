@@ -1,3 +1,9 @@
+import { createDesktopHost } from '../src/host.ts'
+import { encodeFrame, makeRequest, type RpcMessage } from '@i-harness/sdk'
+import { createProjectScopeBroker } from '../src/project-scope.ts'
+import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
+import { createConversationResultReader } from '../src/result-reader.ts'
+import { createSessionManagementFence } from '../src/session-management-fence.ts'
 import { withExecCallerScope, type NativeExecService } from '@i-harness/exec'
 import { acquireAssemblyResultStore } from '../../session-executor/src/lifecycle/result-store.ts'
 import { committedFactSeqs } from '@i-harness/core-session'
@@ -8,7 +14,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { recordFixture } from "./managed-fixture.ts"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createJsonlBackend, createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import { createDesktopExecution, createCodeModeSettings } from "../src/execution.ts"
 import { createAgentProcesses } from "../src/agent-processes.ts"
@@ -55,6 +61,7 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
   }
   const command = (mode: string) => process.platform === "win32" ? `& '${process.execPath.replaceAll("'", "''")}' '${script.replaceAll("'", "''")}' '${mode}'` : `'${process.execPath.replaceAll("'", "'\\''")}' '${script.replaceAll("'", "'\\''")}' '${mode}'`
   let cold: ReturnType<typeof createSessionService> | undefined
+  let coldBroker: ReturnType<typeof createProjectScopeBroker> | undefined
   try {
     const small = await execute(shell, { command: command("small"), background: true }), smallId = String(small.job_id)
     const snapshot = await execute("job_output", { job_id: smallId, wait: true, timeout_ms: 5000 })
@@ -136,7 +143,7 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     await recordFixture(assembly.factOwner, { type: "tool/call", callId: "failed-output", name: "job_output", args: { job_id: smallId } })
     await recordFixture(assembly.factOwner, { type: "tool/result", callId: "failed-output", name: "job_output", output: { ...snapshot, text: "failed output" }, isError: true })
     await coordinator.flush("s"); await live.close(); await coordinator.close()
-    coordinator = createSessionCoordinator(createJsonlBackend(sessionDir), { lock: { enabled: true } }); cold = createSessionService({ workspace: root, modelPolicy: "required" })
+    coordinator = createJsonlSessionCoordinator(sessionDir, { lock: { enabled: true } }); coldBroker = createProjectScopeBroker(coordinator, root, undefined, { async assertIdle() { if (cold?.hasAssembly("s")) throw new Error("Fixture owner is live") } }); cold = createSessionService({ workspace: root, modelPolicy: "required", coordinator, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id) })
     const before = await readFile(join(sessionDir, "s.jsonl"), "utf8"), processes = createAgentProcesses(coordinator, cold)
     expect(await processes.jobOutput("s", smallId)).toEqual({ text: snapshot.text, truncated: false, ownerSessionId: "s", live: false })
     expect(await processes.jobOutput("s", largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: "s", live: false })
@@ -144,9 +151,90 @@ it.each(["tool", "code"] as const)("restores actual registered job_output snapsh
     await expect(processes.jobOutput("other", smallId)).rejects.toThrow(/unavailable.*owner/)
     await expect(processes.jobOutput("s", "unmatched-job")).rejects.toThrow(/unavailable.*owner/)
     await expect(processes.control("s", { action: "job/cancel", id: smallId })).rejects.toThrow(/live|cold/)
+    const fence = createSessionManagementFence()
+    let visible = true, revoke = false, pages = 0
+    let changeBinding: (() => Promise<unknown>) | undefined
+    const isConversation = async () => visible
+    const conversationRead = createConversationResultReader(coordinator, cold, isConversation, fence)!
+    const reader = async (id: string, query: import('@i-harness/session-executor').ResultPageQuery) => { pages++; const result = await conversationRead(id, query); if (revoke) visible = false; if (changeBinding) { const change = changeBinding; changeBinding = undefined; await change() }; return result }
+    const hosted = createAgentProcesses(coordinator, cold, { runRead: createAgentProcessReadRunner({ coordinator, service: cold, isConversation, fence, resultReadScopeFor: id => coldBroker!.resultReadScopeFor(id), readResultPage: reader }) })
+    const documentBeforeReads = JSON.stringify(await coordinator.getDocument('s'))
+    const passive = await hosted.read('s')
+    expect(passive.jobs).toContainEqual(expect.objectContaining({ jobId: smallId, outputAvailable: true, live: false, canCancel: false }))
+    expect(pages).toBe(0)
+    expect(await hosted.jobOutput('s', largeId)).toEqual({ text: String(largeSnapshot.text), truncated: true, ownerSessionId: 's', live: false })
+    expect(pages).toBe(0)
+    const collected = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+    let selectedCursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+    for (let n = 0; ; n++) {
+      if (n > 30) throw new Error('finite cold frame ceiling')
+      const result = await hosted.jobOutput('s', largeId, { backend: 'shell', mode: 'frames', instanceId: large.native_job.instanceId, sourceId: large.native_job.sourceId, cursor: selectedCursor, expectedRef: largeSnapshot.full_result.args.ref })
+      if (result.kind !== 'frames') throw new Error('Cold frame output unavailable: ' + JSON.stringify(result))
+      for (const part of result.page.frames) collected[part.channel].push(Buffer.from(part.data, 'base64'))
+      if (result.page.eof) break
+      selectedCursor = result.page.nextCursor!
+    }
+    expect(pages).toBeGreaterThan(1)
+    expect(Buffer.concat(collected.stdout)).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+    expect(Buffer.concat(collected.stderr)).toEqual(Buffer.from('QA_ERR\n'))
+    expect(createHash('sha256').update(Buffer.concat(collected.stdout)).digest('hex')).toBe(largeSnapshot.digest)
+    expect(createHash('sha256').update(Buffer.concat(collected.stderr)).digest('hex')).toBe(largeSnapshot.stderr_digest)
+    const hostSettings = join(root, 'host-settings.json'); await writeFile(hostSettings, '{}')
+    const frames: RpcMessage[] = [], actualHost = await createDesktopHost({ workspace: root, sessionDir, settingsPath: hostSettings, onWrite: frame => frames.push(frame) })
+    let requestNumber = 0
+    const request = async (method: string, params: object) => { const n = ++requestNumber; await actualHost.handleLine(encodeFrame(makeRequest(n, method, params))); return frames.find(frame => 'id' in frame && frame.id === n) as any }
+    try {
+      await request('initialize', {})
+      expect(await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId })).toMatchObject({ result: { text: 'QA_JOB_OUTPUT\n', live: false } })
+      const result = await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId, sourceId: small.native_job.sourceId, expectedRef: snapshot.full_result.args.ref })
+      expect(result).toMatchObject({ result: { kind: 'frames', live: false, nativeJob: small.native_job, page: { ref: snapshot.full_result.args.ref } } })
+      expect(Buffer.concat(result.result.page.frames.filter((f: any) => f.channel === 'stdout').map((f: any) => Buffer.from(f.data, 'base64')))).toEqual(Buffer.from('QA_JOB_OUTPUT\n'))
+      const actualDecoded = { stdout: [] as Buffer[], stderr: [] as Buffer[] }
+      let actualCursor: import('@i-harness/core-session').ExecFrameCursor | undefined
+      for (let n = 0; ; n++) {
+        if (n > 30) throw new Error('finite actual host cold frame ceiling')
+        const response = await request('desktop/session/processes/job-output', { sessionId: 's', id: largeId, backend: 'shell', mode: 'frames', instanceId: large.native_job.instanceId, sourceId: large.native_job.sourceId, cursor: actualCursor, expectedRef: largeSnapshot.full_result.args.ref })
+        expect(response).toMatchObject({ result: { kind: 'frames', nativeJob: large.native_job, page: { ref: largeSnapshot.full_result.args.ref } } })
+        const page = response.result.page
+        expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(32768)
+        for (const part of page.frames) actualDecoded[part.channel as 'stdout' | 'stderr'].push(Buffer.from(part.data, 'base64'))
+        if (page.eof) break
+        expect(page.nextCursor).not.toEqual(actualCursor); actualCursor = page.nextCursor
+      }
+      expect(Buffer.concat(actualDecoded.stdout)).toEqual(Buffer.from('QA_LIMIT_' + 'x'.repeat(150000)))
+      expect(Buffer.concat(actualDecoded.stderr)).toEqual(Buffer.from('QA_ERR\n'))
+      expect(createHash('sha256').update(Buffer.concat(actualDecoded.stdout)).digest('hex')).toBe(largeSnapshot.digest)
+      expect(createHash('sha256').update(Buffer.concat(actualDecoded.stderr)).digest('hex')).toBe(largeSnapshot.stderr_digest)
+      expect(await request('desktop/session/processes/job-output', { sessionId: 's', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId, expectedRef: { ...snapshot.full_result.args.ref, revision: 'f'.repeat(64) } })).toMatchObject({ result: { kind: 'unavailable', reason: 'stale-ref' } })
+      expect(await request('desktop/session/processes/job-output', { sessionId: 'other', id: smallId, backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toMatchObject({ result: { kind: 'unavailable' } })
+    } finally { await actualHost.close() }
+    expect(JSON.stringify(await coordinator.getDocument('s'))).toBe(documentBeforeReads)
+    expect(await coldBroker.resultReadScopeFor('s')).toBeUndefined()
+    changeBinding = () => coldBroker!.bind('s')
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    const boundGetter = await coldBroker.resultReadScopeFor('s')
+    expect(boundGetter).toBeTypeOf('function'); expect(boundGetter!().revision).toBeTruthy(); expect(boundGetter!().projectId).toBeUndefined()
+    expect((await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).kind).toBe('frames')
+    const freshGetter = (await coldBroker.resultReadScopeFor('s'))!
+    expect(freshGetter).not.toBe(boundGetter); expect(freshGetter().revision).toBe(boundGetter!().revision)
+    const revision = boundGetter!().revision
+    await coldBroker.configure({ id: 'cold-project', name: 'Cold project', roots: [root], primaryRoot: root })
+    changeBinding = () => coldBroker!.move('s', undefined, 'cold-project')
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    expect((await coldBroker.resultReadScopeFor('s'))!().revision).not.toBe(revision)
+    revoke = true
+    const denied = await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })
+    expect(denied).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    visible = true; revoke = false
+    const unsupported = createAgentProcesses(coordinator, cold, { runRead: createAgentProcessReadRunner({ coordinator, service: cold, isConversation, fence, readResultPage: reader }) })
+    await expect(unsupported.jobOutput('s', smallId)).rejects.toMatchObject({ code: 'observation-unsupported', message: 'Job output unavailable for this owner' })
+    await coldBroker.close()
+    const beforeFailedResolver = pages
+    expect(await hosted.jobOutput('s', smallId, { backend: 'shell', mode: 'frames', instanceId: small.native_job.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    expect(pages).toBe(beforeFailedResolver)
     expect(cold.hasAssembly("s")).toBe(false); expect(await readFile(join(sessionDir, "s.jsonl"), "utf8")).toBe(before)
-  } finally { await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
-}, 15000)
+  } finally { await coldBroker?.close(); await cold?.close(); await live.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 30000)
 
 it("projects saved tool/code PTYs and partial output after restart without an assembly or log writes", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-saved-pty-")), sessionDir = join(root, "sessions")

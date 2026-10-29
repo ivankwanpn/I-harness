@@ -36,7 +36,11 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     }
     case "desktop/session/execution/stop": return { sessionId: text("sessionId", 256), cellId: text("cellId", 256) }
     case "desktop/session/processes/read": return { sessionId: text("sessionId", 256) }
-    case "desktop/session/processes/job-output": return { sessionId: text("sessionId", 256), id: text("id", 256) }
+    case "desktop/session/processes/job-output": {
+      const fields = ['backend', 'instanceId', 'sourceId', 'mode', 'cursor', 'expectedRef']
+      if (Object.keys(value).some(key => !['kind', 'workspaceId', 'sessionId', 'id', ...fields].includes(key))) throw new Error('invalid job output query')
+      return { sessionId: text('sessionId', 256), id: text('id', 256), ...Object.fromEntries(fields.filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])])) }
+    }
     case "desktop/session/processes/terminal-output": return { sessionId: text("sessionId", 256), id: text("id", 256) }
     case "desktop/session/processes/control": {
       if (!value.command || typeof value.command !== "object" || Array.isArray(value.command) || JSON.stringify(value.command).length > 131072) throw new Error("invalid process command")

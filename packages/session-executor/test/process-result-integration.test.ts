@@ -114,20 +114,23 @@ it('reads a genuine catalog member repeatedly in an original cold process scope 
       }, async () => { throw new Error('PUBLISHED_CACHED') })).rejects.not.toThrow('PUBLISHED_CACHED')
     } finally { trace.afterRelease = undefined; await finalReader.join() }
     for (const mode of ['scope', 'resolver', 'profile', 'release-failure'] as const) {
-      let revision = 'one', currentGetter = () => ({ revision })
+      let revision = 'one'
+      let currentGetter: (() => { revision: string }) | undefined = () => ({ revision })
       const heldGetter = currentGetter
       const final = createResultPageReader({ ...options, resultReadScopeFor: async () => currentGetter }, () => true)
       let published = false
+      let lastPage: Awaited<ReturnType<typeof final.read>> | undefined
       try {
         trace.afterRelease = () => {
           if (mode === 'scope') revision = 'two'
-          else if (mode === 'resolver') currentGetter = () => ({ revision: 'one' })
+          else if (mode === 'resolver') currentGetter = undefined
           else if (mode === 'profile') trace.afterRead = async path => { if (path === trace.path) { trace.afterRead = undefined; throw new Error('Original profile final read failed') } }
           else throw new Error('Original lease final cleanup failed')
         }
         await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
-          expect(await final.read('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
+          lastPage = await final.read('s', { ref: member.ref, viaCatalog: catalog.ref }); return 'cached'
         }, async value => { published = true; return value })).rejects.toThrow()
+        expect(lastPage).toMatchObject({ kind: "unavailable" })
         expect(published).toBe(false)
       } finally { trace.afterRelease = undefined; trace.afterRead = undefined; currentGetter = heldGetter; await final.join() }
     }
