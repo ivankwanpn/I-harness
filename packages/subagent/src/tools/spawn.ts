@@ -6,6 +6,7 @@ import { createSpawnSource, spawnObservation } from './spawn-source.ts'
 import { userSteerForTool, waitForObservation } from "@i-harness/core-tools"
 import { declaredRoleModel, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord } from "../task-protocol.ts"
+import { residentOwnerFor } from '../followup/resident-lifetime.ts'
 
 export function createSpawnTool(deps: SubagentToolDeps): Tool {
   const spawnDescription = "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call waits for the task's summary; new user input can yield the wait while the same task continues. A deadline returns timed_out: true while the task is still running."
@@ -143,6 +144,8 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
           role,
           parentModel: deps.parentModel,
           codeMode: deps.codeMode, codeModeFactory: deps.codeModeFactory,
+          createInstructionContext: deps.createInstructionContext,
+          retainInitialSetup: setup => residentOwnerFor(deps).retainInitial(setup),
           resolveModel: deps.resolveModel,
           // Forwarded with the resolver so spawnChild decides the role's model for
           // EVERY spawn site (this tool's precondition above only exists to refuse

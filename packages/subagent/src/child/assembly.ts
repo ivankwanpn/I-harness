@@ -17,6 +17,7 @@ export async function assembleChild(
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"],
   suppliedController?: AbortController,
   sharedGeneration?: object,
+  instruction?: import('./instruction-context.ts').ChildInstructionContext,
 ) {
   // child registry: register the role's allowed tools (resolved from the parent).
   // A declared tool the host does not mount is reported, never dropped silently.
@@ -57,6 +58,7 @@ export async function assembleChild(
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     factOwner,
+    ...(instruction ? { requestContext: instruction.requestContext } : {}),
     tools: childReg,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),

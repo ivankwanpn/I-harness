@@ -7,6 +7,7 @@ import { createSession } from '@i-harness/core-session'
 import { createToolRegistry } from '@i-harness/core-tools'
 import { createFsTools } from '@i-harness/fs'
 import { createAgent } from '@i-harness/core-agent'
+import { createRuntimeContext } from '@i-harness/runtime-context'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createLoopbackProvider } from '../../core-agent/test/helpers/provider-loopback.ts'
 import { registerCodeMode } from '../../code-mode/src/register.ts'
@@ -22,7 +23,9 @@ it('uses the original physical code_exec evidence after yield and replans before
   await writeFile(rules, 'old rules'); await writeFile(target, 'before')
   const environment = createProjectInstructionEnvironment(), session = createSession(), sources: import('@i-harness/instructions').InstructionService[] = []
   const create = environment.host.create.bind(environment.host); environment.host.create = scope => { const source = create(scope); sources.push(source); return source }
-  const manager = createMainInstructionManager({ session, environment, cwd, authority: () => ({ kind: 'unbound', revision: '1', workspaceRoot: cwd }), available: () => true, publish: async () => {} })
+  const runtimeContext = createRuntimeContext(session)
+  const manager = createMainInstructionManager({ session, environment, cwd, authority: () => ({ kind: 'unbound', revision: '1', workspaceRoot: cwd }), available: () => true, publish: (signal, retain) => runtimeContext.render(signal, retain) })
+  runtimeContext.registerSection('instructions', manager.text)
   const ctx = createContext(), tools = createToolRegistry(ctx, { instructionsRequired: true, instructionOriginVerifier: isOriginalAcceptedInstructionOrigin, instructionCellRetainer: retainOriginalInstructionCell })
   for (const tool of createFsTools({ workspace: cwd })) tools.register(tool)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
@@ -46,5 +49,6 @@ it('uses the original physical code_exec evidence after yield and replans before
     expect(await readFile(target, 'utf8')).toBe('before'); expect(session.events.filter(event => event.type === 'code/store')).toEqual([])
     expect(session.events.filter(event => event.type === 'code/cell' && event.cellId === cellId && event.state === 'failed')).toMatchObject([{ instructionReplan: { code: 'INSTRUCTIONS_REPLAN_REQUIRED' } }])
     expect(JSON.stringify(server.requests[2]!.body)).toContain('INSTRUCTIONS_REPLAN_REQUIRED')
-  } finally { release.resolve(); await mount.dispose().catch(() => {}); await manager.close().catch(() => {}); await environment.close(); await server.close(); rmWorkspaceSync(cwd) }
+    expect(JSON.stringify(server.requests[2]!.body)).toContain('new rules')
+  } finally { release.resolve(); await mount.dispose().catch(() => {}); await runtimeContext.close(); await manager.close().catch(() => {}); await environment.close(); await server.close(); rmWorkspaceSync(cwd) }
 })

@@ -24,6 +24,7 @@ export interface RoleModelSelection {
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
   createInstructionContext?: import('./instruction-context.ts').ChildInstructionContextFactory
+  retainInitialSetup?: (setup: import('./instruction-context.ts').InitialChildSetup) => () => void
   results?: import("../task/result.ts").TaskResultStore
   generationFactoryFor?: import('@i-harness/core-agent').DocumentGenerationFactory
   modelActionTimeoutMs?: number

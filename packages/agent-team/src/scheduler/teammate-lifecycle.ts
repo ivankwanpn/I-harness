@@ -35,6 +35,7 @@ export function createTeammateSpawner(
     return spawnChild({
       generationFactoryFor: sub.generationFactoryFor, modelActionTimeoutMs: sub.modelActionTimeoutMs, modelActionMaxAttempts: sub.modelActionMaxAttempts,
       codeMode: sub.codeMode, codeModeFactory: sub.codeModeFactory,
+      createInstructionContext: sub.createInstructionContext, retainInitialSetup: sub.retainInitialSetup,
       taskName: name,
       message: prompt,
       parentPath: "lead",

@@ -1437,6 +1437,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
         results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
         ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
@@ -1495,6 +1496,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+          createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
           reportPolicy: SHIPPING_REPORT_POLICY,
           generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           retainResults: subagent.retainResults,

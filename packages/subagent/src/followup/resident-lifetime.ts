@@ -26,6 +26,7 @@ export function refusedReentry(): Promise<never> {
 class ResidentLifetime {
   retired = false
   readonly records = new Set<RetainedResidentResource>()
+  private readonly initialSetups = new Set<import('../child/instruction-context.ts').InitialChildSetup>()
   private readonly results = new WeakMap<NonNullable<ChildAgentEntry['resultCapture']>, () => Promise<unknown>>()
   private flight?: Promise<void>
   private cleanupAttempt?: { borrowers: number; generations: Map<RetainedResidentResource, Promise<void>>; publications: Map<ResidentPreparation, Promise<void>> }
@@ -78,8 +79,13 @@ class ResidentLifetime {
     if (this.retired) throw Object.assign(new Error('Resident owner retired'), { code: 'FACT_CLOSED' })
     this.records.add(record)
   }
-  retire(): void { if (this.retired) return; this.retired = true; for (const record of this.records) record.retire() }
-  inInvocation(): boolean { return inOriginalInvocation(this) || [...this.records].some(record => inOriginalInvocation(record)) }
+  retainInitial(setup: import('../child/instruction-context.ts').InitialChildSetup): () => void {
+    if (this.retired) { setup.retire(); throw Object.assign(new Error('Resident owner retired'), { code: 'FACT_CLOSED' }) }
+    this.initialSetups.add(setup)
+    return () => { this.initialSetups.delete(setup) }
+  }
+  retire(): void { if (this.retired) return; this.retired = true; for (const record of this.records) record.retire(); for (const setup of this.initialSetups) setup.retire() }
+  inInvocation(): boolean { return inOriginalInvocation(this) || [...this.records, ...this.initialSetups].some(record => inOriginalInvocation(record)) }
   retainResult(handle: NonNullable<ChildAgentEntry['resultCapture']>, settle: () => Promise<unknown>): void {
     if (!this.results.has(handle)) this.results.set(handle, settle)
   }
@@ -111,7 +117,7 @@ class ResidentLifetime {
     void attempt.promise.then(() => { this.flight = undefined; finishCleanup() }, () => { this.flight = undefined; finishCleanup() })
     void invokeOriginal(this, async () => {
       const records = [...this.records]
-      const results = await Promise.allSettled(records.map(record => record.close()))
+      const results = await Promise.allSettled([...records.map(record => record.close()), ...[...this.initialSetups].map(setup => setup.close())])
       await Promise.allSettled(records.map(record => record.rawNext))
       const settlements = await Promise.allSettled(records.map(record => record.settleResults?.()))
       const failures = [...results, ...settlements].flatMap(result => result.status === 'rejected' ? [result.reason] : [])
