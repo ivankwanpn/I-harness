@@ -246,10 +246,15 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         const stamp=()=>canonicalJsonData([...ids].map(id=>[id,bindingRevisions.get(id)??0,authority(id).revision,liveOwner(id)??null])),original=stamp()
         const assertCurrent=()=>{assertOpen();binding.assertCurrent();if(!active||original!==stamp())throw Error('Project binding observation changed');for(const id of ids){if(operations.has(id)||loading.has(id))throw Error('Project binding operation pending');const projectId=liveOwner(id);if(referenceFailure||referenceUpdates||scopeUpdates.has(projectId??'')||pendingChanges.has(projectId??''))throw Error('Project scope changed');assertAvailable(projectId)}}
         const captured:BindingObservation={ids,observation,assertCurrent}
+        let setupEntered=true
+        const setupEntry:BindingObservation={ids,observation,assertCurrent(){if(!setupEntered)throw Error('Project observation expired');assertCurrent()}}
         // Setup is original binding work too: revocation joins this acquisition
         // before calling our dependency close or releasing its locks and pins.
-        // The use entry expires before the catch below joins failed cleanup.
-        const getter=await binding.use(()=>bindingObservations.run([...(bindingObservations.getStore()??[]),captured],async()=>{assertCurrent();for(const id of ids)await ensureVisible(id);return observedResultGetter(sourceId,captured)}))
+        // Its ALS entry expires independently of the original lifetime capture
+        // retained by the getter, on successful setup and before failed cleanup.
+        let getter:Awaited<ReturnType<typeof observedResultGetter>>
+        try {getter=await binding.use(()=>bindingObservations.run([...(bindingObservations.getStore()??[]),setupEntry],async()=>{assertCurrent();for(const id of ids)await ensureVisible(id);return observedResultGetter(sourceId,captured)}))}
+        finally {setupEntered=false}
         assertCurrent();getter()
         return Object.freeze({sourceGetter:getter,assertCurrent,attachResult(result:{revoke():void;close():Promise<void>}){assertCurrent();if(used||dependent)throw Error('Result dependency already bound');dependent=result},async use<T>(work:()=>Promise<T>){assertCurrent();used=true;uses++;let entered=true;const entry:BindingObservation={ids,observation,assertCurrent(){if(!entered)throw Error('Project observation expired');assertCurrent()}};try{return await binding.use(()=>bindingObservations.run([...(bindingObservations.getStore()??[]),entry],async()=>{assertCurrent();const value=await work();assertCurrent();return value}))}finally{entered=false;if(!--uses){drain.resolve();drain=Promise.withResolvers<void>()}}},revoke:()=>binding.revoke(),close:()=>binding.release()})
       }catch(error){binding.revoke();try{await binding.release()}catch(cleanup){throw cleanup}throw error}

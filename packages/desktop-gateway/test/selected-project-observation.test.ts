@@ -68,6 +68,26 @@ it('expires project-only use ALS without rediscovering its getter or binding',as
  } finally {await broker.close();await bindings.closeAdmission()();await coordinator.close()}
 })
 
+it.each(['success','failure'] as const)('expires escaped initial visibility ALS after setup %s while retaining only the original getter',async outcome=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'project-setup-escaped-')),backend=createJsonlBackend(join(root,'sessions')),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),ownership=createOwnership({lockRoot:join(root,'sessions')},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership),go=Promise.withResolvers<void>()
+ let visibility=0,escaped!:Promise<unknown>
+ const broker=createProjectScopeBroker(coordinator,root,async()=>{if(++visibility===1){escaped=(async()=>{await go.promise;return broker.resultReadScopeFor('source')})();if(outcome==='failure')throw Error('visibility failed')}return true})
+ try {
+  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:13});const binding=await bindings.acquireSelectedBindingRead({sessionIds:['source']})
+  const acquisition=broker.retainSelectedBindingRead(['source'],binding,'source')
+  if(outcome==='failure')await expect(acquisition).rejects.toThrow('visibility failed')
+  const project=outcome==='success'?await acquisition:undefined,calls=visibility
+  go.resolve();await expect(escaped).rejects.toThrow('Project observation expired');expect(visibility).toBe(calls)
+  if(project){
+   const getter=project.sourceGetter,document=createManagedDocument('source',createSession(),{eventCount:0,bodyBytes:0,prefixDigest:legacyPrefixDigest(0,new Uint8Array())},backend,ownership,undefined,()=>{}),scopes=createResultObservationScope();let captures=0
+   const result=scopes.retainSelected({sessionId:'source',sessionIds:['source'],observation:binding.observation,document,currentSource(){captures++;getter();return {sourceId:'source',readonly:true}},assertHostCurrent(){project.assertCurrent()}});project.attachResult(result);let first:unknown,second:unknown
+   await project.use(()=>result.use(async()=>{expect(project.sourceGetter).toBe(getter);getter();first=scopes.current('source')}))
+   await project.use(()=>result.use(async()=>{expect(project.sourceGetter).toBe(getter);getter();second=scopes.current('source')}))
+   expect(first).toBe(second);expect(captures).toBe(1);expect(visibility).toBe(calls);await project.close();await document.close()
+  }
+ } finally {go.resolve();await escaped?.catch(()=>{});await broker.close();await bindings.closeAdmission()();await coordinator.close()}
+})
+
 
 
 
