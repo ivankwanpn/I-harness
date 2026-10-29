@@ -9,8 +9,14 @@ import type { createBindingObservations } from './binding-observation.ts'
 type Parent = { id: string; assertCurrent(): void }
 export type TaskDocumentConfiguration = { captureParent(document: ManagedDocument): Parent; validator: { validate(value: unknown): void }; open: OpenTaskDocumentSession }
 type Operation = { observe(): Promise<TaskObservation>; confirm(witness: TaskDocumentWitness): Promise<Confirmation>; retryConfirmation(witness: TaskDocumentWitness): Promise<Confirmation>; close(): Promise<void>; retryClose(): Promise<void> }
-type MethodContext = { record: object; owner: object; id: string; key: string; parent?: MethodContext }
+type MethodContext = { record: object; owner: object; ownership: Ownership; id: string; key: string; parent?: MethodContext }
 const methodContext = new AsyncLocalStorage<MethodContext>()
+const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!
+const signalAddListener = EventTarget.prototype.addEventListener
+const signalRemoveListener = EventTarget.prototype.removeEventListener
+export function assertOutsideTaskDocumentSessionOperation(ownership: Ownership, id: string) {
+  for (let context = methodContext.getStore(); context; context = context.parent) if (context.ownership === ownership && context.id === id) throw new Error('TASK_DOCUMENT_CONFLICT')
+}
 export function assertOutsideTaskDocumentOperation(owner: object, ids: readonly string[], keys: readonly string[], all = false) {
   for (let context = methodContext.getStore(); context; context = context.parent) if (context.owner === owner && (all || ids.includes(context.id) || keys.includes(context.key))) throw new Error('TASK_DOCUMENT_CONFLICT')
 }
@@ -44,7 +50,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     if (signalField && (!('value' in signalField) || !signalField.enumerable)) throw new TypeError('Invalid task operation signal')
     const signal = signalField?.value as AbortSignal | undefined
     if (signal !== undefined && (types.isProxy(signal) || !(signal instanceof AbortSignal))) throw new TypeError('Invalid task operation signal')
-    const isAborted = () => signal !== undefined && Reflect.apply(Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'aborted')!.get!, signal, [])
+    const isAborted = () => signal !== undefined && Reflect.apply(signalAborted, signal, [])
     if (isAborted()) throw new Error('TASK_DOCUMENT_CANCELLED')
     ownership.assertOutsideSessionOperation(captured.id); assertConfiguration(); captured.assertCurrent()
     let revoked = false, closed = false, acquire: Promise<void>, pin: Awaited<ReturnType<Ownership['pinOwnership']>> | undefined, lease: Awaited<ReturnType<Ownership['acquireLease']>> | undefined
@@ -60,7 +66,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       if (cleanup) return cleanup
       cleanupPending = true
       cleanup = Promise.resolve().then(async () => {
-        if (signalAttached) { EventTarget.prototype.removeEventListener.call(signal, 'abort', abort); signalAttached = false }
+        if (signalAttached) { Reflect.apply(signalRemoveListener, signal, ['abort', abort]); signalAttached = false }
         await acquire.catch(() => {})
         await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {})
         if (session) await settleResources!()
@@ -72,7 +78,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       return cleanup
     }
     const inSelf = () => { for (let context = methodContext.getStore(); context; context = context.parent) if (context.record === record) return true; return false }
-    const runMethod = <T>(run: () => Promise<T>) => methodContext.run({ record, owner: admission.taskContextIdentity, id: captured.id, key: `task-${captured.id}`, parent: methodContext.getStore() }, run)
+    const runMethod = <T>(run: () => Promise<T>) => methodContext.run({ record, owner: admission.taskContextIdentity, ownership, id: captured.id, key: `task-${captured.id}`, parent: methodContext.getStore() }, run)
     const close = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); revoked = true; return cleanupAttempt() }
     const abort = () => { revoked = true; methodContext.exit(() => { void close().catch(() => {}) }) }
     const retryClose = () => { if (inSelf()) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT')); if (closed) return Promise.resolve(); if (cleanupPending) return cleanup!; cleanup = undefined; return close() }
@@ -86,8 +92,11 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
       const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: active })
       session = open(scope); rawObserve = method(session, 'observe'); rawConfirm = method(session, 'confirm'); settleResources = method(session, 'settleResources'); sessionDescriptors = Object.getOwnPropertyDescriptors(session); active()
     })
-    if (signal) { EventTarget.prototype.addEventListener.call(signal, 'abort', abort, { once: true }); signalAttached = true; if (isAborted()) abort() }
-    try { await acquire; active() } catch (cause) {
+    try {
+      // Installation may throw after registering; its removal remains owned.
+      if (signal) { signalAttached = true; Reflect.apply(signalAddListener, signal, ['abort', abort, { once: true }]); if (isAborted()) abort() }
+      await acquire; active()
+    } catch (cause) {
       revoked = true; let cleanupCause: unknown, failed = false
       try { await cleanupAttempt() } catch (error) { failed = true; cleanupCause = error }
       const wrapper = new Error('TASK_DOCUMENT_BEGIN_FAILED', { cause }); if (failed) Object.assign(wrapper, { cleanupCause })

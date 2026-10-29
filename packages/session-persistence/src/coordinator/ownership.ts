@@ -1,6 +1,7 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { assertOutsideTaskDocumentSessionOperation } from './task-document-operation.ts'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
 type ClaimRecord = { id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
@@ -51,6 +52,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     }
   }
   async function withSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    assertOutsideTaskDocumentSessionOperation(owner, sessionId)
     const previous = sessionOperations.get(sessionId) ?? Promise.resolve()
     const gate = Promise.withResolvers<void>()
     sessionOperations.set(sessionId, gate.promise)
