@@ -6,13 +6,13 @@ import { ToolArgsError, type ToolCall, type PreparedCall, type ToolExec, type To
 import { freezeArguments } from "../approval/arguments.ts"
 import { captureToolCall, ordinaryJson } from '../approval/capture-call.ts'
 import { isAbsolute, win32 } from 'node:path'
-import { bindNativeExecution, registerCaptureOwner, instructionReplan } from '../instructions.ts'
-import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation, AcceptedInstructionCall } from '../types.ts'
+import { bindNativeExecution, bindInstructionCellRetainer, registerCaptureOwner, registerInstructionExec, instructionReplan } from '../instructions.ts'
+import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation, AcceptedInstructionCall, InstructionCellLease } from '../types.ts'
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
 
-export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean) {
+export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined) {
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
   const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
@@ -165,6 +165,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     if (identity?.callId !== undefined) exec.callId = identity.callId
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
+    if (origin && verifyOrigin?.(origin, handle) && retainCell) bindInstructionCellRetainer(exec, origin, handle, (cellId, request) => retainCell(origin, handle, cellId, request))
 
     const prepared = { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
     if (entry.native) {
@@ -184,6 +185,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     }
     bindPreparedSettlement(prepared, identity?.settlementSource)
     registerResultPrepared(prepared, identity?.settlementSource)
+    registerInstructionExec(exec)
     // The callback stays private to this registry; hooks cannot replace the
     // executable, receiver, frozen arguments or exec through prepared metadata.
     executions.set(prepared, () => executeBinding.call(tool, call.args as never, exec))

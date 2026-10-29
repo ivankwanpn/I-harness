@@ -15,8 +15,8 @@ export type { ToolResultDependency } from './registry/result-dependencies.ts'
 
 export { isPolicyRefusal, INVALID_ARGS, ToolArgsError, ToolNotFoundError, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_ABORTED_MID_FLIGHT, TOOL_TIMEOUT } from "./types.ts"
 export type { MediaGenerationAction, ToolModelGeneration, CodeGenerationLineage, CodeGenerationScope } from './types.ts'
-export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, AcceptedCallDescriptor, AcceptedInstructionBatch, InstructionBatchEntry, ToolPrepareIdentity } from './types.ts'
-export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition } from './instructions.ts'
+export type { NativeTarget, NativePlan, NativeMutation, NativeBoundary, CapturedToolCall, AcceptedInstructionCall, AcceptedCallDescriptor, AcceptedInstructionBatch, InstructionBatchEntry, InstructionCellOrigin, InstructionCellLease, ToolPrepareIdentity } from './types.ts'
+export { NativePlanValidationError, nativePlanValidationFailure, isNativePlanValidationError, nativeOperation, nativeMutation, capturedToolRegistry, instructionReplan, isInstructionReplan, InstructionReplanError, declareInstructionReplan, instructionReplanDisposition, retainInstructionCell, bindInstructionInvocation, preflightInstructionInvocations, releaseInstructionCell, isOriginalInstructionCellRequest } from './instructions.ts'
 export type { InstructionReplanData } from './instructions.ts'
 export type { ToolExposure, Tool, PreparedToolIdentity, PreparedApprovalInput, ApprovalRememberView, PreparedApprovalProvider, ApprovalAuthorityProvider, ToolExec, ToolDecision, PolicyRefusal, ToolCall, ToolResult, PreparedCall, ToolDispatchMetadata, ToolSchema, SearchableTool, GuardianRequest, GuardianVerdict, ApprovalGuardian, ToolRegistry } from "./types.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
@@ -29,9 +29,9 @@ export { registerContextRemaining } from "./context-remaining.ts"
 export type { ContextRemainingOptions } from "./context-remaining.ts"
 
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
-const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean }>()
+const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; retainCell?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }>()
 export function registryRequiresInstructionOrigin(registry: ToolRegistry): boolean { return registryInstructions.get(registry)?.required === true }
-export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean } = {}): ToolRegistry {
+export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined } = {}): ToolRegistry {
   if (options.inheritResultRetention && !registryRetention.has(options.inheritResultRetention)) throw new Error('Original tool registry unavailable')
   const retention = options.resultRetention ?? (options.inheritResultRetention ? registryRetention.get(options.inheritResultRetention) : undefined)
   const catalog = createCatalog()
@@ -40,8 +40,11 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
   const verifierDescriptor = Object.getOwnPropertyDescriptor(options, 'instructionOriginVerifier')
   if (verifierDescriptor && (!('value' in verifierDescriptor) || typeof verifierDescriptor.value !== 'function')) throw new TypeError('Invalid instruction origin verifier')
   const verify = inherited?.verify ?? (verifierDescriptor && 'value' in verifierDescriptor ? verifierDescriptor.value.bind(options) : undefined)
+  const retainerDescriptor = Object.getOwnPropertyDescriptor(options, 'instructionCellRetainer')
+  if (retainerDescriptor && (!('value' in retainerDescriptor) || typeof retainerDescriptor.value !== 'function')) throw new TypeError('Invalid instruction cell retainer')
+  const retainCell = inherited?.retainCell ?? (retainerDescriptor && 'value' in retainerDescriptor ? retainerDescriptor.value.bind(options) : undefined)
   const required = inherited?.required === true || options.instructionsRequired === true
-  const preparer = createPreparer(ctx, catalog, () => registry, required, verify)
+  const preparer = createPreparer(ctx, catalog, () => registry, required, verify, retainCell)
   const prepareCaptured: ToolRegistry['prepareCaptured'] = async (...args) => {
     const prepared = await preparer.prepareCaptured(...args)
     await retention?.prepare?.(prepared)
@@ -94,6 +97,6 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
     deferredToolCount: catalog.deferredToolCount,
   }
   registryRetention.set(registry, retention)
-  registryInstructions.set(registry, { required, verify })
+  registryInstructions.set(registry, { required, verify, retainCell })
   return registry
 }

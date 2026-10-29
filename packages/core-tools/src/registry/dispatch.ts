@@ -3,7 +3,7 @@ import type { PreparedCall, Tool, ToolDispatchMetadata, ToolRegistry } from "../
 import { beginRetainedDispatch } from './retained-outcome.ts'
 import { dispatchResultStarted, dispatchResultReturned, declareToolResultOutcome } from './result-finalization.ts'
 import { withToolResultProducer } from './result-dependencies.ts'
-import { assertNativeInstructions, isInstructionReplan } from '../instructions.ts'
+import { assertNativeInstructions, isInstructionReplan, runInstructionBody } from '../instructions.ts'
 
 export function createDispatcher(ctx: PluginContext, getTool: (name: string) => Tool | undefined, getRegistry: () => ToolRegistry, invokePrepared: (prepared: PreparedCall) => Promise<unknown>): ToolRegistry["dispatch"] {
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -45,7 +45,7 @@ export function createDispatcher(ctx: PluginContext, getTool: (name: string) => 
           throw Object.assign(new Error(error instanceof Error ? error.message : String(error), { cause: error }), { policyRefusal: true as const })
         }
         dispatchResultStarted(prepared.exec)
-        const result = await withToolResultProducer(prepared.exec, () => invokePrepared(prepared))
+        const result = await withToolResultProducer(prepared.exec, () => runInstructionBody(prepared.exec, () => invokePrepared(prepared)))
         dispatchResultReturned(prepared.exec)
         retained?.body.observed(); retained?.body.ready(result)
         return result

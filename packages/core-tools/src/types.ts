@@ -41,6 +41,12 @@ export interface NativePlan<P = unknown> {
 }
 export interface CapturedToolCall { readonly kind: 'captured-tool-call' }
 export interface AcceptedInstructionCall { readonly kind: 'accepted-instruction-call' }
+export interface InstructionCellOrigin { readonly kind: 'instruction-cell-origin' }
+export interface InstructionCellLease {
+  bind(invocationId: string, capture: CapturedToolCall): AcceptedInstructionCall
+  preflight(entries: readonly InstructionBatchEntry[], signal?: AbortSignal): Promise<void>
+  release(): Promise<void>
+}
 export interface AcceptedCallDescriptor { readonly callId: string; readonly eventSeq?: number; readonly call: ToolCall }
 export interface InstructionBatchEntry { readonly registry: ToolRegistry; readonly capture: CapturedToolCall; readonly origin: AcceptedInstructionCall }
 export interface AcceptedInstructionBatch {

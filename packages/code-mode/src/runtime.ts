@@ -5,6 +5,8 @@ import { createRetirement } from './runtime/retirement.js'
 import { createOutput } from './runtime/output.js'
 import { createWorkerEvents } from './runtime/worker-events.js'
 import { createAdmission } from './runtime/admission.js'
+import { instructionReplan } from '@i-harness/core-tools'
+import { FactRecoveryRequiredError } from '@i-harness/core-session'
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
 export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeModeRuntime {
@@ -39,7 +41,16 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     },
     cancel: retirement.cancel,
     dispose: retirement.dispose,
-    async drainRetainedObservations() { for (const cell of state.values()) await cell.pendingProjection?.settle() },
+    replan(cellId, detail) { const cell = state.get(cellId); if (cell) retirement.replan(cell, instructionReplan(detail)) },
+    async drainRetainedObservations() {
+      for (const cell of state.values()) {
+        await cell.pendingProjection?.settle()
+        if (cell.instructionReplan && cell.recoveryRequired && !cell.replanTerminalStarted) {
+          cell.recoveryRequired = false; cell.resumeCompletion?.(); await cell.replanDrain
+          if (cell.recoveryRequired) throw new FactRecoveryRequiredError()
+        }
+      }
+    },
   }
   return runtime
 }

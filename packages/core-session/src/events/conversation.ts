@@ -53,6 +53,11 @@ export function validateSemanticSourceEventShape(event: SessionEvent, formatVers
 }
 function conversationEventShape(event: SessionEvent, formatVersion: number, source: boolean): void {
   validateRuntimeContextDiscriminant(event, formatVersion)
+  if (event.type === 'code/cell' && event.instructionReplan !== undefined) {
+    const value = event.instructionReplan
+    const validPaths = (paths: unknown) => paths === undefined || Array.isArray(paths) && paths.length <= 256 && paths.every(path => typeof path === 'string' && path.length <= 4096)
+    if (event.state !== 'failed' || !isStrictFactData(value) || !value || typeof value !== 'object' || !fields(value, ['code', 'currentFingerprint', 'reason', 'splitRequired', 'applied', 'notApplied', 'effectsUnknown']) || value.code !== 'INSTRUCTIONS_REPLAN_REQUIRED' || typeof value.currentFingerprint !== 'string' || value.currentFingerprint.length > 256 || !['missing-origin', 'unseen-rules', 'changed-dependency', 'unavailable', 'mixed-mutation', 'revoked'].includes(value.reason) || value.splitRequired !== undefined && value.splitRequired !== true || !validPaths(value.applied) || !validPaths(value.notApplied) || !validPaths(value.effectsUnknown)) conversationFormatError('invalid instruction replan observation')
+  }
   if (isDeliveryEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)) {
     if (formatVersion < 13 || !validDeliveryEvent(event)) conversationFormatError('invalid required delivery fact or format')
     return

@@ -7,6 +7,7 @@ import type { Retirement } from './retirement.js'
 import type { Output } from './output.js'
 import type { createWorkerEvents } from './worker-events.js'
 import { diagnostic, json, limit } from './limits.js'
+import { releaseInstructionCell } from '@i-harness/core-tools'
 
 /** Admission reservation/start-hook fence before registration and observation. */
 export function createAdmission(
@@ -23,6 +24,15 @@ export function createAdmission(
   const { currentStore, track } = state
   const { observe } = output
   const exec: CodeModeRuntime['exec'] = async (input,providedOrigin = {},observation) => {
+    let bindInstructionCell: CodeModeOrigin['bindInstructionCell']
+    for (let owner: object | null = providedOrigin; owner; owner = Object.getPrototypeOf(owner)) {
+      const descriptor = Object.getOwnPropertyDescriptor(owner, 'bindInstructionCell')
+      if (descriptor) {
+        if (!('value' in descriptor) || descriptor.value !== undefined && typeof descriptor.value !== 'function') throw new TypeError('Invalid instruction cell binding')
+        if (descriptor.value) bindInstructionCell = descriptor.value.bind(providedOrigin)
+        break
+      }
+    }
     // Cell authority belongs to the metadata admitted here, even if a caller
     // reuses or later mutates its own origin object. Only the signal is shared.
     let origin: CodeModeOrigin = Object.freeze({
@@ -67,9 +77,15 @@ export function createAdmission(
     const id = randomUUID()
     if (origin.generationLineage) origin = Object.freeze({ ...origin, generationLineage: origin.generationLineage.bindCell(id) })
     const epoch = retirement.epoch()
+    let instructionOrigin: CodeModeOrigin['instructionOrigin'], installed = false
     admissions++
     try {
-      const started = event({type:'started',cellId:id,source:input.code,origin})
+      instructionOrigin = bindInstructionCell?.(id)
+      if (instructionOrigin) origin = Object.freeze({ ...origin, instructionOrigin })
+      const started = event({type:'started',cellId:id,source:input.code,origin,
+        instructionInstalled() { installed = true },
+        async instructionAdmissionFailed() { if (instructionOrigin && !installed) await releaseInstructionCell(instructionOrigin) },
+      })
       if (started) {
         const pending = Promise.resolve(started)
         track(pending.catch(() => {}))
@@ -78,12 +94,23 @@ export function createAdmission(
       if (retirement.isDisposed() || epoch !== retirement.epoch() || origin.abortSignal?.aborted) throw new Error('Cell admission stopped by its owner')
     }
     catch (error) {
+      if (installed) {
+        try { await event({ type: 'closed', cellId: id, status: origin.abortSignal?.aborted ? 'terminated' : 'failed', error: 'Code Mode admission did not complete', origin }) }
+        catch (saving) { throw new AggregateError([error, saving], 'Code Mode admission cleanup failed', { cause: error }) }
+      }
+      if (String((error as { code?: string })?.code ?? '').startsWith('FACT_')) throw error
       const bounded = diagnostic(error,errorCap)
       throw Object.assign(new Error(bounded.text),{truncated:bounded.truncated})
     }
     finally { admissions-- }
-    const worker = new Worker(new URL(process.env.I_HARNESS_DIST === '1' ? './worker.mjs' : '../worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]})
-    const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false,admission:Promise.resolve(),pendingBytes:0,pendingItems:0,pendingOutputReceipts:0,retainedOutputItems:0,retainedOutputBytes:0}
+    let worker: Worker
+    try { worker = new Worker(new URL(process.env.I_HARNESS_DIST === '1' ? './worker.mjs' : '../worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]}) }
+    catch (error) {
+      if (installed) try { await event({ type: 'closed', cellId: id, status: 'failed', error: 'Code Mode worker could not start', origin }) }
+      catch (saving) { throw new AggregateError([error, saving], 'Code Mode worker cleanup failed', { cause: error }) }
+      throw error
+    }
+    const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),invocations:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false,admission:Promise.resolve(),pendingBytes:0,pendingItems:0,pendingOutputReceipts:0,retainedOutputItems:0,retainedOutputBytes:0}
     state.register(cell)
     workers.attach(cell)
     return observe(cell,yieldMs,maxTokens,undefined,false,observation)

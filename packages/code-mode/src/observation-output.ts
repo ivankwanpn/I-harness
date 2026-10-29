@@ -9,6 +9,7 @@ export function observationOutput(out: CodeModeObservation) {
     cellId: out.cellId, cell_id: out.cellId, status: out.status, text: out.text, truncated: out.truncated,
     ...(out.yielded ? { yielded: true as const, yield_reason: out.yieldReason } : {}),
     ...(out.textRetention ? { textRetention: { ...out.textRetention } } : {}),
+    ...(out.instructionReplan ? { instructionReplan: out.instructionReplan } : {}),
     ...(out.error ? { error: out.error } : {}),
     items: out.items.map(item => item.type === 'text' ? { type: 'text', length: item.text.length }
       : item.type === 'image' ? { type: 'image', mediaType: item.image.mediaType }

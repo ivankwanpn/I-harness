@@ -1,5 +1,6 @@
-import type { CapturedToolCall, NativeMutation, NativePlan, PreparedCall, ToolExec, ToolRegistry } from './types.ts'
+import type { AcceptedInstructionCall, CapturedToolCall, InstructionBatchEntry, InstructionCellLease, InstructionCellOrigin, NativeMutation, NativePlan, PreparedCall, ToolExec, ToolRegistry } from './types.ts'
 import { assertResultPrepared } from './registry/result-finalization.ts'
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 const captureOwners = new WeakMap<CapturedToolCall, ToolRegistry>()
 export function registerCaptureOwner(capture: CapturedToolCall, registry: ToolRegistry): void { captureOwners.set(capture, registry) }
@@ -32,10 +33,69 @@ export function nativePlanValidationFailure(output: Readonly<{ error: string; co
 export function isNativePlanValidationError(error: unknown): error is NativePlanValidationError { return typeof error === 'object' && error !== null && failures.has(error) }
 
 const executions = new WeakMap<ToolExec, { plan: NativePlan; mutation: NativeMutation }>()
+const registeredExecs = new WeakSet<ToolExec>()
+export function registerInstructionExec(exec: ToolExec): void { registeredExecs.add(exec) }
 const dispositions = new WeakMap<ToolExec, InstructionReplanData>()
+const cellRetainers = new WeakMap<ToolExec, (cellId: string, request: object) => InstructionCellLease | undefined>()
+const cells = new WeakMap<InstructionCellOrigin, { bind: InstructionCellLease['bind']; preflight: InstructionCellLease['preflight']; release: InstructionCellLease['release']; released: boolean; flight?: Promise<void> }>()
+const cellRequests = new WeakMap<object, { origin: AcceptedInstructionCall; capture: CapturedToolCall; cellId: string }>()
+const bodyContext = new AsyncLocalStorage<{ exec: ToolExec; active: boolean }>()
+export async function runInstructionBody<T>(exec: ToolExec, body: () => Promise<T>): Promise<T> {
+  const scope = { exec, active: true }
+  try { return await bodyContext.run(scope, body) } finally { scope.active = false }
+}
+export function isOriginalInstructionCellRequest(request: object, origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string): boolean {
+  const actual = request && cellRequests.get(request)
+  return !!actual && actual.origin === origin && actual.capture === capture && actual.cellId === cellId
+}
+function method<T extends (...args: any[]) => any>(owner: object, name: string): T {
+  for (let object: object | null = owner; object; object = Object.getPrototypeOf(object)) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, name)
+    if (descriptor) { if ('value' in descriptor && typeof descriptor.value === 'function') return descriptor.value.bind(owner) as T; break }
+  }
+  throw new TypeError(`Invalid instruction cell ${name} capability`)
+}
+export function bindInstructionCellRetainer(exec: ToolExec, origin: AcceptedInstructionCall, capture: CapturedToolCall, retain: (cellId: string, request: object) => InstructionCellLease | undefined): void {
+  if (cellRetainers.has(exec)) throw new Error('Instruction cell retainer already bound')
+  cellRetainers.set(exec, (cellId, request) => { cellRequests.set(request, { origin, capture, cellId }); try { return retain(cellId, request) } finally { cellRequests.delete(request) } })
+}
+export function retainInstructionCell(exec: ToolExec, cellId: string): InstructionCellOrigin | undefined {
+  if (typeof cellId !== 'string' || !cellId) throw new TypeError('Invalid cell identity')
+  const retain = cellRetainers.get(exec)
+  if (!retain) return undefined
+  const scope = bodyContext.getStore()
+  if (!scope?.active || scope.exec !== exec) throw new Error('Instruction cell requires the original active tool body')
+  cellRetainers.delete(exec)
+  const lease = retain(cellId, Object.freeze({}))
+  if (!lease) return undefined
+  const release = method<InstructionCellLease['release']>(lease, 'release')
+  try {
+    const origin: InstructionCellOrigin = Object.freeze({ kind: 'instruction-cell-origin' })
+    cells.set(origin, { bind: method(lease, 'bind'), preflight: method(lease, 'preflight'), release, released: false })
+    return origin
+  } catch (error) { void release().catch(() => {}); throw error }
+}
+export function bindInstructionInvocation(origin: InstructionCellOrigin, invocationId: string, capture: CapturedToolCall): AcceptedInstructionCall {
+  const cell = origin && cells.get(origin)
+  if (!cell || cell.released || cell.flight) throw new Error('Instruction cell unavailable')
+  return cell.bind(invocationId, capture)
+}
+export function preflightInstructionInvocations(origin: InstructionCellOrigin, entries: readonly InstructionBatchEntry[], signal?: AbortSignal): Promise<void> {
+  const cell = origin && cells.get(origin)
+  if (!cell || cell.released || cell.flight) return Promise.reject(new Error('Instruction cell unavailable'))
+  return cell.preflight(entries, signal)
+}
+export function releaseInstructionCell(origin: InstructionCellOrigin): Promise<void> {
+  const cell = origin && cells.get(origin)
+  if (!cell) return Promise.reject(new Error('Foreign instruction cell'))
+  if (cell.released) return Promise.resolve()
+  if (cell.flight) return cell.flight
+  cell.flight = cell.release().then(() => { cell.released = true }, error => { cell.flight = undefined; throw error })
+  return cell.flight
+}
 export function assertNativeInstructions(exec: ToolExec): void { executions.get(exec)?.mutation.assertCurrent() }
 export function declareInstructionReplan(exec: ToolExec, error: InstructionReplanError, effects: { applied?: readonly string[]; notApplied?: readonly string[]; effectsUnknown?: readonly string[] } = {}): void {
-  if (!executions.has(exec) || !isInstructionReplan(error)) throw new Error('Native replan disposition unavailable')
+  if (!registeredExecs.has(exec) || !isInstructionReplan(error)) throw new Error('Instruction replan disposition unavailable')
   const copy = (values: readonly string[] | undefined) => values && Object.freeze([...values])
   dispositions.set(exec, Object.freeze({ ...error.data, ...(effects.applied ? { applied: copy(effects.applied) } : {}), ...(effects.notApplied ? { notApplied: copy(effects.notApplied) } : {}), ...(effects.effectsUnknown ? { effectsUnknown: copy(effects.effectsUnknown) } : {}) }))
 }
