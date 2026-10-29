@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
-import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
+import type { SessionCoordinator, SessionMeta, ExistingSessionBindingObservation } from "@i-harness/session-persistence"
 import { captureBootstrapTargetPreparationRequest, type BootstrapTargetPreparationRequest, type BootstrapTargetPreparationOutcome } from '@i-harness/session-persistence'
 import { isStrictFactData, canonicalJsonData } from '@i-harness/core-session'
 import type { SessionProjectContext } from "@i-harness/session-executor"
@@ -39,6 +40,13 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const parents = new Map<string, string>()
   const loading = new Map<string, Promise<Binding>>()
   const operations = new Map<string, Promise<unknown>>()
+  type BindingObservation = { ids: Set<string>; observation: ExistingSessionBindingObservation; assertCurrent(): void }
+  const bindingObservations = new AsyncLocalStorage<readonly BindingObservation[]>()
+  function currentObservation(id: string): BindingObservation | undefined {
+    const captured = bindingObservations.getStore()?.findLast(scope => scope.ids.has(id))
+    captured?.assertCurrent()
+    return captured
+  }
   const revisions = new Map<string, number>()
   const bindingRevisions = new Map<string, number>()
   let referenceRevision = 0
@@ -71,11 +79,18 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   async function ensureVisible(id: string): Promise<SessionMeta> {
     assertOpen()
     identifier(id)
-    const { meta } = await coordinator.profile(id)
+    const captured = currentObservation(id)
+    const meta = captured ? captured.observation.metadata(id) : (await coordinator.profile(id)).meta
     if (!await visible(id, meta)) throw new Error("Session is unavailable")
+    captured?.assertCurrent()
     return meta
   }
   function load(id: string): Promise<Binding> {
+    const captured = currentObservation(id)
+    if (captured) {
+      const document = captured.observation.binding(id)
+      return Promise.resolve(parseBinding(document.kind === 'present' ? document.value : undefined))
+    }
     const saved = bindings.get(id)
     if (saved) return Promise.resolve(saved)
     const pending = loading.get(id)
@@ -119,11 +134,13 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     bindings.set(id, { bound: true, ...(projectId ? { projectId } : {}) })
   }
   async function resolveOwner(id: string, ownedOperation?: string, reading = false): Promise<Binding> {
+    const captured = currentObservation(id)
     const chain: string[] = []
     const visited = new Set<string>()
     let cursor = id
     for (;;) {
       if (visited.has(cursor) || chain.length >= 32) throw new Error("Invalid or excessive session project lineage")
+      if (captured && !captured.ids.has(cursor)) throw new Error('Complete project lineage is not held by this observation')
       visited.add(cursor); chain.push(cursor)
       const meta = await ensureVisible(cursor)
       if (reading && meta.archived) throw new Error('Result source session archived')
@@ -135,7 +152,8 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     }
     // Validate the complete chain before waiting: cyclic metadata must not
     // cause two pending binds to wait on each other indefinitely.
-    await Promise.all(chain.filter((sessionId) => sessionId !== ownedOperation).map((sessionId) => operations.get(sessionId)))
+    if (captured) captured.assertCurrent()
+    else await Promise.all(chain.filter((sessionId) => sessionId !== ownedOperation).map((sessionId) => operations.get(sessionId)))
     return chain.map((sessionId) => bindings.get(sessionId)).find((binding) => binding?.bound) ?? { bound: false }
   }
   function liveOwner(id: string): string | undefined {
@@ -240,6 +258,40 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         assertCurrent();getter()
         return Object.freeze({sourceGetter:getter,assertCurrent,attachResult(result:{revoke():void;close():Promise<void>}){assertCurrent();if(used||dependent)throw Error('Result dependency already bound');dependent=result},async use<T>(work:()=>Promise<T>){assertCurrent();used=true;uses++;let entered=true;const entry:BindingObservation={ids,observation,assertCurrent(){if(!entered)throw Error('Project observation expired');assertCurrent()}};try{return await binding.use(()=>bindingObservations.run([...(bindingObservations.getStore()??[]),entry],async()=>{assertCurrent();const value=await work();assertCurrent();return value}))}finally{entered=false;if(!--uses){drain.resolve();drain=Promise.withResolvers<void>()}}},revoke:()=>binding.revoke(),close:()=>binding.release()})
       }catch(error){binding.revoke();try{await binding.release()}catch(cleanup){throw cleanup}throw error}
+    },
+    async withBindingObservation<T>(sessionIds: readonly string[], observation: ExistingSessionBindingObservation, use: () => Promise<T>): Promise<T> {
+      assertOpen(); observation.assertCurrent()
+      if (!sessionIds.length || sessionIds.length > 32 || new Set(sessionIds).size !== sessionIds.length) throw new Error('Invalid held project lineage')
+      const ids = new Set(sessionIds.map(identifier))
+      for (const id of ids) {
+        if (operations.has(id) || loading.has(id)) throw new Error('Project binding operation pending')
+        const meta = observation.metadata(id), document = observation.binding(id)
+        const binding = parseBinding(document.kind === 'present' ? document.value : undefined)
+        observeBinding(id, binding)
+        if (!binding.bound && meta.parentSession && ['subagent', 'team'].includes(meta.origin ?? '')) parents.set(id, identifier(meta.parentSession))
+        else parents.delete(id)
+      }
+      const stamp = () => canonicalJsonData([...ids].map(id => [id, bindingRevisions.get(id) ?? 0, authority(id).revision, liveOwner(id) ?? null]))
+      const original = stamp()
+      let active = true
+      const captured: BindingObservation = { ids, observation, assertCurrent() {
+        assertOpen(); observation.assertCurrent()
+        if (!active) throw new Error('Project binding observation expired')
+        if (original !== stamp()) throw new Error('Project binding observation changed')
+        for (const id of ids) {
+          if (operations.has(id) || loading.has(id)) throw new Error('Project binding operation pending')
+          const projectId = liveOwner(id)
+          if (referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) throw new Error('Project scope changed')
+          assertAvailable(projectId)
+        }
+      } }
+      try {
+        return await bindingObservations.run([...(bindingObservations.getStore() ?? []), captured], async () => {
+          captured.assertCurrent()
+          for (const id of ids) await ensureVisible(id)
+          captured.assertCurrent(); const result = await use(); captured.assertCurrent(); return result
+        })
+      } finally { active = false }
     },
     prepareBootstrapInheritance(input: BootstrapProjectCapture): BootstrapProjectPreparation {
       const capture = captureBootstrapProject(input), id = capture.invocation.targetSessionId
