@@ -551,7 +551,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }).finally(async()=>{if(owned.flight===flight)owned.flight=undefined;if(!b.issued&&!owned.document&&documents.get(id)===owned&&(!owned.captureIO||owned.captureIO.settled)){await releaseCapture(owned);documents.delete(id)}})
       owned.flight=flight;return flight
     }
-  function captureSelected(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
+  function prepareSelectedCapture(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
     const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
     if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
@@ -563,6 +563,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const owned=entry,selectedEntry=owned.selected!
     if(selectedEntry.capture&&selectedEntry.capture!==capture)throw Error('Original selected capture required')
     selectedEntry.capture??=capture
+    return
+  }
+  function captureSelected(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
+    prepareSelectedCapture(input,guard,capture)
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,owned=documents.get(id)!,selectedEntry=owned.selected!
+    const selected=(backend as PersistenceBackend & {selectedCapture:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
     if(owned.flight)return owned.flight as ReturnType<ReturnType<typeof createSelectedCaptureAttempt>['capture']>
     const check=()=>{if(captureClosed||owned.revoked)throw Error('Selected capture revoked');guard()}
     const flight=Promise.resolve().then(async()=>{
@@ -606,7 +612,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     entry.flight=flight;return flight
   }
   return {
-    captureSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
