@@ -15,6 +15,8 @@ import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '..
 import type {createProjectScopeBroker} from './project-scope.ts'
 import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
 import {assertSelectedResultsNodeAdmission} from '../../session-persistence/src/selected-results-node-admission.ts'
+const selectedSignalAborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
+const selectedAborted=(signal?:AbortSignal)=>signal===undefined?false:types.isProxy(signal)?(()=>{throw TypeError('Invalid selected signal')})():Reflect.apply(selectedSignalAborted,signal,[]) as boolean
 
 interface NativeContextOptions {
   workspace:string;storageRoot:string
@@ -156,8 +158,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     const handoffs=new AsyncLocalStorage<{active:boolean}>()
     const available=()=>{assertAvailable();if(retired)throw Error('Selected operation retired')}
     const sourceHandoff=async<T>(source:NonNullable<typeof original>,work:(handoff:{source:{sourceSessionId:string;document:typeof source.document;view:typeof source.view;events:typeof source.view.events;eventCount:number;inherited:typeof source.inherited};assertCurrent():void})=>Promise<T>,signal?:AbortSignal)=>{
-      available();if(signal?.aborted)throw Error('Selected handoff cancelled');source.assertCurrent()
-      const entry={active:true},guard=()=>{available();if(!entry.active||signal?.aborted)throw Error('Selected handoff expired');source.assertCurrent()}
+      available();if(selectedAborted(signal))throw Error('Selected handoff cancelled');source.assertCurrent()
+      const entry={active:true},guard=()=>{available();if(!entry.active||selectedAborted(signal))throw Error('Selected handoff expired');source.assertCurrent()}
       const held=Object.freeze({sourceSessionId:operation.prepared.core.sourceSessionId,document:source.document,view:source.view,events:source.view.events,eventCount:source.view.events.length,inherited:source.inherited})
       // One immutable handle is retained across all handoffs.
       const stable=holderSource??(holderSource=held)
@@ -166,7 +168,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
     const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
     return Object.freeze({
-      first<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(firstStarted)throw Error('Selected first handoff already entered');if(signal?.aborted)throw Error('Selected handoff cancelled');const source=await acquireSelectedSourceObservation(operation.prepared.core.sourceSessionId);original=source;firstStarted=true;if(retired||closed){await source.close();throw Error('Selected operation retired')}return sourceHandoff(source,work,signal)})},
+      first<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(firstStarted)throw Error('Selected first handoff already entered');if(selectedAborted(signal))throw Error('Selected handoff cancelled');const source=await acquireSelectedSourceObservation(operation.prepared.core.sourceSessionId);original=source;firstStarted=true;if(retired||closed){await source.close();throw Error('Selected operation retired')}return sourceHandoff(source,work,signal)})},
       warm<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(!original)throw Error('Original selected source unavailable');return sourceHandoff(original,work,signal)})},
       passive<T>(work:(handoff:{assertCurrent():never})=>Promise<T>){return single(()=>work({assertCurrent():never{throw Error('Passive selected handoff cannot issue')}}))},
       async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
