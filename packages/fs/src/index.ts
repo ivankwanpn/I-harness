@@ -479,7 +479,12 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     isReadOnly: false,
     captureNativePlan(args) {
       try {
-        const hunks = parsePatch(normalizeLineEndings(args.patch_content)).map(hunk => ({ ...hunk, absolutePath: resolvePath(deps.workspace, hunk.path) }))
+        const hunks = parsePatch(normalizeLineEndings(args.patch_content)).map(hunk => {
+          // Partial-effect results retain the original lexical label, which
+          // may be much longer than its normalized executable target.
+          if (hunk.path.length > 4096) throw new FsToolError('FS_TOO_LARGE', `patch path exceeds the 4096-character effect label limit: ${hunk.path}`)
+          return { ...hunk, absolutePath: resolvePath(deps.workspace, hunk.path) }
+        })
         // Parser-internal optional fields may be undefined; the executable data
         // contains only JSON values and is frozen by the registry.
         const operation = JSON.parse(JSON.stringify({ kind: 'patch', args, hunks }))

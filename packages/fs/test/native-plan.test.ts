@@ -7,6 +7,30 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createFsTools } from '../src/index.ts'
 
+it.each([0, 1, 2])('refuses an overlong lexical patch effect label before earlier effects (hunk=%s)', async longIndex => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-patch-label-')), names = ['a.txt', 'b.txt', 'c.txt'], paths = names.map(name => join(root, name))
+  const label = './'.repeat(2050) + names[longIndex]!, labels = names.map((name, i) => i === longIndex ? label : name)
+  try {
+    for (const path of paths) await writeFile(path, 'old\n')
+    const ctx = createContext(), registry = createToolRegistry(ctx)
+    let bodies = 0, boundaries = 0
+    ctx.onCascade('tools/execute', async (_input, next) => { bodies++; return next() })
+    for (const tool of createFsTools({ workspace: root })) registry.register(tool)
+    const patch = ['*** Begin Patch', ...labels.flatMap(path => [`*** Update File: ${path}`, '@@', '-old', '+new']), '*** End Patch', ''].join('\n')
+    let failure: unknown
+    try {
+      const capture = registry.capture({ name: 'apply_patch', args: { patch_content: patch } }), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
+      registry.bindNativeInstructions(capture, origin, { assertCurrent() {}, before(boundary) { boundaries++; if (boundary.target === paths[1] && boundary.operation === 'rename') throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'changed-dependency', currentFingerprint: '' }) }, settle() {} })
+      await registry.dispatch(await registry.prepareCaptured(capture, undefined, origin))
+    } catch (error) { failure = error }
+    expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(['old\n', 'old\n', 'old\n'])
+    expect([bodies, boundaries]).toEqual([0, 0])
+    expect(isNativePlanValidationError(failure)).toBe(true)
+    expect((failure as { output: unknown }).output).toEqual({ code: 'FS_TOO_LARGE', error: `patch path exceeds the 4096-character effect label limit: ${label}` })
+    expect(await readdir(root)).toEqual(names)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 it('captures a write target before dispatch and writes the captured bytes', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-plan-'))
   try {
@@ -106,17 +130,18 @@ it('returns a truthful dispatched replan when an atomic edit is fenced after a t
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 
-it('preserves applied patch hunks and unknown partial effects when a later rename replans', async () => {
+it.each([false, true])('preserves applied patch hunks and unknown partial effects when a later rename replans (boundedLexical=%s)', async boundedLexical => {
   const root = await mkdtemp(join(tmpdir(), 'ih-patch-replan-')), paths = ['a.txt', 'b.txt', 'c.txt'].map(name => join(root, name))
   try {
     for (const path of paths) await writeFile(path, 'old\n')
     const registry = createToolRegistry(createContext()); for (const tool of createFsTools({ workspace: root })) registry.register(tool)
-    const patch = ['*** Begin Patch', ...['a.txt', 'b.txt', 'c.txt'].flatMap(path => [`*** Update File: ${path}`, '@@', '-old', '+new']), '*** End Patch', ''].join('\n')
+    const firstLabel = boundedLexical ? './'.repeat(2045) + 'a.txt' : 'a.txt'
+    const patch = ['*** Begin Patch', ...[firstLabel, 'b.txt', 'c.txt'].flatMap(path => [`*** Update File: ${path}`, '@@', '-old', '+new']), '*** End Patch', ''].join('\n')
     const capture = registry.capture({ name: 'apply_patch', args: { patch_content: patch } }), origin = Object.freeze({ kind: 'accepted-instruction-call' as const })
     registry.bindNativeInstructions(capture, origin, { assertCurrent() {}, before(boundary) { if (boundary.target === paths[1] && boundary.operation === 'rename') throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'changed-dependency', currentFingerprint: 'current' }) }, settle() {} })
     const prepared = await registry.prepareCaptured(capture, undefined, origin), output = await registry.dispatch(prepared)
-    expect(output).toMatchObject({ ok: false, applied: [{ path: 'a.txt' }], instruction_replan: { applied: ['a.txt'], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] } })
-    expect(instructionReplanDisposition(prepared)).toMatchObject({ applied: ['a.txt'], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] })
+    expect(output).toMatchObject({ ok: false, applied: [{ path: firstLabel }], instruction_replan: { applied: [firstLabel], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] } })
+    expect(instructionReplanDisposition(prepared)).toMatchObject({ applied: [firstLabel], effectsUnknown: ['b.txt'], notApplied: ['c.txt'] })
     expect(await Promise.all(paths.map(path => readFile(path, 'utf8')))).toEqual(['new\n', 'old\n', 'old\n'])
   } finally { await rm(root, { recursive: true, force: true }) }
 })
