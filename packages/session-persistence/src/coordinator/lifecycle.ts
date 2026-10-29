@@ -2,6 +2,7 @@ import type { PersistenceBackend, SessionArtifactManifest } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import type { Documents } from "./documents.ts"
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 export function createLifecycle(
   backend: Pick<PersistenceBackend, "deleteOwnedSession">,
@@ -12,6 +13,7 @@ export function createLifecycle(
   { closeAdmissions: closeDocumentAdmissions, pendingWrites: pendingDocuments, observations, withDocumentLeases, retryDisposals }:
     Pick<Documents, "closeAdmissions" | "pendingWrites" | "observations" | "withDocumentLeases" | "retryDisposals">,
   managed: { revoke(sessionId: string): void; closeOne(sessionId: string): Promise<void> },
+  processLatches?: ReturnType<typeof createProcessReadLatches>,
 ) {
   const deletedListeners = new Set<(sessionId: string, manifest: SessionArtifactManifest) => Promise<void>>()
   return {
@@ -22,6 +24,9 @@ export function createLifecycle(
     async deleteOwnedSession(sessionId: string, manifest: SessionArtifactManifest) {
       // Admission, keyed leases and the backend must consume one captured set.
       manifest = { documents: [...manifest.documents], ...(manifest.files === undefined ? {} : { files: [...manifest.files] }) }
+      const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: manifest.documents, kind: 'other' })
+      let outcome: 'settled' | 'unknown' = 'unknown'
+      try {
       // Close local admissions synchronously, before awaiting the existing writes.
       const admission = observations.beginMutation([sessionId], manifest.documents, true)
       closeAdmission(sessionId)
@@ -44,8 +49,11 @@ export function createLifecycle(
           finally { await releaseOwnershipUnlocked(sessionId) }
         })
       } finally { admission.finish() }
+      outcome = 'settled'
+      } finally { token?.end(outcome) }
     },
     async close(releaseOwners = true) {
+      processLatches?.closeAdmission()
       const flushed = await Promise.allSettled(flushWriteBehinds())
       cancelAutomaticWaits()
       await pendingDocuments()
