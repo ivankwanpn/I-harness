@@ -1,5 +1,6 @@
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
+import { AsyncLocalStorage } from 'node:async_hooks'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
 type ClaimRecord = { id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
@@ -31,6 +32,8 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   type Slot = { lock?: SessionLock; live: boolean; claims: Set<object>; acquiring?: Promise<void>; releasing?: Promise<void>; debt?: unknown }
   const slots = new Map<string, Slot>()
   const sessionOperations = new Map<string, Promise<void>>()
+  type SessionContext = { id: string; active: boolean; parent?: SessionContext }
+  const sessionContext = new AsyncLocalStorage<SessionContext>()
   const claims = new WeakMap<object, ClaimRecord>()
 
   async function acquireLease(leaseId: string): Promise<SessionLock> {
@@ -52,8 +55,9 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     const gate = Promise.withResolvers<void>()
     sessionOperations.set(sessionId, gate.promise)
     await previous
-    try { return await operation() }
-    finally { gate.resolve(); if (sessionOperations.get(sessionId) === gate.promise) sessionOperations.delete(sessionId) }
+    const context: SessionContext = { id: sessionId, active: true, parent: sessionContext.getStore() }
+    try { return await sessionContext.run(context, operation) }
+    finally { context.active = false; gate.resolve(); if (sessionOperations.get(sessionId) === gate.promise) sessionOperations.delete(sessionId) }
   }
   async function dispose(id: string, slot: Slot): Promise<void> {
     if (slot.live || slot.claims.size) return
@@ -108,6 +112,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   const owner = {
     assertHeld(id: string) { if (!lockEnabled || !slots.get(id)?.lock?.held || slots.get(id)?.debt) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership,
+    assertOutsideSessionOperation(id: string) { for (let current = sessionContext.getStore(); current; current = current.parent) if (current.active && current.id === id) throw new Error('Session operation reentry conflict') },
     pinOwnership: borrowOwnership, releaseOwnershipUnlocked,
     ownerOf: (id: string) => slots.get(id)?.lock?.held === true,
     hasLiveOwnership(id: string) {
