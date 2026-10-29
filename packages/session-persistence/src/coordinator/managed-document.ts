@@ -437,7 +437,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         holdRecovery() {
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
-                            recoveryHolds.add(source); capacity.holdOptional(source);
+                            recoveryHolds.add(source); invalidateSelected(); capacity.holdOptional(source);
                             for (let index = queue.length - 1; index >= 0; index--) {
                                 const entry = queue[index]!; if (entry.authorization.required) continue;
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
