@@ -11,8 +11,8 @@ export async function instructionRequest(views: Views, method: string, raw: unkn
   if (Object.keys(params).some(key => key !== 'sessionId' && key !== 'childSessionId')) throw new Error('Invalid instruction fields')
   const sessionId = id(params.sessionId, 'session'), childSessionId = params.childSessionId === undefined ? undefined : id(params.childSessionId, 'child session')
   const scope = { sessionId, ...(childSessionId ? { childSessionId } : {}) }
-  if (method === 'desktop/instructions/state') return views.snapshot(scope)
-  if (method === 'desktop/instructions/refresh') return views.snapshot(scope, true)
+  if (method === 'desktop/instructions/state') return views.snapshotReply(scope)
+  if (method === 'desktop/instructions/refresh') return views.snapshotReply(scope, true)
   if (method === 'desktop/instructions/subscribe') return views.subscribe(scope)
   throw new Error('Unknown instruction method')
 }

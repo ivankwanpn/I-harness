@@ -232,6 +232,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           const result = await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings)
           if (message.method === 'desktop/instructions/subscribe') {
             if (!handlers.instructions.acknowledge((result as { subscriptionId: string }).subscriptionId, () => send(makeSuccess(message.id, result)))) throw new Error('Instruction scope changed before acknowledgement')
+          } else if (message.method === 'desktop/instructions/state' || message.method === 'desktop/instructions/refresh') {
+            (result as Awaited<ReturnType<typeof handlers.instructions.snapshotReply>>).write(snapshot => send(makeSuccess(message.id, snapshot)))
           } else send(makeSuccess(message.id, result))
         }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

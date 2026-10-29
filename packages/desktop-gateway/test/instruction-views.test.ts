@@ -51,6 +51,8 @@ it('reports cold instruction state through the actual gateway RPC without creati
   try {
     await call(1, 'initialize', {}); await call(2, 'desktop/instructions/state', { sessionId: id })
     expect(frames.find(frame => frame.id === 2)).toMatchObject({ result: { scope: { sessionId: id }, report: { state: 'not-published' }, cursor: { epoch: expect.any(String), revision: expect.any(Number) } } })
+    await call(4, 'desktop/instructions/refresh', { sessionId: id })
+    expect(frames.find(frame => frame.id === 4)).toMatchObject({ result: { report: { state: 'not-published' } } })
     await call(3, 'desktop/instructions/state', { sessionId: id, childSessionId: 'foreign' }); expect(frames.find(frame => frame.id === 3)).toHaveProperty('error')
     expect(await readFile(log, 'utf8')).toBe(before)
   } finally { await host.close(); await rm(base, { recursive: true, force: true }) }
@@ -125,12 +127,16 @@ it('authorizes only the actual live child lineage before exposing child publicat
     const lifetimeViews = createInstructionViews(coordinator, service, async () => { if (holding && ++checks === 4) { entered.resolve(); await release.promise }; return 'same-project' }, event => events.push(event))
     try {
       const subscribed = await lifetimeViews.subscribe({ sessionId: id, childSessionId: child! }); lifetimeViews.acknowledge(subscribed.subscriptionId)
+      const originalReply = await lifetimeViews.snapshotReply({ sessionId: id, childSessionId: child! })
+      let written: any
+      originalReply.write(value => { written = value }); expect(written.report.state).toBe('ready')
       holding = true
       const reading = lifetimeViews.read({ sessionId: id, childSessionId: child! }); await entered.promise
       const entry = assembly.subagentState().agentTable.find(row => row.sessionId === child)!
       await assembly.tools.get('close_agent')!.execute({ target: entry.path }, { sessionId: id })
       release.resolve()
       expect((await reading).state).toBe('revoked')
+      originalReply.write(value => { written = value }); expect(written.report).toEqual({ state: 'revoked' })
       await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ subscriptionId: subscribed.subscriptionId, reason: 'revoked' })))
       expect(assembly.instructionDiagnostics?.(child!)).toBeUndefined()
     } finally { release.resolve(); lifetimeViews.close() }

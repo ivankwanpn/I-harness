@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
-import type { SessionService } from '@i-harness/session-executor'
+import type { InstructionReport, SessionService } from '@i-harness/session-executor'
 import { createSubagentScope } from '../subagents/scope.ts'
 export type { InstructionReport } from '@i-harness/session-executor'
 
@@ -33,32 +33,39 @@ export function createInstructionViews(coordinator: SessionCoordinator, service:
   }
   const same = (a: Binding, b: Binding) => a.ownerId === b.ownerId && a.assembly === b.assembly && a.diagnostics === b.diagnostics && a.authority === b.authority
   const send = (event: Parameters<typeof notify>[0]) => { try { notify(event) } catch { /* Transport failure cannot change source ownership. */ } }
-  const read = async (input: Scope) => {
+  const capture = async (input: Scope, refreshRequested = false) => {
     const initial = await resolve(input)
+    const refreshed = refreshRequested && initial.ownerId && service.refreshInstructions ? await service.refreshInstructions(initial.ownerId, input.childSessionId) : undefined
     const after = await resolve(input)
-    if (!current(initial, input) || !same(initial, after)) return { state: 'revoked' as const }
-    return initial.ownerId ? service.instructionState?.(initial.ownerId, input.childSessionId) ?? { state: 'not-published' as const } : { state: 'not-published' as const }
+    let report: InstructionReport
+    if (!current(initial, input) || !same(initial, after)) report = { state: 'revoked' }
+    else if (refreshRequested && (!initial.ownerId || !service.refreshInstructions)) report = { state: 'not-published' }
+    else if (refreshed) report = initial.diagnostics?.read() ?? refreshed
+    else report = initial.ownerId ? service.instructionState?.(initial.ownerId, input.childSessionId) ?? { state: 'not-published' } : { state: 'not-published' }
+    return { binding: initial, report }
   }
-  const refresh = async (input: Scope) => {
-    const initial = await resolve(input)
-    if (!initial.ownerId || !service.refreshInstructions) return { state: 'not-published' as const }
-    const report = await service.refreshInstructions(initial.ownerId, input.childSessionId)
-    const after = await resolve(input)
-    return current(initial, input) && same(initial, after) ? initial.diagnostics?.read() ?? report : { state: 'revoked' as const }
+  const read = async (input: Scope, refreshRequested = false) => {
+    const captured = await capture(input, refreshRequested)
+    return current(captured.binding, input) ? captured.report : { state: 'revoked' as const }
   }
-  const snapshot = async (input: Scope, refreshRequested = false) => {
+  const refresh = (input: Scope) => read(input, true)
+  const snapshotReply = async (input: Scope, refreshRequested = false) => {
     input = Object.freeze({ sessionId: input.sessionId, ...(input.childSessionId ? { childSessionId: input.childSessionId } : {}) })
     const key = JSON.stringify([input.sessionId, input.childSessionId ?? null])
     for (let attempt = 0; attempt < 2; attempt++) {
       const before = groups.get(key)?.revision
-      const report = await (refreshRequested && attempt === 0 ? refresh(input) : read(input))
+      const captured = await capture(input, refreshRequested && attempt === 0)
       if (groups.get(key)?.revision !== before) continue
       open(); const revision = advance()
       const group = groups.get(key); if (group) group.revision = revision
-      return { scope: input, cursor: { epoch, revision }, report }
+      // The original lexical binding survives every wire/router continuation.
+      // Only this operation qualifies its DTO at the actual response write.
+      const qualify = () => ({ scope: input, cursor: { epoch, revision }, report: current(captured.binding, input) ? captured.report : { state: 'revoked' as const } })
+      return Object.freeze({ read: qualify, write(write: (value: ReturnType<typeof qualify>) => void) { write(qualify()) } })
     }
     throw new Error('Instruction state changed during observation')
   }
+  const snapshot = async (input: Scope, refreshRequested = false) => (await snapshotReply(input, refreshRequested)).read()
   const remove = (group: Group, member: Member) => {
     if (!member.active) return; member.active = false; group.members.delete(member); subscriptions.delete(member.id)
     if (!group.members.size) { group.off?.(); if (groups.get(group.key) === group) groups.delete(group.key) }
@@ -107,7 +114,7 @@ export function createInstructionViews(coordinator: SessionCoordinator, service:
     } catch (error) { remove(owner, member); throw error }
     } finally { if (reserved) pending-- }
   }
-  return { read, refresh, snapshot, subscribe, acknowledge(id: string, write?: () => void) {
+  return { read, refresh, snapshot, snapshotReply, subscribe, acknowledge(id: string, write?: () => void) {
     const value = subscriptions.get(id)
     if (!value) return false
     if (!value.member.active || groups.get(value.group.key) !== value.group || !current(value.group.binding, value.group.scope)) { remove(value.group, value.member); return false }
