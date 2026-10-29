@@ -34,6 +34,7 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
       try {
         if (!available(sessionId)) return deny(result)
         const process = lookupProcessReadContext(options.coordinator!, sessionId)
+        process?.assertPageAdmission()
         if (process && !options.resultReadScopeFor) throw new Error('PROCESS_READ_UNAVAILABLE')
         getter = await options.resultReadScopeFor?.(sessionId)
         process?.assertCurrent()

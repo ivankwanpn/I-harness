@@ -8,6 +8,7 @@ import type { ResultDependency } from '@i-harness/core-session'
 import { acquireAssemblyResultStore, acquireResultReadStore } from '../src/lifecycle/result-store.ts'
 import { readManagedResultPage } from '@i-harness/context-output'
 import { createResultPageReader } from '../src/service/result-reader.ts'
+import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
 import { createSessionService } from '../src/service.ts'
 
 const trace = vi.hoisted(() => ({ path: '', active: false, reads: [] as { length: number; position: number; bytes: number }[], fullReads: 0, builds: 0, decodes: 0, snapshots: 0, afterRelease: undefined as (() => void) | undefined, afterRead: undefined as ((path: string) => Promise<void>) | undefined }))
@@ -76,6 +77,17 @@ it('reads a genuine catalog member repeatedly in an original cold process scope 
     expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
     expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     console.log(JSON.stringify({ control: 'standalone-process-cost', pages: 3, historyBytes, witnessBytePasses: 2, journalDecodes: trace.decodes, visibilityBuilds: trace.builds, profileReads: trace.reads.filter(read => read.length === 65536).length, profileBytes: trace.reads.filter(read => read.length === 65536).reduce((sum, read) => sum + read.bytes, 0), fullReadFileCalls: trace.fullReads, catalogAndPinIO: 'actual, not counted by this probe' }))
+    let publishBodies = 0
+    trace.reads = []; trace.active = true
+    trace.afterRead = async path => { if (path.endsWith('body')) publishBodies++ }
+    try {
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'cached', async (value, o) => {
+        o.assertCurrent(); expect(lookupProcessReadContext(coordinator, 's')!.containsVisibleResult(catalog.ref)).toBe(true)
+        expect(await service.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return value
+      })).rejects.toThrow()
+      expect(publishBodies).toBe(0)
+      expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
+    } finally { trace.afterRead = undefined; trace.active = false }
     const foreignCoordinator = createJsonlSessionCoordinator(sessionRoot, { lock: { enabled: true } })
     const a = await acquireResultReadStore({ ...options, readCallerAvailable: () => true }, getter)
     const b = await acquireResultReadStore({ ...options, coordinator: foreignCoordinator, readCallerAvailable: () => true }, () => ({ revision: 'foreign', scope: { id: 'foreign', roots: [root] } }))
@@ -161,9 +173,16 @@ it('reads a genuine catalog member repeatedly in an original cold process scope 
     expect(trace.builds).toBe(1); expect(trace.decodes).toBe(0); expect(trace.snapshots).toBe(0)
     expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1)).toHaveLength(0)
     await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async o => {
+      await o.check()
       expect((await managed.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed')
-      expect((await o.check()).kind).toBe('suffix')
-      expect(await service.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ frames: [{ data: 'eA==' }] }); return 'managed-suffix'
-    }, async (value, o) => { o.assertCurrent(); return value })
+      return 'managed-suffix'
+    }, async (value, o, last) => { expect(last.kind).toBe('suffix'); o.assertCurrent(); expect(lookupProcessReadContext(coordinator, 's')!.containsVisibleResult(catalog.ref)).toBe(true); return value })
+    publishBodies = 0; trace.afterRead = async path => { if (path.endsWith('body')) publishBodies++ }
+    try {
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'cached', async value => {
+        expect(await service.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return value
+      })).rejects.toThrow()
+      expect(publishBodies).toBe(0)
+    } finally { trace.afterRead = undefined }
   } finally { trace.active = false; await service.close(); await producer.release(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

@@ -24,6 +24,7 @@ export function createProcessAwareResultService(policy: Policy) {
   const context = (id: string) => {
     const page = pages.getStore(), coordinator = page?.coordinator ?? policy.coordinatorFor(id)
     const process = lookupProcessReadContext(coordinator!, id)
+    process?.assertPageAdmission()
     if (process && (!page || page.id !== id || !page.available())) { failScope(id); throw new Error('PROCESS_READ_UNAVAILABLE') }
     return process
   }
@@ -45,10 +46,14 @@ export function createProcessAwareResultService(policy: Policy) {
       try { if (context(access.sessionId)) { failScope(access.sessionId); throw new Error('PROCESS_READ_UNAVAILABLE') }; return await policy.authorize!(access, ref) } catch { return false }
     }),
   })
-  if (policy.guardedRead) {
+  {
     const read = service.readResult.bind(service), exec = service.readExecResult.bind(service)
-    service.readResult = (access, query) => policy.guardedRead!(access.sessionId, () => read(access, query))
-    service.readExecResult = (access, query) => policy.guardedRead!(access.sessionId, () => exec(access, query))
+    const admitted = <T>(id: string, run: () => Promise<T>) => {
+      context(id)?.assertPageAdmission()
+      return policy.guardedRead ? policy.guardedRead(id, run) : run()
+    }
+    service.readResult = (access, query) => admitted(access.sessionId, () => read(access, query))
+    service.readExecResult = (access, query) => admitted(access.sessionId, () => exec(access, query))
   }
   const readResult = Object.getOwnPropertyDescriptor(service, 'readResult'), readExecResult = Object.getOwnPropertyDescriptor(service, 'readExecResult')
   const assertMethods = () => {
@@ -61,11 +66,11 @@ export function createProcessAwareResultService(policy: Policy) {
     if (this !== bridge || retired || !available()) throw new Error('PROCESS_READ_UNAVAILABLE')
     const process = lookupProcessReadContext(coordinator, id)
     if (!process) return run()
-    try { assertMethods(); process.assertCurrent() } catch (error) { failScope(id); throw error }
+    try { assertMethods(); process.assertPageAdmission() } catch (error) { failScope(id); throw error }
     return pages.run({ coordinator, id, available }, async () => {
       try {
         const result = await run(); if (retired || !available()) throw new Error('PROCESS_READ_UNAVAILABLE')
-        assertMethods(); process.assertCurrent(); return result
+        assertMethods(); process.assertPageAdmission(); return result
       } catch (error) { failScope(id); throw error }
     })
   } })

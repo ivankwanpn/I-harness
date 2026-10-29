@@ -9,7 +9,8 @@ export interface ProcessReadOptions { readonly documentKeys: readonly string[] }
 export interface ProcessReadInitial { readonly session: SessionView; readonly highWater: number; readonly documents: ReadonlyMap<string, ObservedDocument> }
 export type ProcessReadUpdate = { readonly kind: 'unchanged'; readonly highWater: number } | { readonly kind: 'suffix'; readonly from: number; readonly to: number; readonly events: readonly SessionEventView[] }
 export interface ProcessReadObservation { readonly initial: ProcessReadInitial; check(): Promise<ProcessReadUpdate>; assertCurrent(): void }
-export type ProcessReadScopeRunner = <T>(observation: ProcessReadObservation, visibility: ReturnType<typeof createProcessReadVisibility>, run: () => Promise<T>) => Promise<T>
+export interface ProcessReadScopeControl { assertExit(): void; assertPageAdmission(): void }
+export type ProcessReadScopeRunner = <T>(observation: ProcessReadObservation, visibility: ReturnType<typeof createProcessReadVisibility>, run: () => Promise<T>, control: ProcessReadScopeControl) => Promise<T>
 
 /** Internal lifecycle; the composition owner is solely responsible for run. */
 export function createColdProcessReadOwner(storage: ProcessReadStorage, latches: ReturnType<typeof createProcessReadLatches>) {
@@ -40,14 +41,18 @@ export function createColdProcessReadOwner(storage: ProcessReadStorage, latches:
         },
         assertCurrent() { if (this !== observation) { state = 'failed'; throw new TypeError('Invalid observation receiver') }; assertCurrent() },
       })
+      const control: ProcessReadScopeControl = Object.freeze({
+        assertExit() { assertCurrent(); if (checking) { state = 'failed'; throw new Error('PROCESS_READ_UNAVAILABLE') } },
+        assertPageAdmission() { if (state !== 'active' || checking) { state = 'failed'; throw new Error('PROCESS_READ_UNAVAILABLE') }; assertCurrent() },
+      })
       state = 'active'
-      const candidate = await scope(observation, visibility, () => work(observation))
+      const candidate = await scope(observation, visibility, () => work(observation), control)
       assertCurrent(); if (checking) throw new Error('PROCESS_READ_UNAVAILABLE')
       state = 'finishing'; await raw.finish()
       if (state !== 'finishing') throw new Error('PROCESS_READ_UNAVAILABLE')
       latch.assertCurrent(); latch.markVerified(); state = 'verified'
       const last: ProcessReadUpdate = Object.freeze({ kind: 'unchanged', highWater })
-      const result = await scope(observation, visibility, () => publish(candidate, observation, last))
+      const result = await scope(observation, visibility, () => publish(candidate, observation, last), control)
       assertCurrent()
       return result
     } finally { state = 'retired'; latch.retire() }

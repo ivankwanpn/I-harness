@@ -59,7 +59,7 @@ export interface ManagedReadyObservation {
     assertCurrent(): void;
 }
 type ProcessUpdate = { kind: 'unchanged'; highWater: number } | { kind: 'suffix'; from: number; to: number; events: SessionView['events'] };
-type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertDrained(): void; markVerified(): void; close(): void };
+type ManagedProcessCapture = { readonly initial: SessionView; take(): ProcessUpdate; assertHealthy(): void; assertDrained(): void; markVerified(): void; close(): void };
 const readyOwners = new WeakMap<ManagedDocument, { ownership: Ownership; capture(): ManagedReadyObservation; captureParent(): Readonly<{ view: SessionView; assertCurrent(): void }>; captureProcess(documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture }>();
 export function captureManagedProcessRead(document: ManagedDocument, ownership: Ownership, documentKeys: readonly string[], checkEntry: () => void): ManagedProcessCapture {
     const original = readyOwners.get(document);
@@ -572,6 +572,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         try { check(); } catch (error) { latch.retire(); throw error; }
         const initial: SessionView = Object.freeze({ ...view, events: Object.freeze([...events]) });
         const result: ManagedProcessCapture = Object.freeze({ initial,
+            assertHealthy() { if (this !== result) { failed = true; throw new TypeError('Invalid process capture receiver'); } check(); },
             take() {
                 if (this !== result) throw new TypeError('Invalid process capture receiver');
                 check();

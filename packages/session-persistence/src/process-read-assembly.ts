@@ -3,12 +3,12 @@ import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
 import { createSessionCoordinatorCore } from './coordinator-factory.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { ManagedArtifactRef } from '@i-harness/core-session'
-import { createColdProcessReadOwner, type ProcessReadObservation, type ProcessReadOptions, type ProcessReadScopeRunner, type ProcessReadUpdate } from './coordinator/process-read-owner.ts'
+import { createColdProcessReadOwner, type ProcessReadObservation, type ProcessReadOptions, type ProcessReadScopeRunner, type ProcessReadUpdate, type ProcessReadScopeControl } from './coordinator/process-read-owner.ts'
 import { createManagedProcessReadOwner } from './coordinator/process-read-managed-owner.ts'
 import type { createProcessReadVisibility } from './coordinator/process-read-visibility.ts'
 import type { SessionCoordinator } from './coordinator/types.ts'
 
-type Scope = { coordinator: SessionCoordinator; id: string; observation: ProcessReadObservation; visibility: ReturnType<typeof createProcessReadVisibility>; assertOriginal(): void; failed: boolean }
+type Scope = { coordinator: SessionCoordinator; id: string; observation: ProcessReadObservation; visibility: ReturnType<typeof createProcessReadVisibility>; control: ProcessReadScopeControl; assertOriginal(): void; failed: boolean }
 const active = new AsyncLocalStorage<Scope>()
 /** Checked lookup only; no caller can install a view or predicate. */
 export function lookupProcessReadContext(coordinator: SessionCoordinator, id: string) {
@@ -22,6 +22,10 @@ export function lookupProcessReadContext(coordinator: SessionCoordinator, id: st
   }
   check()
   const predicate = Object.freeze({
+    assertPageAdmission() {
+      try { if (this !== predicate) throw new TypeError('Invalid process context receiver'); check(); scope.control.assertPageAdmission() }
+      catch (error) { scope.failed = true; throw error }
+    },
     assertCurrent() { if (this !== predicate) { scope.failed = true; throw new TypeError('Invalid process context receiver') }; check() },
     containsVisibleResult(ref: ManagedArtifactRef) { if (this !== predicate) { scope.failed = true; throw new TypeError('Invalid process context receiver') }; check(); return scope.visibility.contains(ref) },
   })
@@ -48,12 +52,12 @@ export function assembleSessionCoordinatorWithProcessStorage(backend: Persistenc
         if (!descriptor || !('value' in descriptor) || !('value' in expected) || descriptor.value !== expected.value) throw new Error('PROCESS_READ_UNAVAILABLE')
       }
     }
-    const within: ProcessReadScopeRunner = (observation, visibility, run) => {
+    const within: ProcessReadScopeRunner = (observation, visibility, run, control) => {
       let scope = scopes.get(observation)
-      if (!scope) { scope = { coordinator, id, observation, visibility, assertOriginal, failed: false }; scopes.set(observation, scope) }
+      if (!scope) { scope = { coordinator, id, observation, visibility, control, assertOriginal, failed: false }; scopes.set(observation, scope) }
       const current = scope
       return active.run(current, async () => {
-        try { const result = await run(); if (current.failed) throw new Error('PROCESS_READ_UNAVAILABLE'); current.assertOriginal(); observation.assertCurrent(); return result }
+        try { const result = await run(); if (current.failed) throw new Error('PROCESS_READ_UNAVAILABLE'); current.assertOriginal(); current.control.assertExit(); return result }
         catch (error) { current.failed = true; throw error }
       })
     }

@@ -7,6 +7,7 @@ import { createJsonlSessionCoordinator } from '@i-harness/session-persistence-js
 import { createSessionService } from '@i-harness/session-executor'
 import type { ResultDependency } from '@i-harness/core-session'
 import { createNativeContextRuntime } from '../src/context-runtime.ts'
+import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
 
 const trace = vi.hoisted(() => ({ path: '', active: false, reads: [] as { length: number; position: number; bytes: number }[], fullReads: 0, builds: 0, decodes: 0, snapshots: 0, afterRead: undefined as ((path: string) => Promise<void>) | undefined }))
 vi.mock('../../session-persistence/src/coordinator-factory.ts', async original => {
@@ -63,6 +64,17 @@ it('reads real catalog members through the injected native service without visib
     expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
     expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     console.log(JSON.stringify({ control: 'native-process-cost', pages: 3, historyBytes, witnessBytePasses: 2, journalDecodes: trace.decodes, visibilityBuilds: trace.builds, profileReads: trace.reads.filter(read => read.length === 65536).length, profileBytes: trace.reads.filter(read => read.length === 65536).reduce((sum, read) => sum + read.bytes, 0), fullReadFileCalls: trace.fullReads, visibleRefsCalls: visibleRefsFor.mock.calls.length, catalogAndPinIO: 'actual, not counted by this probe' }))
+    let publishBodies = 0
+    trace.reads = []; trace.active = true
+    trace.afterRead = async path => { if (path.endsWith('body')) publishBodies++ }
+    try {
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => 'cached', async (value, o) => {
+        o.assertCurrent(); expect(lookupProcessReadContext(coordinator, 's')!.containsVisibleResult(catalog.ref)).toBe(true)
+        expect(await reader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return value
+      })).rejects.toThrow()
+      expect(publishBodies).toBe(0)
+      expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
+    } finally { trace.afterRead = undefined; trace.active = false }
     const foreign = { ...member.ref, id: `ctxv1_${'f'.repeat(64)}` }
     await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
       expect(await reader.readResultPage!('s', { ref: foreign, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'discard'

@@ -104,3 +104,20 @@ it('uses the original ready managed owner and delivers its contiguous suffix', a
         expect(result).toBe('candidate');
     } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
 });
+
+it('delivers the unique final managed suffix committed during the last work await', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ih-final-suffix-')), coordinator = createJsonlSessionCoordinator(root, { lock: { enabled: true } });
+    try {
+        await coordinator.create({ sessionId: 's' }); const document = await coordinator.openManagedDocument('s');
+        let publications = 0;
+        expect(await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async o => {
+            await o.check();
+            expect((await document.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed');
+            return 'candidate';
+        }, async (value, o, last) => {
+            publications++; expect(last).toMatchObject({ kind: 'suffix', from: 0, to: 1, events: [{ type: 'plan/mode' }] });
+            o.assertCurrent(); return value;
+        })).toBe('candidate');
+        expect(publications).toBe(1);
+    } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }); }
+});

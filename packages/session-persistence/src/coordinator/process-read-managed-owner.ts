@@ -1,6 +1,6 @@
 import type { createManagedDocuments } from './managed-documents.ts'
 import type { ProcessReadStorage } from './process-read-storage.ts'
-import type { ProcessReadInitial, ProcessReadObservation, ProcessReadOptions, ProcessReadUpdate, ProcessReadScopeRunner } from './process-read-owner.ts'
+import type { ProcessReadInitial, ProcessReadObservation, ProcessReadOptions, ProcessReadUpdate, ProcessReadScopeRunner, ProcessReadScopeControl } from './process-read-owner.ts'
 import { createProcessReadVisibility } from './process-read-visibility.ts'
 
 /** Uses only the original ready entry and the backend's metadata/document witness. */
@@ -26,13 +26,24 @@ export function createManagedProcessReadOwner(storage: ProcessReadStorage, manag
         },
         assertCurrent() { if (this !== observation) { state = 'failed'; throw new TypeError('Invalid observation receiver') }; assertCurrent() },
       })
+      const control: ProcessReadScopeControl = Object.freeze({
+        assertExit() {
+          try {
+            if (checking) throw new Error('PROCESS_READ_UNAVAILABLE')
+            if (state === 'active') capture.assertHealthy()
+            else assertCurrent()
+          } catch (error) { state = 'failed'; throw error }
+        },
+        assertPageAdmission() { if (state !== 'active' || checking) { state = 'failed'; throw new Error('PROCESS_READ_UNAVAILABLE') }; assertCurrent() },
+      })
       state = 'active'
-      const candidate = await scope(observation, visibility, () => work(observation))
+      const candidate = await scope(observation, visibility, () => work(observation), control)
+      control.assertExit()
       if (state !== 'active' || checking) throw new Error('PROCESS_READ_UNAVAILABLE')
       state = 'finishing'; await auxiliary.finish()
       if (state !== 'finishing') throw new Error('PROCESS_READ_UNAVAILABLE')
       const last = take(); capture.markVerified(); state = 'verified'
-      const result = await scope(observation, visibility, () => publish(candidate, observation, last))
+      const result = await scope(observation, visibility, () => publish(candidate, observation, last), control)
       assertCurrent(); return result
     } finally { state = 'retired'; capture.close() }
   } }
