@@ -64,6 +64,7 @@ export function createSavedInstructionPolicy(settingsPath: string, watch: FsWatc
         if (disposed || generation !== revision || watcher?.getState().kind !== 'covered') return
         if (result.kind === 'missing' && present) throw new Error('Saved instruction policy missing')
         state = { kind: 'ready', generation: String(generation), policy: resolveInstructionPolicy(result.kind === 'loaded' ? result.settings.instructions : { enabled: true, maxBytes: 24000 }, dirname(path)) }
+        for (const listener of [...listeners]) { try { listener() } catch { /* Observers do not change saved policy authority. */ } }
       } catch {
         if (!disposed && generation === revision) state = { kind: 'unavailable', generation: String(generation), reason: 'Saved instruction policy unavailable' }
       }

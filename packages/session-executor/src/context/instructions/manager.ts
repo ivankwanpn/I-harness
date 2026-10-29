@@ -7,6 +7,7 @@ import { capturedToolRegistry, instructionReplan, isInstructionReplan, isOrigina
 import type { InstructionEnvironment } from './contracts.ts'
 import { instructionView, type InstructionView } from './views.ts'
 import { classifyInstructionTarget, contained, instructionTargetKey, orderedInstructionTargets } from './targets.ts'
+import type { InstructionPublication, InstructionReport } from './diagnostics.ts'
 
 type Evidence = { view: InstructionView; authority: string; policy: string; snapshot: InstructionSnapshot; selection: number }
 const acceptedOrigins = new WeakMap<AcceptedInstructionCall, { capture: CapturedToolCall; current(): boolean; retainCell?(cellId: string): InstructionCellLease }> ()
@@ -37,6 +38,12 @@ export function createMainInstructionManager(options: { session?: SessionView; e
   const cleanupDebt = new Set<InstructionView>()
   const outstanding = new Set<{ requested: boolean; release(): Promise<void> }>()
   let closed = false, text = '', key: string | undefined, active: InstructionView | undefined, token: InstructionRequestEvidence | undefined
+  let published: InstructionPublication | undefined, publishedAuthority: string | undefined, diagnosticStale = false, reconciling = 0, unsubscribeView: (() => void) | undefined
+  const diagnosticListeners = new Set<() => void>()
+  let notificationPending = false
+  const changed = () => { if (notificationPending) return; notificationPending = true; queueMicrotask(() => { notificationPending = false; for (const listener of [...diagnosticListeners]) try { listener() } catch { /* Diagnostics do not change source authority. */ } }) }
+  const invalidateDiagnostics = () => { diagnosticStale = true; changed() }
+  const unsubscribePolicy = options.environment.policy.subscribe(invalidateDiagnostics)
   let selection = 0, pending: Map<string, InstructionTarget> | undefined, consumed = new Map<string, InstructionTarget>(), mappingUnavailable = false
   const retire = async (view: InstructionView) => {
     try { await view.retire(); cleanupDebt.delete(view); if (view.finished) views.delete(view) }
@@ -48,7 +55,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
     if (state.kind === 'revoked' || state.kind === 'unavailable') throw unavailable()
     const roots = state.kind === 'bound' ? state.roots : [state.workspaceRoot]
     if (!roots.some(root => contained(root, options.cwd))) throw unavailable()
-    return { roots, identity: JSON.stringify([state.revision, roots]) }
+    return { roots, revision: state.revision, identity: JSON.stringify([state.revision, roots]) }
   }
   const current = (candidate: InstructionRequestEvidence | undefined) => {
     if (!candidate || closed || cleanupDebt.size) return false
@@ -61,8 +68,21 @@ export function createMainInstructionManager(options: { session?: SessionView; e
         && JSON.stringify(now.candidates) === JSON.stringify(evidence.snapshot.candidates) && JSON.stringify(now.applicable) === JSON.stringify(evidence.snapshot.applicable)
     } catch { return false }
   }
+  const readDiagnostic = (): InstructionReport => {
+    if (closed) return Object.freeze({ state: 'revoked' as const })
+    try { if (publishedAuthority && authority().identity !== publishedAuthority) return Object.freeze({ state: 'revoked' as const }); if (!publishedAuthority) authority() } catch { return Object.freeze({ state: 'revoked' as const }) }
+    let policy: ReturnType<InstructionEnvironment['policy']['current']>
+    try { policy = options.environment.policy.current() } catch { return Object.freeze({ state: 'unavailable' as const, ...(published ? { publication: published } : {}) }) }
+    const effectivePolicy = policy.kind === 'ready' ? Object.freeze({ generation: policy.generation, enabled: policy.policy.enabled, maxBytes: policy.policy.maxBytes }) : undefined
+    if (!published) return Object.freeze({ state: policy.kind !== 'ready' ? 'unavailable' as const : reconciling ? 'pending' as const : 'not-published' as const, ...(effectivePolicy ? { effectivePolicy } : {}) })
+    let state: InstructionReport['state'] = reconciling ? 'pending' : diagnosticStale || !current(token) ? 'stale' : 'ready'
+    try { if (policy.kind !== 'ready' || active && active.service.snapshot().reliability === 'unavailable') state = 'unavailable' } catch { state = 'unavailable' }
+    return Object.freeze({ state, publication: published, ...(effectivePolicy ? { effectivePolicy } : {}) })
+  }
   const context: SessionRequestContext = {
     async reconcile(signal) {
+      reconciling++; changed()
+      try {
       signal?.throwIfAborted()
       for (const view of cleanupDebt) await retire(view)
       await options.environment.policy.ready()
@@ -90,6 +110,13 @@ export function createMainInstructionManager(options: { session?: SessionView; e
         active = view; key = nextKey
         token = Object.freeze({ kind: 'instruction-request', version: 1 })
         tokens.set(token, { view, authority: scope.identity, policy: policy.generation, snapshot, selection: capturedSelection })
+        published = Object.freeze({ fingerprint: snapshot.fingerprint, sourceRevision: snapshot.revision, policyGeneration: policy.generation, authorityRevision: scope.revision,
+          enabled: policy.policy.enabled, maxBytes: policy.policy.maxBytes, bytes: snapshot.bytes,
+          scope: Object.freeze({ cwd: options.cwd, roots: Object.freeze([...scope.roots]) }),
+          sources: Object.freeze(snapshot.sources.map(source => Object.freeze({ ...source }))) })
+        publishedAuthority = scope.identity
+        if (previous !== view) { unsubscribeView?.(); unsubscribeView = view.service.subscribe(invalidateDiagnostics) }
+        diagnosticStale = false; changed()
         if (previous && previous !== view) await retire(previous)
         for (const retained of views) if (retained.finished) views.delete(retained)
       } catch (error) {
@@ -97,6 +124,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
         catch (saving) { throw new AggregateError([error, saving], 'Instruction preparation and original cleanup failed', { cause: error }) }
         throw error
       }
+      } finally { reconciling--; changed() }
     },
     capture: () => token && tokens.get(token)?.selection === selection && !cleanupDebt.size ? token : undefined,
     current,
@@ -261,28 +289,34 @@ export function createMainInstructionManager(options: { session?: SessionView; e
       })
       return batch
     },
-    promotedHumanRequest() { if (pending || consumed.size || mappingUnavailable) { pending = undefined; consumed = new Map(); mappingUnavailable = false; selection++ } },
+    promotedHumanRequest() { if (pending || consumed.size || mappingUnavailable) { pending = undefined; consumed = new Map(); mappingUnavailable = false; selection++; invalidateDiagnostics() } },
     async close() {
       closed = true
+      unsubscribePolicy(); unsubscribeView?.(); unsubscribeView = undefined; changed()
       const releases = await Promise.allSettled([...outstanding].filter(owner => owner.requested).map(owner => owner.release()))
       const results = await Promise.allSettled([...views].map(async view => { await view.close(); views.delete(view); cleanupDebt.delete(view) }))
       const failures = [...releases, ...results].flatMap(result => result.status === 'rejected' ? [result.reason] : [])
       if (failures.length) throw new AggregateError(failures, 'Instruction manager cleanup incomplete')
     },
   }
-  return Object.assign(context, { text: () => text, async observe(target: InstructionTarget) {
+  return Object.assign(context, { text: () => text, diagnostics: Object.freeze({
+    read: readDiagnostic,
+    subscribe(listener: () => void) { if (closed) return () => {}; diagnosticListeners.add(listener); return () => { diagnosticListeners.delete(listener) } },
+    invalidate: invalidateDiagnostics,
+    async refresh(signal?: AbortSignal): Promise<InstructionReport> { if (closed || reconciling || !active) return readDiagnostic(); active.service.invalidate(); await context.reconcile(signal); return readDiagnostic() },
+  }), async observe(target: InstructionTarget) {
     let scope: ReturnType<typeof authority>
-    try { scope = authority() } catch { mappingUnavailable = true; return { status: 'unavailable' as const, reason: 'mapping-unavailable' as const } }
+    try { scope = authority() } catch { mappingUnavailable = true; invalidateDiagnostics(); return { status: 'unavailable' as const, reason: 'mapping-unavailable' as const } }
     const captured = scope.identity, classified = await classifyInstructionTarget(target, scope.roots)
     if (classified.status === 'reference-only') return classified
     let stillAuthorized = false
     try { stillAuthorized = authority().identity === captured } catch { /* Preserve mapping uncertainty after revocation. */ }
-    if (classified.status === 'unavailable' || !stillAuthorized) { mappingUnavailable = true; selection++; return { status: 'unavailable' as const, reason: 'mapping-unavailable' as const } }
+    if (classified.status === 'unavailable' || !stillAuthorized) { mappingUnavailable = true; selection++; invalidateDiagnostics(); return { status: 'unavailable' as const, reason: 'mapping-unavailable' as const } }
     const path = resolve(target.path)
     const id = instructionTargetKey(target)
     if (!pending && consumed.has(id)) return classified
     if (!pending) { pending = new Map(); selection++ }
-    if (!pending.has(id)) { pending.set(id, consumed.get(id) ?? Object.freeze({ path, kind: target.kind })); selection++ }
+    if (!pending.has(id)) { pending.set(id, consumed.get(id) ?? Object.freeze({ path, kind: target.kind })); selection++; invalidateDiagnostics() }
     return classified
   } })
 }

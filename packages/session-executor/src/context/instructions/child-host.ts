@@ -97,7 +97,12 @@ export function createChildInstructionHost(options: {
     }).then(deferred.resolve, deferred.reject)
     return deferred.promise
   }
-  return { create, observe(target: InstructionTarget, exec: ToolExec): Promise<InstructionReadScope> {
+  return { create, diagnosticsFor(session: SessionView, factOwner: FactOwner) {
+    if (!available() || factOwner.view !== session) return undefined
+    if (session === rootSession) return factOwner === rootOwner ? rootManager.diagnostics : undefined
+    const slot = slots.get(session)
+    return slot && slot.factOwner === factOwner ? slot.diagnostics() : undefined
+  }, observe(target: InstructionTarget, exec: ToolExec): Promise<InstructionReadScope> {
     if (!available()) return Promise.resolve({ status: 'unavailable', reason: 'mapping-unavailable' })
     const session = exec.session
     if (!session) return Promise.resolve({ status: 'reference-only', reason: 'outside-root' })

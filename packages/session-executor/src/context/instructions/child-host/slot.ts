@@ -69,7 +69,8 @@ export class InstructionSlot {
   private live(): boolean {
     return !this.retired && this.owner.available() && this.owner.invoke(this.lifetimeAvailable) && !this.retired && this.owner.available()
   }
-  retire(): void { this.retired = true }
+  retire(): void { if (this.retired) return; this.retired = true; this.manager?.diagnostics.invalidate() }
+  diagnostics() { return this.available() ? this.manager?.diagnostics : undefined }
   get clean(): boolean { return !this.constructing && (!this.runtime || this.runtimeClosed) && (!this.manager || this.managerClosed) }
 
   retryConstructionCleanup(): void {

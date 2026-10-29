@@ -117,3 +117,12 @@ it('a rejected first coverage promise can later recover with unchanged bytes', a
     expect(policy.current()).toMatchObject({ kind: 'ready', policy: { enabled: true } })
   } finally { await policy.close(); rmWorkspaceSync(root) }
 })
+
+it('notifies original policy subscribers when covered reload becomes ready', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-policy-notify-')), path = join(root, 'settings.json')
+  await writeFile(path, '{}')
+  const watch = createFsWatchService(), policy = createSavedInstructionPolicy(path, watch), states: string[] = []
+  const unsubscribe = policy.subscribe(() => states.push(policy.current().kind))
+  try { await policy.ready(); expect(policy.current().kind).toBe('ready'); expect(states).toContain('ready') }
+  finally { unsubscribe(); await policy.close(); await watch.close(); rmWorkspaceSync(root) }
+})
