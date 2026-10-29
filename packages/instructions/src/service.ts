@@ -3,6 +3,7 @@ import { discover, frozen, key, overlaps, paths, planDiscovery, record, resolveB
 import { applicableFingerprint, buildSnapshot, candidateFingerprint, emptySnapshot, reliability, type CachedRead } from './snapshot.ts'
 import { basename, dirname } from 'node:path'
 import { inside } from './discovery.ts'
+import { createPendingEpochs } from './pending-epochs.ts'
 
 // Capture capabilities without evaluating accessors or freezing their owner.
 function method<T extends (...args: any[]) => any>(owner: unknown, name: string): T {
@@ -23,7 +24,9 @@ function observationData(value: unknown): InstructionObservationState {
   if (!Number.isSafeInteger(r.revision) || (r.revision as number) < 0 || typeof r.available !== 'boolean' || !Array.isArray(r.pending)) throw new InstructionConfigurationError('Invalid observation state')
   const seen = new Set<string>()
   const pending = r.pending.map(value => { const p = record(value); if (typeof p.id !== 'string' || !p.id || seen.has(p.id)) throw new InstructionConfigurationError('Invalid pending ID'); seen.add(p.id); return { id: p.id, paths: paths(p.paths) } }).sort((a, b) => a.id.localeCompare(b.id))
-  return frozen({ revision: r.revision as number, available: r.available, pending })
+  const mappingPaths = r.mappingPaths === undefined ? undefined : paths(r.mappingPaths)
+  if (mappingPaths && !mappingPaths.length) throw new InstructionConfigurationError('Invalid mapping scope')
+  return frozen({ revision: r.revision as number, available: r.available, pending, ...(mappingPaths ? { mappingPaths } : {}) })
 }
 const closedError = () => Object.assign(new Error('Instruction service closed'), { code: 'INSTRUCTIONS_CLOSED' })
 
@@ -41,14 +44,15 @@ export function createInstructionService(options: InstructionServiceOptions): In
   let plan: DiscoveryPlan = planDiscovery(scope, [])
   let boundaryAliases: readonly BoundaryAlias[] = []
   let lastDiscovery: Discovery | undefined, healthEpoch = 0
-  const externalEpoch = new Map<string, number>(), markerEpoch = new Map<string, number>(), pendingEpoch = new Map<string, Map<string, number>>()
-  type Witness = { discovery: Discovery; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, Map<string, number>>; health: number }
-  type ProofData = { slots: string[]; baseline: Map<string, string>; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, Map<string, number>>; health: number; active: boolean }
+  const externalEpoch = new Map<string, number>(), markerEpoch = new Map<string, number>(), pendingEpoch = createPendingEpochs()
+  type Witness = { discovery: Discovery; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, number>; health: number }
+  type ProofData = { slots: string[]; membership: Map<string, string>; baseline: Map<string, string>; external: Map<string, number>; markers: Map<string, number>; pending: Map<string, number>; health: number; active: boolean }
   type OwnData = { proof: ApplicableInstructionProof; id: string; settle: () => void; candidatePaths: string[]; active: boolean }
   const witnesses = new WeakMap<InstructionSnapshot, Witness>(), proofs = new WeakMap<ApplicableInstructionProof, ProofData>(), writes = new WeakMap<OwnedInstructionWrite, OwnData>()
-  const copyPending = () => new Map([...pendingEpoch].map(([id, values]) => [id, new Map(values)]))
+  const copyPending = () => pendingEpoch.snapshot()
   const candidateData = (c: InstructionSnapshot['candidates'][number]) => { const { fingerprint: _f, reliability: _r, pendingIds: _p, ...rest } = c; return JSON.stringify(rest) }
   const targetKey = (t: InstructionTarget) => `${t.kind}:${key(t.path)}`
+  const exactProjection = (t: Discovery['targets'][number]) => t.membership && JSON.stringify([t.membership, t.slotIds])
   const projection = (t: Discovery['targets'][number]) => t.membership && JSON.stringify({ root: key(t.membership.root), selectedRoot: key(t.membership.selectedRoot), directory: key(t.target.kind === 'file' ? dirname(t.membership.target) : t.membership.target), boundary: key(t.membership.boundary), markers: t.membership.markers.map(m => [key(m.path), key(m.canonicalPath), m.state]), globals: t.membership.globals.map(key) })
 
   function publish(next: InstructionSnapshot, reconcile = false, discovery?: Discovery) {
@@ -93,10 +97,7 @@ export function createInstructionService(options: InstructionServiceOptions): In
     }
   }
   function notePending(id: string, changed: readonly string[]) {
-    for (const slot of affectedIds(withBoundaryAliases(changed))) {
-      let values = pendingEpoch.get(slot); if (!values) { values = new Map(); pendingEpoch.set(slot, values) }
-      values.set(id, (values.get(id) ?? 0) + 1)
-    }
+    pendingEpoch.record(id, affectedIds(withBoundaryAliases(changed)), state.pending.some(p => p.id === id))
   }
   function mark(changed?: readonly string[], reconcile = false) {
     if (closed || disabled) return
@@ -147,8 +148,9 @@ export function createInstructionService(options: InstructionServiceOptions): In
         if (event.paths.length) noteExternal(event.paths)
         else { healthEpoch++; noteExternal() }
       }
-      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available) { healthEpoch++; noteExternal() }
-      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available) { interestsChanged = true; mark(undefined, true) }
+      const scoped = !!event.mappingPaths && event.kind !== 'reset' && event.kind !== 'availability'
+      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available && !scoped) { healthEpoch++; noteExternal() }
+      if (event.kind === 'reset' || event.kind === 'availability' || before.available !== state.available && !scoped) { interestsChanged = true; mark(undefined, true) }
       else {
         if (!state.available) interestsChanged = true
         mark([...event.paths, ...pendingChanges], true)
@@ -239,19 +241,22 @@ export function createInstructionService(options: InstructionServiceOptions): In
         if (issued !== current) throw new Error('Foreign instruction evidence')
         values.forEach(targetData)
         const proof: ApplicableInstructionProof = Object.freeze({ kind: 'applicable-instruction-proof' })
-        proofs.set(proof, { slots: [], baseline: new Map(), external: new Map(), markers: new Map(), pending: new Map(), health: healthEpoch, active: true })
+        proofs.set(proof, { slots: [], membership: new Map(), baseline: new Map(), external: new Map(), markers: new Map(), pending: new Map(), health: healthEpoch, active: true })
         return proof
       }
       const prior = witnesses.get(issued), now = witnesses.get(current)
       if (!prior || !now) throw new Error('Instruction evidence unavailable')
       const priorCandidates = new Map(issued.candidates.map(c => [c.slotId, c])), present = new Map(current.candidates.map(c => [c.slotId, c]))
-      const slotSet = new Set<string>(), markers = new Set<string>()
+      const slotSet = new Set<string>(), markers = new Set<string>(), membership = new Map<string, string>()
       for (const value of values) {
         const target = targetData(value), actual = now.discovery.targets.find(t => targetKey(t.target) === targetKey(target))
         const applicable = current.applicable.find(a => targetKey(a.target) === targetKey(target))
         if (!actual || !actual.complete || !applicable?.complete || !projection(actual)) throw new Error('Target resolver evidence unavailable')
+        const originalTarget = prior.discovery.targets.find(t => targetKey(t.target) === targetKey(target))
+        if (originalTarget && (!originalTarget.complete || exactProjection(originalTarget) !== exactProjection(actual))) throw new Error('Issued target membership changed')
         const compatible = prior.discovery.targets.find(t => t.complete && issued.applicable.some(a => targetKey(a.target) === targetKey(t.target) && a.complete) && projection(t) === projection(actual) && actual.slotIds.every(id => t.slotIds.includes(id)))
         if (!compatible) throw new Error('Target instruction evidence not issued')
+        membership.set(targetKey(target), exactProjection(actual)!)
         for (const id of actual.slotIds) {
           const a = priorCandidates.get(id), b = present.get(id)
           if (!a || !b || candidateData(a) !== candidateData(b)) throw new Error('Instruction dependency changed')
@@ -260,20 +265,24 @@ export function createInstructionService(options: InstructionServiceOptions): In
         for (const marker of actual.membership!.markers) markers.add(key(marker.path))
       }
       const proof: ApplicableInstructionProof = Object.freeze({ kind: 'applicable-instruction-proof' })
-      proofs.set(proof, { slots: [...slotSet], baseline: new Map([...slotSet].map(id => [id, candidateData(priorCandidates.get(id)!)])), external: prior.external, markers: new Map([...markers].map(id => [id, prior.markers.get(id) ?? 0])), pending: prior.pending, health: prior.health, active: true })
+      proofs.set(proof, { slots: [...slotSet], membership, baseline: new Map([...slotSet].map(id => [id, candidateData(priorCandidates.get(id)!)])), external: prior.external, markers: new Map([...markers].map(id => [id, prior.markers.get(id) ?? 0])), pending: prior.pending, health: prior.health, active: true })
       service.assertApplicable(proof)
       return proof
     },
     assertApplicable(proof, own) {
       const data = proof && proofs.get(proof), owned = own && writes.get(own)
-      if (!data || !data.active || closed || data.health !== healthEpoch || !healthy || !state.available || own && (!owned || !owned.active || owned.proof !== proof)) throw new Error('Instruction proof revoked')
+      if (!data || !data.active || closed || data.health !== healthEpoch || !healthy || !state.available && !state.mappingPaths || own && (!owned || !owned.active || owned.proof !== proof)) throw new Error('Instruction proof revoked')
+      if (!state.available && state.mappingPaths && [...affectedIds(withBoundaryAliases(state.mappingPaths))].some(id => data.slots.includes(id))) throw new Error('Instruction mapping unavailable')
       for (const [id, epoch] of data.markers) if ((markerEpoch.get(id) ?? 0) !== epoch) throw new Error('Instruction membership changed')
+      for (const [id, projection] of data.membership) {
+        const target = lastDiscovery?.targets.find(t => targetKey(t.target) === id)
+        if (!target?.complete || exactProjection(target) !== projection) throw new Error('Instruction target membership changed')
+      }
       const candidates = new Map(current.candidates.map(c => [c.slotId, c]))
       for (const id of data.slots) {
         const c = candidates.get(id)
         if (!c || candidateData(c) !== data.baseline.get(id) || (externalEpoch.get(id) ?? 0) !== (data.external.get(id) ?? 0)) throw new Error('Instruction dependency changed')
-        const oldPending = data.pending.get(id) ?? new Map<string, number>(), livePending = pendingEpoch.get(id) ?? new Map<string, number>()
-        for (const pendingId of new Set([...oldPending.keys(), ...livePending.keys()])) if (pendingId !== owned?.id && (oldPending.get(pendingId) ?? 0) !== (livePending.get(pendingId) ?? 0)) throw new Error('Instruction pending write changed')
+        if (!pendingEpoch.matches(id, data.pending, owned?.id)) throw new Error('Instruction pending write changed')
         if (c.pendingIds.some(id => id !== owned?.id) || c.reliability !== 'ready' && (!owned || !c.pendingIds.includes(owned.id))) throw new Error('Instruction dependency unavailable')
       }
     },

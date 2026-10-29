@@ -11,7 +11,7 @@ export interface InstructionApplicableDependencies { readonly target: Instructio
 export interface InstructionSnapshot { readonly revision: number; readonly fingerprint: string; readonly text: string; readonly bytes: number; readonly sources: readonly InstructionSourceStatus[]; readonly candidates: readonly InstructionCandidateDependency[]; readonly applicable: readonly InstructionApplicableDependencies[]; readonly reliability: SourceReliability; readonly complete: boolean }
 export interface InstructionWatchInterest { readonly directory: string; readonly candidates: readonly string[] }
 export interface InstructionPendingWrite { readonly id: string; readonly paths: readonly string[] }
-export interface InstructionObservationState { readonly revision: number; readonly available: boolean; readonly pending: readonly InstructionPendingWrite[] }
+export interface InstructionObservationState { readonly revision: number; readonly available: boolean; readonly pending: readonly InstructionPendingWrite[]; /** Known candidate-only mapping invalidation; absent for backend health/reset uncertainty. */ readonly mappingPaths?: readonly string[] }
 export interface InstructionObservationEvent extends InstructionObservationState { readonly kind: 'changed' | 'reset' | 'availability' | 'pending'; readonly paths: readonly string[] }
 export interface InstructionObservationLease { update(interests: readonly InstructionWatchInterest[]): Promise<InstructionObservationState>; close(): Promise<void> }
 export interface InstructionObservationPort { subscribe(listener: (event: InstructionObservationEvent) => void): InstructionObservationLease }

@@ -112,6 +112,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
     let stopped = false, mappingDirty = true, revision = 0, exhausted = false, running: Promise<InstructionObservationState> | undefined, closing: Promise<void> | undefined
     let state: InstructionObservationState = frozen({ revision, available: false, pending: [] })
     let dirty = new Set<string>(), reset = false, updating = false
+    let scopedMapping: Set<string> | undefined
     const activePlans = () => [plan, staging].filter((value): value is InterestPlan => !!value)
     const pendingPaths = (changed: readonly string[]) => [...new Set([
       ...activePlans().flatMap(value => matchPaths(value, changed, true).paths),
@@ -131,8 +132,8 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
       if (revision >= Number.MAX_SAFE_INTEGER - 1) { exhausted = true; mappingDirty = true; kind = 'availability'; paths = [] }
       revision++
       let nextPending: InstructionPendingWrite[]
-      try { nextPending = pending() } catch { mappingVersion++; mappingDirty = true; nextPending = [...state.pending] }
-      state = frozen({ revision, available: available(), pending: nextPending })
+      try { nextPending = pending() } catch { mappingVersion++; mappingDirty = true; scopedMapping = undefined; nextPending = [...state.pending] }
+      state = frozen({ revision, available: available(), pending: nextPending, ...(scopedMapping?.size && !stopped && !closed && !exhausted && [...shards.values()].every(shard => shard.status === 'ready') ? { mappingPaths: [...scopedMapping] } : {}) })
       const event = frozen({ ...state, kind, paths: [...paths] })
       for (const listener of [...listeners]) {
         // A reentrant pending/close publication already delivered the newer
@@ -143,6 +144,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
     }
     function affect(kind: InstructionObservationEvent['kind'], paths: readonly string[] = []) {
       if (stopped) return
+      if (kind === 'reset' || kind === 'availability') scopedMapping = undefined
       if (updating) {
         if (kind === 'reset' || kind === 'availability') reset = true
         for (const path of paths) { if (dirty.size >= 1024) { reset = true; dirty.clear(); break } dirty.add(path) }
@@ -179,12 +181,14 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         try {
           const matched = activePlans().map(value => matchPaths(value, event.changes.map(change => change.path)))
           const changed = [...new Set(matched.flatMap(value => value.paths))]
-          const remap = matched.some(value => value.mapping) || changed.length > 0 && event.changes.some(change => change.kind !== 'change')
-          if (remap) { mappingVersion++; mappingDirty = true; affect('reset', changed) }
+          if (matched.some(value => value.mapping)) { mappingVersion++; mappingDirty = true; affect('reset', changed) }
           else if (changed.length) {
             // W1 may classify atomic replacement as change. That can replace a
             // regular candidate with a symlink, so content alone cannot certify
             // its routing alias. Revalidate only on this observed invalidation.
+            if (!mappingDirty && plan) scopedMapping = new Set()
+            if (scopedMapping) for (const path of changed) scopedMapping.add(path)
+            if (scopedMapping && scopedMapping.size > 1024) scopedMapping = undefined
             mappingVersion++; mappingDirty = true; affect('changed', changed)
           }
         } catch { mappingVersion++; mappingDirty = true; affect('reset') }
@@ -236,8 +240,10 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         // recovery opportunity. Actual callbacks set reset/dirty and publish
         // immediately; changed interests/mappings/outcomes still get a barrier.
         if (priorInterests !== JSON.stringify(registered) || priorMapping !== plan?.signature || reset || dirty.size || state.available !== available()) {
-          publish('reset', reset ? [] : [...dirty])
+          if (scopedMapping?.size) publish('changed', [...scopedMapping])
+          else publish('reset', reset ? [] : [...dirty])
         }
+        if (!mappingDirty) scopedMapping = undefined
         return state
       }
       try {
@@ -290,6 +296,7 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         return finish()
       } catch {
         if (!stopped) {
+          scopedMapping = undefined
           mappingDirty = true
           if (staging) {
             // An unsuccessful mapping check still ends this handoff. Retain the
