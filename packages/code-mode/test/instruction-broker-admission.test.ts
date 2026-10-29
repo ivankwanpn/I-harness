@@ -26,10 +26,11 @@ it('preflights the full queued cell set before either nested native body', async
   } finally { block.resolve(); await Promise.allSettled([blocker, first, second]); broker.retireCell('c'); await broker.finishRetiredCell('c'); await broker.dispose() }
 })
 
-it('latches replan before a guest-facing nested rejection and leaves no native effect', async () => {
+it.each([false, true])('arbitrates preflight policy before replan and guest delivery (policy=%s)', async policy => {
   const ctx = createContext(), session = createSession(), origin = Object.freeze({ kind: 'accepted-instruction-call' as const }), trace: string[] = []
   let cellOrigin: InstructionCellOrigin | undefined
   const error = instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'unseen-rules', currentFingerprint: 'current' })
+  if (policy) Object.assign(error, { policyRefusal: true })
   const lease = { bind() { return origin }, async preflight() { throw error }, async release() {} }
   const tools = createToolRegistry(ctx, { instructionsRequired: true, instructionOriginVerifier: value => value === origin, instructionCellRetainer: () => lease })
   tools.register({ name: 'write', description: '', inputSchema: {}, captureNativePlan: () => ({ targets: [{ path: process.cwd(), kind: 'directory', mode: 'mutate' }], operation: {} }), execute: async () => { trace.push('body') } })
@@ -38,8 +39,9 @@ it('latches replan before a guest-facing nested rejection and leaves no native e
   const broker = createCodeModeBroker(ctx, tools, { session }, () => { trace.push('latched') }); (broker.startCell as any)('c', cellOrigin)
   try {
     await expect(broker.invoke({ cellId: 'c', invocationId: 'a', name: 'write', args: {}, origin: { instructionOrigin: cellOrigin }, signal: new AbortController().signal })).rejects.toBe(error)
-    trace.push('guest-rejected'); expect(trace).toEqual(['latched', 'guest-rejected'])
-  } finally { await broker.drainCell('c'); await broker.finishReplannedCell('c'); await broker.dispose() }
+    trace.push('guest-rejected'); expect(trace).toEqual(policy ? ['guest-rejected'] : ['latched', 'guest-rejected'])
+    if (policy) expect(session.events.filter(event => event.type === 'code/result')).toMatchObject([{ output: { code: 'POLICY_REFUSAL' } }])
+  } finally { await broker.drainCell('c'); if (policy) await broker.finishRetiredCell('c'); else await broker.finishReplannedCell('c'); await broker.dispose() }
 })
 
 it('detects a later missing-origin native call before an earlier queued non-native effect', async () => {

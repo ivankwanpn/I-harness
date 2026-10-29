@@ -1,6 +1,34 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
+import { Worker } from 'node:worker_threads'
 import { instructionReplan } from '@i-harness/core-tools'
 import { createCodeModeRuntime } from '../src/runtime.ts'
+
+it.each([false, true])('joins the original worker acknowledgement before a replan terminal (reject=%s)', async reject => {
+  const ack = Promise.withResolvers<number>(), stopped = Promise.withResolvers<void>(), original = Worker.prototype.terminate
+  const spy = vi.spyOn(Worker.prototype, 'terminate').mockImplementation(function(this: Worker) {
+    void original.call(this).then(() => stopped.resolve(), error => stopped.reject(error)); return ack.promise
+  })
+  const fault = new Error('original termination acknowledgement failed'), terminals: unknown[] = []
+  const runtime = createCodeModeRuntime({ tools: () => [{ name: 'stale', description: '', inputSchema: {} }], invoke: async () => { throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'unseen-rules', currentFingerprint: '' }) }, onEvent(event) { if (event.type === 'closed') terminals.push(event) } })
+  const work = runtime.exec({ code: 'await tools.stale({})', yield_time_ms: 5000 }); void work.catch(() => {})
+  try {
+    await stopped.promise; await new Promise<void>(resolve => setImmediate(resolve)); expect(terminals).toEqual([])
+    if (reject) { ack.reject(fault); await expect(work).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' }); await expect(runtime.dispose()).rejects.toBeDefined(); expect(terminals).toEqual([]) }
+    else { ack.resolve(0); expect(await work).toMatchObject({ status: 'failed', instructionReplan: { code: 'INSTRUCTIONS_REPLAN_REQUIRED' } }); expect(terminals).toHaveLength(1) }
+  } finally { ack.resolve(0); await work.catch(() => {}); await runtime.dispose().catch(() => {}); spy.mockRestore() }
+})
+
+it('lets a late accepted policy refusal outrank a draining replan', async () => {
+  const entered = Promise.withResolvers<void>(), deny = Promise.withResolvers<void>(), stale = Promise.withResolvers<void>()
+  const terminals: unknown[] = [], policy = Object.assign(new Error('late denial'), { policyRefusal: true })
+  const runtime = createCodeModeRuntime({ tools: () => ['held', 'stale'].map(name => ({ name, description: '', inputSchema: {} })), async invoke(call) {
+    if (call.name === 'held') { entered.resolve(); await deny.promise; throw policy }
+    await entered.promise; stale.resolve(); throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'unseen-rules', currentFingerprint: '' })
+  }, onEvent(event) { if (event.type === 'closed') terminals.push(event) } })
+  const work = runtime.exec({ code: 'await Promise.all([tools.held({}), tools.stale({})])', yield_time_ms: 5000 })
+  try { await stale.promise; await new Promise<void>(resolve => setImmediate(resolve)); deny.resolve(); const result = await work; expect(result.status).toBe('terminated'); expect(result.instructionReplan).toBeUndefined(); expect(terminals).toMatchObject([{ policyRefusal: true, status: 'terminated' }]) }
+  finally { deny.resolve(); await work.catch(() => {}); await runtime.dispose() }
+})
 
 it('binds the original cell capability with its receiver before publishing started', async () => {
   const trace: string[] = [], handle = Object.freeze({ kind: 'instruction-cell-origin' as const })

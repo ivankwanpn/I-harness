@@ -3,6 +3,7 @@ import type { Cell, CellState } from './cell-state.js';
 import type { CodeModeStatus, CodeModeStoreEntries } from '../types.js';
 import { diagnostic, message } from './limits.js';
 import type { InstructionReplanError } from '@i-harness/core-tools';
+import { FactRecoveryRequiredError } from '@i-harness/core-session';
 /** Sole stop, commit queue, cancellation barrier, and disposal authority. */
 export function createRetirement(options: CodeModeRuntimeOptions, errorCap: number, state: Pick<CellState, 'entries' | 'currentStore' | 'track' | 'installStore' | 'values' | 'drain' | 'clear'>, event: (event: CodeModeRuntimeEvent) => void | Promise<void>, cancelRuntime: (reason: string) => Promise<void>) {
     const { entries, currentStore, track } = state;
@@ -18,7 +19,7 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
         const pending = cell.worker.terminate();
         cell.stop = pending;
         stopping.add(pending);
-        void pending.finally(() => stopping.delete(pending));
+        void pending.then(() => stopping.delete(pending), () => stopping.delete(pending));
         return pending;
     }
     function replan(cell: Cell, error: InstructionReplanError) {
@@ -40,6 +41,7 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             if (running || terminalStarted || cell.status !== 'running') return;
             running = true;
             const work = Promise.resolve().then(async () => {
+                await cell.stop;
                 await Promise.allSettled([...cell.invocations]);
                 await options.drainInstructionCell?.(cell.id);
                 await cell.admission;
@@ -68,6 +70,8 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             return;
         }
         const bounded = error === undefined ? undefined : diagnostic(error, errorCap);
+        const joinTermination = !!cell.instructionReplan || !!cell.origin.instructionOrigin;
+        if (joinTermination) cell.terminalReceiptPending = true;
         cell.status = status;
         if (status === 'terminated') { cell.instructionReplan = undefined; cell.replanTerminalStarted = false; }
         cell.error = bounded?.text;
@@ -103,11 +107,16 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
                 cell.recoveryRequired = false;
                 cell.wake?.();
             };
-            const pending = event({
+            const publish = () => {
+              const receipt = event({
                 type: 'closed', cellId: cell.id, status, error: cell.error, policyRefusal, origin: cell.origin, committed, retainOutcome() {
                     cell.terminalReceiptPending = true;
                 }
-            });
+              });
+              if (!receipt) committed();
+              return receipt;
+            };
+            const pending = joinTermination ? cell.stop!.then(publish, cause => { throw Object.assign(new FactRecoveryRequiredError(), { cause }); }) : publish();
             if (pending)
                 track(Promise.resolve(pending).catch(failed).finally(() => cell.wake?.()), cell);
             else
@@ -309,8 +318,10 @@ export function createRetirement(options: CodeModeRuntimeOptions, errorCap: numb
             close(cell, 'terminated', reason);
         }
         try {
-            await Promise.allSettled([...stopping]);
+            const acknowledgements = await Promise.allSettled([...new Set([...stopping, ...[...state.values()].flatMap(cell => cell.stop ? [cell.stop] : [])])]);
             await state.drain();
+            const failures = acknowledgements.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+            if (failures.length) throw Object.assign(new FactRecoveryRequiredError(), { cause: new AggregateError(failures, 'Original worker termination failed') });
         }
         finally {
             cancelling = undefined;

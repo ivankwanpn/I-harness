@@ -13,10 +13,21 @@ export function capturedToolRegistry(capture: CapturedToolCall): ToolRegistry {
 const failures = new WeakSet<object>()
 const replans = new WeakSet<object>()
 export interface InstructionReplanData { readonly code: 'INSTRUCTIONS_REPLAN_REQUIRED'; readonly currentFingerprint: string; readonly reason: 'missing-origin' | 'unseen-rules' | 'changed-dependency' | 'unavailable' | 'mixed-mutation' | 'revoked'; readonly splitRequired?: true; readonly applied?: readonly string[]; readonly notApplied?: readonly string[]; readonly effectsUnknown?: readonly string[] }
+function boundedReplan(data: InstructionReplanData): InstructionReplanData {
+  if (data.code !== 'INSTRUCTIONS_REPLAN_REQUIRED' || typeof data.currentFingerprint !== 'string' || data.currentFingerprint.length > 256 || !['missing-origin', 'unseen-rules', 'changed-dependency', 'unavailable', 'mixed-mutation', 'revoked'].includes(data.reason) || data.splitRequired !== undefined && data.splitRequired !== true) throw new TypeError('Invalid instruction replan')
+  let total = 0
+  const copy = (value: readonly string[] | undefined) => {
+    if (value === undefined) return undefined
+    if (!Array.isArray(value) || value.length > 1024 || (total += value.length) > 1024 || value.some(path => typeof path !== 'string' || path.length > 4096)) throw new TypeError('Instruction replan effect limit exceeded')
+    return Object.freeze([...value])
+  }
+  const applied = copy(data.applied), notApplied = copy(data.notApplied), effectsUnknown = copy(data.effectsUnknown)
+  return Object.freeze({ code: data.code, currentFingerprint: data.currentFingerprint, reason: data.reason, ...(data.splitRequired ? { splitRequired: true as const } : {}), ...(applied ? { applied } : {}), ...(notApplied ? { notApplied } : {}), ...(effectsUnknown ? { effectsUnknown } : {}) })
+}
 export class InstructionReplanError extends Error {
   readonly code = 'INSTRUCTIONS_REPLAN_REQUIRED' as const
   readonly data: InstructionReplanData
-  constructor(data: InstructionReplanData) { super('Instructions changed; a new model request is required'); this.data = Object.freeze({ ...data }); replans.add(this) }
+  constructor(data: InstructionReplanData) { super('Instructions changed; a new model request is required'); this.data = boundedReplan(data); replans.add(this) }
 }
 export function instructionReplan(data: InstructionReplanData): InstructionReplanError { return new InstructionReplanError(data) }
 export function isInstructionReplan(error: unknown): error is InstructionReplanError { return typeof error === 'object' && error !== null && replans.has(error) }
@@ -96,8 +107,7 @@ export function releaseInstructionCell(origin: InstructionCellOrigin): Promise<v
 export function assertNativeInstructions(exec: ToolExec): void { executions.get(exec)?.mutation.assertCurrent() }
 export function declareInstructionReplan(exec: ToolExec, error: InstructionReplanError, effects: { applied?: readonly string[]; notApplied?: readonly string[]; effectsUnknown?: readonly string[] } = {}): void {
   if (!registeredExecs.has(exec) || !isInstructionReplan(error)) throw new Error('Instruction replan disposition unavailable')
-  const copy = (values: readonly string[] | undefined) => values && Object.freeze([...values])
-  dispositions.set(exec, Object.freeze({ ...error.data, ...(effects.applied ? { applied: copy(effects.applied) } : {}), ...(effects.notApplied ? { notApplied: copy(effects.notApplied) } : {}), ...(effects.effectsUnknown ? { effectsUnknown: copy(effects.effectsUnknown) } : {}) }))
+  dispositions.set(exec, boundedReplan({ ...error.data, ...effects }))
 }
 export function instructionReplanDisposition(prepared: PreparedCall): InstructionReplanData | undefined { assertResultPrepared(prepared); return dispositions.get(prepared.exec) }
 /** Registry-only binding; never derive an executable plan from hook data. */

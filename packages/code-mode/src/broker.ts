@@ -215,19 +215,19 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
           } catch (error) { failure = error; failed = true }
           const stopped = group.some(value => value.signal.aborted)
           if (stopped) { failure = new Error('Code Mode tool call aborted before dispatch'); failed = true }
-          if (!stopped && failure && isInstructionReplan(failure)) replanCell(item.call.cellId, failure.data)
+          if (!stopped && failure && isInstructionReplan(failure) && !isPolicyRefusal(failure)) replanCell(item.call.cellId, failure.data)
           for (const pending of group) {
             const error = pending.captureFailure ?? failure
             if (!pending.captureFailure && !failed) continue
             const at = queue.indexOf(pending); if (at >= 0) queue.splice(at, 1)
             try {
-              const output = stopped || pending.signal.aborted ? { error: 'Code Mode tool call aborted before dispatch', code: 'TOOL_ABORTED_BEFORE_DISPATCH' } : isNativePlanValidationError(error) ? error.output : isInstructionReplan(error) ? error.data : { error: message(error), code: 'TOOL_FAILED' }
+              const output = stopped || pending.signal.aborted ? { error: 'Code Mode tool call aborted before dispatch', code: 'TOOL_ABORTED_BEFORE_DISPATCH' } : isPolicyRefusal(error) ? { error: message(error), code: 'POLICY_REFUSAL' } : isNativePlanValidationError(error) ? error.output : isInstructionReplan(error) ? error.data : { error: message(error), code: 'TOOL_FAILED' }
               await records.record(pending, output, true, undefined, { outcome: stopped || pending.signal.aborted ? 'canceled' : 'failed', dispatch: 'not-dispatched' })
-              records.settle(pending, !stopped && isNativePlanValidationError(error) ? { value: output } : { error })
+              records.settle(pending, !stopped && !isPolicyRefusal(error) && isNativePlanValidationError(error) ? { value: output } : { error })
             } catch (cause) { records.settle(pending, { error: recovery(cause) }) }
             pending.admitted(); await release(pending)
           }
-          if (failed && !isInstructionReplan(failure)) retireCell(item.call.cellId)
+          if (failed && (!isInstructionReplan(failure) || isPolicyRefusal(failure))) retireCell(item.call.cellId)
           continue
         }
         if (!item.tool.isConcurrencySafe && active.size) break

@@ -43,7 +43,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
       const plan = planMethod.call(tool, call.args)
       if (!ordinaryJson(plan)) throw new TypeError('Native plan must be ordinary JSON data')
       const copied = structuredClone(plan) as NativePlan
-      if (!copied || !Array.isArray(copied.targets) || copied.targets.length > 1024 || !Object.hasOwn(copied, 'operation') || copied.targets.some(t => !t || typeof t.path !== 'string' || !(isAbsolute(t.path) || win32.isAbsolute(t.path)) || !['file', 'directory'].includes(t.kind) || !['read', 'mutate'].includes(t.mode))) throw new TypeError('Invalid native plan targets')
+      if (!copied || !Array.isArray(copied.targets) || copied.targets.length > 1024 || !Object.hasOwn(copied, 'operation') || copied.targets.some(t => !t || typeof t.path !== 'string' || t.path.length > 4096 || !(isAbsolute(t.path) || win32.isAbsolute(t.path)) || !['file', 'directory'].includes(t.kind) || !['read', 'mutate'].includes(t.mode))) throw new TypeError('Invalid native plan targets')
       freezeArguments(copied); native = copied
     }
     const handle: CapturedToolCall = Object.freeze({ kind: 'captured-tool-call' })

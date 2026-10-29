@@ -5,7 +5,8 @@ it('bounds the optional instruction replan on a failed code cell while keeping o
   const detail = { code: 'INSTRUCTIONS_REPLAN_REQUIRED', currentFingerprint: 'abc', reason: 'changed-dependency' }
   expect(() => validateConversationEventShape({ type: 'code/cell', cellId: 'c', state: 'failed', instructionReplan: detail } as never, 13)).not.toThrow()
   expect(() => validateConversationEventShape({ type: 'code/cell', cellId: 'c', state: 'completed' }, 13)).not.toThrow()
-  for (const invalid of [{ ...detail, reason: 'invented' }, { ...detail, effectsUnknown: Array(257).fill('x') }, { ...detail, extra: true }]) {
+  for (const count of [257, 1024]) expect(() => validateConversationEventShape({ type: 'code/cell', cellId: 'c', state: 'failed', instructionReplan: { ...detail, effectsUnknown: Array(count).fill('x') } } as never, 13)).not.toThrow()
+  for (const invalid of [{ ...detail, reason: 'invented' }, { ...detail, effectsUnknown: Array(1025).fill('x') }, { ...detail, applied: Array(600).fill('x'), notApplied: Array(600).fill('x') }, { ...detail, extra: true }]) {
     expect(() => validateConversationEventShape({ type: 'code/cell', cellId: 'c', state: 'failed', instructionReplan: invalid } as never, 13)).toThrow()
   }
   expect(() => validateConversationEventShape({ type: 'code/cell', cellId: 'c', state: 'completed', instructionReplan: detail } as never, 13)).toThrow()

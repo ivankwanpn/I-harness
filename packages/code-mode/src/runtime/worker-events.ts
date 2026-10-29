@@ -44,11 +44,10 @@ export function createWorkerEvents(
       catch (error) { reject(error) }
     }, error => {
       if (cell.status !== 'running') return
-      if (isInstructionReplan(error)) { replan(cell, error); return }
-      if (cell.instructionReplan) return
       if (typeof error === 'object' && error !== null && 'policyRefusal' in error && error.policyRefusal === true) {
         close(cell,'terminated',message(error),true)
-      } else if (!controller.signal.aborted) reject(error)
+      } else if (isInstructionReplan(error)) { replan(cell, error) }
+      else if (!cell.instructionReplan && !controller.signal.aborted) reject(error)
     }).finally(() => { cell.calls.delete(id); cell.invocations.delete(producer); state.untrack(producer,cell) })
     cell.invocations.add(producer)
     state.accept(producer,cell)
