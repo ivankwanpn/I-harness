@@ -298,7 +298,11 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     if (!notificationsActive || notificationsRetired) return
     const job = notifDrain.drain()
     notificationDrains.add(job)
-    void job.catch(() => {}).finally(() => { notificationDrains.delete(job) })
+    // Forward failure as a dirty hint to the already published host drain.
+    // Only that owner classifies the original error and arms its retry.
+    void job.catch(() => {
+      try { opts.parentNotify?.wake(opts.persist?.parentSessionId ?? '') } catch { /* A host hint cannot replace the retained drain failure. */ }
+    }).finally(() => { notificationDrains.delete(job) })
   }
   if (opts.restoredState && opts.persist) {
     // Task 4.4 (fix round 1): restoreState mapped each mid-flight job

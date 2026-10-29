@@ -8,10 +8,11 @@ import * as generationReader from '../../core-session/src/conversation/generatio
 import { createGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
 import { createSession, createNondurableFactOwner } from '@i-harness/core-session'
 import { readOwnedGenerationActions } from '../../core-session/src/managed/view.ts'
-import { createDeliveryDrain } from '../src/service/delivery-drain.ts'
+import { createDeliveryDrain, isRetryableDeliveryError } from '../src/service/delivery-drain.ts'
 import { receivedInputsFor } from '../src/lifecycle/received-inputs.ts'
 import { createSessionService } from '../src/service.ts'
 import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
+import { DeliverySourcesError } from '../../subagent/src/task-notification.ts'
 
 it('live managed generation lifecycle reads original committed index without replaying the delivery history', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-generation-read-'))
@@ -148,4 +149,31 @@ it('retirement prevents a signalled in-flight registration from scheduling throu
   await drain.reconcile(); drain.signal(); await drain.join()
   drain.retire(); completion!(); await drain.join()
   expect(registrations).toBe(1)
+})
+
+it.each([undefined, null, false, 0, ''])('falsey reconciliation failure does not reset classified retry backoff (%j)', async failure => {
+  vi.useFakeTimers()
+  let attempt = 0
+  const drain = createDeliveryDrain({ current: () => true, reconcile: async () => {
+    if (++attempt === 2) throw failure
+    throw new RecipientDeliveryRecoveryError({ kind: 'retryable', phase: 'original-physical' })
+  }, pending: () => [], schedule: () => false, report() {} })
+  try {
+    await drain.reconcile(); await drain.reconcile(); await drain.reconcile()
+    await vi.advanceTimersByTimeAsync(100)
+    expect(attempt).toBe(3)
+    await vi.advanceTimersByTimeAsync(400)
+    expect(attempt).toBe(4)
+  } finally { drain.retire(); vi.useRealTimers() }
+})
+
+
+it('only the known original delivery collection carries nominal receiver retry authority across independent save failure', () => {
+  const nominal = new RecipientDeliveryRecoveryError({ kind: 'retryable', phase: 'temporary-admission' })
+  const preserved = new DeliverySourcesError([new DeliverySourcesError([nominal]), undefined])
+  expect(preserved.errors).toEqual([nominal, undefined])
+  expect(isRetryableDeliveryError(preserved)).toBe(true)
+  expect(isRetryableDeliveryError(new AggregateError([nominal]))).toBe(false)
+  expect(isRetryableDeliveryError(new DeliverySourcesError([new AggregateError([nominal])]))).toBe(false)
+  expect(isRetryableDeliveryError(new DeliverySourcesError([{ code: 'FACT_RECOVERY_REQUIRED' }]))).toBe(false)
 })

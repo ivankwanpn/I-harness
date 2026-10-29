@@ -1,8 +1,10 @@
 import { RecipientDeliveryRecoveryError } from '../lifecycle/recipient-delivery.ts'
 import { DeliverySourcesError, OriginalTerminalRecoveryError } from '../../../subagent/src/task-notification.ts'
 
-export const isRetryableDeliveryError = (error: unknown): boolean => error instanceof RecipientDeliveryRecoveryError && error.deliveryDisposition.kind === 'retryable'
-  || error instanceof OriginalTerminalRecoveryError || error instanceof DeliverySourcesError && error.retryable
+const isOriginalRetryable = (error: unknown): boolean => error instanceof RecipientDeliveryRecoveryError && error.deliveryDisposition.kind === 'retryable'
+  || error instanceof OriginalTerminalRecoveryError
+export const isRetryableDeliveryError = (error: unknown): boolean => isOriginalRetryable(error)
+  || error instanceof DeliverySourcesError && error.errors.some(isOriginalRetryable)
 
 /** Scheduling only. Original captures, Inbox and the existing serial lane own
  * the work; this loop has no model executor or persistent state of its own. */
@@ -23,8 +25,8 @@ export function createDeliveryDrain(options: {
     const pending = (async () => {
       while (dirty && !retired && options.current()) {
         dirty = false
-        let failure: unknown
-        try { await options.reconcile() } catch (error) { failure = error; options.report(error) }
+        let failed = false, retryable = false
+        try { await options.reconcile() } catch (error) { failed = true; retryable = isRetryableDeliveryError(error); options.report(error) }
         if (retired || !options.current()) return
         // Source failure cannot erase already committed eligible inputs. The
         // actual owner readiness still gates registration on the normal lane.
@@ -41,12 +43,12 @@ export function createDeliveryDrain(options: {
             if (!retired && options.current() && signalRevision !== registration.signalRevision) { dirty = true; void run() }
           }
           try { if (!options.schedule(inputId, settled)) inFlight.delete(inputId) }
-          catch (error) { inFlight.delete(inputId); options.report(error); failure ??= error }
+          catch (error) { inFlight.delete(inputId); options.report(error); failed = true; retryable ||= isRetryableDeliveryError(error) }
         }
-        if (failure) {
+        if (failed) {
           // A blocked observation never dirties itself. Actual source/receiver
           // changes may trigger one new pass under the same published owner.
-          if (!dirty && !retired && options.current() && isRetryableDeliveryError(failure) && timer === undefined) {
+          if (!dirty && !retired && options.current() && retryable && timer === undefined) {
             const delay = [100, 500, 2000, 5000][Math.min(backoff++, 3)]!
             timer = setTimeout(() => { timer = undefined; dirty = true; void run() }, delay)
           }

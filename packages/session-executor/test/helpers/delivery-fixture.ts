@@ -19,7 +19,7 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   const backend = createJsonlBackend(join(root, 'sessions'))
   let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
@@ -54,7 +54,7 @@ export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; 
   for (const warning of options.expectedWarnings ?? []) expectedWarnings.add(warning)
   if (options.rewindFsWrite) expectedWarnings.add(`[rewind] bound pre-M54 journal ${join(root, 'rewind-store', 'rewind', 'parent')} to workspace ${root} (no meta.json existed)`)
   if (options.holdTerminalUnknown) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: AggregateError: Original delivery sources require settlement`)
-  if (options.holdReceiptUnknown || options.expectStopDiagnostics) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: FactRecoveryRequiredError: Managed facts require reconciliation`)
+  if (options.holdReceiptUnknown || options.holdReceiptBeforeIssue || options.expectStopDiagnostics) for (const prefix of ['original delivery settlement', 'delivery reconciliation failed']) expectedWarnings.add(`[i-harness] ${prefix}: FactRecoveryRequiredError: Managed facts require reconciliation`)
   if (options.expectStopDiagnostics) expectedWarnings.add('[i-harness] delivery Stop requires reconciliation: FactRecoveryRequiredError: Managed facts require reconciliation')
   const originalWarn = console.warn.bind(console)
   const warn = vi.spyOn(console, 'warn').mockImplementation((...args) => {
@@ -153,6 +153,7 @@ export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; 
     launches++
     await childGate.promise
     yield { type: 'text/chunk', text: 'original child result' }
+    if (options.failChild) { yield { type: 'error', error: new Error('Controlled dispatched child failure') }; return }
     yield { type: 'end' }
   })
   const parent = controlledModel(async function* (request) {
@@ -167,7 +168,7 @@ export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; 
         yield { type: 'tool_call', call: { id: 'normal-parent-step', name: 'fixture_step', args: {} } }
         yield { type: 'end' }; return
       }
-      if (JSON.stringify(request.messages).includes('<task_result>')) {
+      if (JSON.stringify(request.messages).includes('<task_result>') || JSON.stringify(request.messages).includes('<task_error>')) {
         delivery.resolve()
         if (options.failDelivery) { yield { type: 'error', error: generationError('GENERATION_CLOSED') }; return }
       }
@@ -257,7 +258,7 @@ export async function createDeliveryFixture(options: { rewindFsWrite?: boolean; 
         closed = failures.length === 0
         expect(warnings.filter(message => !expectedWarnings.has(message)), 'unexpected delivery fixture warnings').toEqual([])
         if (options.holdTerminalUnknown) expect(warnings.some(message => message.includes('Original delivery sources require settlement'))).toBe(true)
-        if (failures.length) throw new AggregateError(failures, 'Delivery fixture cleanup failed')
+        if (failures.length) { console.info('original-delivery-cleanup-failures', inspect(failures, { depth: 8 })); throw new AggregateError(failures, 'Delivery fixture cleanup failed') }
       } finally { restoreWarning() }
     },
   }

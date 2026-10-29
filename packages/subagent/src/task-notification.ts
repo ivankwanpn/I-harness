@@ -50,8 +50,9 @@ export class OriginalTerminalRecoveryError extends Error {
 export class DeliverySourcesError extends AggregateError {
   readonly retryable: boolean
   constructor(errors: readonly unknown[]) {
-    super(errors, 'Original delivery sources require settlement')
-    this.retryable = errors.some(error => error instanceof OriginalTerminalRecoveryError)
+    const original = errors.flatMap(error => error instanceof DeliverySourcesError ? error.errors : [error])
+    super(original, 'Original delivery sources require settlement')
+    this.retryable = original.some(error => error instanceof OriginalTerminalRecoveryError)
   }
 }
 
@@ -99,9 +100,12 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
     // covers cross-process (M23) for the underlying write.
     drain(): Promise<number> {
       const run = async () => {
-        let sourceFailure: unknown
-        try { await opts.reconcileSources?.() } catch (error) { sourceFailure = error }
-        if (!opts.admit?.admitTaskDelivery || !opts.evidence) return 0
+        const failures: unknown[] = []
+        try { await opts.reconcileSources?.() } catch (error) { failures.push(error) }
+        if (!opts.admit?.admitTaskDelivery || !opts.evidence) {
+          if (failures.length) throw failures[0]
+          return 0
+        }
         let delivered = 0
         let changed = false
         for (const n of opts.tasks.notifications()) {
@@ -152,14 +156,18 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
           } catch (err) {
             const stopped = isParentNotificationStopped(err)
             opts.tasks.updateNotification(n.id, { status: stopped ? "suppressed" : "error", error: err instanceof Error ? err.message : String(err) })
+            if (!stopped) failures.push(err)
           }
         }
         // ADAPTATION (M26-D1, plan §written "await save()" unconditionally): a
         // cold-restore drain over an EMPTY outbox would mint an empty
         // `task-<stateId>` doc on every mount — two pre-existing CLI tests
         // assert exactly one *.jsonl per store dir. Save only when a row moved.
-        if (changed) await opts.tasks.save()
-        if (sourceFailure) throw sourceFailure
+        // Persist row observations before returning the original retry
+        // disposition to the host. Save failure cannot hide receiver debt.
+        if (changed) try { await opts.tasks.save() } catch (error) { failures.push(error) }
+        if (failures.length === 1) throw failures[0]
+        if (failures.length) throw new DeliverySourcesError(failures)
         return delivered
       }
       const pending = drainChain.then(run)
