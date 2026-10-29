@@ -22,3 +22,11 @@ it('retains the original broker getter across uses and revokes on reference chan
 
 
 
+it('revokes an idle retained project without a warm retry',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-project-idle-')),backend=createJsonlBackend(join(root,'sessions')),coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),ownership=createOwnership({lockRoot:join(root,'sessions')},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership),broker=createProjectScopeBroker(coordinator,root)
+ try{
+  await backend.create('source',{sessionId:'source',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:13});const binding=await bindings.acquireSelectedBindingRead({sessionIds:['source']}),project=await broker.retainSelectedBindingRead(['source'],binding,'source');let revoked=0;binding.onRevoke(()=>revoked++)
+  await binding.use(()=>project.use(async()=>{project.sourceGetter()}));const update=broker.configureReferences([]);expect(revoked).toBe(1);await update;const other=createOwnership({lockRoot:join(root,'sessions')},{lock:{enabled:true}}),pin=await other.pinOwnership('source');await pin.release();await binding.release();expect(()=>project.assertCurrent()).toThrow();await broker.close();await bindings.closeAdmission()()
+ }finally{await coordinator.close()}
+})
+
