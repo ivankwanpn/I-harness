@@ -181,6 +181,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       passive<T>(work:(handoff:{assertCurrent():never})=>Promise<T>){return single(()=>work({assertCurrent():never{throw Error('Passive selected handoff cannot issue')}}))},
       captureFirst(signal?:AbortSignal){return holder.first<Awaited<ReturnType<typeof targetOwner.captureSelected>>>(handoff=>{qualifyProject();return targetOwner.captureSelected(route,handoff.assertCurrent,capture)},signal)},
       captureWarm(signal?:AbortSignal){return holder.warm<Awaited<ReturnType<typeof targetOwner.captureSelected>>>(handoff=>{qualifyProject();return targetOwner.captureSelected(route,handoff.assertCurrent,capture)},signal)},
+      reconcilePassive(){return holder.passive(()=>targetOwner.reconcileSelected(route))},
       async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});await targetOwner.releaseSelected(route);if(original)await original.close()},
     })
     return holder

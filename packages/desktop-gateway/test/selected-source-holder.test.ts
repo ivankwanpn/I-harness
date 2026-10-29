@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { it,expect,vi } from 'vitest'
 import { createGatewayForkFixture } from './helpers/fork-fixture.ts'
 import { createSelectedResultsIntent,readSelectedResultsCore,readSelectedResultsOperation } from '../../session-persistence/src/selected-results-fork-contract.ts'
@@ -27,7 +28,7 @@ it('exports an actual selected public seed with passive code store inside the he
 })
 it('captures the original selected source once under the existing target owner',async()=>{
  const f=await createGatewayForkFixture();try{await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'original'},{type:'turn/end'}]);const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'capture-real',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation),flush=vi.spyOn(f.coordinator,'flush')
- const first=await holder.captureFirst();expect(first.kind).toBe('captured');flush.mockClear();const second=await holder.captureWarm();expect(second).toBe(first);expect(flush).not.toHaveBeenCalled();await expect(f.coordinator.openManagedDocument('target')).rejects.toThrow();const sourceDocument=await f.coordinator.openManagedDocument('source');await sourceDocument.metadata.enterPlan('changed');await expect(holder.captureWarm()).rejects.toThrow();await holder.close();flush.mockRestore()
+ const first=await holder.captureFirst();expect(first.kind).toBe('captured');if(first.kind==='captured'){const {readFile}=await import('node:fs/promises');expect((await readFile(join(f.sessions,'target.jsonl'))).toString()).toBe(first.headerBytes)}flush.mockClear();const second=await holder.captureWarm();expect(second).toBe(first);expect(flush).not.toHaveBeenCalled();await expect(f.coordinator.openManagedDocument('target')).rejects.toThrow();const sourceDocument=await f.coordinator.openManagedDocument('source');await sourceDocument.metadata.enterPlan('changed');await expect(holder.captureWarm()).rejects.toThrow();flush.mockClear();expect((await holder.reconcilePassive()).kind).toBe('committed');expect(flush).not.toHaveBeenCalled();await holder.close();flush.mockRestore()
  }finally{await f.close()}
 })
 
@@ -42,4 +43,18 @@ it('cannot bypass original project mismatch by retrying the retained source',asy
  const f=await createGatewayForkFixture();try{const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'other'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'wrong-project',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
  await expect(holder.captureFirst()).rejects.toThrow('project mismatch');await expect(holder.captureWarm()).rejects.toThrow('project mismatch');const {readdir}=await import('node:fs/promises');expect((await readdir(f.sessions)).some(name=>name.startsWith('target.jsonl'))).toBe(false);await holder.close()
  }finally{await f.close()}
+})
+
+
+
+import { mkdtemp,mkdir,writeFile } from 'node:fs/promises'
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createProjectScopeBroker } from '../src/project-scope.ts'
+import { createNativeContextRuntime } from '../src/context-runtime.ts'
+import { selectedBootstrapPaths } from '../../session-persistence-jsonl/src/backend/selected-results-route-path.ts'
+it('does not confirm a byte-equal foreign header when original header issue never began',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-no-header-issue-')),workspace=join(root,'w'),sessions=join(root,'s');await mkdir(workspace);const backend=createJsonlBackend(sessions),actual=backend.selectedCapture;backend.selectedCapture={...actual,async prepareSelectedHeader(){return {kind:'conflict'}}};const coordinator=createSessionCoordinator(backend,{lock:{enabled:true}}),projects=createProjectScopeBroker(coordinator,workspace);await coordinator.create({sessionId:'source'});await coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'original'},{type:'turn/end'}]);const runtime=await createNativeContextRuntime({workspace,storageRoot:join(root,'n'),coordinator,projectFor:projects.nativeScopeFor,resultReadScopeFor:projects.resultReadScopeFor,withBindingObservation:projects.withBindingObservation,retainSelectedProjectRead:projects.retainSelectedBindingRead,contextConfig:{enabled:true}})
+ try{const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unassigned'}),invocation={version:1 as const,operationId:'foreign-header',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest},operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation}),holder=runtime.createSelectedSourceHolder(operation),captured=await holder.captureFirst();if(captured.kind!=='captured')throw Error('capture unavailable');const route={protocol:'public-results-v1' as const,request:{invocation,core,requestIntent:intent}};await writeFile(selectedBootstrapPaths(join(sessions,'target.jsonl'),route).stage,captured.stageBytes);await writeFile(join(sessions,'target.jsonl'),captured.headerBytes);expect((await holder.reconcilePassive()).kind).toBe('unknown');await holder.close()
+ }finally{await runtime.close();await projects.close();await coordinator.close()}
 })

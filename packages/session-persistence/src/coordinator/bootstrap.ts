@@ -12,7 +12,7 @@ import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
 import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
-import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest } from './bootstrap-types.ts'
+import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest, HeaderOutcome } from './bootstrap-types.ts'
 import type { createManagedDocument } from './managed-document.ts'
 import type { PersistenceBackend } from './types.ts'
 import type { Ownership } from './ownership.ts'
@@ -29,7 +29,7 @@ import { captureSelectedResultsRoute, type SelectedResultsRoute } from './select
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {route:SelectedResultsRoute;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssuing?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -553,8 +553,8 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   function captureSelected(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
-    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]}).selectedCapture
-    if(!selected||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
+    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
     if(typeof guard!=='function'||typeof capture!=='function'||utilTypes.isProxy(guard)||utilTypes.isProxy(capture))throw TypeError('Invalid selected capture')
     if(captureClosed)throw Error('Selected capture closed')
     let entry=documents.get(id)
@@ -569,8 +569,20 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       await settleCapture(owned);check();await backend.checkBootstrapCaptureRoot!();check()
       const io=await captureBundle(owned);check()
       selectedEntry.attempt??=createSelectedCaptureAttempt({reserveSelectedCapture(...args){io.settled=false;return selected.reserveSelectedCapture(...args)}},io.issuer,route,capture)
-      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
-      try{return await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture())}
+      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;if(selectedEntry.headerIssuing)selectedEntry.headerIssued=true;io.settled=false}
+      try{
+        const state=await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture());await settleCapture(owned);check()
+        if(state.kind==='captured'&&selectedEntry.header?.kind!=='committed'){
+          const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
+          const reconcile=selectedEntry.headerIssued===true
+          if(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'){
+            selectedEntry.headerAttempted=true;selectedEntry.headerIssuing=!reconcile;io.settled=false
+            try{selectedEntry.header=await ownership.withSessionOperation(id,()=>reconcile?selected.reconcileSelectedHeader(id,io.held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation))}finally{selectedEntry.headerIssuing=false}
+            await settleCapture(owned);check()
+          }
+        }
+        return state
+      }
       finally{io.activeIssue=undefined;await settleCapture(owned)}
     }).finally(()=>{if(owned.flight===flight)owned.flight=undefined})
     owned.flight=flight;return flight
@@ -583,8 +595,18 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     await entry.flight?.catch(()=>{});await releaseCapture(entry)
     entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
   }
+  function reconcileSelected(input:SelectedResultsRoute):Promise<HeaderOutcome> {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    const backendSelected=(backend as PersistenceBackend & {selectedCapture?:{reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    if(!entry||!selected||!io||io.released||!backendSelected||!sameBootstrapData(selected.route,route))return Promise.resolve({kind:'unknown'})
+    if(entry.flight)return Promise.resolve({kind:'unknown'})
+    const captured=selected.attempt?.inspect();if(!captured||captured.kind!=='captured'||!selected.headerIssued)return Promise.resolve({kind:'unknown'})
+    const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(captured.stageBytes),headerBytes:Buffer.from(captured.headerBytes)}
+    const flight=Promise.resolve().then(async()=>{await settleCapture(entry);io.held.assertHeld();io.settled=false;try{const outcome=await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation));selected.header=outcome;return outcome}finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    entry.flight=flight;return flight
+  }
   return {
-    captureSelected,releaseSelected,
+    captureSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
