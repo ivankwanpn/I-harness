@@ -141,3 +141,21 @@ it('retains the original failed-begin pin cleanup with falsey acquisition and cl
     const operation = await documents.taskOperations!.begin(token); await operation.close()
   } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }) }
 })
+
+it('rejects a replaced backend write method before invoking either body', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-method-')), backend = createJsonlBackend(root), opts = { lock: { enabled: true } }
+  const ownership = createOwnership(backend, opts), mutations = createMutations(backend, ownership, 200, () => {}), loads = createLoads(backend, ownership, mutations), managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, () => {}, mutations)
+  let mutable: { issue(): Promise<import('../src/coordinator/task-document-types.ts').TaskWriteOutcome>; reconcile(): Promise<import('../src/coordinator/task-document-types.ts').TaskWriteOutcome>; retry(): Promise<import('../src/coordinator/task-document-types.ts').TaskWriteOutcome>; outcome(): import('../src/coordinator/task-document-types.ts').TaskWriteOutcome | undefined }, replacementCalls = 0
+  const documents = createDocuments(backend, ownership, () => {}, undefined, { captureParent: document => managed.captureParent(document), validator: taskDocumentStorageContract, open(scope) {
+    const raw = createTaskDocumentObservation(root, join(root, `${scope.key}.doc.jsonl`), scope)
+    return { observe: () => raw.observe(), confirm: witness => raw.confirm(witness), settleResources: () => raw.settleResources(), stageWrite(witness, bytes) { const original = raw.stageWrite(witness, bytes); mutable = { issue: () => original.issue(), reconcile: () => original.reconcile(), retry: () => original.retry(), outcome: () => original.outcome() }; return mutable } }
+  } })
+  try {
+    await mutations.create({ sessionId: 'parent' }); const parent = await managed.open('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const operation = await documents.taskOperations!.begin(documents.taskOperations!.parent(parent)), observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('missing')
+    const write = operation.stageWrite(observed.witness, { formatVersion: 2, tasks: [], notifications: [] })
+    mutable!.retry = async () => { replacementCalls++; throw new Error('replacement') }
+    await expect(write.issue()).rejects.toThrow('Changed task capability method'); expect(replacementCalls).toBe(0); await operation.close()
+  } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }) }
+})

@@ -17,7 +17,7 @@ export function createDocuments(
   const disposalDebt = new Set<Awaited<ReturnType<Ownership['acquireLease']>>>()
   let docChain: Promise<void> = Promise.resolve()
   const taskOperations = taskConfiguration && ownership.pinOwnership && ownership.withSessionOperation
-    ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }) : undefined
+    ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }, processLatches) : undefined
   async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
     const locks: Awaited<ReturnType<Ownership['acquireLease']>>[] = []
     let result: T | undefined, failure: unknown, failed = false

@@ -5,6 +5,7 @@ import { waitForObservation } from "@i-harness/core-tools"
 import { TaskResultOwner } from "./result.ts"
 import { TaskNotifications } from "./notifications.ts"
 import { TaskPersistence } from "./persistence.ts"
+import { associateTaskSaveOwner } from './save-owner.ts'
 import { TaskRecords } from "./records.ts"
 import { type TaskRecord, type TaskRegistryOptions, type TaskRegistry, type TaskProtocolDocument, type TaskTerminalizeInput } from "./types.ts"
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
@@ -27,7 +28,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
   const notifications = new TaskNotifications()
   const maxConcurrency = opts.maxConcurrency ?? Infinity
-  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot)
+  const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, opts.ownedTask)
   const save = () => persistence.save()
 
   function snapshot(): TaskProtocolDocument {
@@ -107,7 +108,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     return true
   }
 
-  return {
+  const registry: TaskRegistry = {
     async prepareResult(taskId, context, current) {
       const task = records.get(taskId)
       if (!task) throw new Error(`unknown task: ${taskId}`)
@@ -209,5 +210,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     save,
     flushPersistence: () => persistence.flush(),
   }
+  associateTaskSaveOwner(registry, persistence)
+  return registry
 
 }
