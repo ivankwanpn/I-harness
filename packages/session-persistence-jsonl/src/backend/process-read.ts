@@ -23,6 +23,15 @@ const sameParents = (a: DirectoryChain, b: DirectoryChain) => sameRoot(a, b) && 
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 /** Low-level byte adapter; cannot associate a backend with factory authority. */
 export function createJsonlProcessReadCapability(ports: Ports) {
+    function processHeader(line: string) {
+        const raw = JSON.parse(line) as Record<string, unknown>;
+        // Generic header normalization deliberately remains unchanged. This
+        // narrower read domain cannot infer local provenance for copied seed.
+        if (Object.hasOwn(raw, 'seedLength') && raw.seedLength !== 0) bad();
+        const meta = parseHeader(line);
+        if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed || !meta.journal) bad();
+        return meta;
+    }
     async function ancestors(path: string) {
         let parent = dirname(path), root: Identity | undefined;
         const rootAncestry: string[] = [], pathAncestry: string[] = [];
@@ -70,12 +79,30 @@ export function createJsonlProcessReadCapability(ports: Ports) {
         const path = ports.file(id), sessionParents = await ancestors(path);
         await ports.checkDeleted('session', id); await ports.checkNamespace(id);
         const raw = transcript ? await file(path, sessionParents) : undefined, decoder = new TextDecoder('utf-8', { fatal: true });
+        if (!transcript) {
+            // Generic loads may normalize malformed legacy boundary fields.
+            // Check the original bounded header as domain evidence only; this
+            // neither decodes history nor certifies managed backing-file bytes.
+            const info = await lstat(path, { bigint: true });
+            if (!info.isFile() || info.isSymbolicLink()) bad();
+            const original = identity(info), handle = await open(path, 'r');
+            try {
+                if (!same(original, identity(await handle.stat({ bigint: true })))) bad();
+                const bytes = Buffer.alloc(65536); let offset = 0, end = -1;
+                while (offset < bytes.length && end < 0) {
+                    const read = await handle.read(bytes, offset, bytes.length - offset, offset);
+                    if (!read.bytesRead) break;
+                    offset += read.bytesRead; end = bytes.subarray(0, offset).indexOf(10);
+                }
+                if (end < 0) bad();
+                processHeader(decoder.decode(bytes.subarray(0, end)));
+            } finally { await handle.close(); }
+        }
         let initial: ReturnType<typeof freezeJsonData> | undefined;
         if (raw) {
             if (!isUtf8(raw.bytes)) bad();
             const end = raw.bytes.indexOf(10); if (end < 0 || raw.bytes.at(-1) !== 10) bad();
-            const meta = parseHeader(decoder.decode(raw.bytes.subarray(0, end)));
-            if (meta.formatVersion !== CURRENT_FORMAT_VERSION || meta.semanticSeed || !meta.journal) bad();
+            const meta = processHeader(decoder.decode(raw.bytes.subarray(0, end)));
             const decoded = readFactJournal(raw.bytes.subarray(end + 1), meta.journal!, meta.formatVersion, meta);
             if (decoded.torn || decoded.prefix.bodyBytes !== raw.bytes.length - end - 1) bad();
             initial = freezeJsonData({ formatVersion: meta.formatVersion, header: meta, events: decoded.events });

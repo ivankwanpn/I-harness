@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { contextPathKey, contextWorkspaceLocation, contextSourceIdentity, loadContextOutputConfiguration, type ContextCapture, type ContextOutputService, type LegacyReadObservationRunner } from '@i-harness/context-output'
 import { managedResultRefs, semanticSeedResultRefs, sameManagedArtifactRef, rewindCuts } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
@@ -24,6 +25,8 @@ interface StoreEntry {
   bridge: ReturnType<typeof createProcessAwareResultService>
 }
 const stores = new Map<string, Promise<StoreEntry>>()
+// Installed only by the genuine reader lease, for this page's full authorization.
+const pageRegistrations = new AsyncLocalStorage<Registration>()
 
 export interface ResultStoreOptions {
   workspace: string; coordinator?: SessionCoordinator; sessionId?: string
@@ -64,18 +67,26 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
       const observations = createResultObservationScope()
       const deletionListeners = new Set<(documents: readonly string[]) => Promise<void>>(), deletionSources = new Map<SessionCoordinator, () => void>()
       async function sourceFor(sessionId: string): Promise<NonNullable<ContextCapture['source']>> {
+        const page = pageRegistrations.getStore()
+        const assertPage = () => {
+          if (!page) return
+          if (!registrations.has(page) || page.mode !== 'reader' || page.sessionId !== sessionId || page.available?.() === false) throw new Error('Result page registration unavailable')
+          lookupProcessReadContext(page.coordinator, sessionId)!.assertCurrent()
+        }
+        assertPage()
         const observed = observations.current(sessionId)
         if (observed) {
           observed.assertCurrent(); return observed.source
         }
         const candidates = [...registrations]
-        const coordinator = candidates.at(-1)?.coordinator
+        const coordinator = page?.coordinator ?? candidates.at(-1)?.coordinator
         if (!coordinator) throw new Error('Result source owner unavailable')
-        const independent = candidates.findLast(owner => owner.sessionId === sessionId && owner.mode === 'reader' && owner.readScope)
+        const independent = page ? (page.readScope ? page : undefined) : candidates.findLast(owner => owner.sessionId === sessionId && owner.mode === 'reader' && owner.readScope)
         if (independent) {
           if (independent.available?.() === false) throw new Error('Result source host unavailable')
           const before = independent.readScope!()
           const { meta } = await independent.coordinator.profile(sessionId)
+          assertPage()
           const current = independent.readScope!()
           if (meta.archived || independent.available?.() === false || before.revision !== current.revision
             || current.projectId && current.scope?.id !== current.projectId) throw new Error('Result read scope unavailable')
@@ -87,11 +98,13 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
           if (visited.has(cursor) || visited.size >= 64) throw new Error('Result source lineage unavailable')
           visited.add(cursor)
           const { meta } = await coordinator.profile(cursor)
+          assertPage()
           if (meta.archived) throw new Error('Result source session archived')
           selected ??= candidates.findLast(owner => owner.sessionId === cursor && owner.mode === 'producer')
           reader ??= candidates.findLast(owner => owner.sessionId === cursor && owner.mode === 'reader')
           if (!bindingSeen) {
             const binding = await coordinator.getDocument('desktop-session-project-' + createHash('sha256').update(cursor).digest('hex'))
+            assertPage()
             if (binding !== undefined) {
               if (!binding || typeof binding !== 'object' || Array.isArray(binding) || (binding as { version?: unknown }).version !== 1 || Object.keys(binding).some(field => !['version', 'projectId'].includes(field))) throw new Error('Result project binding unavailable')
               const value = (binding as { projectId?: unknown }).projectId
@@ -103,10 +116,12 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
           cursor = meta.parentSession
         }
         selected ??= reader
+        if (page && selected?.coordinator !== page.coordinator) throw new Error('Result source coordinator differs from page owner')
         if (!selected || selected.available?.() === false) throw new Error('Result source host unavailable')
         const scope = selected.projectContext?.()
         if (projectId && scope?.id !== projectId || !scope && selected.lastScopeId) throw new Error('Result project scope unconfirmed')
         if (scope) selected.lastScopeId = scope.id
+        assertPage()
         return { sourceId: contextSourceIdentity(location.workspaceKey, location.canonical, scope), readonly: true }
       }
       const bridge = createProcessAwareResultService({ root: location.serviceRoot, workspaceId: location.workspaceKey, config, requireObservedLegacyRecipients: true,
@@ -218,7 +233,9 @@ async function acquireResultStore(options: ResultStoreOptions, mode: Registratio
     return { service: entry.service, sourceFor, withLegacyReadObservation, observations: entry.observations, release,
       async withProcessReadContext<T>(run: () => Promise<T>) {
         const available = () => !released && !entry.retirement && entry.registrations.has(registration) && registration.mode === 'reader' && registration.available?.() !== false
-        return entry.bridge.withPage(registration.coordinator, registration.sessionId, available, run)
+        const process = lookupProcessReadContext(registration.coordinator, registration.sessionId)
+        return entry.bridge.withPage(registration.coordinator, registration.sessionId, available,
+          () => process ? pageRegistrations.run(registration, run) : run())
       } }
   } catch (cause) {
     try { await release() }

@@ -98,22 +98,26 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
   const callbackScope=new AsyncLocalStorage<{id:string;active:boolean}>()
-  const bootstrapWitnesses = new Map<string, { token: ReturnType<NonNullable<typeof processLatches>['beginMutation']>; active: number; retained: boolean; ready: boolean }>()
+  const bootstrapWitnesses = new Map<string, { token: ReturnType<NonNullable<typeof processLatches>['beginMutation']>; active: number; retained: boolean; ready: boolean; unknown: boolean }>()
   function trackBootstrap(invocation: BootstrapInvocation, run: () => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
     if (!processLatches) return run()
     const key = JSON.stringify([invocation.version, invocation.targetSessionId, invocation.operationId, invocation.createdAt, invocation.requestDigest])
     let witness = bootstrapWitnesses.get(key)
-    if (!witness) { witness = { token: processLatches.beginMutation({ sessionIds: [invocation.targetSessionId], documentKeys: [], kind: 'other' }), active: 0, retained: false, ready: false }; bootstrapWitnesses.set(key, witness) }
+    if (!witness) { witness = { token: processLatches.beginMutation({ sessionIds: [invocation.targetSessionId], documentKeys: [], kind: 'other' }), active: 0, retained: false, ready: false, unknown: false }; bootstrapWitnesses.set(key, witness) }
     const owned = witness; owned.active++
+    const ownsIssuedWork = () => {
+      const original = documents.get(invocation.targetSessionId)?.bootstrap
+      return !!original?.issued && sameBootstrapData(original.invocation, invocation)
+    }
     let result: Promise<BootstrapOutcome>
-    try { result = run() } catch (error) { owned.active--; owned.retained = true; throw error }
+    try { result = run() } catch (error) { result = Promise.reject(error) }
     return result.then(outcome => {
       if (outcome.kind === 'ready' || outcome.kind === 'already-ready') owned.ready = true
-      else if (outcome.kind === 'blocked' || documents.get(invocation.targetSessionId)?.bootstrap?.issued) { owned.retained = true; owned.ready = false }
+      else if (ownsIssuedWork()) { owned.retained = true; owned.ready = false }
       return outcome
-    }, error => { owned.retained = true; owned.ready = false; throw error }).finally(() => {
+    }, error => { if (ownsIssuedWork()) owned.retained = true; else owned.unknown = true; owned.ready = false; throw error }).finally(() => {
       owned.active--
-      if (!owned.active && (owned.ready || !owned.retained)) { owned.token.end('settled'); bootstrapWitnesses.delete(key) }
+      if (!owned.active && (owned.ready || !owned.retained)) { owned.token.end(owned.unknown ? 'unknown' : 'settled'); bootstrapWitnesses.delete(key) }
     })
   }
   let captureClosed=false

@@ -37,8 +37,15 @@ it('retains the original target witness through a blocked bootstrap and its actu
   try {
     expect((await managed.bootstrapSemanticTarget(request, guards)).kind).toBe('blocked')
     expect(() => latches.capture({ sessionId: 'target', documentKeys: [], mode: 'cold' })).toThrow()
+    for (let n = 0; n < 12; n++) {
+      expect((await managed.resumeSemanticTarget({ ...invocation, operationId: `foreign-${n}` }, guards)).kind).toBe('refused')
+    }
     backend.prepareBootstrapHeader = original
     expect(['ready', 'already-ready']).toContain((await managed.resumeSemanticTarget(invocation, guards, request)).kind)
+    expect(() => latches.capture({ sessionId: 'target', documentKeys: [], mode: 'cold' })).not.toThrow()
+    for (let n = 0; n < 12; n++) {
+      expect((await managed.resumeSemanticTarget({ ...invocation, operationId: `foreign-ready-${n}` }, guards)).kind).toBe('refused')
+    }
     expect(() => latches.capture({ sessionId: 'target', documentKeys: [], mode: 'cold' })).not.toThrow()
   } finally { await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true }) }
 })

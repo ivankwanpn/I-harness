@@ -50,7 +50,7 @@ for (const terminal of ['committed', 'absent', 'failed-install'] as const) it(`r
         for (let retry = 0; retry < 5; retry++) expect(await document.reconcile(key!)).toMatchObject({ kind: 'unknown' });
         expect((await Promise.all([document.reconcile(key!), document.reconcile(key!)])).map(outcome => outcome.kind)).toEqual(['unknown', 'unknown']);
         expect(begins - before).toBe(1);
-        expect(begins - ends).toBe(2); // Original admission plus original reconciliation, regardless of retry count.
+        expect(begins - ends).toBe(3); // Admission, original reconciliation and original quarantine; bounded across retries.
         unknown = false; installation.fail = terminal === 'failed-install';
         const outcome = await document.reconcile(key!);
         expect(outcome.kind).toBe(terminal === 'absent' ? 'absent' : terminal === 'failed-install' ? 'recovery-required' : 'committed');

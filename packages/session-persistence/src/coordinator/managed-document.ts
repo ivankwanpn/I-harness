@@ -472,6 +472,10 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             if (completed.cleanupDiagnostic) reportCleanup();
             if (!pending) {
                 quarantined = false;
+                // Only this original pending owner has resolved quarantine.
+                // Existing readers stay invalid; fresh readers may be admitted.
+                // A distinct terminal source fault must never be cleared here.
+                if (!sourceFault && faultWitness) { faultWitness.end('settled'); faultWitness = undefined; }
                 capacity.resume();
             }
             const result = completed.results[0]!;
@@ -556,6 +560,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 const readyProperty = Object.getOwnPropertyDescriptor(document, 'assertReady');
                 if (failed || retired || !bootstrapReady || pending || queue.length || quarantined || sourceFault || recoveryHolds.size || closing || closed
                     || formatVersion !== CURRENT_FORMAT_VERSION || header?.semanticSeed !== undefined
+                    || (header?.seedLength !== undefined && header.seedLength !== 0)
                     || !viewProperty || !('value' in viewProperty) || viewProperty.value !== view
                     || !readyProperty || !('value' in readyProperty) || readyProperty.value !== originalReady
                     || state.view !== view || view.header !== header || view.events !== events

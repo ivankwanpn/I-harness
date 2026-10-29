@@ -1,0 +1,126 @@
+import { mkdtemp, mkdir, rm, stat, writeFile, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, dirname } from 'node:path'
+import { createHash } from 'node:crypto'
+import { expect, it, vi } from 'vitest'
+import { createJsonlSessionCoordinator } from '@i-harness/session-persistence-jsonl'
+import { createSessionService } from '@i-harness/session-executor'
+import type { ResultDependency } from '@i-harness/core-session'
+import { createNativeContextRuntime } from '../src/context-runtime.ts'
+
+const trace = vi.hoisted(() => ({ path: '', active: false, reads: [] as { length: number; position: number; bytes: number }[], fullReads: 0, builds: 0, decodes: 0, snapshots: 0, afterRead: undefined as ((path: string) => Promise<void>) | undefined }))
+vi.mock('../../session-persistence/src/coordinator-factory.ts', async original => {
+  const real = await original<typeof import('../../session-persistence/src/coordinator-factory.ts')>()
+  return { ...real, createSessionCoordinatorCore(...args: Parameters<typeof real.createSessionCoordinatorCore>) {
+    const coordinator = real.createSessionCoordinatorCore(...args), snapshot = coordinator.snapshot!
+    coordinator.snapshot = (...input) => { if (trace.active) trace.snapshots++; return Reflect.apply(snapshot, coordinator, input) }
+    return coordinator
+  } }
+})
+vi.mock('@i-harness/core-session', async original => {
+  const real = await original<typeof import('@i-harness/core-session')>()
+  return { ...real, readFactJournal(...args: Parameters<typeof real.readFactJournal>) { if (trace.active) trace.decodes++; return real.readFactJournal(...args) } }
+})
+vi.mock('node:fs/promises', async original => {
+  const fs = await original<typeof import('node:fs/promises')>()
+  return { ...fs, readFile: async (...args: Parameters<typeof fs.readFile>) => { if (trace.active && String(args[0]) === trace.path) trace.fullReads++; return fs.readFile(...args) }, open: async (...args: Parameters<typeof fs.open>) => {
+    const handle = await fs.open(...args), read = handle.read.bind(handle)
+    handle.read = (async (...input: [Buffer, number, number, number]) => { const result = await read(...input); if (trace.active && String(args[0]) === trace.path) trace.reads.push({ length: input[2], position: input[3], bytes: result.bytesRead }); await trace.afterRead?.(String(args[0])); return result }) as typeof handle.read
+    return handle
+  } }
+})
+vi.mock('../../session-persistence/src/coordinator/process-read-visibility.ts', async original => {
+  const real = await original<typeof import('../../session-persistence/src/coordinator/process-read-visibility.ts')>()
+  return { ...real, createProcessReadVisibility() { if (trace.active) trace.builds++; return real.createProcessReadVisibility() } }
+})
+
+it('reads real catalog members through the injected native service without visibility rescans', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-native-bridge-')), sessions = join(root, 'sessions'), settings = join(root, 'settings.json')
+  await mkdir(sessions); await writeFile(settings, '{}')
+  const coordinator = createJsonlSessionCoordinator(sessions, { lock: { enabled: true } }); await coordinator.create({ sessionId: 's' })
+  let revision = 'one'
+  const visibleRefsFor = vi.fn(async () => []), getter = () => ({ revision }), resolveScope = async () => getter
+  const native = await createNativeContextRuntime({ workspace: root, storageRoot: join(root, 'native'), coordinator, projectFor: async () => ({ revision: 'one' }), resultReadScopeFor: resolveScope, visibleRefsFor })
+  const source = await native.sourceFor('s'), output = native.contextOutput, owner = { operationId: 'member', sessionId: 's', callId: 'member', source }
+  const memberSink = await output.beginResult(output.registerResultScope(owner, () => true), 'exec-frames-v1')
+  await memberSink.write(Buffer.from('IHEXEC01\n{"channel":"stdout","frame":0,"offset":0,"end":true,"data":"eA=="}\n'))
+  const member = await memberSink.finish('complete'); if (member.kind !== 'committed') throw new Error('member refused')
+  const entries: ResultDependency[] = [{ kind: 'exec-frames', sourceId: 'native', retention: { kind: 'artifact', ref: member.ref } }]
+  const scope = output.registerResultDependencyScope({ ...owner, operationId: 'catalog', callId: 'catalog' }, () => true, entries)
+  const sink = await output.beginResult(scope, 'json-utf8-v1'); await sink.write(Buffer.from(JSON.stringify({ version: 1, kind: 'result-dependencies', entries })))
+  const catalog = await sink.finish('complete'); if (catalog.kind !== 'committed') throw new Error('catalog refused')
+  expect(await output.settleResultDependencyMembership(scope, catalog.ref)).toBe('ready')
+  await coordinator.append('s', [{ type: 'tool/call', callId: 'c', name: 'read', args: {} }, { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'unavailable', reason: 'quota', observedEncodedBytes: 0 }, dependencies: { kind: 'artifact-set', ref: catalog.ref, count: 1 } } }])
+  const reader = createSessionService({ workspace: root, coordinator, sessionId: 's', contextOutput: output, contextOutputSourceFor: native.sourceFor, contextOutputSettingsPath: settings, resultReadScopeFor: resolveScope })
+  try {
+    trace.path = join(sessions, 's.jsonl'); const historyBytes = (await stat(trace.path)).size; trace.reads = []; trace.fullReads = 0; trace.builds = 0; trace.decodes = 0; trace.active = true
+    const value = await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async o => {
+      for (let n = 0; n < 3; n++) { expect(await reader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ frames: [{ data: 'eA==' }] }); await o.check() }
+      return 'candidate'
+    }, async (candidate, o) => { o.assertCurrent(); return candidate })
+    trace.active = false
+    expect(value).toBe('candidate'); expect(trace.fullReads).toBe(0); expect(trace.snapshots).toBe(0); expect(visibleRefsFor).not.toHaveBeenCalled()
+    expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
+    expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
+    console.log(JSON.stringify({ control: 'native-process-cost', pages: 3, historyBytes, witnessBytePasses: 2, journalDecodes: trace.decodes, visibilityBuilds: trace.builds, profileReads: trace.reads.filter(read => read.length === 65536).length, profileBytes: trace.reads.filter(read => read.length === 65536).reduce((sum, read) => sum + read.bytes, 0), fullReadFileCalls: trace.fullReads, visibleRefsCalls: visibleRefsFor.mock.calls.length, catalogAndPinIO: 'actual, not counted by this probe' }))
+    const foreign = { ...member.ref, id: `ctxv1_${'f'.repeat(64)}` }
+    await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+      expect(await reader.readResultPage!('s', { ref: foreign, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'discard'
+    }, async result => result)).rejects.toThrow()
+    const copied = createSessionService({ workspace: root, coordinator, sessionId: 's', contextOutput: { ...output }, contextOutputSourceFor: native.sourceFor, contextOutputSettingsPath: settings, resultReadScopeFor: resolveScope })
+    try {
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+        expect(await copied.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'discard'
+      }, async result => result)).rejects.toThrow()
+    } finally { await copied.close() }
+    for (const mode of ['scope', 'pin'] as const) {
+      let restoredPin: { path: string; bytes: Buffer } | undefined, reachedBody = false, published = false
+      try {
+        trace.afterRead = async path => {
+          if (!path.includes(member.ref.id) || !path.endsWith('body')) return
+          trace.afterRead = undefined; reachedBody = true
+          if (mode === 'scope') { revision = 'two'; return }
+          const pin = join(dirname(path), 'pins', createHash('sha256').update('s').digest('hex') + '.json')
+          restoredPin = { path: pin, bytes: await readFile(pin) }; await rm(pin)
+        }
+        await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+          expect(await reader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
+        }, async result => { published = true; return result })).rejects.toThrow()
+        expect(reachedBody).toBe(true); expect(published).toBe(false)
+      } finally { trace.afterRead = undefined; revision = 'one'; if (restoredPin) await writeFile(restoredPin.path, restoredPin.bytes) }
+    }
+    const originalMethod = output.readExecResult
+    try {
+      output.readExecResult = async () => { throw new Error('Substituted page method ran') }
+      let published = false
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+        expect(await reader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
+      }, async result => { published = true; return result })).rejects.toThrow()
+      expect(published).toBe(false)
+    } finally { output.readExecResult = originalMethod }
+    const unlistedSink = await output.beginResult(output.registerResultScope({ ...owner, operationId: 'unlisted', callId: 'unlisted' }, () => true), 'exec-frames-v1')
+    await unlistedSink.write(Buffer.from('IHEXEC01\n{"channel":"stdout","frame":0,"offset":0,"end":true,"data":"eQ=="}\n'))
+    const unlisted = await unlistedSink.finish('complete'); if (unlisted.kind !== 'committed') throw new Error('unlisted fixture refused')
+    let memberPublished = false
+    await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+      expect(await reader.readResultPage!('s', { ref: unlisted.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
+    }, async result => { memberPublished = true; return result })).rejects.toThrow()
+    expect(memberPublished).toBe(false)
+    const foreignCoordinator = createJsonlSessionCoordinator(sessions, { lock: { enabled: true } })
+    const foreignReader = createSessionService({ workspace: root, coordinator: foreignCoordinator, sessionId: 's', contextOutput: output, resultReadScopeFor: resolveScope })
+    try {
+      let published = false
+      await expect(coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+        expect(await foreignReader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })).toMatchObject({ kind: 'unavailable' }); return 'cached'
+      }, async result => { published = true; return result })).rejects.toThrow()
+      expect(published).toBe(false)
+    } finally { await foreignReader.close(); await foreignCoordinator.close() }
+    const leave = Promise.withResolvers<void>()
+    let escaped: Promise<unknown> | undefined
+    await coordinator.withProcessReadObservation!('s', { documentKeys: [] }, async () => {
+      escaped = leave.promise.then(() => reader.readResultPage!('s', { ref: member.ref, viaCatalog: catalog.ref })); return 'original'
+    }, async result => result)
+    leave.resolve(); expect(await escaped).toMatchObject({ kind: 'unavailable' })
+    expect(visibleRefsFor).not.toHaveBeenCalled()
+  } finally { trace.active = false; trace.afterRead = undefined; await reader.close(); await native.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})

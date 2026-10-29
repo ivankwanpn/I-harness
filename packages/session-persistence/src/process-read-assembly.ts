@@ -35,12 +35,18 @@ export function assembleSessionCoordinatorWithProcessStorage(backend: Persistenc
   const original = owners!
   const cold = createColdProcessReadOwner(storage, original.latches), managed = createManagedProcessReadOwner(storage, original.managed)
   let originalMethod: SessionCoordinator['withProcessReadObservation']
+  let originalDescriptors: PropertyDescriptorMap
   const method: NonNullable<SessionCoordinator['withProcessReadObservation']> = async function<T, U>(this: SessionCoordinator, id: string, options: ProcessReadOptions, work: (observation: ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: ProcessReadObservation, last: ProcessReadUpdate) => Promise<U>) {
-    if (this !== coordinator || originalMethod !== method) throw new Error('PROCESS_READ_UNAVAILABLE')
+    if (this !== coordinator || originalMethod !== method) {
+      const originalScope = active.getStore(); if (originalScope) originalScope.failed = true
+      throw new Error('PROCESS_READ_UNAVAILABLE')
+    }
     const scopes = new WeakMap<ProcessReadObservation, Scope>()
     const assertOriginal = () => {
-      const descriptor = Object.getOwnPropertyDescriptor(coordinator, 'withProcessReadObservation')
-      if (!descriptor || !('value' in descriptor) || descriptor.value !== method) throw new Error('PROCESS_READ_UNAVAILABLE')
+      for (const [key, expected] of Object.entries(originalDescriptors)) {
+        const descriptor = Object.getOwnPropertyDescriptor(coordinator, key)
+        if (!descriptor || !('value' in descriptor) || !('value' in expected) || descriptor.value !== expected.value) throw new Error('PROCESS_READ_UNAVAILABLE')
+      }
     }
     const within: ProcessReadScopeRunner = (observation, visibility, run) => {
       let scope = scopes.get(observation)
@@ -51,12 +57,13 @@ export function assembleSessionCoordinatorWithProcessStorage(backend: Persistenc
         catch (error) { current.failed = true; throw error }
       })
     }
-    assertOriginal()
+    try { assertOriginal() } catch (error) { const originalScope = active.getStore(); if (originalScope) originalScope.failed = true; throw error }
     return (original.managed.has(id) ? managed : cold).run(id, options, work, publish, within)
   }
-  // The owner exists but is not advertised until every mutation and both
-  // original result-service bridges are qualified together.
-  const capabilityReady = false
+  // Only genuine JSONL composition installs this optional method. Generic
+  // coordinator construction does not acquire storage authority from options.
+  const capabilityReady = true
   if (capabilityReady) { originalMethod = method; Object.defineProperty(coordinator, 'withProcessReadObservation', { value: method, configurable: true, writable: true, enumerable: true }) }
+  originalDescriptors = Object.getOwnPropertyDescriptors(coordinator)
   return coordinator
 }
