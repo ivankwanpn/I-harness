@@ -54,4 +54,5 @@ export type { HeldFactOwner, IssuingFactOwner, BackendFactOutcome, OwnedFactBack
 export { isHeldFactOwner } from './coordinator/fact-owner.ts'
 
 export type { HeldTaskDocumentScope, TaskDocumentWitness, TaskDocumentAck, TaskObservation, Confirmation, RawTaskObservation, TaskDocumentBackendSession, OpenTaskDocumentSession } from './coordinator/task-document-types.ts'
+export type { TaskWriteOutcome, TaskDocumentWrite } from './coordinator/task-document-types.ts'
 export { isHeldTaskDocumentScope } from './coordinator/task-document-scope.ts'

@@ -2,6 +2,7 @@ import { lstat, open } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
+import { createOwnedDocumentWrite } from './document-write.ts'
 
 const LIMIT = 64 * 1024 * 1024
 const CHUNK = 64 * 1024
@@ -9,7 +10,7 @@ type Opener = (path: string, flags: 'r' | 'r+') => Promise<FileHandle>
 type Resource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
 
 /** Private raw observation owner. Confirmation and Documents admission are separate future owners. */
-export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope, opener: Opener = open) {
+export function createTaskDocumentObservation(root: string, path: string, scope: HeldTaskDocumentScope, opener: Opener = open, checkAvailable: () => Promise<void> = async () => {}) {
   if (!isHeldTaskDocumentScope(scope)) throw new TypeError('Invalid task document scope')
   const assert = scope.assertActive
   Reflect.apply(assert, scope, [])
@@ -20,12 +21,15 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
   let flight: Promise<Readonly<{ kind: 'absent' }> | RawTaskObservation> | undefined
   let cleanup: Promise<void> | undefined
   let confirming: Promise<Confirmation> | undefined
+  let lastConfirmation: Confirmation | undefined
   let ack: TaskDocumentAck | undefined
   let conflict = false
   // This record is private to the session and is installed only when the
   // original observation can actually be returned to its caller.
   type Original = { witness: RawTaskObservation['witness']; bytes: Buffer; file: Awaited<ReturnType<typeof lstat>>; root: Awaited<ReturnType<typeof lstat>> }
   let original: Original | undefined
+  let absentRoot: Awaited<ReturnType<typeof lstat>> | undefined
+  let ownedWrite: ReturnType<typeof createOwnedDocumentWrite> | undefined
   function guard() {
     if (!isHeldTaskDocumentScope(scope) || scope.assertActive !== assert) throw new TypeError('Changed task document scope')
     Reflect.apply(assert, scope, [])
@@ -64,7 +68,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     const rootBefore = await directories()
     let before: Awaited<ReturnType<typeof lstat>>
     try { before = await lstat(filePath) }
-    catch (error) { guard(); if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') { const rootAfter = await directories(); if (!sameDirectory(rootBefore, rootAfter)) throw new Error('Changed root'); return Object.freeze({ kind: 'absent' as const }) } throw error }
+    catch (error) { guard(); if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') { const rootAfter = await directories(); if (!sameDirectory(rootBefore, rootAfter)) throw new Error('Changed root'); absentRoot = rootBefore; return Object.freeze({ kind: 'absent' as const }) } throw error }
     guard()
     if (!before.isFile() || before.isSymbolicLink()) throw new Error('Task document is not a regular file')
     if (before.size > LIMIT) throw new Error('Task document too large')
@@ -170,6 +174,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     },
     confirm(witness: TaskDocumentWitness): Promise<Confirmation> {
       if (this !== session) return Promise.reject(new TypeError('Invalid confirmation receiver'))
+      if (ownedWrite) return Promise.reject(new Error('Task write already staged'))
       let input: Original
       try { input = confirmationInput(witness) } catch (error) { return Promise.reject(error) }
       if (confirming) return confirming
@@ -178,8 +183,20 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       const priorCleanup = cleanup
       const attempt = Promise.resolve().then(() => confirmOriginal(input, priorCleanup))
       confirming = attempt
-      void attempt.finally(() => { if (confirming === attempt) confirming = undefined }).catch(() => {})
+      void attempt.then(outcome => { lastConfirmation = outcome; if (confirming === attempt) confirming = undefined }, () => { if (confirming === attempt) confirming = undefined })
       return attempt
+    },
+    stageWrite(witness: TaskDocumentWitness, bytes: Uint8Array) {
+      if (this !== session || ownedWrite || confirming || resources.size || conflict || lastConfirmation?.kind === 'unknown') throw new TypeError('Invalid task write stage')
+      const input = confirmationInput(witness)
+      ownedWrite = createOwnedDocumentWrite({ path: filePath, bytes, preimage: { bytes: input.bytes, identity: { dev: Number(input.file.dev), ino: Number(input.file.ino) } }, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(input.root, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
+      return ownedWrite.handle
+    },
+    stageInitialize(bytes: Uint8Array) {
+      if (this !== session || ownedWrite || confirming || resources.size || !absentRoot) throw new TypeError('Invalid task initialization stage')
+      guard(); const expectedRoot = absentRoot
+      ownedWrite = createOwnedDocumentWrite({ path: filePath, bytes, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(expectedRoot, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
+      return ownedWrite.handle
     },
     settleResources(): Promise<void> {
       if (this !== session) return Promise.reject(new TypeError('Invalid observation receiver'))
@@ -188,6 +205,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       const attempt = Promise.resolve().then(async () => {
         if (flight) await flight.catch(() => {})
         if (admittedConfirmation) await admittedConfirmation.catch(() => {})
+        if (ownedWrite) await ownedWrite.settle()
         let failed = false, cause: unknown
         for (const resource of resources) try { await closeResource(resource) } catch (error) { if (!failed) { failed = true; cause = error } }
         if (failed) throw cause
