@@ -228,7 +228,12 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (['desktop/instructions/state', 'desktop/instructions/refresh', 'desktop/instructions/subscribe', 'desktop/instructions/unsubscribe', 'desktop/instructions/settings', 'desktop/instructions/configure'].includes(message.method) && handlers.instructions) {
-        try { send(makeSuccess(message.id, await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings))) }
+        try {
+          const result = await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings)
+          if (message.method === 'desktop/instructions/subscribe') {
+            if (!handlers.instructions.acknowledge((result as { subscriptionId: string }).subscriptionId, () => send(makeSuccess(message.id, result)))) throw new Error('Instruction scope changed before acknowledgement')
+          } else send(makeSuccess(message.id, result))
+        }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }

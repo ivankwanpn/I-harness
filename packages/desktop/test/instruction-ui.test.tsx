@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { InstructionSettings } from '../src/renderer/settings/InstructionSettings.tsx'
 import { InstructionsPane } from '../src/renderer/session/InstructionsPane.tsx'
@@ -8,6 +8,30 @@ import { useLocale } from '../src/renderer/design/i18n.ts'
 const originalLocale = useLocale.getState().locale
 beforeEach(() => useLocale.setState({ locale: 'en' }))
 afterEach(() => { cleanup(); useLocale.setState({ locale: originalLocale }) })
+const snapshot = (revision: number, fingerprint: string, subscriptionId?: string) => ({ subscriptionId, scope: { sessionId: 'p' }, cursor: { epoch: 'e', revision }, report: { state: 'ready', publication: { fingerprint, bytes: 0, sources: [] } } })
+
+it('keeps a newer manual snapshot when the initial subscription acknowledgement arrives late', async () => {
+  const ack = Promise.withResolvers<unknown>()
+  const request = vi.fn(async (input: { kind: string }) => input.kind === 'desktop/instructions/subscribe' ? ack.promise : input.kind === 'desktop/instructions/refresh' ? snapshot(3, 'newer-publication') : {})
+  const view = render(<InstructionsPane workspaceId="w" sessionId="p" bridge={{ request: request as never, onEvent: () => () => {} }} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await screen.findByText(/newer-publication/)
+  await act(async () => { ack.resolve(snapshot(1, 'older-publication', 'original-id')) })
+  expect(screen.queryByText(/older-publication/)).toBeNull(); expect(screen.getByText(/newer-publication/)).toBeTruthy()
+  view.unmount(); await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/unsubscribe', workspaceId: 'w', subscriptionId: 'original-id' }))
+})
+
+it('retains explicit refresh intent while a passive state read is in flight', async () => {
+  const state = Promise.withResolvers<unknown>(); let listener: (event: any) => void = () => {}
+  const request = vi.fn(async (input: { kind: string }) => input.kind === 'desktop/instructions/subscribe' ? snapshot(1, 'initial', 's') : input.kind === 'desktop/instructions/state' ? state.promise : input.kind === 'desktop/instructions/refresh' ? snapshot(4, 'manually-refreshed') : {})
+  render(<InstructionsPane workspaceId="w" sessionId="p" bridge={{ request: request as never, onEvent: callback => { listener = callback; return () => {} } }} />)
+  await screen.findByText(/initial/)
+  act(() => listener({ kind: 'sdk/notification', workspaceId: 'w', method: 'desktop/instructions/changed', params: { subscriptionId: 's', scope: { sessionId: 'p' }, cursor: { epoch: 'e', revision: 2 }, reason: 'changed' } }))
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+  await act(async () => { state.resolve(snapshot(3, 'passive')) })
+  await screen.findByText(/manually-refreshed/)
+  expect(request.mock.calls.filter(([input]) => input.kind === 'desktop/instructions/refresh')).toHaveLength(1)
+})
 it('keeps the dirty settings draft when the original save rejects', async () => {
   const request = vi.fn(async (input: { kind: string }) => { if (input.kind === 'desktop/instructions/settings') return { saved: { enabled: true, maxBytes: 24000 } }; throw new Error('saved write failed') })
   render(<InstructionSettings workspaceId="w" bridge={{ request: request as never, onEvent: () => () => {} }} />)
@@ -83,3 +107,31 @@ it('mounts instruction settings in the existing execution settings section', asy
   expect(await screen.findByRole('heading', { name: 'Instruction settings' })).toBeTruthy()
   expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/settings', workspaceId: 'w' })
 })
+
+it('opens authorized selected-child instructions through the mounted workbench and fences hidden child replies', async () => {
+  const { Workbench } = await import('../src/renderer/shell/Workbench.tsx'), { useUiStore } = await import('../src/renderer/shell/ui-store.ts')
+  const ack = Promise.withResolvers<unknown>()
+  const request = vi.fn(async (input: any) => {
+    if (input.kind === 'desktop/session/subagents/list') return { parentSessionId: 'p', agents: ['a', 'b'].map(sessionId => ({ sessionId, parentSessionId: 'p', path: `/root/${sessionId}`, label: sessionId, status: 'waiting', live: true })) }
+    if (input.kind === 'desktop/session/subagents/history') return { events: [], nextSeq: 0 }
+    if (input.kind === 'desktop/instructions/subscribe') return input.childSessionId === 'a' ? ack.promise : { ...snapshot(3, 'child-b-publication', 'b-id'), scope: { sessionId: 'p', childSessionId: 'b' } }
+    if (input.kind === 'desktop/instructions/refresh') return { ...snapshot(4, 'child-b-refreshed'), scope: { sessionId: 'p', childSessionId: 'b' } }
+    return {}
+  })
+  useUiStore.setState({ reviewOpen: false, surface: 'conversation' })
+  try {
+    const view = render(<Workbench projects={[]} bridge={{ request: request as never, onEvent: () => () => {} }} workspaces={[{ id: 'w', path: 'D:/workspace', label: 'workspace' }]} selectedWorkspaceId="w" selectedSessionId="p" capabilities={{ 'desktop-instructions': ['1'], 'desktop-subagent-catalog': ['1'] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} conversation={{ rows: [], canSend: false, running: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+    fireEvent.click(screen.getByRole('button', { name: /workbench tools/i })); fireEvent.click(screen.getByRole('button', { name: 'Subagents' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'View subagent a' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Instruction sources' }))
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/subscribe', workspaceId: 'w', sessionId: 'p', childSessionId: 'a' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Back to subagents' })); fireEvent.click(await screen.findByRole('button', { name: 'View subagent b' })); fireEvent.click(await screen.findByRole('button', { name: 'Instruction sources' }))
+    await screen.findByText(/child-b-publication/)
+    await act(async () => { ack.resolve({ ...snapshot(1, 'late-child-a', 'a-id'), scope: { sessionId: 'p', childSessionId: 'a' } }) })
+    expect(screen.queryByText(/late-child-a/)).toBeNull()
+    await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/unsubscribe', workspaceId: 'w', subscriptionId: 'a-id' }))
+    fireEvent.click(within(screen.getByRole('region', { name: 'Instruction sources' })).getByRole('button', { name: 'Refresh' })); await screen.findByText(/child-b-refreshed/)
+    expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/refresh', workspaceId: 'w', sessionId: 'p', childSessionId: 'b' })
+    view.unmount(); await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: 'desktop/instructions/unsubscribe', workspaceId: 'w', subscriptionId: 'b-id' }))
+  } finally { ack.resolve(snapshot(1, 'settled', 'a-id')); useUiStore.setState({ reviewOpen: false, surface: 'conversation', sidebarCollapsed: false }) }
+}, 15000)

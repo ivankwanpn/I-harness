@@ -390,7 +390,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       const snapshot=await coordinator.snapshot!(target)
       const refs=snapshot.session.events.flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
       await nativeContext.inheritFork(parent,target,refs)
-    }, moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
+    }, onVisibilityWithdrawn: id => instructions.revokeSession(id), moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
     activeWork: async id => (await workflow.read(id)).goalRun?.running === true, drainSession })
   const schedules = createDesktopSchedules(coordinator, service)
   const rewind = createDesktopRewind(options.sessionDir, options.workspace, coordinator, service)

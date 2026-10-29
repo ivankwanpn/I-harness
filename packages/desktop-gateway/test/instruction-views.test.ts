@@ -21,6 +21,7 @@ it('observes a real live publication through one scoped subscription and cleans 
   try {
     await service.assemblyFor(id)
     const first = await views.subscribe({ sessionId: id }), second = await views.subscribe({ sessionId: id })
+    views.acknowledge(first.subscriptionId); views.acknowledge(second.subscriptionId)
     expect(first.report.state).toBe('not-published'); expect(second.cursor).toEqual(first.cursor)
     await service.submit(id, 'hello', new AbortController().signal)
     await vi.waitFor(() => { for (const subscriptionId of [first.subscriptionId, second.subscriptionId]) expect(events).toContainEqual(expect.objectContaining({ subscriptionId, reason: 'changed' })) })
@@ -30,7 +31,7 @@ it('observes a real live publication through one scoped subscription and cleans 
     await vi.waitFor(() => { for (const subscriptionId of [first.subscriptionId, second.subscriptionId]) expect(events).toContainEqual(expect.objectContaining({ subscriptionId, reason: 'revoked' })) })
     await expect(views.read({ sessionId: id })).rejects.toThrow('foreign parent')
     allowed = true; views.unsubscribe(first.subscriptionId); views.unsubscribe(second.subscriptionId)
-    const third = await views.subscribe({ sessionId: id }); const prior = events.length
+    const third = await views.subscribe({ sessionId: id }); views.acknowledge(third.subscriptionId); const prior = events.length
     hold = true; await service.reconcileExecutionAuthority([id]); await entered.promise
     views.unsubscribe(third.subscriptionId); gate.resolve(); await Promise.resolve(); await Promise.resolve(); expect(events).toHaveLength(prior)
     hold = false; await service.refreshInstructions!(id); await Promise.resolve(); expect(events).toHaveLength(prior)
@@ -66,7 +67,7 @@ it('catches an actual publication during the original subscription snapshot', as
     await service.assemblyFor(id)
     const subscribing = views.subscribe({ sessionId: id }); await entered.promise
     await service.submit(id, 'hello', new AbortController().signal)
-    gate.resolve(); const initial = await subscribing
+    gate.resolve(); const initial = await subscribing; views.acknowledge(initial.subscriptionId)
     await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ subscriptionId: initial.subscriptionId, reason: 'changed', cursor: expect.objectContaining({ revision: expect.any(Number) }) })))
     expect(events.some(event => event.subscriptionId === initial.subscriptionId && event.cursor.revision > initial.cursor.revision)).toBe(true)
     expect(server.requests).toHaveLength(1)
@@ -96,6 +97,9 @@ it('delivers live published instruction metadata through actual host RPC and not
     await expect(call('desktop/instructions/configure', { patch: { maxBytes: -1 } })).rejects.toThrow()
     expect((await call('desktop/instructions/settings')).saved).toMatchObject({ enabled: false, maxBytes: 0 })
     await vi.waitFor(async () => { const updated = await call('desktop/instructions/state', { sessionId }); expect(updated.report.effectivePolicy).toMatchObject({ enabled: false, maxBytes: 0 }); expect(updated.report.state).not.toBe('ready') })
+    await call('desktop/session/manage', { sessionId, action: 'archive' })
+    await vi.waitFor(() => expect(frames).toContainEqual(expect.objectContaining({ method: 'desktop/instructions/changed', params: expect.objectContaining({ subscriptionId: subscription.subscriptionId, reason: 'revoked' }) })))
+    await expect(call('desktop/instructions/state', { sessionId })).rejects.toThrow()
     await call('desktop/instructions/unsubscribe', { subscriptionId: subscription.subscriptionId }); expect(server.requests).toHaveLength(sentBeforeRefresh)
   } finally { await host.close(); globalThis.fetch = previousFetch; await server.close(); await rm(base, { recursive: true, force: true }) }
 }, 20000)
@@ -114,6 +118,22 @@ it('authorizes only the actual live child lineage before exposing child publicat
     const report = await views.read({ sessionId: id, childSessionId: child! })
     expect(report).toMatchObject({ state: 'ready', publication: { sources: [{ path: join(workspace, 'AGENTS.md'), state: 'loaded' }] } })
     await expect(views.read({ sessionId: foreign, childSessionId: child! })).rejects.toThrow()
+    // Retire the real child through its original registered control while the
+    // final authorization awaits; the observation Session row remains retained.
+    let holding = false, checks = 0
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), events: any[] = []
+    const lifetimeViews = createInstructionViews(coordinator, service, async () => { if (holding && ++checks === 4) { entered.resolve(); await release.promise }; return 'same-project' }, event => events.push(event))
+    try {
+      const subscribed = await lifetimeViews.subscribe({ sessionId: id, childSessionId: child! }); lifetimeViews.acknowledge(subscribed.subscriptionId)
+      holding = true
+      const reading = lifetimeViews.read({ sessionId: id, childSessionId: child! }); await entered.promise
+      const entry = assembly.subagentState().agentTable.find(row => row.sessionId === child)!
+      await assembly.tools.get('close_agent')!.execute({ target: entry.path }, { sessionId: id })
+      release.resolve()
+      expect((await reading).state).toBe('revoked')
+      await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({ subscriptionId: subscribed.subscriptionId, reason: 'revoked' })))
+      expect(assembly.instructionDiagnostics?.(child!)).toBeUndefined()
+    } finally { release.resolve(); lifetimeViews.close() }
     expect(server.errors).toEqual([])
   } finally { views.close(); await service.close().catch(() => {}); await coordinator.close(); await server.close(); await rm(workspace, { recursive: true, force: true }); await rm(root, { recursive: true, force: true }) }
 }, 15000)

@@ -6,19 +6,22 @@ type Change = { subscriptionId: string; scope: Snapshot['scope']; cursor: Snapsh
 export function useInstructionObservation(bridge: DesktopBridge, workspaceId: string, sessionId: string, childSessionId?: string) {
   const [report, setReport] = useState<InstructionReport>(), [error, setError] = useState<string>()
   const [connectionAttempt, setConnectionAttempt] = useState(0)
-  const state = useRef<{ active: boolean; disconnected?: boolean; id?: string; cursor?: Snapshot['cursor']; busy: boolean; dirty: boolean }>({ active: false, busy: false, dirty: false })
+  const state = useRef<{ active: boolean; disconnected?: boolean; id?: string; cursor?: Snapshot['cursor']; busy: boolean; dirty: boolean; manual?: boolean }>({ active: false, busy: false, dirty: false })
+  const accept = useCallback((owner: typeof state.current, snapshot: Snapshot) => {
+    if (!owner.active || state.current !== owner || snapshot.scope?.sessionId !== sessionId || snapshot.scope.childSessionId !== childSessionId) return false
+    if (owner.cursor && (snapshot.cursor.epoch !== owner.cursor.epoch || snapshot.cursor.revision < owner.cursor.revision)) return false
+    owner.cursor = snapshot.cursor; setReport(snapshot.report); setError(undefined); return true
+  }, [sessionId, childSessionId])
   const refresh = useCallback(async (manual = false) => {
     const owner = state.current; if (!owner.active) return
-    if (owner.busy) { owner.dirty = true; return }
+    if (owner.busy) { owner.dirty = true; owner.manual ||= manual; return }
     owner.busy = true
     try {
       const snapshot = await bridge.request({ kind: manual ? 'desktop/instructions/refresh' : 'desktop/instructions/state', workspaceId, sessionId, ...(childSessionId ? { childSessionId } : {}) }) as Snapshot
-      if (!owner.active || state.current !== owner) return
-      if (owner.cursor && (snapshot.cursor.epoch !== owner.cursor.epoch || snapshot.cursor.revision < owner.cursor.revision)) return
-      owner.cursor = snapshot.cursor; setReport(snapshot.report); setError(undefined)
+      accept(owner, snapshot)
     } catch (reason) { if (owner.active && state.current === owner) setError(reason instanceof Error ? reason.message : String(reason)) }
-    finally { owner.busy = false; if (owner.active && owner.dirty) { owner.dirty = false; void refresh() } }
-  }, [bridge, workspaceId, sessionId, childSessionId])
+    finally { owner.busy = false; if (owner.active && state.current === owner && owner.dirty) { const manual = owner.manual === true; owner.dirty = false; owner.manual = false; void refresh(manual) } }
+  }, [bridge, workspaceId, sessionId, childSessionId, accept])
   useEffect(() => {
     const owner = { active: true, busy: false, dirty: false } as typeof state.current; state.current = owner; setReport(undefined); setError(undefined)
     const buffered: Change[] = []; let overflow = false
@@ -40,12 +43,12 @@ export function useInstructionObservation(bridge: DesktopBridge, workspaceId: st
     void bridge.request({ kind: 'desktop/instructions/subscribe', workspaceId, sessionId, ...(childSessionId ? { childSessionId } : {}) }).then(value => {
       const snapshot = value as Snapshot
       if (!snapshot.subscriptionId) throw new Error('Instruction subscription unavailable')
-      if (!owner.active) { if (!owner.disconnected) void bridge.request({ kind: 'desktop/instructions/unsubscribe', workspaceId, subscriptionId: snapshot.subscriptionId }).catch(() => {}); return }
-      owner.id = snapshot.subscriptionId; owner.cursor = snapshot.cursor; setReport(snapshot.report)
+      if (!owner.active || state.current !== owner) { if (!owner.disconnected) void bridge.request({ kind: 'desktop/instructions/unsubscribe', workspaceId, subscriptionId: snapshot.subscriptionId }).catch(() => {}); return }
+      owner.id = snapshot.subscriptionId; accept(owner, snapshot)
       for (const event of buffered) receive(event)
       if (overflow) void refresh()
     }).catch(reason => { if (owner.active) setError(reason instanceof Error ? reason.message : String(reason)) })
     return () => { owner.active = false; off(); if (owner.id && !owner.disconnected) void bridge.request({ kind: 'desktop/instructions/unsubscribe', workspaceId, subscriptionId: owner.id }).catch(() => {}) }
-  }, [bridge, workspaceId, sessionId, childSessionId, refresh, connectionAttempt])
+  }, [bridge, workspaceId, sessionId, childSessionId, refresh, accept, connectionAttempt])
   return { report, error, refresh: () => { if (!state.current.active) { setConnectionAttempt(value => value + 1); return }; return refresh(true) } }
 }
