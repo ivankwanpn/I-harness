@@ -1,6 +1,6 @@
 import { savedResultDescriptor } from './saved-result-json.ts'
 import { createHash } from 'node:crypto'
-import { sameManagedArtifactRef, validManagedArtifactRef, type SessionView } from "@i-harness/core-session"
+import { sameManagedArtifactRef, validManagedArtifactRef, type SessionView, type ManagedArtifactRef } from "@i-harness/core-session"
 type Fact = Record<string, any>
 type Cut = { cutFrom: number; markerSeq: number }
 function effectiveCuts(events: readonly unknown[]): Cut[] {
@@ -23,7 +23,7 @@ function hidden(seq: unknown, cuts: Cut[]): boolean {
 export interface SavedCall {
   callIndex: number; resultIndex: number; callSeq?: number; resultSeq?: number; dispatchSeq?: number
   surface: 'tool' | 'code'; cellId?: string; parentCallId?: string; callId: string; name: string
-  args: unknown; value: unknown; provenance: 'inline' | 'legacy' | 'artifact'; descriptor?: NonNullable<ReturnType<typeof savedResultDescriptor>>
+  catalog?: ManagedArtifactRef; args: unknown; value: unknown; provenance: 'inline' | 'legacy' | 'artifact'; descriptor?: NonNullable<ReturnType<typeof savedResultDescriptor>>
 }
 /** Decode only uniquely paired original facts. This is evidence, not read authority. */
 export function decodeSavedCalls(events: readonly unknown[], owner: string): SavedCall[] {
@@ -69,18 +69,21 @@ export function decodeSavedCalls(events: readonly unknown[], owner: string): Sav
       const di = group.dispatches[0]!, dispatch = facts[di]!
       if (di <= ci || di >= ri || dispatch.eventSeq !== undefined && dispatch.eventSeq !== call.seq) continue
     }
+    let catalog: ManagedArtifactRef | undefined
     let value: unknown, provenance: SavedCall['provenance'], descriptor: SavedCall['descriptor']
     if ('envelope' in result) {
       if ('output' in result || 'isError' in result) continue
       const envelope = result.envelope
       if (!envelope || envelope.execution?.outcome !== 'succeeded' || envelope.execution?.dispatch !== 'dispatched') continue
+      const dep = envelope.dependencies
+      if (dep?.kind === 'artifact-set' && dep.count === 1 && validManagedArtifactRef(dep.ref) && dep.ref.codec === 'json-utf8-v1' && dep.ref.encodedBytes <= 65536 && ['complete', 'source-limited'].includes(dep.ref.completeness)) catalog = Object.freeze({ ...dep.ref })
       if (envelope.retention?.kind === 'inline' && Object.hasOwn(envelope.retention, 'value')) { value = envelope.retention.value; provenance = 'inline' }
       else { descriptor = savedResultDescriptor(envelope); if (!descriptor) continue; provenance = 'artifact' }
     } else {
       if (!('output' in result) || result.isError) continue
       value = result.output; provenance = 'legacy'
     }
-    out.push({ callIndex: ci, resultIndex: ri, callSeq: call.seq, resultSeq: result.seq, dispatchSeq: group.dispatches.length ? facts[group.dispatches[0]!]!.seq : undefined, surface, cellId: surface === 'code' ? call.cellId : undefined, parentCallId: call.parentCallId, callId: call.callId, name: call.name, args: structuredClone(call.args), value: structuredClone(value), provenance, descriptor })
+    out.push({ callIndex: ci, resultIndex: ri, callSeq: call.seq, resultSeq: result.seq, dispatchSeq: group.dispatches.length ? facts[group.dispatches[0]!]!.seq : undefined, surface, cellId: surface === 'code' ? call.cellId : undefined, parentCallId: call.parentCallId, callId: call.callId, name: call.name, args: structuredClone(call.args), value: structuredClone(value), provenance, descriptor, catalog })
   }
   return out.sort((a, b) => a.resultIndex - b.resultIndex)
 }
@@ -207,8 +210,8 @@ export interface FixedSavedSelection {
 }
 /** Request-local fixed evidence. Only new suffix records are consumed after creation.
  * The caller still owns visibility, project epoch and original read-store authority. */
-export function createFixedSavedSelection(initial: SavedProcessInitial, owner: string, id: string, instanceId?: string): FixedSavedSelection {
-  const selected = buildObservedSavedProcessIndex(initial, owner).select(id, instanceId)
+export function createFixedSavedSelection(initial: SavedProcessInitial, owner: string, id: string, instanceId?: string, prepared?: ReturnType<typeof buildSavedProcessIndex>): FixedSavedSelection {
+  const selected = (prepared ?? buildObservedSavedProcessIndex(initial, owner)).select(id, instanceId)
   if (selected.kind !== 'selected') throw new Error('Process selection unavailable: ' + selected.kind)
   const fixed = structuredClone(selected.candidate), evidence: Fact = {}
   let cuts = effectiveCuts(initial.session.events)

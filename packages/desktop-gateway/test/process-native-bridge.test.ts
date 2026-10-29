@@ -1,3 +1,7 @@
+import { createAgentProcesses } from '../src/agent-processes.ts'
+import { createAgentProcessReadRunner } from '../src/agent-process-read.ts'
+import { createConversationResultReader } from '../src/result-reader.ts'
+import { createSessionManagementFence } from '../src/session-management-fence.ts'
 import { mkdtemp, mkdir, rm, stat, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -9,7 +13,11 @@ import type { ResultDependency } from '@i-harness/core-session'
 import { createNativeContextRuntime } from '../src/context-runtime.ts'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
 
-const trace = vi.hoisted(() => ({ path: '', active: false, reads: [] as { length: number; position: number; bytes: number }[], fullReads: 0, builds: 0, decodes: 0, snapshots: 0, afterRead: undefined as ((path: string) => Promise<void>) | undefined }))
+const trace = vi.hoisted(() => ({ path: '', active: false, reads: [] as { length: number; position: number; bytes: number }[], fullReads: 0, builds: 0, decodes: 0, snapshots: 0, gatewayBuilds: 0, afterRead: undefined as ((path: string) => Promise<void>) | undefined }))
+vi.mock('../src/saved-process-index.ts', async original => {
+  const real = await original<typeof import('../src/saved-process-index.ts')>()
+  return { ...real, buildObservedSavedProcessIndex(...args: Parameters<typeof real.buildObservedSavedProcessIndex>) { if (trace.active) trace.gatewayBuilds++; return real.buildObservedSavedProcessIndex(...args) } }
+})
 vi.mock('../../session-persistence/src/coordinator-factory.ts', async original => {
   const real = await original<typeof import('../../session-persistence/src/coordinator-factory.ts')>()
   return { ...real, createSessionCoordinatorCore(...args: Parameters<typeof real.createSessionCoordinatorCore>) {
@@ -52,6 +60,19 @@ it('reads real catalog members through the injected native service without visib
   const catalog = await sink.finish('complete'); if (catalog.kind !== 'committed') throw new Error('catalog refused')
   expect(await output.settleResultDependencyMembership(scope, catalog.ref)).toBe('ready')
   await coordinator.append('s', [{ type: 'tool/call', callId: 'c', name: 'read', args: {} }, { type: 'tool/result', callId: 'c', name: 'read', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'unavailable', reason: 'quota', observedEncodedBytes: 0 }, dependencies: { kind: 'artifact-set', ref: catalog.ref, count: 1 } } }])
+  const nativeJob = { version: 1, jobId: 'bash-1', instanceId: 'probe-native-instance', ownerSessionId: 's', sourceId: 'native' }
+  const digest = (text: string) => createHash('sha256').update(text).digest('hex')
+  const dtoValue = { job_id: 'bash-1', native_job: nativeJob, status: 'completed', source: { kind: 'retained-summary' }, scope: 'captured', completeness: 'complete', total_bytes: 1, stderr_total_bytes: 0, total_raw_bytes: 1, digest: digest('x'), stderr_digest: digest(''), digest_format: 'sha256-raw-v1', text: 'x', offset_bytes: 0, next_offset_bytes: 1, truncated: false,
+    full_result: { tool: 'context_output_read', args: { ref: member.ref, maxBytes: 32768 }, access: 'catalog-required', catalog_from: 'envelope.dependencies.ref' } }
+  const dtoSink = await output.beginResult(output.registerResultScope({ ...owner, operationId: 'dto', callId: 'dto' }, () => true), 'json-utf8-v1')
+  await dtoSink.write(Buffer.from(JSON.stringify(dtoValue))); const dto = await dtoSink.finish('complete'); if (dto.kind !== 'committed') throw new Error('DTO refused')
+  const inline = { job_id: 'bash-1', native_job: nativeJob }
+  await coordinator.append('s', [
+    { type: 'tool/call', callId: 'start', name: 'shell', args: {} },
+    { type: 'tool/result', callId: 'start', name: 'shell', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'inline', value: inline, encodedBytes: Buffer.byteLength(JSON.stringify(inline)) } } },
+    { type: 'tool/call', callId: 'dto', name: 'job_output', args: { job_id: 'bash-1', job_instance_id: nativeJob.instanceId } },
+    { type: 'tool/result', callId: 'dto', name: 'job_output', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'non-authority', media: [], retention: { kind: 'artifact', ref: dto.ref }, dependencies: { kind: 'artifact-set', ref: catalog.ref, count: 1 } } },
+  ])
   const reader = createSessionService({ workspace: root, coordinator, sessionId: 's', contextOutput: output, contextOutputSourceFor: native.sourceFor, contextOutputSettingsPath: settings, resultReadScopeFor: resolveScope })
   try {
     trace.path = join(sessions, 's.jsonl'); const historyBytes = (await stat(trace.path)).size; trace.reads = []; trace.fullReads = 0; trace.builds = 0; trace.decodes = 0; trace.active = true
@@ -64,6 +85,26 @@ it('reads real catalog members through the injected native service without visib
     expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
     expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
     console.log(JSON.stringify({ control: 'native-process-cost', pages: 3, historyBytes, witnessBytePasses: 2, journalDecodes: trace.decodes, visibilityBuilds: trace.builds, profileReads: trace.reads.filter(read => read.length === 65536).length, profileBytes: trace.reads.filter(read => read.length === 65536).reduce((sum, read) => sum + read.bytes, 0), fullReadFileCalls: trace.fullReads, visibleRefsCalls: visibleRefsFor.mock.calls.length, catalogAndPinIO: 'actual, not counted by this probe' }))
+    trace.reads = []; trace.fullReads = 0; trace.builds = 0; trace.decodes = 0; trace.gatewayBuilds = 0; trace.snapshots = 0
+    const fence = createSessionManagementFence(), isConversation = async () => true
+    const conversationRead = createConversationResultReader(coordinator, reader, isConversation, fence)!
+    let selectedPages = 0
+    const processes = createAgentProcesses(coordinator, reader, { runRead: createAgentProcessReadRunner({ coordinator, service: reader, isConversation, fence, resultReadScopeFor: resolveScope,
+      readResultPage: async (id, query) => { selectedPages++; return conversationRead(id, query) } }) })
+    trace.active = true
+    const selected = await processes.jobOutput('s', 'bash-1', { backend: 'shell', mode: 'frames', instanceId: nativeJob.instanceId })
+    trace.active = false
+    expect(selected).toMatchObject({ kind: 'frames', page: { frames: [{ data: 'eA==' }] } })
+    expect(selectedPages).toBe(3)
+    expect(trace.fullReads).toBe(0); expect(trace.snapshots).toBe(0); expect(trace.gatewayBuilds).toBe(1); expect(trace.builds).toBe(1); expect(trace.decodes).toBe(1)
+    expect(trace.reads.filter(read => read.position === 0 && read.length === historyBytes + 1 && read.bytes === historyBytes)).toHaveLength(2)
+    console.log(JSON.stringify({ control: 'gateway-selected-dto-catalog-body', selectedPages, historyBytes, witnessBytePasses: 2, gatewayBuilds: trace.gatewayBuilds, visibilityBuilds: trace.builds, journalDecodes: trace.decodes, snapshots: trace.snapshots, fullReadFileCalls: trace.fullReads, catalogAndPinIO: 'original membership IO remains separately required' }))
+    selectedPages = 0; trace.reads = []; trace.fullReads = 0; trace.snapshots = 0; trace.gatewayBuilds = 0; trace.builds = 0; trace.decodes = 0; trace.active = true
+    const passiveRows = await processes.read('s')
+    trace.active = false
+    expect(passiveRows.jobs).toContainEqual(expect.objectContaining({ jobId: 'bash-1', outputAvailable: true, live: false, canCancel: false }))
+    expect(selectedPages).toBe(0); expect(reader.hasAssembly('s')).toBe(false); expect(trace.snapshots).toBe(0); expect(trace.fullReads).toBe(0); expect(trace.gatewayBuilds).toBe(1)
+    console.log(JSON.stringify({ control: 'gateway-passive-process-list', artifactPages: selectedPages, gatewayBuilds: trace.gatewayBuilds, snapshots: trace.snapshots, fullReadFileCalls: trace.fullReads, hasAssembly: reader.hasAssembly('s') }))
     let publishBodies = 0
     trace.reads = []; trace.active = true
     trace.afterRead = async path => { if (path.endsWith('body')) publishBodies++ }

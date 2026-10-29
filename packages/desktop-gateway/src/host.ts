@@ -1,3 +1,4 @@
+import { createAgentProcessReadRunner } from './agent-process-read.ts'
 import type { ContextResultRef } from "@i-harness/context-output"
 import type { ManagedArtifactRef } from "@i-harness/core-session"
 import { createModelWaitSettings } from "./model-wait-settings.ts"
@@ -14,8 +15,8 @@ import { deriveSessionTitle, rewindCuts, semanticSeedResultRefs } from "@i-harne
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
-import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+
+import { createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
@@ -124,7 +125,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
-  const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
+  const coordinator = createJsonlSessionCoordinator(options.sessionDir, {
     lock: { enabled: true, lockRoot: options.sessionDir },
   })
   const compactionSignals = new Map<string, AbortSignal>()
@@ -388,7 +389,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return state.status === "ready" ? (await service.assemblyFor(id)).session : await createDurableSessionLoader(coordinator)(id)
   } })
   const execution = createDesktopExecution(coordinator, service)
-  const agentProcesses = createAgentProcesses(coordinator, service)
+  const conversationRead = createConversationResultReader(coordinator, service, isConversation, fence)
+  const agentProcesses = createAgentProcesses(coordinator, service, { runRead: createAgentProcessReadRunner({ coordinator, service, isConversation, fence, resultReadScopeFor: projects.resultReadScopeFor, readResultPage: conversationRead }) })
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
     workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
@@ -435,7 +437,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   }
   const internalIds = new Set<string>()
   const base = createSdkServer(service, {
-    readResultPage: createConversationResultReader(coordinator, service, isConversation, fence),
+    readResultPage: conversationRead,
     supportsResultDependencyMembership: true,
     coordinator,
     modelState: async (sessionId) => {

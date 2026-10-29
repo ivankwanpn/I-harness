@@ -69,7 +69,7 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
         if (process) {
           const currentGetter = await options.resultReadScopeFor!(sessionId)
           process.assertCurrent()
-          if (currentGetter !== getter) throw new Error('Result read scope owner changed')
+          if (!!currentGetter !== !!getter || currentGetter?.().revision !== getter?.().revision) throw new Error('Result read scope owner changed')
         }
       } catch (cause) { result = deny(resultPageFailure(cause)) }
       finally {
@@ -90,7 +90,7 @@ export function createResultPageReader(options: ResultStoreOptions, available: (
         if (process) {
           const currentGetter = await options.resultReadScopeFor!(sessionId)
           process.assertCurrent(); assertScope()
-          if (currentGetter !== getter) return deny()
+          if (!!currentGetter !== !!getter || currentGetter?.().revision !== getter?.().revision) return deny()
         }
       } catch { return deny() }
       return available(sessionId) ? result : deny()
