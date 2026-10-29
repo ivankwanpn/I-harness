@@ -62,10 +62,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   let modelLabel: string | undefined
   let initial: InitialChildInput | undefined
   let document: import('@i-harness/session-persistence').ManagedDocument | undefined
-  let preparedRuntime: import('@i-harness/code-mode').CodeModeMount | undefined
   let closeDocument: (() => Promise<void>) | undefined, revokeDocument: (() => void) | undefined, closeInitial: (() => Promise<void>) | undefined
   let cancelRuntime: ((reason?: string) => Promise<void>) | undefined, disposeRuntime: (() => Promise<void>) | undefined
   let instruction: import('./child/instruction-context.ts').ChildInstructionContext | undefined
+  let instructionCleanup: Pick<import('./child/instruction-context.ts').ChildInstructionContext, 'retire' | 'close'> | undefined
   let failedInstructionInput: import('./child/instruction-context.ts').ChildInstructionContextInput | undefined, failedInstructionSettled = false
   let instructionAvailable = true
   let transferred = false, publishedEntry: import('./agent-table.ts').ChildAgentEntry | undefined, releaseSetup: (() => void) | undefined
@@ -74,7 +74,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   let setupFlight: Promise<void> | undefined
   const setupExit = Promise.withResolvers<void>()
   const setup: import('./child/instruction-context.ts').InitialChildSetup = {
-    retire() { instructionAvailable = false; controller.abort(); try { instruction?.retire() } catch (error) { retirementFault = { error } } },
+    retire() { instructionAvailable = false; controller.abort(); try { instructionCleanup?.retire() } catch (error) { retirementFault = { error } } },
     close() {
       if (setupClosed || transferred) return Promise.resolve()
       if (setupFlight) return setupFlight
@@ -84,12 +84,12 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
         instructionAvailable = false; controller.abort()
         const failures: unknown[] = []
         if (retirementFault) { failures.push(retirementFault.error); retirementFault = undefined }
-        else try { instruction?.retire() } catch (error) { failures.push(error) }
+        else try { instructionCleanup?.retire() } catch (error) { failures.push(error) }
         if (!mountCancelled) try { await cancelRuntime?.('Child preparation failed'); mountCancelled = true } catch (error) { failures.push(error) }
         if (!mountDisposed) try { await disposeRuntime?.(); mountDisposed = true } catch (error) { failures.push(error) }
         if (!initialClosed) try { await closeInitial?.(); initialClosed = true } catch (error) { failures.push(error) }
         if (failures.length) throw new AggregateError(failures, 'Original child setup producer cleanup incomplete')
-        if (!instructionClosed) { await instruction?.close(); instructionClosed = true }
+        if (!instructionClosed) { await instructionCleanup?.close(); instructionClosed = true }
         if (failedInstructionInput && !failedInstructionSettled) {
           if (!failedSettlement) throw Object.assign(new Error('Original failed child instruction cleanup unavailable'), { code: 'FACT_RECOVERY_REQUIRED' })
           await failedSettlement(failedInstructionInput); failedInstructionSettled = true
@@ -124,8 +124,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   controller.signal.throwIfAborted()
   if (createInstruction) {
     const input = { session: childSession, factOwner, lifetime: { available: () => instructionAvailable } }
-    try { instruction = invokeOriginal(setup, () => captureChildInstructionContext(createInstruction(input), () => { instructionAvailable = false })) }
+    let returned: import('./child/instruction-context.ts').ChildInstructionContext
+    try { returned = invokeOriginal(setup, () => createInstruction(input)) }
     catch (error) { failedInstructionInput = input; throw error }
+    instruction = captureChildInstructionContext(returned, () => { instructionAvailable = false }, cleanup => { instructionCleanup = cleanup })
   }
   if (!instructionAvailable) { instruction?.retire(); throw Object.assign(new Error('Child instruction setup retired'), { code: 'FACT_CLOSED' }) }
   initial = await openInitialChildGeneration(opts, factOwner, sessionId, controller, start, () => model)
@@ -151,13 +153,14 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   warnInheritedSeed(childSession, contextWindow)
 
-  const { childReg, codeModeMount, agent } = await assembleChild(opts, childCtx, childSession, factOwner, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? opts.inheritedBindingForStep : undefined, controller, initial.sharedGeneration, instruction)
-  preparedRuntime = codeModeMount
-  if (preparedRuntime) {
-    const cancel = dataMethod<(reason?: string) => Promise<void>>(preparedRuntime, 'cancel'), dispose = dataMethod<() => Promise<void>>(preparedRuntime, 'dispose')
-    if (!cancel || !dispose) throw new TypeError('Original child Code Mode cleanup unavailable')
-    cancelRuntime = cancel.bind(preparedRuntime); disposeRuntime = dispose.bind(preparedRuntime)
-  }
+  const { childReg, codeModeMount, agent } = await assembleChild(opts, childCtx, childSession, factOwner, sessionId, childPath, model, reasoningEffort, contextWindow, maxOutputTokens, contextMetadata, budgetBinding, declared === undefined ? opts.inheritedBindingForStep : undefined, controller, initial.sharedGeneration, instruction, mount => {
+    const failures: unknown[] = []
+    try { const cancel = dataMethod<(reason?: string) => Promise<void>>(mount, 'cancel'); if (!cancel) throw new TypeError('Original child Code Mode cancel unavailable'); cancelRuntime = cancel.bind(mount) }
+    catch (error) { failures.push(error); cancelRuntime = async () => { throw error } }
+    try { const dispose = dataMethod<() => Promise<void>>(mount, 'dispose'); if (!dispose) throw new TypeError('Original child Code Mode dispose unavailable'); disposeRuntime = dispose.bind(mount) }
+    catch (error) { failures.push(error); disposeRuntime = async () => { throw error } }
+    if (failures.length) throw failures[0]
+  })
   controller.signal.throwIfAborted()
   const published = await publishChild(opts, childCtx, childSession, factOwner, document, sessionId, childPath, childReg, codeModeMount, controller, agent, modelLabel, initial, () => model, instruction, () => { instructionAvailable = false }, entry => { publishedEntry = entry; transferred = true; releaseSetup?.(); releaseSetup = undefined; setupExit.resolve() }, () => { if (!instructionAvailable) throw Object.assign(new Error('Child setup retired'), { code: 'FACT_CLOSED' }) }, { unmount: unmountContext, revokeDocument, closeDocument, closeInitial, cancelMount: cancelRuntime, disposeMount: disposeRuntime })
   // Existing background-child lifetime begins at publication. The launching
