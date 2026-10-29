@@ -1,4 +1,5 @@
 import {join} from 'node:path'
+import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
 import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type LegacyReadObservationRunner} from '@i-harness/context-output'
 import {isStrictFactData,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
@@ -9,6 +10,9 @@ import {createProcessAwareResultService} from '@i-harness/session-executor/inter
 import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
+import {selectedSourceFor} from '@i-harness/session-persistence/internal/selected-source-owner'
+import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
+import type {createProjectScopeBroker} from './project-scope.ts'
 
 interface NativeContextOptions {
   workspace:string;storageRoot:string
@@ -21,6 +25,7 @@ interface NativeContextOptions {
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
   registerJob?:CodeRetrievalOptions['registerJob']
+  retainSelectedProjectRead?:ReturnType<typeof createProjectScopeBroker>['retainSelectedBindingRead']
 }
 type ObservedBindings = {
   coordinator:Pick<SessionCoordinator,'profile'|'onDocumentDeleted'|'openManagedDocument'|'withExistingSessionBindingObservation'>
@@ -100,6 +105,30 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       }catch{return false}
     }})
   const contextOutput=bridge.service
+  const selectedSources=new Set<{close():Promise<void>;revoke():void}>()
+  async function acquireSelectedSourceObservation(sessionId:string) {
+    assertAvailable();if(!options.retainSelectedProjectRead)throw Error('Selected source unavailable')
+    const coordinator=options.coordinator as SessionCoordinator,original=selectedSourceFor(coordinator)
+    await coordinator.flush(sessionId);assertAvailable();const document=await coordinator.openManagedDocument(sessionId);assertAvailable()
+    let binding:Awaited<ReturnType<typeof original.acquire>>|undefined,revoked=false
+    const witness=original.retain(document,()=>{revoked=true;binding?.revoke()})
+    const current=()=>{assertAvailable();if(revoked)throw Error('Selected source revoked');witness.assertCurrent();binding?.assertCurrent()}
+    try{
+      const ids=await discoverResultLineage(coordinator,sessionId,current);current()
+      binding=await original.acquire({sessionIds:ids});current();assertResultLineage(binding.observation,ids,sessionId)
+      const project=await options.retainSelectedProjectRead(ids,binding,sessionId);current()
+      const result=observations.retainSelected({sessionId,sessionIds:ids,observation:binding.observation,document,currentSource(){return canonicalSource(project.sourceGetter)},assertHostCurrent(){current();project.assertCurrent()}})
+      let metadata:Awaited<ReturnType<typeof bridge.acquireSelectedMetadata>>|undefined
+      project.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadata)await metadata.close();await result.close();witness.unsubscribe()}})
+      await project.use(()=>result.use(async()=>{const originalRead=legacyObservationFor(result.observation);metadata=await bridge.acquireSelectedMetadata(originalRead);current()}));current()
+      const retained=metadata!
+      const uses=new AsyncLocalStorage<{active:boolean}>()
+      const useCurrent=()=>{if(!uses.getStore()?.active)throw Error('Selected source use expired');current();retained.assertCurrent()}
+      const inherited=Object.freeze({assertCurrent:useCurrent,legacy(){useCurrent();const iterator=retained.reader.legacy()[Symbol.asyncIterator]();return {[Symbol.asyncIterator](){return this},async next(){useCurrent();const value=await iterator.next();useCurrent();return value},async return(){return iterator.return?iterator.return():{done:true as const,value:undefined}}}}})
+      const source=Object.freeze({document,view:witness.view,inherited,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}})))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
+      selectedSources.add(source);return source
+    }catch(error){binding?.revoke();if(binding)try{await binding.release()}catch(cleanup){throw cleanup}witness.unsubscribe();throw error}
+  }
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
   async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{
@@ -204,7 +233,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     refreshing=work
     try{await work}catch{/* The service preserves job error/outcome for its UI. */}finally{if(refreshing===work)refreshing=undefined}
   }
-  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,
+  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,
     async configureReferences(next:NativeReferenceSource[]){
       if(JSON.stringify(references)===JSON.stringify(next))return
       // Visibility changes before awaiting drainage, so old snippets cannot
@@ -230,7 +259,10 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
     },
     async close(){
-      if(closed)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+      if(closed&&!selectedSources.size)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+      for(const source of selectedSources)source.revoke()
+      const settled=await Promise.allSettled([...selectedSources].map(source=>source.close())),errors=settled.flatMap(value=>value.status==='rejected'?[value.reason]:[])
+      if(errors.length)throw new AggregateError(errors,'Selected source cleanup unresolved')
       await codeRetrieval.cancel();await refreshing
       await Promise.all([contextOutput.close(),codeRetrieval.close()])
     },

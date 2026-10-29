@@ -28,7 +28,7 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
   await projects.configure(project)
   if (!existingRoot) { await projects.bind('source', 'p'); await projects.bind('other', 'p') }
   const runtime = await createNativeContextRuntime({ workspace, storageRoot: join(root, 'native'), coordinator,
-    projectFor: projects.nativeScopeFor, resultReadScopeFor: projects.resultReadScopeFor, withBindingObservation: projects.withBindingObservation,
+    projectFor: projects.nativeScopeFor, resultReadScopeFor: projects.resultReadScopeFor, withBindingObservation: projects.withBindingObservation, retainSelectedProjectRead: projects.retainSelectedBindingRead.bind(projects),
     prepareBootstrapInheritance: projects.prepareBootstrapInheritance,
     visibleRefsFor: async id => { const view = runtime.observations.current(id)?.view ?? (await coordinator.snapshot!(id)).session, cuts = rewindCuts(view)
       return [...semanticSeedResultRefs(view), ...view.events.flatMap(event => !cuts.some(cut => event.seq !== undefined && event.seq >= cut.cutFrom && event.seq < cut.markerSeq) ? managedResultRefs(event) : [])] } })
@@ -61,3 +61,4 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
     async close() { await router.close(); await base.close(); await controller.close(); await service.close(); await runtime.close(); await projects.close(); await coordinator.close() },
   }
 }
+
