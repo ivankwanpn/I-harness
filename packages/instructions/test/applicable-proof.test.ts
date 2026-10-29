@@ -6,6 +6,39 @@ import { createInstructionObservationOwner, createObservedInstructionService } f
 import { temporary, ControlledWatch } from './helpers/observation-fixture.ts'
 import * as pendingEpochs from '../src/pending-epochs.ts'
 import { fixture } from './helpers/instruction-fixture.ts'
+import { createInstructionService } from '../src/service.ts'
+import type { InstructionObservationEvent, InstructionWatchInterest, InstructionObservationLease } from '../src/contracts.ts'
+
+it('publishes global uncertainty once when same-interest mapping fails after a scoped remap', async () => {
+  const f = await fixture(), outside = await temporary(), watch = new ControlledWatch(), owner = createInstructionObservationOwner(watch)
+  await f.dir('a'); await f.dir('b'); await f.write('a/AGENTS.md', 'a'); const bPath = await f.write('b/AGENTS.md', 'b')
+  const outsideFile = join(outside.root, 'AGENTS.md'); await writeFile(outsideFile, 'outside')
+  const a = { path: f.path('a', 'file'), kind: 'file' as const }, b = { path: f.path('b', 'file'), kind: 'file' as const }
+  const scope = { cwd: f.root, roots: [f.root], globalSources: [], enabled: true, maxBytes: 24000 }
+  const port = owner.port(scope), events: InstructionObservationEvent[] = []
+  let lease!: InstructionObservationLease, interests!: readonly InstructionWatchInterest[]
+  const service = createInstructionService({ scope, observation: { subscribe(listener) {
+    lease = port.subscribe(event => { events.push(event); listener(event) })
+    return { update(input) { interests = input; return lease.update(input) }, close: () => lease.close() }
+  } } })
+  try {
+    const acquired = watch.acquired.promise, started = service.prepare([a, b]), source = await acquired
+    source.reset(); const issued = await started, proof = service.proveApplicable(issued, [a])
+    source.change(bPath)
+    expect(events.at(-1)).toMatchObject({ available: false, mappingPaths: [bPath] })
+    service.assertApplicable(proof)
+    await unlink(bPath); await symlink(outsideFile, bPath, 'file')
+    const before = events.at(-1)!.revision, result = await lease.update(interests)
+    expect(result.available).toBe(false)
+    expect(result.mappingPaths).toBeUndefined()
+    expect(result.revision).toBeGreaterThan(before)
+    expect(events.at(-1)).toMatchObject({ kind: 'reset', revision: result.revision, available: false })
+    expect(() => service.assertApplicable(proof)).toThrow()
+    const count = events.length, again = await lease.update(interests)
+    expect(again.revision).toBe(result.revision)
+    expect(events).toHaveLength(count)
+  } finally { await service.close(); await owner.close(); await watch.close(); await f.cleanup(); await outside.remove() }
+})
 
 for (const destination of ['inside', 'outside'] as const) it(`revokes an existing target proof after canonical retarget ${destination}`, async () => {
   const f = await fixture(), outside = await temporary()

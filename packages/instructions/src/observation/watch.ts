@@ -239,7 +239,11 @@ export function createObservationRoutes(watch: FsWatchService): ObservationRoute
         // A repeated unavailable update is an internal attempt, not a new
         // recovery opportunity. Actual callbacks set reset/dirty and publish
         // immediately; changed interests/mappings/outcomes still get a barrier.
-        if (priorInterests !== JSON.stringify(registered) || priorMapping !== plan?.signature || reset || dirty.size || state.available !== available()) {
+        // Losing a known mapping scope is a new global uncertainty even when
+        // availability was already false. Once published, identical retries
+        // have no scope left to lose and remain deduplicated.
+        const lostScopedCoverage = !!state.mappingPaths?.length && !scopedMapping?.size
+        if (priorInterests !== JSON.stringify(registered) || priorMapping !== plan?.signature || reset || dirty.size || state.available !== available() || lostScopedCoverage) {
           if (scopedMapping?.size) publish('changed', [...scopedMapping])
           else publish('reset', reset ? [] : [...dirty])
         }
