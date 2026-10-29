@@ -106,7 +106,13 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     }})
   const contextOutput=bridge.service
   const selectedSources=new Set<{close():Promise<void>;revoke():void}>()
-  async function acquireSelectedSourceObservation(sessionId:string) {
+  const selectedAcquisitions=new Set<Promise<unknown>>()
+  const selectedCleanupDebt=new Set<{retry():Promise<void>}>()
+  function acquireSelectedSourceObservation(sessionId:string) {
+    assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const flight=Promise.resolve().then(()=>acquireSelectedSource(sessionId));selectedAcquisitions.add(flight)
+    void flight.finally(()=>selectedAcquisitions.delete(flight)).catch(()=>{});return flight
+  }
+  async function acquireSelectedSource(sessionId:string) {
     assertAvailable();if(!options.retainSelectedProjectRead)throw Error('Selected source unavailable')
     const coordinator=options.coordinator as SessionCoordinator,original=selectedSourceFor(coordinator)
     await coordinator.flush(sessionId);assertAvailable();const document=await coordinator.openManagedDocument(sessionId);assertAvailable()
@@ -127,7 +133,14 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const inherited=Object.freeze({assertCurrent:useCurrent,legacy(){useCurrent();const iterator=retained.reader.legacy()[Symbol.asyncIterator]();return {[Symbol.asyncIterator](){return this},async next(){useCurrent();const value=await iterator.next();useCurrent();return value},async return(){return iterator.return?iterator.return():{done:true as const,value:undefined}}}}})
       const source=Object.freeze({document,view:witness.view,inherited,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}})))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
       selectedSources.add(source);return source
-    }catch(error){binding?.revoke();if(binding)try{await binding.release()}catch(cleanup){throw cleanup}witness.unsubscribe();throw error}
+    }catch(error){
+      binding?.revoke();let failure=error
+      if(binding)try{await binding.release()}catch(cleanup){failure=cleanup}
+      const originalCleanup=original.cleanupForError(failure)
+      if(originalCleanup){const debt={async retry(){await originalCleanup.retry();witness.unsubscribe();selectedCleanupDebt.delete(debt)}};selectedCleanupDebt.add(debt)}
+      else witness.unsubscribe()
+      throw failure
+    }
   }
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
@@ -259,7 +272,11 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
     },
     async close(){
-      if(closed&&!selectedSources.size)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+      if(closed&&!selectedSources.size&&!selectedAcquisitions.size&&!selectedCleanupDebt.size)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+      for(const source of selectedSources)source.revoke()
+      await Promise.allSettled([...selectedAcquisitions])
+      const cleanup=await Promise.allSettled([...selectedCleanupDebt].map(debt=>debt.retry())),cleanupErrors=cleanup.flatMap(value=>value.status==='rejected'?[value.reason]:[])
+      if(cleanupErrors.length)throw new AggregateError(cleanupErrors,'Selected source acquisition cleanup unresolved')
       for(const source of selectedSources)source.revoke()
       const settled=await Promise.allSettled([...selectedSources].map(source=>source.close())),errors=settled.flatMap(value=>value.status==='rejected'?[value.reason]:[])
       if(errors.length)throw new AggregateError(errors,'Selected source cleanup unresolved')
