@@ -50,7 +50,19 @@ export function createBindingObservations(
       || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
     const entry: OwnedDocument = { id, key, revoke: operations.revoke, close: operations.close, retryClose: operations.retryClose, assertOutside: operations.assertOutside ?? (() => {}), closing: false }
     ownedDocuments.add(entry)
-    return () => { ownedDocuments.delete(entry) }
+    let writing = false
+    const registration = Object.freeze({
+      unregister() { if (this !== registration || writing) throw new TypeError('Invalid task registration receiver'); ownedDocuments.delete(entry) },
+      beginOwnedWrite() {
+        if (this !== registration || !ownedDocuments.has(entry) || entry.closing || writing || closed || deletedIds.has(id) || deletedKeys.has(key) || retiringIds.has(id) || pendingIds.has(id) || pendingKeys.has(key)
+          || [...scopes].some(scope => intersects(scope, [id], [key])) || [...ownedDocuments].some(scope => scope !== entry && ownedIntersects(scope, [id], [key]))) throw new Failure('conflict')
+        writing = true; pendingKeys.set(key, (pendingKeys.get(key) ?? 0) + 1)
+        let finished = false
+        const token = Object.freeze({ finish() { if (this !== token || finished) throw new TypeError('Invalid task write admission'); finished = true; writing = false; const count = pendingKeys.get(key)! - 1; if (count) pendingKeys.set(key, count); else pendingKeys.delete(key) } })
+        return token
+      },
+    })
+    return registration
   }
   function refuseSelf(ids: readonly string[], keys: readonly string[], all = false) {
     if (context.getStore()?.some(current => current.state !== 'done' && (all || intersects(current, ids, keys)))) throw new Failure('conflict')

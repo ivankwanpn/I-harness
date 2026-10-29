@@ -88,6 +88,8 @@ export interface TaskTerminalizeInput {
   recoveryReason?: RecoveryReason
 }
 export interface TaskRegistryOptions {
+  /** Internal original-parent save capability; never supplied by a tool. */
+  ownedTask?: import('./persistence.ts').OwnedTaskContext
   results?: TaskResultStore
   reportPolicy?: ReportPolicy
   coordinator?: SessionCoordinator

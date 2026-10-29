@@ -1,11 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { expect, it } from 'vitest'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlTaskDocumentCoordinator } from '../src/task-document-factory.ts'
-import { compileSemanticSeed } from '@i-harness/session-persistence'
+import { compileSemanticSeed, type TaskDocumentWitness } from '@i-harness/session-persistence'
 import { taskDocumentOperationsFor } from '../../session-persistence/src/coordinator/task-document-association.ts'
 
 it('constructs the original coordinator, Documents owner and JSONL task witness together', async () => {
@@ -21,6 +21,75 @@ it('constructs the original coordinator, Documents owner and JSONL task witness 
     const observed = await operation.observe()
     if (observed.kind !== 'present') throw new Error('missing')
     expect((await operation.confirm(observed.witness)).kind).toBe('confirmed'); await operation.close()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('retains one immutable replacement from the genuine observed document', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const operations = taskDocumentOperationsFor(coordinator)!, operation = await operations.begin(operations.parent(parent)), observed = await operation.observe()
+    if (observed.kind !== 'present') throw new Error('missing')
+    const snapshot = { formatVersion: 2, tasks: [], notifications: [] }, write = operation.stageWrite(observed.witness, snapshot)
+    snapshot.formatVersion = 1
+    const first = await write.issue(); expect(first.kind).toBe('committed'); expect(await write.issue()).toEqual(first)
+    expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(2)
+    await coordinator.withProcessReadObservation!('parent', { documentKeys: ['task-parent'] }, async observation => { expect(await write.retry()).toEqual(first); observation.assertCurrent(); return true }, async (value, observation) => { observation.assertCurrent(); return value })
+    await operation.close()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('invalidates an original process reader on the same actual task write', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-latch-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const operations = taskDocumentOperationsFor(coordinator)!, operation = await operations.begin(operations.parent(parent)), observed = await operation.observe()
+    if (observed.kind !== 'present') throw new Error('missing')
+    const write = operation.stageWrite(observed.witness, { formatVersion: 2, tasks: [], notifications: [] })
+    await expect(coordinator.withProcessReadObservation!('parent', { documentKeys: ['task-parent'] }, async o => {
+      expect((await write.issue()).kind).toBe('committed'); try { o.assertCurrent() } catch {} return 'discard'
+    }, async value => value)).rejects.toThrow()
+    await operation.close()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('refuses stage validator self mutations before they poison admission', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-write-self-')); let staging = false, attempts: Promise<unknown>[] = []
+  let coordinator: ReturnType<typeof createJsonlTaskDocumentCoordinator>, parent: Awaited<ReturnType<typeof coordinator.openManagedDocument>>
+  const validator = { validate(value: unknown) { taskDocumentStorageContract.validate(value); if (staging) { attempts = [coordinator.putDocumentStrict!('task-parent', value), parent.metadata.admit({ type: 'plan/mode', mode: 'on' }), coordinator.close()]; for (const attempt of attempts) void attempt.catch(() => {}) } } }
+  coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, validator)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); parent = await coordinator.openManagedDocument('parent')
+    await writeFile(join(root, 'task-parent.doc.jsonl'), '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const operations = taskDocumentOperationsFor(coordinator)!, operation = await operations.begin(operations.parent(parent)), observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('missing')
+    staging = true; const write = operation.stageWrite(observed.witness, { formatVersion: 2, tasks: [], notifications: [] }); staging = false
+    for (const attempt of attempts) await expect(attempt).rejects.toThrow()
+    expect((await write.issue()).kind).toBe('committed'); await operation.close()
+    expect((await parent.metadata.admit({ type: 'plan/mode', mode: 'on' })).kind).toBe('committed')
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('rejects non-JSON snapshots and recursive staging before any candidate is issued', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-stage-data-')); let staging = false, recursiveRejected = false
+  let operation: Awaited<ReturnType<NonNullable<ReturnType<typeof taskDocumentOperationsFor>>['begin']>>, witness: TaskDocumentWitness
+  const validator = { validate(value: unknown) { taskDocumentStorageContract.validate(value); if (staging) { try { operation.stageWrite(witness, value) } catch { recursiveRejected = true } } } }
+  const coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, validator)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent')
+    await writeFile(join(root, 'task-parent.doc.jsonl'), '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const operations = taskDocumentOperationsFor(coordinator)!; operation = await operations.begin(operations.parent(parent)); const observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('missing'); witness = observed.witness
+    const base = () => ({ formatVersion: 2, tasks: [] as unknown[], notifications: [] as unknown[] })
+    const sparse = base(); sparse.tasks.length = 1
+    const hidden = base(); Object.defineProperty(hidden, 'hidden', { value: 1 })
+    const symbol = base(); Object.defineProperty(symbol, Symbol('x'), { value: 1 })
+    const cyclic = base(); cyclic.tasks.push(cyclic)
+    const accessor = base(); Object.defineProperty(accessor, 'x', { enumerable: true, get() { throw new Error('getter executed') } })
+    for (const value of [{ ...base(), bad: undefined }, sparse, hidden, symbol, cyclic, accessor, new Proxy(base(), {})]) expect(() => operation.stageWrite(witness, value)).toThrow()
+    staging = true; const write = operation.stageWrite(witness, base()); staging = false; expect(recursiveRejected).toBe(true)
+    await expect(write.reconcile()).rejects.toThrow(); expect((await write.issue()).kind).toBe('committed')
+    const ack = await write.retry(); expect(ack.kind).toBe('committed'); await operation.close()
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 

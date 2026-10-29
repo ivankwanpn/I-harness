@@ -60,6 +60,8 @@ import { createNotificationDrain, type ParentInputAdmission } from "./task-notif
 import type { ReportPolicy } from "./report-policy.ts"
 import { subagentFactOwner } from './facts.ts'
 import { residentOwnerFor, refusedReentry } from './followup/resident-lifetime.ts'
+import type { ManagedDocument } from '@i-harness/session-persistence'
+import { captureOwnedTaskContext } from './task/owned-context.ts'
 
 export interface RegisterSubagentOptions extends RoleModelHost {
   residentActivation?: import('./followup/activation.ts').ResidentInboxActivation
@@ -199,10 +201,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     void pending.then(() => { settlingDeliverySources = undefined }, () => { settlingDeliverySources = undefined })
     return pending
   }
+  let ownedTask: import('./task/persistence.ts').OwnedTaskContext | undefined
+  if (opts.factOwner && opts.persist) ownedTask = captureOwnedTaskContext(opts.persist.coordinator, opts.factOwner as ManagedDocument, opts.parentSession, opts.persist.stateId)
   const tasks = createTaskRegistry({
     results: opts.results,
     reportPolicy: opts.reportPolicy,
     ...(opts.persist ? { coordinator: opts.persist.coordinator, stateId: opts.persist.stateId } : {}),
+    ...(ownedTask ? { ownedTask } : {}),
     maxConcurrency: opts.maxConcurrency,
     onTerminalized: () => { notifDrainHook?.() },
   })
