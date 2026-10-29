@@ -39,6 +39,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
   const outstanding = new Set<{ requested: boolean; release(): Promise<void> }>()
   let closed = false, text = '', key: string | undefined, active: InstructionView | undefined, token: InstructionRequestEvidence | undefined
   let published: InstructionPublication | undefined, publishedAuthority: string | undefined, diagnosticStale = false, reconciling = 0, unsubscribeView: (() => void) | undefined
+  let publishedSelection: number | undefined
   const diagnosticListeners = new Set<() => void>()
   let notificationPending = false
   const changed = () => { if (notificationPending) return; notificationPending = true; queueMicrotask(() => { notificationPending = false; for (const listener of [...diagnosticListeners]) try { listener() } catch { /* Diagnostics do not change source authority. */ } }) }
@@ -75,7 +76,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
     try { policy = options.environment.policy.current() } catch { return Object.freeze({ state: 'unavailable' as const, ...(published ? { publication: published } : {}) }) }
     const effectivePolicy = policy.kind === 'ready' ? Object.freeze({ generation: policy.generation, enabled: policy.policy.enabled, maxBytes: policy.policy.maxBytes }) : undefined
     if (!published) return Object.freeze({ state: policy.kind !== 'ready' ? 'unavailable' as const : reconciling ? 'pending' as const : 'not-published' as const, ...(effectivePolicy ? { effectivePolicy } : {}) })
-    let state: InstructionReport['state'] = reconciling ? 'pending' : diagnosticStale || !current(token) ? 'stale' : 'ready'
+    let state: InstructionReport['state'] = reconciling ? 'pending' : diagnosticStale || publishedSelection !== selection || !current(token) ? 'stale' : 'ready'
     try { if (policy.kind !== 'ready' || active && active.service.snapshot().reliability === 'unavailable') state = 'unavailable' } catch { state = 'unavailable' }
     return Object.freeze({ state, publication: published, ...(effectivePolicy ? { effectivePolicy } : {}) })
   }
@@ -115,8 +116,9 @@ export function createMainInstructionManager(options: { session?: SessionView; e
           scope: Object.freeze({ cwd: options.cwd, roots: Object.freeze([...scope.roots]) }),
           sources: Object.freeze(snapshot.sources.map(source => Object.freeze({ ...source }))) })
         publishedAuthority = scope.identity
+        publishedSelection = capturedSelection
         if (previous !== view) { unsubscribeView?.(); unsubscribeView = view.service.subscribe(invalidateDiagnostics) }
-        diagnosticStale = false; changed()
+        diagnosticStale = capturedSelection !== selection; changed()
         if (previous && previous !== view) await retire(previous)
         for (const retained of views) if (retained.finished) views.delete(retained)
       } catch (error) {
@@ -183,7 +185,7 @@ export function createMainInstructionManager(options: { session?: SessionView; e
             const value: InstructionTarget = { path: target.path, kind: target.kind }, id = instructionTargetKey(value)
             if (!pending && consumed.has(id)) continue
             if (!pending) { pending = new Map(); selection++ }
-            if (!pending.has(id)) { pending.set(id, Object.freeze(value)); selection++ }
+            if (!pending.has(id)) { pending.set(id, Object.freeze(value)); selection++; invalidateDiagnostics() }
           }
           try {
             signal?.throwIfAborted(); check()

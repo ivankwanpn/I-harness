@@ -5,6 +5,55 @@ import { join } from 'node:path'
 import { createProjectInstructionEnvironment } from '../src/context/instructions/host.ts'
 import { createMainInstructionManager } from '../src/context/instructions/manager.ts'
 import { rmWorkspaceSync } from './helpers.ts'
+import { createContext } from '@i-harness/core-plugin'
+import { createSession } from '@i-harness/core-session'
+import { createToolRegistry, type AcceptedInstructionBatch } from '@i-harness/core-tools'
+import { createFsTools } from '@i-harness/fs'
+
+// The accepted preflight branch is explicitly controlled evidence, no transport.
+it.each(['observe', 'preflight'] as const)('keeps a newer %s target stale across an older successful publication', async activation => {
+  const cwd = await mkdtemp(join(tmpdir(), 'ih-i6-selection-')), environment = createProjectInstructionEnvironment(), session = createSession()
+  const { mkdir } = await import('node:fs/promises')
+  await writeFile(join(cwd, 'AGENTS.md'), 'ROOT'); await mkdir(join(cwd, 'nested')); await writeFile(join(cwd, 'nested', 'AGENTS.md'), 'NESTED')
+  const target = join(cwd, 'nested', 'file'), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  await writeFile(target, 'existing readable target')
+  let publications = 0, notices = 0, guards = 0, failSecondGuard = false, batch: AcceptedInstructionBatch | undefined
+  const manager = createMainInstructionManager({ session, cwd, environment, available: () => true,
+    authority() { if (failSecondGuard && ++guards === 2) throw new Error('original preflight authority unavailable'); return { kind: 'unbound', revision: '1', workspaceRoot: cwd } },
+    async publish() { if (++publications === 2) { entered.resolve(); await release.promise } } })
+  const unsubscribe = manager.diagnostics.subscribe(() => { notices++ })
+  try {
+    await manager.reconcile(); const evidence = manager.capture()!, original = manager.diagnostics.read().publication!
+    if (activation === 'preflight') {
+      const args = { path: target, text: 'never' }
+      session.events.push({ type: 'tool/call', callId: 'write', name: 'write', args, seq: 0 })
+      session.events.push({ type: 'model/exchange-accepted', version: 1, exchangeId: 'e', actionId: 'a', attemptId: 't', stepStartSeq: 0, assistantSeq: 0, callSeqs: [0], seq: 1 })
+      batch = manager.succeeded({ evidence, candidate: { instructions: evidence } as never, acceptedSeq: 1, outcome: { kind: 'memory-committed', durability: 'nondurable', seqs: [1] }, physicalExecutionReceipt: { actionId: 'a', attemptId: 't' } as never, calls: [{ callId: 'write', eventSeq: 0, call: { name: 'write', args } }] })!
+    }
+    const publishing = manager.reconcile(); await entered.promise
+    const beforeNotices = notices
+    if (activation === 'observe') expect(await manager.observe({ path: target, kind: 'file' })).toEqual({ status: 'queued' })
+    else {
+      const tools = createToolRegistry(createContext()); for (const tool of createFsTools({ workspace: cwd })) tools.register(tool)
+      const capture = tools.capture({ name: 'write', args: { path: target, text: 'never' } }, { session, callId: 'write', callEventSeq: 0 }), origin = batch!.bind(0, capture)
+      failSecondGuard = true
+      try { await expect(batch!.preflight([{ registry: tools, capture, origin }])).rejects.toMatchObject({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', data: { reason: 'revoked' } }) }
+      finally { failSecondGuard = false }
+    }
+    await Promise.resolve()
+    expect(notices).toBeGreaterThan(beforeNotices)
+    release.resolve(); await publishing
+    expect(manager.capture()).toBeUndefined()
+    expect(manager.current(evidence)).toBe(true) // Do not change accepted-evidence eligibility to fix diagnostics.
+    expect(manager.diagnostics.read()).toMatchObject({ state: 'stale', publication: original })
+    expect(publications).toBe(2)
+    await batch?.release(); batch = undefined
+    const refreshed = await manager.diagnostics.refresh()
+    expect(refreshed.state).toBe('ready'); expect(manager.capture()).toBeDefined()
+    expect(refreshed.publication!.sources.some(source => source.path === join(cwd, 'nested', 'AGENTS.md'))).toBe(true)
+    expect(publications).toBe(3)
+  } finally { release.resolve(); unsubscribe(); await batch?.release(); await manager.close(); await environment.close(); rmWorkspaceSync(cwd) }
+})
 
 it('exposes only the original successfully published source metadata and preserves it across failed refresh', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'ih-i6-published-')); await writeFile(join(cwd, 'AGENTS.md'), 'PRIVATE_I6_SOURCE_TEXT')
