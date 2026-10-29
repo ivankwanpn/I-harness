@@ -71,6 +71,7 @@ export class InstructionSlot {
   }
   retire(): void { if (this.retired) return; this.retired = true; this.manager?.diagnostics.invalidate() }
   diagnostics() { return this.available() ? this.manager?.diagnostics : undefined }
+  invalidateDiagnostics() { this.manager?.diagnostics.invalidate() }
   get clean(): boolean { return !this.constructing && (!this.runtime || this.runtimeClosed) && (!this.manager || this.managerClosed) }
 
   retryConstructionCleanup(): void {

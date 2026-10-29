@@ -1667,7 +1667,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     constructionComplete = true
     if (!opts.residentActivation) residentActivation.activate()
     return {
-      reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      reconcileExecutionAuthority: () => { instructionManager?.diagnostics.invalidate(); childInstructionHost?.invalidateDiagnostics(); return executionRuntime.reconcile() },
       settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
       executionBackendStatus: () => executionRuntime.status(),
       ctx,

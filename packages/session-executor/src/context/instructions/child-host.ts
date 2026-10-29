@@ -97,7 +97,7 @@ export function createChildInstructionHost(options: {
     }).then(deferred.resolve, deferred.reject)
     return deferred.promise
   }
-  return { create, diagnosticsFor(session: SessionView, factOwner: FactOwner) {
+  return { create, invalidateDiagnostics() { for (const slot of owned) slot.invalidateDiagnostics() }, diagnosticsFor(session: SessionView, factOwner: FactOwner) {
     if (!available() || factOwner.view !== session) return undefined
     if (session === rootSession) return factOwner === rootOwner ? rootManager.diagnostics : undefined
     const slot = slots.get(session)

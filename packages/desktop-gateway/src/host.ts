@@ -29,6 +29,8 @@ import { createContextPicker } from "./context-picker.ts"
 import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
+import { createInstructionViews } from './instructions/views.ts'
+import { createInstructionSettings } from './instructions/settings.ts'
 import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt, mountedHookAuthority } from "./plugin-mount.ts"
@@ -368,6 +370,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return page
     },
     onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
+  const instructions = createInstructionViews(coordinator, service, async input => {
+    const { meta } = await coordinator.profile(input.sessionId)
+    if (!await isConversation(input.sessionId, meta)) throw new Error('Conversation unavailable')
+    const parent = await projects.nativeScopeFor(input.sessionId)
+    if (!input.childSessionId) return JSON.stringify(parent)
+    const child = await projects.nativeScopeFor(input.childSessionId)
+    if (child.projectId !== parent.projectId) throw new Error('Child is outside the parent project')
+    return JSON.stringify([parent, child])
+  }, event => options.onWrite(makeNotification('desktop/instructions/changed', event)))
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
@@ -404,7 +415,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     projectContentSearch,
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs())).hookConfigs, () => service.refreshExtensions(), { workspace: options.workspace }),
-    subagents, sessionSubagents,
+    subagents, sessionSubagents, instructions, instructionSettings: createInstructionSettings(settingsPath),
     agentSettings,
     contextSubsystems,
     terminal,
@@ -521,6 +532,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
+        await once('instruction subscriptions', () => instructions.close())
         await once("projects", () => projects.close())
         await once("review", () => review.close())
         await once("workflow", () => workflow.close())

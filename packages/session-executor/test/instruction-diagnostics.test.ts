@@ -153,7 +153,9 @@ it('observes the actual live service publication and stops delivering after unsu
     await service.submit('live', 'hello', new AbortController().signal)
     expect(service.instructionState!('live')).toMatchObject({ state: 'ready', publication: { sources: [{ path: join(cwd, 'AGENTS.md'), state: 'loaded' }] } })
     expect(server.requests).toHaveLength(1); expect(JSON.stringify(server.requests[0]!.body)).toContain('SERVICE_LIVE_RULE')
-    expect(notices).toBeGreaterThan(0); unsubscribe(); const prior = notices
+    expect(notices).toBeGreaterThan(0)
+    await service.reconcileExecutionAuthority(['live']); expect(service.instructionState!('live').state).toBe('stale')
+    unsubscribe(); const prior = notices
     await service.refreshInstructions!('live'); await Promise.resolve(); expect(notices).toBe(prior); expect(server.requests).toHaveLength(1)
   } finally { unsubscribe(); await service.close(); await server.close(); rmWorkspaceSync(cwd) }
 }, 15000)
