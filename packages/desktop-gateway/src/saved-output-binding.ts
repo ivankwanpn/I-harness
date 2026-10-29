@@ -37,6 +37,12 @@ export function validateSavedOutput(value: Record<string, any>, identity: Native
     || !hash(value.digest) || !hash(value.stderr_digest) || args.digest !== undefined && args.digest !== value.digest) throw new Error('Native summary mismatch')
   if ('error' in value || value.display_only !== undefined || typeof value.text !== 'string' || typeof value.truncated !== 'boolean' || value.offset_bytes !== 0 || !size(value.next_offset_bytes)
     || value.next_offset_bytes !== Buffer.byteLength(value.text, 'utf8') || value.next_offset_bytes > value.total_bytes || value.truncated !== (value.next_offset_bytes < value.total_bytes || value.completeness !== 'complete')) throw new Error('Unsupported native snapshot')
+  if (Object.hasOwn(value, 'text_result')) {
+    const next = object(value.text_result)
+    if (!closed(next, ['tool', 'args']) || next!.tool !== 'job_output' || !closed(next!.args, ['job_id', 'job_instance_id', 'source_id', 'digest', 'offset_bytes'])
+      || next!.args.job_id !== identity.jobId || next!.args.job_instance_id !== identity.instanceId || next!.args.source_id !== identity.sourceId
+      || next!.args.digest !== value.digest || next!.args.offset_bytes !== value.next_offset_bytes) throw new Error('Native text continuation mismatch')
+  }
   const sha = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex')
   if (value.next_offset_bytes === value.total_bytes && sha(value.text) !== value.digest || value.stderr_total_bytes === 0 && sha('') !== value.stderr_digest) throw new Error('Native snapshot digest mismatch')
 }

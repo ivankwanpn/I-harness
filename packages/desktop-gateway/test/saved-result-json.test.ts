@@ -158,3 +158,30 @@ it('invalid authenticated JSON refuses without echoing source bytes in the parse
   const x = await alteredSource('{"private":"secret"')
   await expect(x.result).rejects.toThrow(/^Invalid JSON syntax$/)
 })
+
+const shippingContinuation = () => ({ tool: 'job_output', args: { job_id: 'bash-1', job_instance_id: 'original', source_id: 'process:1', digest: sha('你好'), offset_bytes: 6 } })
+it('preserves the actual shipping text_result continuation and the older absent-field compatibility', async () => {
+  const current = fixture(v => { v.text_result = shippingContinuation() })
+  expect((await current.run()).text_result).toEqual(shippingContinuation())
+  const older = await fixture().run(); expect(Object.hasOwn(older, 'text_result')).toBe(false)
+})
+it.each([
+  ['job', (t: any) => { t.args.job_id = 'other' }],
+  ['instance', (t: any) => { t.args.job_instance_id = 'other' }],
+  ['source', (t: any) => { t.args.source_id = 'other' }],
+  ['digest', (t: any) => { t.args.digest = 'e'.repeat(64) }],
+  ['offset', (t: any) => { t.args.offset_bytes = 0 }],
+  ['tool', (t: any) => { t.tool = 'other' }],
+  ['missing source', (t: any) => { delete t.args.source_id }],
+  ['extra args', (t: any) => { t.args.viaCatalog = {} }],
+  ['extra field', (t: any) => { t.extra = true }],
+  ['null args', (t: any) => { t.args = null }],
+] as const)('valid DTO and catalog digests still refuse contradictory text_result %s', async (_field, alter) => {
+  const f = fixture(v => { v.text_result = shippingContinuation(); alter(v.text_result) })
+  await expect(f.run()).rejects.toThrow(/^Native text continuation mismatch$/)
+  expect(f.pages()).toBe(2)
+})
+it('a present null text_result refuses rather than manufacturing continuation fields', async () => {
+  const f = fixture(v => { v.text_result = null })
+  await expect(f.run()).rejects.toThrow(/^Native text continuation mismatch$/)
+})
