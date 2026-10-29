@@ -235,9 +235,10 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
     scope(id,owner)
     return {route,stageBytes,headerBytes,reservationBytes:Buffer.from(canonicalJsonData(stage.captureReservation)+'\n')}
   }
-  async function selectedHeader(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation,issue:boolean):Promise<HeaderOutcome> {
+  async function selectedHeader(id:string,owner:HeldFactOwner,input:SelectedResultsRoute,operation:BootstrapHeaderOperation,issue:boolean,onHeaderIssue?:()=>void):Promise<HeaderOutcome> {
     const captured=selectedOperation(id,owner,input,operation)
     if(issue&&typeof (owner as IssuingFactOwner).beforeIssue!=='function')throw new TypeError('Invalid capture issuer')
+    if(onHeaderIssue!==undefined&&(typeof onHeaderIssue!=='function'||types.isProxy(onHeaderIssue)))throw new TypeError('Invalid header issue observer')
     return tracked(id,owner,async ledger=>{
       const guard=()=>scope(id,owner),path=filePath(id),paths=selectedBootstrapPaths(path,captured.route),issuer=owner as IssuingFactOwner
       let issued=false
@@ -261,7 +262,9 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         } else if(!Buffer.from(selected.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
         const target=await bytes(ledger,path,65536,guard)
         if(target&&!captured.headerBytes.subarray(0,target.length).equals(target))return {kind:'conflict'}
-        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target,()=>{issued=true})
+        // Stage promotion uses the same owner and ledger, but only this original
+        // target write boundary can record target-header issuance provenance.
+        if(issue)await writeExact(ledger,path,captured.headerBytes,issuer,target,()=>{issued=true;onHeaderIssue?.()})
         else {
           if(!target||!target.equals(captured.headerBytes))return {kind:'unknown'}
           const resource=await acquire(ledger,path,'r+')
@@ -272,7 +275,7 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
       }catch(error){ledger.diagnostics.push(error);let code:unknown;try{code=error!==null&&(typeof error==='object'||typeof error==='function')?(error as NodeJS.ErrnoException).code:undefined}catch{};if(issue&&!issued&&(code==='FACT_CANCELLED'||code==='FACT_PRECONDITION_STALE'))return {kind:'not-issued',reason:code==='FACT_CANCELLED'?'cancelled':'stale-source'};return {kind:'unknown'}}
     })
   }
-  const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,true)
+  const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void)=>selectedHeader(id,owner,route,operation,true,onHeaderIssue)
   const reconcileSelectedHeader=(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,false)
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
   return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }

@@ -29,7 +29,7 @@ import { captureSelectedResultsRoute, type SelectedResultsRoute } from './select
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssuing?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {route:SelectedResultsRoute;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -553,7 +553,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   function captureSelected(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
-    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
+    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
     if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
     if(typeof guard!=='function'||typeof capture!=='function'||utilTypes.isProxy(guard)||utilTypes.isProxy(capture))throw TypeError('Invalid selected capture')
     if(captureClosed)throw Error('Selected capture closed')
@@ -569,15 +569,15 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       await settleCapture(owned);check();await backend.checkBootstrapCaptureRoot!();check()
       const io=await captureBundle(owned);check()
       selectedEntry.attempt??=createSelectedCaptureAttempt({reserveSelectedCapture(...args){io.settled=false;return selected.reserveSelectedCapture(...args)}},io.issuer,route,capture)
-      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;if(selectedEntry.headerIssuing)selectedEntry.headerIssued=true;io.settled=false}
+      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
       try{
         const state=await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture());await settleCapture(owned);check()
         if(state.kind==='captured'&&selectedEntry.header?.kind!=='committed'){
           const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
           const reconcile=selectedEntry.headerIssued===true
           if(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'){
-            selectedEntry.headerAttempted=true;selectedEntry.headerIssuing=!reconcile;io.settled=false
-            try{selectedEntry.header=await ownership.withSessionOperation(id,()=>reconcile?selected.reconcileSelectedHeader(id,io.held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation))}finally{selectedEntry.headerIssuing=false}
+            selectedEntry.headerAttempted=true;io.settled=false
+            selectedEntry.header=await ownership.withSessionOperation(id,()=>reconcile?selected.reconcileSelectedHeader(id,io.held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true}))
             await settleCapture(owned);check()
           }
         }
