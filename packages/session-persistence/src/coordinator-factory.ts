@@ -13,6 +13,7 @@ import { captureBootstrapInvocation } from './coordinator/bootstrap-header.ts'
 import type { BootstrapOutcome, BootstrapInvocation } from './coordinator/bootstrap-types.ts'
 import { types as utilTypes } from 'node:util'
 import { retainSelectedSourceRead } from './coordinator/managed-document.ts'
+import { captureSelectedResultsRoute } from './coordinator/selected-results-route.ts'
 const selectedSources=new WeakMap<SessionCoordinator,{acquire:ReturnType<typeof createDocuments>['observations']['acquireSelectedBindingRead'];cleanupForError:ReturnType<typeof createDocuments>['observations']['cleanupForError'];captureSelected:ReturnType<typeof createManagedDocuments>['captureSelected'];reconcileSelected:ReturnType<typeof createManagedDocuments>['reconcileSelected'];releaseSelected:ReturnType<typeof createManagedDocuments>['releaseSelected'];retain(document:import('./coordinator/fact-types.ts').ManagedDocument,onRevoke:()=>void):ReturnType<typeof retainSelectedSourceRead>}>()
 export function selectedSourceFor(coordinator:SessionCoordinator) {const owner=selectedSources.get(coordinator);if(!owner)throw new TypeError('Original coordinator required');return owner}
 export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void): SessionCoordinator {
@@ -123,7 +124,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
-  selectedSources.set(coordinator,Object.freeze({acquire:observations.acquireSelectedBindingRead,cleanupForError:observations.cleanupForError,captureSelected(route,guard,capture){managed.prepareSelectedCapture(route,guard,capture);return observations.withSelectedBootstrapMutation(route,()=>managed.captureSelected(route,guard,capture))},reconcileSelected(route){return observations.withSelectedBootstrapMutation(route,()=>managed.reconcileSelected(route))},releaseSelected:managed.releaseSelected,retain(document,onRevoke){return retainSelectedSourceRead(document,ownership,onRevoke)}}))
+  selectedSources.set(coordinator,Object.freeze({acquire:observations.acquireSelectedBindingRead,cleanupForError:observations.cleanupForError,captureSelected(input,guard,capture){const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId;observations.assertOutsideObservedSession(id);observations.assertSessionAdmission(id);managed.prepareSelectedCapture(route,guard,capture);return observations.withSelectedBootstrapMutation(route,()=>managed.captureSelected(route,guard,capture))},reconcileSelected(route){return observations.withSelectedBootstrapMutation(route,()=>managed.reconcileSelected(route))},releaseSelected:managed.releaseSelected,retain(document,onRevoke){return retainSelectedSourceRead(document,ownership,onRevoke)}}))
   if (processLatches) onConstruct?.({ managed, latches: processLatches })
   return coordinator
 }
