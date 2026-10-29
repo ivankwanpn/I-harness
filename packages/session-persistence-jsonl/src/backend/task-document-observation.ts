@@ -1,4 +1,5 @@
 import { lstat, open } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { isHeldTaskDocumentScope, type HeldTaskDocumentScope, type RawTaskObservation, type TaskDocumentWitness, type TaskDocumentAck, type Confirmation, type TaskDocumentBackendSession } from '@i-harness/session-persistence'
@@ -26,9 +27,9 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
   let conflict = false
   // This record is private to the session and is installed only when the
   // original observation can actually be returned to its caller.
-  type Original = { witness: RawTaskObservation['witness']; bytes: Buffer; file: Awaited<ReturnType<typeof lstat>>; root: Awaited<ReturnType<typeof lstat>> }
+  type Original = { witness: RawTaskObservation['witness']; bytes: Buffer; file: BigIntStats; root: BigIntStats; identity: { dev: bigint; ino: bigint } }
   let original: Original | undefined
-  let absentRoot: Awaited<ReturnType<typeof lstat>> | undefined
+  let absentRoot: BigIntStats | undefined
   let ownedWrite: ReturnType<typeof createOwnedDocumentWrite> | undefined
   function guard() {
     if (!isHeldTaskDocumentScope(scope) || scope.assertActive !== assert) throw new TypeError('Changed task document scope')
@@ -45,20 +46,20 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     catch (cause) { resource.failed = true; resource.cause = cause; throw cause }
   }
   async function directories() {
-    const rootStat = await lstat(rootPath); guard()
+    const rootStat = await lstat(rootPath, { bigint: true }); guard()
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Invalid task document root')
     const parts = relative(rootPath, dirname(filePath)).split(sep).filter(Boolean)
     let current = rootPath
     for (const part of parts) {
       current = resolve(current, part)
-      const stat = await lstat(current); guard()
+      const stat = await lstat(current, { bigint: true }); guard()
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Invalid task document parent')
     }
     return rootStat
   }
-  const same = (a: Awaited<ReturnType<typeof lstat>>, b: Awaited<ReturnType<typeof lstat>>) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs
+  const same = (a: BigIntStats, b: BigIntStats) => a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs
   // Entries may change on unrelated keys without replacing their directory owner.
-  const sameDirectory = (a: Awaited<ReturnType<typeof lstat>>, b: Awaited<ReturnType<typeof lstat>>) => a.isDirectory() && b.isDirectory() && !a.isSymbolicLink() && !b.isSymbolicLink() && a.dev === b.dev && a.ino === b.ino
+  const sameDirectory = (a: BigIntStats, b: BigIntStats) => a.isDirectory() && b.isDirectory() && !a.isSymbolicLink() && !b.isSymbolicLink() && a.dev === b.dev && a.ino === b.ino
   function freeze(value: unknown): void {
     if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value) }
   }
@@ -66,21 +67,25 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     guard()
     if (resources.size) throw new Error('Task document cleanup pending')
     const rootBefore = await directories()
-    let before: Awaited<ReturnType<typeof lstat>>
-    try { before = await lstat(filePath) }
+    let before: BigIntStats
+    try { before = await lstat(filePath, { bigint: true }) }
     catch (error) { guard(); if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') { const rootAfter = await directories(); if (!sameDirectory(rootBefore, rootAfter)) throw new Error('Changed root'); absentRoot = rootBefore; return Object.freeze({ kind: 'absent' as const }) } throw error }
     guard()
     if (!before.isFile() || before.isSymbolicLink()) throw new Error('Task document is not a regular file')
-    if (before.size > LIMIT) throw new Error('Task document too large')
+    if (before.size < 0n || before.size > BigInt(LIMIT)) throw new Error('Task document too large')
+    const precise = await lstat(filePath, { bigint: true }); guard()
+    if (!precise.isFile() || precise.isSymbolicLink() || precise.ino <= 0n) throw new Error('Task document identity unavailable')
     const handle = await opener(filePath, 'r')
     const resource: Resource = { handle, close: handle.close, failed: false }
     resources.add(resource)
     let body: { ok: true; value: RawTaskObservation; original: Original } | { ok: false; cause: unknown }
     try {
       guard()
-      const opened = await handle.stat(); guard()
+      const opened = await handle.stat({ bigint: true }); guard()
       if (!opened.isFile() || !same(before, opened)) throw new Error('Changed task document')
-      const bytes = Buffer.alloc(before.size)
+      const openedIdentity = await handle.stat({ bigint: true }); guard()
+      if (openedIdentity.dev !== precise.dev || openedIdentity.ino !== precise.ino) throw new Error('Changed task document')
+      const bytes = Buffer.alloc(Number(before.size))
       let offset = 0
       while (offset < bytes.length) {
         const result = await handle.read(bytes, offset, Math.min(CHUNK, bytes.length - offset), offset); guard()
@@ -89,14 +94,16 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
       }
       const extra = Buffer.alloc(1), eof = await handle.read(extra, 0, 1, offset); guard()
       if (eof.bytesRead) throw new Error('Changed task document size')
-      const afterHandle = await handle.stat(); guard()
-      const afterPath = await lstat(filePath); guard()
+      const afterHandle = await handle.stat({ bigint: true }); guard()
+      const afterPath = await lstat(filePath, { bigint: true }); guard()
+      const finalIdentity = await lstat(filePath, { bigint: true }); guard()
+      const finalHandleIdentity = await handle.stat({ bigint: true }); guard()
       const rootAfter = await directories()
-      if (!same(before, afterHandle) || !same(before, afterPath) || !sameDirectory(rootBefore, rootAfter)) throw new Error('Changed task document')
+      if (!same(before, afterHandle) || !same(before, afterPath) || !sameDirectory(rootBefore, rootAfter) || finalIdentity.dev !== precise.dev || finalIdentity.ino !== precise.ino || finalHandleIdentity.dev !== precise.dev || finalHandleIdentity.ino !== precise.ino) throw new Error('Changed task document')
       const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
       freeze(value)
       const witness = Object.freeze({}) as RawTaskObservation['witness']
-      body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }), original: { witness, bytes, file: before, root: rootBefore } }
+      body = { ok: true, value: Object.freeze({ kind: 'present' as const, value, witness }), original: { witness, bytes, file: before, root: rootBefore, identity: { dev: precise.dev, ino: precise.ino } } }
     } catch (cause) { body = { ok: false, cause } }
     try { await closeResource(resource) }
     catch (cause) {
@@ -121,14 +128,14 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     try {
       guard()
       const rootNow = await directories()
-      const pathNow = await lstat(filePath); guard()
+      const pathNow = await lstat(filePath, { bigint: true }); guard()
       if (!sameDirectory(input.root, rootNow) || !pathNow.isFile() || pathNow.isSymbolicLink() || !same(input.file, pathNow)) throw new Changed()
       const handle = await opener(filePath, 'r+')
       resource = { handle, close: handle.close, failed: false }
       resources.add(resource)
       const verify = async () => {
         guard()
-        const stat = await handle.stat(); guard()
+        const stat = await handle.stat({ bigint: true }); guard()
         if (!stat.isFile() || !same(input.file, stat)) throw new Changed()
         const chunk = Buffer.alloc(Math.min(CHUNK, Math.max(1, input.bytes.length)))
         let offset = 0
@@ -140,8 +147,8 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
         }
         const eof = await handle.read(chunk, 0, 1, offset); guard()
         if (eof.bytesRead) throw new Changed()
-        const after = await handle.stat(); guard()
-        const pathAfter = await lstat(filePath); guard()
+        const after = await handle.stat({ bigint: true }); guard()
+        const pathAfter = await lstat(filePath, { bigint: true }); guard()
         const rootAfter = await directories()
         if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || !same(input.file, after) || !same(input.file, pathAfter) || !sameDirectory(input.root, rootAfter)) throw new Changed()
       }
@@ -189,7 +196,7 @@ export function createTaskDocumentObservation(root: string, path: string, scope:
     stageWrite(witness: TaskDocumentWitness, bytes: Uint8Array) {
       if (this !== session || ownedWrite || confirming || resources.size || conflict || lastConfirmation?.kind === 'unknown') throw new TypeError('Invalid task write stage')
       const input = confirmationInput(witness)
-      ownedWrite = createOwnedDocumentWrite({ path: filePath, bytes, preimage: { bytes: input.bytes, identity: { dev: Number(input.file.dev), ino: Number(input.file.ino) } }, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(input.root, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
+      ownedWrite = createOwnedDocumentWrite({ path: filePath, bytes, preimage: { bytes: input.bytes, identity: input.identity }, guard, async verifyRoot() { const root = await directories(); if (!sameDirectory(input.root, root)) throw new Error('Changed task document root'); await checkAvailable(); guard() } })
       return ownedWrite.handle
     },
     stageInitialize(bytes: Uint8Array) {
