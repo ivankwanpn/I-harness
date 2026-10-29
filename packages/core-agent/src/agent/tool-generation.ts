@@ -30,8 +30,9 @@ export function toolGenerationFactory(deps: AgentDeps): ExecuteToolCallsOptions[
     approval: async options => {
       check()
       const generation = await source.open('approval', { kind, seq: eventSeq, parentActionId: parent.actionId }, { signal, timeoutMs: options.timeoutMs, selectedClient: options.selectedClient, start: { wall: Date.now(), monotonic: performance.now() } })
+      const recoverClose = generation.recoverClose?.bind(generation)
       let attached = false
-      const capability: ApprovalGenerationAction = { signal: generation.signal, control: generation.control('auxiliary', check), bind: (prepared, bindingSource) => generation.bind(prepared, bindingSource), close: disposition => generation.close(disposition), forChild(view) {
+      const capability: ApprovalGenerationAction = { signal: generation.signal, control: generation.control('auxiliary', check), bind: (prepared, bindingSource) => generation.bind(prepared, bindingSource), close: disposition => generation.close(disposition), ...(recoverClose ? { recoverClose } : {}), forChild(view) {
         check(); generation.assertOpen()
         const child = view as SessionView
         if (this !== capability || attached || child.header?.origin !== 'approval-review' || child.header.parentSession !== sessionId || child.header.seedLength !== 0) throw generationError('GENERATION_STALE')

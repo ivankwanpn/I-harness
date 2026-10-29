@@ -1,3 +1,4 @@
+import { openOwnedPreparedStream, readDrainedOwnedExecutionConfirmation } from '../src/prepared/stream-lifetime.ts'
 import { createServer } from 'node:http'
 import { afterEach, expect, it } from 'vitest'
 import { ProjectionCounter } from '@i-harness/token-meter'
@@ -175,4 +176,158 @@ it('does not promote fetch overrides or public arbitrary callback wrappers to ow
     if (prepared === wrapper) expect(read(confirmation!, terminal)).toBeDefined()
   }
   expect(server.received).toHaveLength(2)
+})
+
+it('existing provisional confirmation precedes original decoder cleanup', async () => {
+  const server = await loopback()
+  let release!: () => void, finished = false, confirmation: ExecutionConfirmation | undefined
+  const held = new Promise<void>(resolve => { release = resolve })
+  const terminal = http(server.url, { async *read() { try { yield { type: 'end' } } finally { await held; finished = true } } })
+  const waiting = await prepareModelRequest(createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 1000, progressMs: 1000 }), request)
+  try {
+    const invocation = openOwnedPreparedStream(waiting, { confirmExecution: value => { confirmation = value } })
+    for await (const _event of invocation.stream) {}
+    expect(server.received).toHaveLength(1)
+    expect(finished).toBe(false)
+    expect(read(confirmation!, waiting)).toBeDefined()
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmation!, waiting)).toBeUndefined()
+    release()
+    await invocation.drain()
+    expect(finished).toBe(true)
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmation!, waiting)).toBeDefined()
+    expect(readDrainedOwnedExecutionConfirmation(invocation, { ...confirmation! }, waiting)).toBeUndefined()
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmation!, waiting.withOutputCap(10))).toBeUndefined()
+    expect(readDrainedOwnedExecutionConfirmation({ ...invocation }, confirmation!, waiting)).toBeUndefined()
+  } finally { release() }
+})
+
+it('retains a falsey decoder cleanup failure and never qualifies the original confirmation', async () => {
+  const server = await loopback()
+  let release!: () => void, confirmation: ExecutionConfirmation | undefined
+  const held = new Promise<void>(resolve => { release = resolve })
+  const terminal = http(server.url, { async *read() { try { yield { type: 'end' } } finally { await held; throw undefined } } })
+  const waiting = await prepareModelRequest(createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 1000, progressMs: 1000 }), request)
+  const invocation = openOwnedPreparedStream(waiting, { confirmExecution: value => { confirmation = value } })
+  try {
+    for await (const _event of invocation.stream) {}
+    release()
+    const failure = await invocation.drain().then(() => 'unexpected success', error => error)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect((failure as AggregateError).errors).toContain(undefined)
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmation!, waiting)).toBeUndefined()
+    await expect(invocation.drain()).rejects.toBe(failure)
+  } finally { release() }
+})
+
+it('keeps concurrent invocations of the same prepared stream and their confirmations separate', async () => {
+  const server = await loopback()
+  let release!: () => void, count = 0
+  const held = new Promise<void>(resolve => { release = resolve })
+  const terminal = http(server.url, { async *read() { const ordinal = ++count; try { yield { type: 'end' } } finally { if (ordinal === 1) await held } } })
+  const waiting = await prepareModelRequest(createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 1000, progressMs: 1000 }), request)
+  let firstConfirmation: ExecutionConfirmation | undefined, secondConfirmation: ExecutionConfirmation | undefined
+  const first = openOwnedPreparedStream(waiting, { confirmExecution: value => { firstConfirmation = value } })
+  const second = openOwnedPreparedStream(waiting, { confirmExecution: value => { secondConfirmation = value } })
+  try {
+    for await (const _event of first.stream) {}
+    for await (const _event of second.stream) {}
+    await second.drain()
+    expect(readDrainedOwnedExecutionConfirmation(second, secondConfirmation!, waiting)).toBeDefined()
+    expect(readDrainedOwnedExecutionConfirmation(second, firstConfirmation!, waiting)).toBeUndefined()
+    expect(readDrainedOwnedExecutionConfirmation(first, secondConfirmation!, waiting)).toBeUndefined()
+    expect(readDrainedOwnedExecutionConfirmation(first, firstConfirmation!, waiting)).toBeUndefined()
+    release(); await first.drain()
+    expect(readDrainedOwnedExecutionConfirmation(first, firstConfirmation!, waiting)).toBeDefined()
+  } finally { release() }
+})
+
+it('joins both physical retry flights before qualifying the successful original confirmation', async () => {
+  const server = await loopback(attempt => attempt === 1 ? 503 : 200)
+  const terminal = http(server.url), confirmations: ExecutionConfirmation[] = []
+  const retry = createRetryingClient(preparedModelClient(async () => terminal), resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } }))
+  const prepared = (await prepareModelRequest(createWaitingGuard(retry, { firstResponseMs: 1000, progressMs: 1000 }), request)).withOutputCap(7)
+  const invocation = openOwnedPreparedStream(prepared, { confirmExecution: value => { confirmations.push(value) } })
+  for await (const _event of invocation.stream) {}
+  await invocation.drain()
+  expect(server.received).toHaveLength(2)
+  expect(readDrainedOwnedExecutionConfirmation(invocation, confirmations[0]!, prepared)).toBeUndefined()
+  expect(readDrainedOwnedExecutionConfirmation(invocation, confirmations[1]!, prepared)).toBeDefined()
+})
+
+it('rejects a stale decoder continuation before it can start a second owned stream', async () => {
+  const server = await loopback()
+  let release!: () => void, late!: Promise<unknown>
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let terminal: PreparedModelRequest
+  terminal = http(server.url, { async *read() {
+    late = gate.then(() => terminal.stream())
+    yield { type: 'end' }
+  } })
+  const waiting = await prepareModelRequest(createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 1000, progressMs: 1000 }), request)
+  const invocation = openOwnedPreparedStream(waiting, {})
+  for await (const _event of invocation.stream) {}
+  await invocation.drain()
+  release()
+  await expect(late).rejects.toThrow('Owned stream context finalized')
+  expect(server.received).toHaveLength(1)
+})
+
+it('refuses an original decoder attempting to join its own stream drain', async () => {
+  const server = await loopback()
+  let invocation!: ReturnType<typeof openOwnedPreparedStream>, selfError: unknown
+  const terminal = http(server.url, { async *read() {
+    selfError = await invocation.drain().then(() => undefined, error => error)
+    yield { type: 'end' }
+  } })
+  invocation = openOwnedPreparedStream(terminal, {})
+  for await (const _event of invocation.stream) {}
+  await invocation.drain()
+  expect(selfError).toBeInstanceOf(Error)
+  expect((selfError as Error).message).toContain('Cannot drain inside owned stream')
+})
+
+it('keeps the real pending decoder next and detached return owned after waiting timeout', async () => {
+  const server = await loopback()
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+  const terminal = http(server.url, { async *read() { entered(); await gate; yield { type: 'end' } } })
+  const waiting = await prepareModelRequest(createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 30, progressMs: 30 }), request)
+  const invocation = openOwnedPreparedStream(waiting, {})
+  try {
+    const consuming = (async () => { try { for await (const _event of invocation.stream) {} } catch {} })()
+    await started; await consuming
+    let settled = false
+    const draining = invocation.drain().then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve(); expect(settled).toBe(false)
+    release(); await draining
+    expect(settled).toBe(true); expect(server.received).toHaveLength(1)
+  } finally { release() }
+})
+
+it('joins the delayed first original retry cleanup before qualifying the successful second send', async () => {
+  const server = await loopback()
+  let release!: () => void, reads = 0
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const terminal = http(server.url, { async *read() { if (++reads === 1) { try { yield { type: 'error', error: Object.assign(new Error('temporary'), { code: 'TRANSPORT' }) } } finally { await gate } } else yield { type: 'end' } } })
+  const waiting = createWaitingGuard(preparedModelClient(async () => terminal), { firstResponseMs: 1000, progressMs: 1000 })
+  const retry = createRetryingClient(waiting, resolveRetryPolicy({ mode: 'normal', maxRetries: 1, backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } }))
+  const prepared = (await prepareModelRequest(retry, request)).withOutputCap(7), confirmations: ExecutionConfirmation[] = []
+  const invocation = openOwnedPreparedStream(prepared, { confirmExecution: value => { confirmations.push(value) } })
+  try {
+    for await (const _event of invocation.stream) {}
+    expect(server.received).toHaveLength(2); expect(confirmations).toHaveLength(2)
+    let settled = false; const drain = invocation.drain().then(() => { settled = true })
+    await Promise.resolve(); expect(settled).toBe(false)
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmations[1]!, prepared)).toBeUndefined()
+    release(); await drain
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmations[0]!, prepared)).toBeUndefined()
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmations[1]!, prepared)).toBeDefined()
+  } finally { release() }
+})
+
+it('refuses opening an unowned custom prepared terminal as an auxiliary invocation', async () => {
+  const server = await loopback(), owned = http(server.url)
+  const copied = { ...owned }
+  expect(() => openOwnedPreparedStream(copied, {})).toThrow(expect.objectContaining({ code: 'GENERATION_UNSUPPORTED' }))
+  expect(server.received).toHaveLength(0)
 })

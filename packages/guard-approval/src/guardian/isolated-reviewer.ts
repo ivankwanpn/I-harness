@@ -33,6 +33,11 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
   if (request.signal?.aborted) cancel()
   let abortListener: (() => void) | undefined
   let lease: ReviewerContextLease | undefined
+  let instruction: import('./instruction-context.ts').IsolatedInstructionLease | undefined
+  let instructionAttempt: import('./instruction-context.ts').IsolatedInstructionAttempt | undefined
+  let instructionAvailable = true, commitReview: (() => void) | undefined
+  let generationAdopted = false, cleanupAttempted = false
+  let workFlight: Promise<GuardianReviewVerdict> | undefined
   let generation: AuxiliaryGenerationAction | undefined, completed = false
   let selectedModel = deps.model ?? deps.parentModel
   const expire = () => controller.abort(generation?.signal.reason)
@@ -82,13 +87,20 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       }
       const policy = deps.policyText ?? BUNDLED_GUARDIAN_POLICY
       const inherited = deps.inheritedSystemContext?.()
-      const systemPrompt = `${policy}\n\n${FRESH_REVIEW_POLICY}\n\n${GUARDIAN_JSON_CONTRACT}${inherited ? `\n\n${inherited}` : ""}`
+      if (deps.createIsolatedInstructionContext) {
+        const acquisition = deps.createIsolatedInstructionContext({ signal: controller.signal, lifetime: { available: () => instructionAvailable }, ...(generation ? { generation } : {}) })
+        generationAdopted = true
+        instruction = await acquisition
+      }
+      if (!instructionAvailable) { instruction?.retire(); if (instruction) await instruction.close(); throw new Error('Reviewer instruction lifetime retired') }
+      controller.signal.throwIfAborted()
+      const systemPrompt = `${policy}\n\n${FRESH_REVIEW_POLICY}\n\n${GUARDIAN_JSON_CONTRACT}${inherited ? `\n\n${inherited}` : ""}${instruction?.text ? `\n\n${instruction.text}` : ""}`
       const prompt = renderGuardianMessage(request, renderRecentContext(deps.parentSession), policy)
       const permission = deps.isolated?.permissionContext?.()
       if (deps.isolated && identity.provider && identity.model && identity.protocol && identity.configurationKey && permission) {
         const userIntent = deps.parentSession.events.findLast((event) => event.type === "user/message")
         const key = createHash("sha256").update(JSON.stringify([identity.provider, identity.model, identity.protocol, reasoningEffort ?? identity.reasoningEffort,
-          identity.configurationKey, permission, systemPrompt, sessionKey(deps.parentSession), userIntent])).digest("hex")
+          identity.configurationKey, permission, systemPrompt, sessionKey(deps.parentSession), userIntent, instruction?.poolIdentity])).digest("hex")
         lease = poolFor(deps.isolated).acquire(key)
       }
       const history = lease?.messages ?? []
@@ -105,7 +117,9 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       if (assessed.decision.disposition === 'reduce' || assessed.decision.disposition === 'blocked') throw new Error('Reviewer context window is too small for the approval request')
       const prepared = assessed.prepared
       await generation?.bind(prepared)
-      for await (const event of prepared.stream(generation ? { generation: generation.control } : undefined)) {
+      instructionAttempt = instruction?.bind(prepared)
+      const invocation = instructionAttempt?.open({ ...(generation ? { generation: generation.control } : {}), signal: controller.signal })
+      for await (const event of invocation?.stream ?? prepared.stream(generation ? { generation: generation.control } : undefined)) {
         controller.signal.throwIfAborted()
         if (event.type === "text/chunk") {
           text += event.text
@@ -117,29 +131,47 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
           ended = true
         }
       }
+      if (invocation) { await invocation.drain(); instructionAttempt!.complete() }
       controller.signal.throwIfAborted()
       const verdict = ended ? parseGuardianAssessment(text) : undefined
-      if (verdict) lease?.commit(prompt, text)
+      if (verdict) commitReview = () => lease?.commit(prompt, text)
       return verdict ? { outcome: verdict.outcome, rationale: verdict.rationale }
         : { outcome: "deny", rationale: "Reviewer produced malformed output", cause: "malformed" }
     }
-    const aborted = generation ? undefined : new Promise<never>((_, reject) => {
+    const aborted = generation && !deps.createIsolatedInstructionContext ? undefined : new Promise<never>((_, reject) => {
       abortListener = () => reject(controller.signal.reason ?? new Error("guardian aborted"))
       controller.signal.addEventListener("abort", abortListener, { once: true })
       if (controller.signal.aborted) abortListener()
     })
-    const result = await (generation ? work() : Promise.race([work(), aborted!]))
+    workFlight = work()
+    const result = await (aborted ? Promise.race([workFlight, aborted]) : workFlight)
     completed = result.cause === undefined
+    if (instruction) { instruction.assertCurrent(); controller.signal.throwIfAborted(); instruction.finish(completed ? 'completed' : 'failed'); cleanupAttempted = true; await instruction.close(); instruction = undefined }
+    controller.signal.throwIfAborted()
+    commitReview?.()
     return result
   } catch (error) {
     if (request.signal?.aborted) throw error
     return { outcome: "deny", rationale: error instanceof Error ? error.message : String(error), cause: controller.signal.aborted ? "timeout" : "operational" }
   } finally {
+    instructionAvailable = false
+    instructionAttempt?.close()
+    instruction?.finish(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed')
+    instruction?.retire()
+    const lateInstruction = instruction, lateGeneration = generation
+    if (deps.createIsolatedInstructionContext && workFlight && !completed) {
+      lateGeneration?.signal.removeEventListener('abort', expire)
+      generation = undefined
+      void workFlight.catch(() => {}).then(async () => {
+        try { if (!generationAdopted) await lateGeneration?.close(controller.signal.aborted ? 'stopped' : 'failed') }
+        finally { await lateInstruction?.close() }
+      }).catch(() => {})
+    } else if (instruction && !cleanupAttempted) void instruction.close().catch(() => {})
     lease?.release()
     clearTimeout(timeout)
     request.signal?.removeEventListener("abort", cancel)
     if (abortListener) controller.signal.removeEventListener("abort", abortListener)
     generation?.signal.removeEventListener('abort', expire)
-    await generation?.close(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed')
+    if (!generationAdopted) await generation?.close(controller.signal.aborted ? 'stopped' : completed ? 'completed' : 'failed')
   }
 }

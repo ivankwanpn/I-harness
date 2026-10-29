@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./internal/bedrock-terminal": "./src/prepared/bedrock-terminal.ts",
+    "./internal/stream-lifetime": "./src/prepared/stream-consumer.ts",
     ".": "./src/index.ts"
   },
   "scripts": {

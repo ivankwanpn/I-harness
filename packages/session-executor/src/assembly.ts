@@ -1066,6 +1066,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let instructionEnvironment: InstructionEnvironment | undefined
   let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
   let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined
+  let isolatedInstructionHost: ReturnType<typeof import('./context/instructions/isolated.ts').createIsolatedInstructionHost> | undefined
   let retireInstructionHost: (() => void) | undefined
   let closeInstructionHost: (() => Promise<void>) | undefined
   runtimeContext.registerSection(
@@ -1205,6 +1206,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   const retireExecutionSurface = () => {
     residentActivation.retire()
+    isolatedInstructionHost?.retire()
     retireInstructionHost?.()
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
@@ -1238,6 +1240,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
       root: { session, factOwner, manager: instructionManager } })
+    isolatedInstructionHost = (await import('./context/instructions/isolated.ts')).createIsolatedInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow, available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false })
     retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
     closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
@@ -1437,6 +1440,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        createIsolatedInstructionContext: isolatedInstructionHost.create,
         createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
         results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
         ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
@@ -1888,7 +1892,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Failed child/generation debt still borrows the original publication,
     // document, environment and result-store owners. Never release through it.
     if (!processCleanupFailures.length) {
-      await phase('instruction-host', () => closeInstructionHost?.())
+      await phase('isolated-instructions', () => isolatedInstructionHost?.close())
+      if (cleanupDone.has('isolated-instructions')) await phase('instruction-host', () => closeInstructionHost?.())
       if (cleanupDone.has('instruction-host')) await phase('runtime', () => runtimeContext.close())
       if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
       if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())
