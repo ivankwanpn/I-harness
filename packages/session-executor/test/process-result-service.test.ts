@@ -17,3 +17,9 @@ it('creates its own real result service and preserves generic page scope behavio
     await expect(owner.withPage(coordinator, 's', () => true, async () => 'bad')).rejects.toThrow()
   } finally { await owner.service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+it('forwards the original core metadata acquisition through its process-aware service',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'metadata-bridge-')),coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')),{lock:{enabled:true}}),bridge=createProcessAwareResultService({root,workspaceId:'w',coordinatorFor:()=>coordinator,sourceFor:async()=>({sourceId:'s',readonly:true}),genericVisible:async()=>false})
+ try{await coordinator.create({sessionId:'source'});const document=await coordinator.openManagedDocument('source'),{createResultObservationScope,legacyObservationFor}=await import('../src/lifecycle/result-observation.ts'),scopes=createResultObservationScope()
+ await coordinator.withExistingSessionBindingObservation!({sessionIds:['source']},observation=>scopes.run({sessionId:'source',sessionIds:['source'],observation,document,currentSource(){return {sourceId:'s',readonly:true}},assertHostCurrent(){}},async()=>{const metadata=await bridge.acquireSelectedMetadata(legacyObservationFor(scopes.current('source')!));expect((await metadata.reader.legacy()[Symbol.asyncIterator]().next()).done).toBe(true);await metadata.close()}));bridge.retireBridge();await expect(bridge.acquireSelectedMetadata({} as any)).rejects.toThrow()
+ }finally{await bridge.service.close();await coordinator.close()}
+})
