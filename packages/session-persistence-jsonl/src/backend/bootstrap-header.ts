@@ -47,7 +47,7 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {bootstrapRoutes:BootstrapRouteBackend} {
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {bootstrapRoutes:BootstrapRouteBackend;selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'>} {
   const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO)
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
     scope(id,owner)
@@ -105,6 +105,7 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     return{route:selected.route,stage:selected.stage}
   }}
   return {
+    selectedCapture:Object.freeze({readSelectedCapture:capture.readSelectedCapture,reserveSelectedCapture:capture.reserveSelectedCapture,prepareSelectedHeader:capture.prepareSelectedHeader,reconcileSelectedHeader:capture.reconcileSelectedHeader}),
     checkBootstrapCaptureRoot: capture.checkBootstrapCaptureRoot,
     readBootstrapCapture: capture.readBootstrapCapture,
     prepareBootstrapCapture: capture.prepareBootstrapCapture,

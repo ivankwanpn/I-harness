@@ -38,7 +38,7 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
 // (honest-bounding: it may have content — never guessed blank).
 const BLANK_PROBE_MAX_BYTES = 1024
 
-export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend> } {
+export function createJsonlBackend(root: string): PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } {
   const rootPath = resolve(root)
   const captureIO = createBootstrapCaptureIO()
   const artifactPath = (id: string, suffix: string): string => {
@@ -125,7 +125,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     return { visibility: value.visibility, manifest: { documents: value.documents, files: value.files } }
   }
 
-  const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend> } = {
+  const backend: PersistenceBackend & { selectedJournal: ReturnType<typeof createSelectedFactJournalBackend>;selectedCapture:ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture'] } = {
     ...createFactJournalBackend(filePath, assertNotDeleted),
     ...createBootstrapHeaderBackend(filePath, assertNotDeleted, rootPath, captureIO),
     // Original private cold lane only; selectedResultsBootstrap stays absent.
