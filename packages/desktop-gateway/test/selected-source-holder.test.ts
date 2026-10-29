@@ -18,3 +18,10 @@ it('joins an in-flight first acquisition on holder close',async()=>{
  }finally{await f.close()}
 })
 
+import { createCompletedPassiveContext } from '@i-harness/core-session/internal/bootstrap'
+import { exportSelectedResultsConversationSeed } from '../../core-session/src/conversation/seed-export.ts'
+it('exports an actual selected public seed with passive code store inside the held handoff',async()=>{
+ const f=await createGatewayForkFixture();try{await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'original'},{type:'turn/end'}]);const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'export',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+ await holder.first(async handoff=>{const context=createCompletedPassiveContext({kind:'held-public-fork',sourceSessionId:'source',view:handoff.source.view,factOwner:handoff.source.document,assertCurrent:handoff.assertCurrent},core.selection);expect(context.kind).toBe('ready');if(context.kind!=='ready')throw Error('passive context unavailable');const selected=await exportSelectedResultsConversationSeed(context.context,handoff.source.inherited);expect(selected.kind).toBe('seed');if(selected.kind==='seed')expect(selected.seed.passive.codeStore.version).toBe(1)});await holder.close()
+ }finally{await f.close()}
+})
