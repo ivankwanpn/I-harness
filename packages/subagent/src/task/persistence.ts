@@ -91,6 +91,7 @@ export class TaskPersistence {
         const observed = await operation.observe(); if (observed.kind !== 'present') throw new Error('Task document is absent')
         write = operation.stageWrite(observed.witness, snapshot)
         await finish(false)
+        assertHandoff()
       } catch (error) {
         primaryFailure = error; let failure: unknown = error
         if (!operation) beginCleanup = owned.operations.cleanupFor(error)
@@ -104,7 +105,7 @@ export class TaskPersistence {
       assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); assertHandoff() },
       retry() {
         if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver'))
-        if (!retryFlight) { retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
+        if (!retryFlight) { retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
         return retryFlight
       }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return result },
     })

@@ -27,6 +27,39 @@ import { registerExec } from '@i-harness/exec'
 import { registerSubagent } from '../src/index.ts'
 import { lockPathFor } from '../../fs-lock/src/index.ts'
 
+it.each(['initial', 'retry'] as const)('rechecks the original %s save after awaiting finish', async mode => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-finish-continuation-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), probed = Promise.withResolvers<void>()
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: 2, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
+    fault.target = path; handoff.publications = handoff.temps = handoff.syncs = 0
+    if (mode === 'retry') fault.failFinalClose = true
+    else { handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise }
+    const original = persistence.captureSave()!
+    let completing = original.done; void completing.catch(() => {})
+    if (mode === 'retry') {
+      await expect(original.done).rejects.toBeNull(); fault.failFinalClose = false
+      handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
+      completing = original.retry(); void completing.catch(() => {})
+    }
+    await entered.promise; const committed = original.outcome(); expect(committed?.kind).toBe('committed')
+    // All file IO is settled at this native release gate. Keep one bounded
+    // continuation queued ahead of the enclosing await's continuation; revoke
+    // as soon as the genuine handle proves finish has completed its check.
+    let turns = 0, revoked = false
+    const probe = () => {
+      try { original.assertHandoff() } catch { if (++turns < 128) { queueMicrotask(probe); return }; probed.resolve(); return }
+      document.revokeNewWork(); revoked = true; probed.resolve()
+    }
+    queueMicrotask(probe); release.resolve(); await probed.promise
+    expect(revoked).toBe(true); await expect(completing).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
+    const after = original.outcome(); expect(after).toMatchObject({ kind: 'committed', cleanupPending: false }); if (committed?.kind === 'committed' && after?.kind === 'committed') expect(after.ack).toBe(committed.ack)
+    expect({ publications: handoff.publications, temps: handoff.temps, syncs: handoff.syncs }).toEqual({ publications: 1, temps: 1, syncs: 1 })
+  } finally { release.resolve(); fault.failFinalClose = false; fault.target = ''; handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
 it.each(['revoked', 'mutated', 'ready'] as const)('checks actual registry parent %s after committed save cleanup', async state => {
   const root = await mkdtemp(join(tmpdir(), 'ih-task-handoff-cleanup-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
