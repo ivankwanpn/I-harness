@@ -8,6 +8,21 @@ import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/in
 import { createSessionService } from '../src/index.ts'
 import { createGenerationLifecycle } from '../src/lifecycle/generation-actions.ts'
 import { PNG } from '../../image-validation/test/fixtures.ts'
+import { assertSettlementRegistrationForwarding, type TestAction } from '../../core-agent/test/helpers/settlement-registration.ts'
+
+function observeGenerationClose<Action extends TestAction>(action: Action, capturedClose: () => void) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const source = register.apply(action, args), capture = source.generation.capture.bind(source.generation)
+    source.generation.capture = event => { if (event.op === 'close') capturedClose(); return capture(event) }
+    return source
+  }
+  return action
+}
+
+it('forwards the exact registration tuple through the promotion source adapter', async () => {
+  await assertSettlementRegistrationForwarding(action => observeGenerationClose(action, () => {}))
+})
 
 afterEach(() => vi.unstubAllGlobals())
 const success = () => new Response('data: {"choices":[{"delta":{"content":"done"},"finish_reason":null}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
@@ -272,13 +287,7 @@ it.each(['committed', 'absent', 'absent-cancel-unknown'] as const)('uncertain st
   const document = await coordinator.openManagedDocument(id), beginAction = document.beginAction.bind(document)
   let closeCaptures = 0
   vi.spyOn(document, 'beginAction').mockImplementation(signal => {
-    const action = beginAction(signal), register = action.registerSettlementSource.bind(action)
-    action.registerSettlementSource = (drain, reconcilePending) => {
-      const source = register(drain, reconcilePending), capture = source.generation.capture.bind(source.generation)
-      source.generation.capture = event => { if (event.op === 'close') closeCaptures++; return capture(event) }
-      return source
-    }
-    return action
+    return observeGenerationClose(beginAction(signal), () => { closeCaptures++ })
   })
   const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'fixture', baseUrl: 'https://steer-promotion-unknown.fixture.invalid' })
   const service = createSessionService({ workspace: root, coordinator, codeMode: { mode: 'off' }, modelBindingFor: async () => { resolverEntered.resolve(); await resolverRelease.promise; return { status: 'ready', binding: { model, modelId: 'fixture', providerId: 'fixture', label: 'fixture' } } }, transformPrompt: async (_assembly, text) => { if (text === '/uncertain-steer') { transformations++; return 'derived uncertain steer' } return text } })

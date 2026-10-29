@@ -6,13 +6,20 @@ import type { PersistenceBackend, SessionMeta } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import type { Mutations } from "./mutations.ts"
 import { SessionFormatUnsupportedError } from '../format/registry.ts'
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 export function createLoads(
   backend: Pick<PersistenceBackend, "read" | "repair" | "replaceEvents" | "append" | "id" | "upgradeSessionFormat">,
   { withSessionOperation, borrowOwnership }:
     Pick<Ownership, "withSessionOperation" | "borrowOwnership">,
   { assertWritable, pendingWriteBehind, invalidateConversation }: Pick<Mutations, "assertWritable" | "pendingWriteBehind" | "invalidateConversation">,
+  processLatches?: ReturnType<typeof createProcessReadLatches>,
 ) {
+  async function processMutation<T>(id: string, work: () => Promise<T>): Promise<T> {
+    const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
+    let outcome: 'settled' | 'unknown' = 'unknown'
+    try { const value = await work(); outcome = 'settled'; return value } finally { token?.end(outcome) }
+  }
   const read = async (sessionId: string) => {
     try { return await backend.read(sessionId) }
     catch (cause) {
@@ -31,7 +38,7 @@ export function createLoads(
       } }
     },
     async load(sessionId: string) {
-      return withSessionOperation(sessionId, async () => {
+      return processMutation(sessionId, () => withSessionOperation(sessionId, async () => {
         invalidateConversation(sessionId)
         const peeked = await read(sessionId)
         preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
@@ -85,10 +92,11 @@ export function createLoads(
         })
         preflightSessionFormat(CURRENT_FORMAT_VERSION, canonical, meta)
         return { session: buildSession(meta, canonical) }
-      })
+      }))
     },
     async loadOwned(sessionId: string) {
       assertWritable(sessionId)
+      return processMutation(sessionId, async () => {
       const pendingWrites = pendingWriteBehind(sessionId)
       if (pendingWrites !== undefined) await pendingWrites.flush()
       return withSessionOperation(sessionId, async () => {
@@ -138,6 +146,7 @@ export function createLoads(
           try { await acquired.release() } catch { /* preserve load error and retained cleanup debt */ }
           throw error
         }
+      })
       })
     },
   }

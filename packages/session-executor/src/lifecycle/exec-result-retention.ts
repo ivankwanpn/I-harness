@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { currentToolResultProducer, registerToolResultDependency, type ToolExec, type ToolResultDependency } from '@i-harness/core-tools'
 import { createExecFrameCapture } from '@i-harness/output-retention'
 import type { ContextOutputService, ResultArtifactScope } from '@i-harness/context-output'
+import { resultPageFailure, summarizeExecFrames, type ExecFrameSummary } from '@i-harness/context-output'
+import { sameManagedArtifactRef, type ManagedArtifactRef } from '@i-harness/core-session'
 import type { ExecFrameCapture, ExecFrameObservation, ExecResultRetention } from '@i-harness/exec'
 import { resultSourceBinding } from './result-sources.ts'
 
@@ -13,6 +15,38 @@ export function createExecResultRetention(service: ContextOutputService | undefi
   const startupTargets = new WeakMap<ExecFrameCapture, string | undefined>()
   const passive = new WeakMap<ExecFrameCapture, ToolResultDependency>()
   const observers = new WeakMap<ExecFrameCapture, WeakMap<ToolExec, ToolResultDependency>>()
+  const summaries = new WeakMap<ExecFrameCapture, { ref: ManagedArtifactRef; summary: ExecFrameSummary }>()
+  const scans = new WeakMap<ExecFrameCapture, { ref: ManagedArtifactRef; controller: AbortController; promise: Promise<ExecFrameSummary>; readers: number }>()
+
+  function scan(capture: ExecFrameCapture, ref: ManagedArtifactRef, origin: string, signal?: AbortSignal): Promise<ExecFrameSummary> {
+    let flight = scans.get(capture)
+    if (!flight || flight.controller.signal.aborted || !sameManagedArtifactRef(flight.ref, ref)) {
+      const controller = new AbortController()
+      const promise = summarizeExecFrames(ref, (cursor, maxBytes) => service!.readExecResult({ sessionId: origin, signal: controller.signal }, { ref, cursor, maxBytes }), controller.signal)
+      flight = { ref, controller, promise, readers: 0 }
+      scans.set(capture, flight)
+      const original = flight
+      void promise.then(summary => {
+        if (!controller.signal.aborted) summaries.set(capture, { ref, summary })
+        if (scans.get(capture) === original) scans.delete(capture)
+      }, () => { if (scans.get(capture) === original) scans.delete(capture) })
+    }
+    const joined = flight
+    joined.readers++
+    return new Promise((resolve, reject) => {
+      let detached = false
+      const detach = () => {
+        if (detached) return false
+        detached = true; signal?.removeEventListener('abort', abort)
+        if (--joined.readers === 0) joined.controller.abort()
+        return true
+      }
+      const abort = () => { if (detach()) reject(signal!.reason) }
+      signal?.addEventListener('abort', abort, { once: true })
+      void joined.promise.then(value => { if (detach()) resolve(value) }, cause => { if (detach()) reject(cause) })
+      if (signal?.aborted) abort()
+    })
+  }
 
   /** Reads settle the same original artifact; only the grant target differs. */
   function dependencyFor(capture: ExecFrameCapture, target: string | undefined): ToolResultDependency {
@@ -42,6 +76,57 @@ export function createExecResultRetention(service: ContextOutputService | undefi
   }
   return {
     previewBytes,
+    async readFrames(capture, query) {
+      const { signal, maxBytes, textView } = query, cursor = query.cursor ? { ...query.cursor } : undefined
+      signal?.throwIfAborted()
+      const origin = origins.get(capture)
+      if (!captures.has(capture) || !origin || !service) return { kind: 'unavailable', reason: 'unsupported-owner' }
+      const settled = await capture.settle()
+      signal?.throwIfAborted()
+      if (settled.kind !== 'ready') return settled
+      const dependency = settled.dependency
+      if (dependency.retention.kind === 'unavailable') return { kind: 'unavailable', reason: dependency.retention.reason }
+      const ref = Object.freeze({ ...dependency.retention.ref })
+      try {
+        const page = await service.readExecResult({ sessionId: origin, signal }, { ref, cursor, maxBytes, textView })
+        signal?.throwIfAborted()
+        return { kind: 'page', dependency, page }
+      } catch (cause) { signal?.throwIfAborted(); return resultPageFailure(cause) }
+    },
+    async summarize(capture, { signal } = {}) {
+      signal?.throwIfAborted()
+      // No caller-supplied ref/owner is accepted by this trusted port.
+      const origin = origins.get(capture)
+      if (!captures.has(capture) || !origin || !service) return { kind: 'unavailable', reason: 'unsupported-owner' }
+      const settled = await capture.settle()
+      signal?.throwIfAborted()
+      if (settled.kind !== 'ready') return settled
+      const dependency = settled.dependency
+      if (dependency.retention.kind === 'unavailable') return { kind: 'unavailable', reason: dependency.retention.reason }
+      const ref = Object.freeze({ ...dependency.retention.ref })
+      const read = (cursor: import('@i-harness/core-session').ExecFrameCursor, maxBytes: number) => service.readExecResult({ sessionId: origin, signal }, { ref, cursor, maxBytes })
+      try {
+        const cached = summaries.get(capture)
+        let summary: ExecFrameSummary
+        if (cached && sameManagedArtifactRef(cached.ref, ref)) {
+          // Cache is computation only: even a hit must recheck original authority.
+          await read({ recordOffset: 9, sliceOffset: 0 }, 32768)
+          summary = cached.summary
+        } else {
+          // Reader cancellation detaches only this waiter. The shared scan is
+          // cancelled only when no readers remain; rejected flights are cleared.
+          summary = await scan(capture, ref, origin, signal)
+          // Revalidate this caller's original authority after the shared await.
+          await read({ recordOffset: 9, sliceOffset: 0 }, 32768)
+        }
+        signal?.throwIfAborted()
+        summaries.set(capture, { ref, summary })
+        return { kind: 'retained-summary', dependency, summary }
+      } catch (cause) {
+        signal?.throwIfAborted()
+        return { kind: 'unavailable', reason: 'read-unavailable' }
+      }
+    },
     begin(input) {
       const exec = currentToolResultProducer(), binding = exec ? resultSourceBinding(exec) : undefined, operationId = randomUUID()
       let scope: ResultArtifactScope | undefined

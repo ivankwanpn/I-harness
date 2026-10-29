@@ -5,6 +5,7 @@ import type { AgentGenerationLifecycle, AgentGenerationDependencies } from '@i-h
 import { generationClock } from './generation-clock.ts'
 import { OwnedGenerationAction } from './generation-action.ts'
 import { readOwnedGenerationActions } from '../../../core-session/src/managed/view.ts'
+import { retainGenerationClose } from './generation-close-settlement.ts'
 
 const sameOrigin = (a: GenerationOrigin, b: GenerationOrigin) => a.kind === b.kind && a.seq === b.seq
   && (a.kind === 'observation-input' ? a.inputId === (b.kind === 'observation-input' ? b.inputId : undefined) : true)
@@ -76,6 +77,12 @@ export function createGenerationLifecycle(view: SessionView, ownerSessionId: str
       view, ownerSessionId, incarnation, assertOpen: action.assertOpen, read: state,
       append: async (events, current) => { await commit(events, current) },
       settle: async event => { await receipt(source.generation.capture(event)) },
+      captureClose: event => {
+        const capture = source.generation.capture(event)
+        retained.add(capture)
+        const original = retainGenerationClose(capture, () => retained.delete(capture))
+        return { settle: () => own(original.settle()) }
+      },
       phase: async (recovery, phase, current) => { await receipt(action.captureGenerationRecovery(recovery, phase, current)) },
     }, { maxAttempts: options.maxAttempts, localTest: options.selectedClient ? { enabled: localTest?.enabled === true, selectedClient: options.selectedClient } : localTest })
 

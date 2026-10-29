@@ -4,13 +4,25 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import type { FactOwner } from '@i-harness/core-session'
 import { createCodeModeEventFacts } from '../src/event-facts.ts'
 
+/** Direct producer fixtures own their original cancellation/terminal seal. */
+function directFacts(owner: FactOwner, onChange?: () => void) {
+  const live = new Set<string>()
+  const facts = createCodeModeEventFacts(owner, async () => {
+    for (const cellId of [...live]) { live.delete(cellId); await facts.required({ type: 'code/cell', cellId, state: 'terminated' }) }
+  }, onChange)
+  const optional = facts.optional, required = facts.required
+  facts.optional = async (...args) => { await optional(...args); live.add(args[0].cellId) }
+  facts.required = (...args) => { if (args[0].type === 'code/cell') live.delete(args[0].cellId); return required(...args) }
+  return facts
+}
 it('releases only the recovered original output hold while keeping its live mount source usable', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-hold-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = directFacts(document)
   let blocked = true, installed = 0
   try {
     await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
@@ -30,7 +42,7 @@ it('cannot publish a queued terminal from source pre-drain before earlier output
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-close-order-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = directFacts(document)
   let blocked = true
   try {
     await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
@@ -55,7 +67,7 @@ it('keeps a same-cell accepted backlog on its original source while recovery for
   const root = await mkdtemp(join(tmpdir(), 'ih-code-output-backlog-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = directFacts(document)
   let blocked = true
   const result = (preview: string) => ({ type: 'code/output' as const, cellId: 'original', envelope: { version: 1 as const, execution: { outcome: 'succeeded' as const, dispatch: 'not-dispatched' as const }, preview, media: [], retention: { kind: 'unavailable' as const, reason: 'quota' as const } } })
   try {
@@ -69,13 +81,13 @@ it('keeps a same-cell accepted backlog on its original source while recovery for
   } finally { blocked = false; await facts.close().catch(() => {}); await coordinator.close().catch(() => {}) }
 })
 
-it('mirrors a transient original hold until that source closes and isolates passive observation', async () => {
+it('mirrors a transient original hold until its original checkpoint verifies recovery and isolates passive observation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-hold-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   let blocked = true, preparations = 0, observeRelease = false, emptyButHeld = false
   const states: string[] = []
-  const facts = createCodeModeEventFacts(document, async () => {}, () => {
+  const facts = directFacts(document, () => {
     states.push(facts.observationState())
     if (observeRelease && facts.observationState() === 'unavailable') {
       try { facts.assertObserved(); emptyButHeld = true } catch { /* Still pending; no readiness certificate. */ }
@@ -112,7 +124,7 @@ it('keeps installation faults unavailable through original failed close', async 
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-install-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = directFacts(document)
   try {
     await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
     await expect(facts.required({ type: 'code/cell', cellId: 'original', state: 'completed' }, () => { throw new Error('local installation failed') })).rejects.toThrow()
@@ -129,7 +141,7 @@ it('registers pending before preparation awaits and reports installation before 
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
   const release = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>(), states: string[] = []
-  const facts = createCodeModeEventFacts(document, async () => {}, () => states.push(facts.observationState()))
+  const facts = directFacts(document, () => states.push(facts.observationState()))
   let installed: string | undefined
   try {
     await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })
@@ -151,7 +163,7 @@ it('keeps cancellation bookkeeping unavailable until the original callback retur
   const root = await mkdtemp(join(tmpdir(), 'ih-code-observation-cancel-'))
   const backend = createJsonlBackend(root), coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
   const { id } = await coordinator.create(), document = await coordinator.openManagedDocument(id)
-  const facts = createCodeModeEventFacts(document, async () => {})
+  const facts = directFacts(document)
   let cancelledState: string | undefined
   try {
     await facts.optional({ type: 'code/cell', cellId: 'original', state: 'started' })

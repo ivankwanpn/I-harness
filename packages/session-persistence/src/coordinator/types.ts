@@ -112,6 +112,7 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  withProcessReadObservation?<T, U>(id: string, options: import('./process-read-owner.ts').ProcessReadOptions, work: (observation: import('./process-read-owner.ts').ProcessReadObservation) => Promise<T>, publish: (candidate: T, observation: import('./process-read-owner.ts').ProcessReadObservation, last: import('./process-read-owner.ts').ProcessReadUpdate) => Promise<U>): Promise<U>
   withExistingSessionBindingObservation?<T>(request: ExistingSessionBindingObservationRequest, run: (observation: ExistingSessionBindingObservation) => Promise<T>): Promise<T>
   withSessionBindingObservation?<T>(request: SessionBindingObservationRequest, run: (observation: SessionBindingObservation) => Promise<T>): Promise<T>
   bootstrapSemanticTarget(request: import('./bootstrap-types.ts').BootstrapRequest, guards: import('./bootstrap-types.ts').BootstrapGuards): Promise<import('./bootstrap-types.ts').BootstrapOutcome>
@@ -163,6 +164,8 @@ export interface SessionCoordinator {
   getDocument(key: string): Promise<unknown | undefined>
   /** Whether this coordinator holds the session's write ownership lease (M23, opt-in lock). */
   ownerOf(sessionId: string): boolean
+  /** An adopted live owner, excluding temporary observation pins and disposal debt. */
+  hasLiveOwnership?(sessionId: string): boolean
   /**
    * Acquire the session's ownership lease and hold it until close() — the CLI
    * resume path calls this after a successful load(). Throws

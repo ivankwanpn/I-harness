@@ -1,3 +1,5 @@
+import { nativeOutputRefusal } from './tools/native-job-output.ts'
+import { jobOutputInvocation } from './job-output-invocation.ts'
 import { TaskResultOwner } from "./task/result.ts"
 import { createHash } from "node:crypto"
 import type { Tool } from "@i-harness/core-tools"
@@ -131,6 +133,7 @@ export function boundReport(output: Record<string, unknown>, args: ReportPageArg
 
 export function withReportPolicy(tool: Tool, deps: SubagentToolDeps): Tool {
   if (!deps.reportPolicy || !["list_agents", "wait_agent", "get_task_output", "job_output", "job_list", "spawn_agent"].includes(tool.name)) return tool
+  const invokeJobOutput = jobOutputInvocation(tool)
   const reference = (row: Record<string, unknown>, field: string, digest: string) => {
     const taskId = row.task_id
     if (typeof taskId === "string") {
@@ -144,9 +147,12 @@ export function withReportPolicy(tool: Tool, deps: SubagentToolDeps): Tool {
   }
   return { ...tool, get description() { return tool.description }, get inputSchema() {
     const schema = tool.inputSchema as { properties?: Record<string, unknown> }
-    return { ...schema, properties: { ...schema.properties, ...reportPageSchema } }
+    return { ...schema, properties: { ...reportPageSchema, ...schema.properties } }
   }, execute: async (args, exec) => {
-    const output = await tool.execute(args, exec) as Record<string, unknown>, pageArgs = args as ReportPageArgs
+    const invoked = invokeJobOutput ? await invokeJobOutput(args as Record<string, unknown>, exec, deps.reportPolicy!) : undefined
+    if (invoked?.route === 'native') return invoked!.value
+    if (invoked && ((args as any).job_instance_id !== undefined || (args as any).source_id !== undefined)) return nativeOutputRefusal('unsupported-selector')
+    const output = invoked ? invoked.value : await tool.execute(args, exec) as Record<string, unknown>, pageArgs = args as ReportPageArgs
     const rows = output.tasks as Record<string, unknown>[] | undefined
     if (tool.name === 'get_task_output' && rows?.length === 1) {
       const row = rows[0]!, taskId = row.task_id as string, task = deps.tasks.get(taskId)!

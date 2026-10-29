@@ -15,6 +15,10 @@ export interface AgentGenerationAction {
   control(lane: GenerationLane, checkCurrent?: () => void): GenerationControl
   acceptance(confirmation: ExecutionConfirmation | undefined): import('@i-harness/core-session').GenerationAcceptanceDraft
   close(disposition: Extract<GenerationActionEvent, { op: 'close' }>['disposition']): Promise<void>
+  /** Retry only the already captured original close; never create an intent. */
+  recoverClose?(): Promise<void>
+  /** Observe whether ordinary close created its original intent. No authority. */
+  originalCloseInvoked?(): boolean
   phase(recovery: Extract<import('@i-harness/core-session').SessionEvent, { type: 'context/recovery' }>): Promise<void>
 }
 export interface AgentGenerationLifecycle {

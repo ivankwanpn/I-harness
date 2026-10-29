@@ -1,3 +1,4 @@
+import { createResidentActivation, type ResidentActivationController } from './lifecycle/resident-activation.ts'
 // packages/session-executor/src/service.ts — R-C0 (engine-owned posture).
 // The GLOBAL per-session service. A-region owns the per-session serial lane
 // (packages/core-agent/src/executor.ts: createSessionExecutor over
@@ -274,7 +275,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const loadingWriters = new Map<string, Promise<Session | undefined>>()
   const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
-  type CreatingAssembly = { work: Promise<SessionAssembly>; cleanup?: () => Promise<void>; failed: boolean }
+  type CreatingAssembly = { work: Promise<SessionAssembly>; cleanup?: () => Promise<void>; failed: boolean; assembly?: SessionAssembly; residentActivation: ResidentActivationController }
   const creating = new Map<string, CreatingAssembly>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
   const extensionRefreshes = new Map<string, Promise<void>>()
@@ -675,7 +676,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       // Publish the owner before build starts, including synchronous retention
       // during the original constructor. Never replace this row after failure.
       const work = Promise.withResolvers<SessionAssembly>()
-      const row: CreatingAssembly = { work: work.promise, failed: false }
+      const row: CreatingAssembly = { work: work.promise, failed: false, residentActivation: createResidentActivation(() =>
+        !!row.assembly && !closed && !closing.has(sessionId) && !failedClose.has(sessionId)
+        && assemblies.get(sessionId) === row.assembly && !retiredSurfaces.has(row.assembly) && row.assembly.executionSurfaceState?.() !== 'retired') }
       pending = row
       creating.set(sessionId, row)
       void (async () => {
@@ -720,6 +723,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             projectContext,
             executionAuthority,
             executionCallerAvailable,
+            residentActivation: row.residentActivation,
             retainConstructionCleanup: cleanup => { row.cleanup = cleanup },
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
@@ -764,6 +768,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             projectContext,
             executionAuthority,
             executionCallerAvailable,
+            residentActivation: row.residentActivation,
             retainConstructionCleanup: cleanup => { row.cleanup = cleanup },
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
@@ -776,6 +781,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
           })
         }
+        row.assembly = assembly
         if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) await assembly.recordSandboxMode(currentSandbox)
         writableSessions.set(sessionId, assembly.session)
         mountingAssemblies.set(sessionId, assembly)
@@ -879,12 +885,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           assembly.revokeNewWork(); retireSurface(sessionId, assembly)
         } else notifySurface({ sessionId, assembly, kind: 'published' })
         for (const hook of [...hooks]) hook(assembly)
+        if (creating.get(sessionId) === row) row.residentActivation.activate()
         // Recovery admission needs the exact published parent and its lane.
         // Waking schedules through submit without awaiting that turn here.
         try { await assembly.drainParentNotifications?.(); await deliveryDrain.reconcile() }
         catch (error) { d.warn(`[i-harness] parent notification recovery failed: ${error instanceof Error ? error.message : String(error)}`) }
         return assembly
       })().catch(error => {
+        row.residentActivation.retire()
         // Failed setup cleanup still owns its mounted resources. A retry must
         // acknowledge that close before another assembly can replace them.
         if (mountingAssemblies.has(sessionId)) failedClose.add(sessionId)
@@ -1187,6 +1195,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
   const resultReader = createResultPageReader(opts, id => !closed && !closing.has(id) && !failedClose.has(id))
   function revokeSession(sessionId: string): void {
+    creating.get(sessionId)?.residentActivation.retire()
     deliveryDrains.get(sessionId)?.retire()
     const assembly = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
     if (assembly) receivedInputsFor(assembly.factOwner, sessionId).delivery.revoke()

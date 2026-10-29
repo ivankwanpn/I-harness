@@ -117,6 +117,15 @@ describe("exec background jobs", () => {
     expect(await exec.killJob(jobId)).toBe("already-finished")
   }, 10_000)
 
+  it("rejects a stale native selector before cancelling the live job", async () => {
+    const exec = registerExec(createContext())
+    const { jobId, nativeJob } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
+    try {
+      await expect(exec.killJob(jobId, { jobInstanceId: "stale", sourceId: nativeJob.sourceId })).rejects.toThrow(/stale-instance/)
+      expect(exec.getOutput(jobId).status).toBe("running")
+      await expect(exec.killJob(jobId, { jobInstanceId: nativeJob.instanceId, sourceId: nativeJob.sourceId })).resolves.toBe("cancellation-requested")
+    } finally { await exec.dispose() }
+  }, 10000)
   it("getOutput for unknown job throws", () => {
     const exec = registerExec(createContext())
     expect(() => exec.getOutput("nope")).toThrow(/unknown job/i)

@@ -11,6 +11,54 @@ import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts
 import { localTestGeneration } from './fixtures/generation.ts'
 import { createMockClient } from '@i-harness/llm-mock'
 import { observeModelClient } from '@i-harness/llm-seam'
+import { assertSettlementRegistrationForwarding, type TestAction, type TestSource } from './helpers/settlement-registration.ts'
+
+function instrumentInvocationAction(action: TestAction, hooks: {
+  finish: () => void; registering?: () => void; beforeDrain?: () => Promise<void>
+  registered?: (source: TestSource) => void; closing?: () => void; closed?: () => void
+}): TestAction {
+  const register = action.registerSettlementSource
+  return { ...action, finish: hooks.finish, registerSettlementSource(...args) {
+    hooks.registering?.()
+    const [drain, reconcilePending, checkpointOwner] = args, beforeDrain = hooks.beforeDrain
+    const source = beforeDrain
+      ? register.call(action, async () => { await beforeDrain(); await drain() }, reconcilePending, checkpointOwner)
+      : register.apply(action, args)
+    hooks.registered?.(source)
+    if (hooks.closing || hooks.closed) {
+      const close = source.close
+      source.close = async () => { hooks.closing?.(); await close.call(source); hooks.closed?.() }
+    }
+    return source
+  } }
+}
+
+it.each(['held-drain', 'registration-failure', 'cleanup-order'] as const)('forwards the exact registration tuple through the invocation %s adapter', async mode => {
+  await assertSettlementRegistrationForwarding(action => instrumentInvocationAction(action, {
+    finish: action.finish.bind(action),
+    ...(mode === 'held-drain' ? { beforeDrain: async () => {}, registered() {}, closed() {} } : {}),
+    ...(mode === 'registration-failure' ? { registering() {} } : {}),
+    ...(mode === 'cleanup-order' ? { closing() {} } : {}),
+  }), { instrumentedDrain: mode === 'held-drain' })
+})
+
+it('keeps the invocation lifecycle gate before its original drain while the exact source remains held', async () => {
+  const action = createNondurableFactOwner(createSession()).beginAction()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), order: string[] = []
+  const wrapped = instrumentInvocationAction(action, {
+    finish: action.finish.bind(action),
+    async beforeDrain() { order.push('gate'); entered.resolve(); await release.promise },
+    closed() { order.push('closed') },
+  })
+  const source = wrapped.registerSettlementSource(async () => { order.push('original drain') })
+  const closing = source.close()
+  try {
+    await entered.promise
+    expect(order).toEqual(['gate'])
+    expect(() => source.assertHeld()).not.toThrow()
+  } finally { release.resolve(); await closing; action.finish() }
+  expect(order).toEqual(['gate', 'original drain', 'closed'])
+})
 
 const settled = <T>(promise: Promise<T>) => promise.then(value => ({ value, error: undefined }), error => ({ value: undefined, error }))
 
@@ -54,14 +102,13 @@ it.each(['provider', 'acceptance', 'stop', 'failed-drain', 'compact'] as const)(
     const owner: FactOwner = { ...original, beginAction(signal) {
       const action = original.beginAction(signal)
       actions.push(action)
-      return { ...action, finish() { finished++; action.finish() }, registerSettlementSource(drain) {
-        const source = action.registerSettlementSource(async () => {
+      return instrumentInvocationAction(action, {
+        finish() { finished++; action.finish() },
+        async beforeDrain() {
           if (actions.length === 1 && (boundary === 'failed-drain' || boundary === 'compact')) await hold()
-          await drain()
-        })
-        sources.push(source)
-        return { ...source, async close() { await source.close(); closed++ } }
-      } }
+        },
+        registered(source) { sources.push(source) }, closed() { closed++ },
+      })
     } }
     ctx.on('agent/pre-step', () => { hooks++ })
     ctx.on('agent/stop', async () => { if (actions.length === 1 && boundary === 'stop') await hold() })
@@ -106,10 +153,10 @@ it.each(['factory', 'registration'] as const)('settles created resources after %
   let first = true
   const owner: FactOwner = { ...original, beginAction(signal) {
     const action = original.beginAction(signal)
-    return { ...action, finish() { order.push('finish'); action.finish() }, registerSettlementSource(drain) {
-      if (first && boundary === 'registration') throw primary
-      return action.registerSettlementSource(drain)
-    } }
+    return instrumentInvocationAction(action, {
+      finish() { order.push('finish'); action.finish() },
+      registering() { if (first && boundary === 'registration') throw primary },
+    })
   } }
   const deps: AgentDeps & AgentConfig = {
     session, factOwner: owner, tools: createToolRegistry(ctx), systemPrompt: 'p',
@@ -167,13 +214,10 @@ it('joins every created close after failures while retaining busy through genera
   const owner: FactOwner = { ...original, beginAction(signal) {
     const action = original.beginAction(signal)
     originalAction = action
-    return { ...action,
+    return instrumentInvocationAction(action, {
       finish() { order.push('finish'); action.finish(); throw finishFailure },
-      registerSettlementSource(drain) {
-        const source = action.registerSettlementSource(drain)
-        return { ...source, async close() { order.push('source'); await source.close() } }
-      },
-    }
+      closing() { order.push('source') },
+    })
   } }
   const agent = createAgent(ctx, {
     session, factOwner: owner, tools: createToolRegistry(ctx), model: createMockClient([]), systemPrompt: '',

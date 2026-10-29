@@ -32,6 +32,9 @@ export class LeaseRetirement {
   }
 }
 
+/** Preserve a sole callback failure literally only after clean retirement. Two
+ * failures aggregate even when they are the same object; writer recovery relies
+ * on this exact outer rejection distinction and never unwraps aggregates. */
 export function failuresTogether(failures: unknown[], message: string): void {
   if (failures.length === 1) throw failures[0]
   if (failures.length) throw new AggregateError(failures, message)

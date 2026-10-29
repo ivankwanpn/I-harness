@@ -113,3 +113,21 @@ it('keeps passive storage intact when a current observer fails and allows the ne
     await job.exec.dispose(); disposed = true
   } finally { job.release(); if (!disposed) await job.exec.dispose().catch(() => {}) }
 })
+
+it('passive job metadata neither retries unknown storage nor registers an observer', async () => {
+  const job = await runJob({ finishes: [{ kind: 'unknown' }, { kind: 'artifact' }] })
+  try {
+    expect(job.counters()).toEqual({ launches: 1, attempts: 1, observations: 0 })
+    const first = job.exec.getJobView(job.jobId)
+    expect(first.nativeJob).toBe(job.exec.listJobViews()[0]!.nativeJob)
+    expect(first.retentionFailure).toBe('recovery-required')
+    expect(first.retained).toBeUndefined()
+    await new Promise<void>(done => setImmediate(done))
+    expect(job.counters()).toEqual({ launches: 1, attempts: 1, observations: 0 })
+    // Existing observing semantics still retry the exact original capture.
+    job.exec.listJobs()
+    await new Promise<void>(done => setImmediate(done))
+    expect(job.counters()).toEqual({ launches: 1, attempts: 2, observations: 1 })
+    expect(job.exec.getJobView(job.jobId).retained?.sourceId).toBe(first.nativeJob.sourceId)
+  } finally { job.release(); await job.exec.dispose() }
+})

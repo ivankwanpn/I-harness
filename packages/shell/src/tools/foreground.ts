@@ -1,4 +1,5 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
+import type { NativeJobIdentity } from '@i-harness/exec'
 import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
 import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ShellToolDeps } from "../types.ts"
@@ -19,7 +20,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
   // bash-absent branch and `sandboxUnavailableFailure` both carry the reason in
   // `stderr` (the field the model reads). It was absent from this type, so the
   // refusal's most important field sat outside the declared output shape.
-  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
+  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; native_job?: NativeJobIdentity; promoted?: true; ran_foreground_ms?: number }> = {
     name: "bash",
     description: deps.wslShell ? `Run Linux Bash in ${deps.wslShell.label}. Background jobs remain alive only until the root command exits; descendants are then cleaned up.` : "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
@@ -76,8 +77,8 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = await deps.exec.runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-          return { job_id: jobId }
+          const { jobId, nativeJob } = await deps.exec.runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId, ...(nativeJob === undefined ? {} : { native_job: nativeJob }) }
         }
         // A deadline or direct user steer changes observation of this one
         // command; execution and policy admission are never replayed.
@@ -104,7 +105,7 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       }
     },
   }
-  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
+  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; native_job?: NativeJobIdentity; promoted?: true; ran_foreground_ms?: number }> = {
     name: "pwsh",
     description: deps.wslShell ? "Run native Windows PowerShell using the host sandbox backend. WSL Linux paths and capabilities do not apply here; background or PTY support depends on the selected native backend." : "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
@@ -132,8 +133,8 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
-          return { job_id: jobId }
+          const { jobId, nativeJob } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId, ...(nativeJob === undefined ? {} : { native_job: nativeJob }) }
         }
         // Observe the same capture through the deadline and direct steer source.
         const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }

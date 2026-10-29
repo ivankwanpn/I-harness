@@ -50,12 +50,31 @@ export function createCloseTool(deps: SubagentToolDeps): Tool {
 }
 
 export function createJobKillTool(deps: SubagentToolDeps): Tool {
-  const jobKillTool: Tool<{ job_id: string; reason?: string }, { outcome: string }> = {
+  const jobKillTool: Tool<{ job_id: string; reason?: string; backend?: "shell" | "child" | "workflow"; job_instance_id?: string; source_id?: string }, { outcome: string }> = {
     name: "job_kill",
     description: "Request cancellation of a running background job (subagent, shell, or workflow).",
-    inputSchema: { type: "object", properties: { job_id: { type: "string" }, reason: { type: "string" } }, required: ["job_id"] },
+    inputSchema: { type: "object", additionalProperties: false, properties: { job_id: { type: "string" }, reason: { type: "string" }, backend: { type: "string", enum: ["shell", "child", "workflow"] }, job_instance_id: { type: "string" }, source_id: { type: "string" } }, required: ["job_id"] },
     isReadOnly: false,
     execute: async (args) => {
+      const keys = ['job_id', 'reason', 'backend', 'job_instance_id', 'source_id']
+      if (Object.keys(args).some(key => !keys.includes(key)) || typeof args.job_id !== 'string' || !args.job_id.trim()
+        || (args.backend !== undefined && !['shell', 'child', 'workflow'].includes(args.backend))
+        || (args.reason !== undefined && typeof args.reason !== 'string')
+        || (args.job_instance_id !== undefined && (typeof args.job_instance_id !== 'string' || !args.job_instance_id.trim()))
+        || (args.source_id !== undefined && (typeof args.source_id !== 'string' || !args.source_id.trim()))) throw new Error('invalid-selector')
+      if (args.backend === "shell") {
+        if (!args.job_instance_id || deps.exec.supportsNativeJobKill !== true) throw new Error("Checked native cancellation unavailable")
+        const selected = deps.exec.getJobView?.(args.job_id)?.nativeJob
+        if (!selected || selected.version !== 1 || selected.jobId !== args.job_id || !selected.ownerSessionId || selected.instanceId !== args.job_instance_id) throw new Error('stale-instance')
+        if (args.source_id !== undefined && selected.sourceId !== args.source_id) throw new Error('stale-source')
+        return { outcome: await deps.exec.killJob(args.job_id, { jobInstanceId: args.job_instance_id, ...(args.source_id !== undefined ? { sourceId: args.source_id } : {}) }) }
+      }
+      if (args.job_instance_id !== undefined || args.source_id !== undefined) throw new Error(args.backend === undefined ? "unsupported-selector" : "Native selectors require shell backend")
+      if (args.backend === "child") return { outcome: deps.jobs.kill(args.job_id) }
+      if (args.backend === "workflow") {
+        if (!deps.workflow) throw new Error("Workflow cancellation unavailable")
+        return { outcome: deps.workflow.killJob(args.job_id) }
+      }
       // M24b (spec §3.3) third layer: `workflow-` ids route to the workflow
       // job store (its killJob aborts the run's current step process tree).
       if (deps.workflow && args.job_id.startsWith("workflow-")) {

@@ -106,11 +106,18 @@ it('promotes the exact raw human input and records command expansion once as a d
     const inherited = projectConversation(forked.view)
     expect(inherited.items.filter(item => item.kind === 'input').map(item => item.messages)).toEqual(projectConversation(service.liveSession(id)!).items.filter(item => item.kind === 'input').map(item => item.messages))
     expect(forked.view.events.filter(event => event.type === 'context/action' || event.type === 'context/attempt' || event.type === 'agent/input/preparation')).toHaveLength(0)
-    const raw = forked.view.events.find(event => event.type === 'user/message' && event.text === '/fixture')!
-    expect(forked.view.events.flatMap(event => event.type === 'user/message' && event.seedInputContext ? [event.seedInputContext.rawMessageSeq] : [])).toEqual([raw.seq, raw.seq])
+    // Exercise the actual child-seed consumer. Its current semantic-seed remap
+    // failure must remain visible before inspecting inherited message links.
     const childSeed = forkTurns(forked.view.events, Infinity, forked.view.formatVersion, forked.view.header)
+    const raw = childSeed.find(event => event.type === 'user/message' && event.text === '/fixture')!
+    expect(raw).toMatchObject({ text: '/fixture', provenance: { kind: 'inherited', authority: 'observation' } })
+    expect(childSeed.flatMap(event => event.type === 'user/message' && event.seedInputContext ? [event.seedInputContext.rawMessageSeq] : [])).toEqual([raw.seq, raw.seq])
     expect(childSeed.filter(event => event.type === 'user/message' && event.seedInputContext)).toHaveLength(2)
-    expect(() => remapConversationSeed({ source: forked.view.events, retained: forked.view.events.filter(event => event.type === 'user/message' && event.seedInputContext), sourceFormat: 8, sourceHeader: forked.view.header })).toThrow(/raw source/)
+    expect(childSeed.filter(event => event.type === 'user/message' && event.seedInputContext)).toMatchObject([
+      { provenance: { kind: 'inherited', authority: 'observation' } },
+      { provenance: { kind: 'inherited', authority: 'observation' } },
+    ])
+    expect(() => remapConversationSeed({ source: childSeed, retained: childSeed.filter(event => event.type === 'user/message' && event.seedInputContext), sourceFormat: 8, sourceHeader: forked.view.header })).toThrow(/raw source/)
     const detached = fromJSONL(await readFile(join(root, `${id}.jsonl`), 'utf8'))
     const compiled = remapConversationSeed({ source: detached.events, retained: detached.events, sourceFormat: detached.formatVersion, sourceHeader: detached.header })
     const declared = await coordinator.create({ parentSession: id, seedLength: compiled.length })

@@ -22,7 +22,7 @@ import { createMailbox } from '../src/mailbox.ts'
 import { foldTeam } from '../src/fold.ts'
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { committedFactSeqs, createSession, decodeFactBatch, isNondurableSession, type BatchKey } from "@i-harness/core-session"
+import { committedFactSeqs, createSession, decodeFactBatch, isNondurableSession, type BatchKey, type ProducerFactOutcome } from "@i-harness/core-session"
 import { ownedTeamFixture } from './owned-fixture.ts'
 import { createAgentTable, createJobRegistry, createRoleRegistry, type ChildAgentEntry } from "@i-harness/subagent"
 import { snapshotState } from "../../subagent/src/persist.ts"
@@ -33,6 +33,44 @@ import { registerExec } from "@i-harness/exec"
  * @i-harness/subagent's child.test.ts. */
 const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 import type { ModelClient } from "@i-harness/llm-seam"
+import { assertSettlementRegistrationForwarding, type TestAction, type TestSource } from '../../core-agent/test/helpers/settlement-registration.ts'
+
+function retainRegisteredSource<Outcome extends ProducerFactOutcome>(action: TestAction<Outcome>, retained: (source: TestSource<Outcome>) => void) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => { const source = register.apply(action, args); retained(source); return source }
+  return action
+}
+
+function holdRegisteredSourceClose<Action extends TestAction>(action: Action, retained: (source: TestSource) => void, beforeClose: () => void) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const actual = register.apply(action, args), close = actual.close.bind(actual)
+    retained(actual)
+    actual.close = async () => { beforeClose(); await close() }
+    return actual
+  }
+  return action
+}
+
+function drainBeforeTransaction<Action extends TestAction>(action: Action, drained: () => void) {
+  const register = action.registerSettlementSource
+  action.registerSettlementSource = (...args) => {
+    const source = register.apply(action, args)
+    // Native producer calls are legal before the transaction facade returns.
+    // An empty actual facts owner needs no uninitialized transaction read.
+    drained(); void args[0]()
+    return source
+  }
+  return action
+}
+
+it.each(['retained', 'held-close', 'early-drain'] as const)('forwards the exact registration tuple through the Team %s adapter', async mode => {
+  await assertSettlementRegistrationForwarding(action => {
+    if (mode === 'retained') return retainRegisteredSource(action, () => {})
+    if (mode === 'held-close') return holdRegisteredSourceClose(action, () => {}, () => {})
+    return drainBeforeTransaction(action, () => {})
+  }, { earlyDrain: mode === 'early-drain' })
+})
 
 const TEAM_TOOL_NAMES = [
   "spawn_teammate", "list_members", "send_message", "followup_task", "wait_agent", "interrupt_agent",
@@ -329,9 +367,7 @@ describe("mountAgentTeams lifecycle", () => {
     const begin = f.document.beginAction.bind(f.document)
     let source: ReturnType<ReturnType<typeof begin>['registerSettlementSource']> | undefined, attempts = 0
     f.document.beginAction = (...args) => {
-      const action = begin(...args), register = action.registerSettlementSource.bind(action)
-      action.registerSettlementSource = producer => { source = register(producer); return source }
-      return action
+      return retainRegisteredSource(begin(...args), actual => { source = actual })
     }
     const handle = await mountAgentTeams(ctx, tools, makeDeps({ parentSession: f.document.view, factOwner: f.document,
       spawnChild: async () => { attempts++; entered.resolve(); await release.promise; throw error },
@@ -432,14 +468,9 @@ describe("mountAgentTeams lifecycle", () => {
     let blocked = true, source: object | undefined, retained: TeamMountHandle | undefined, begins = 0, closes = 0
     f.document.beginAction = (...args) => {
       begins++
-      const action = begin(...args), register = action.registerSettlementSource.bind(action), finish = action.finish.bind(action)
+      const action = begin(...args), finish = action.finish.bind(action)
       let first = true
-      action.registerSettlementSource = producer => {
-        const actual = register(producer), close = actual.close.bind(actual)
-        source = actual
-        actual.close = async () => { closes++; if (blocked) throw cleanup; await close() }
-        return actual
-      }
+      holdRegisteredSourceClose(action, actual => { source = actual }, () => { closes++; if (blocked) throw cleanup })
       action.finish = () => { if (first) { first = false; throw construction }; finish() }
       return action
     }
@@ -479,15 +510,7 @@ describe("mountAgentTeams lifecycle", () => {
     const begin = f.document.beginAction.bind(f.document)
     let producerDrains = 0
     f.document.beginAction = (...args) => {
-      const action = begin(...args), register = action.registerSettlementSource.bind(action)
-      action.registerSettlementSource = producer => {
-        const source = register(producer)
-        // Native producer calls are legal before the transaction facade returns.
-        // An empty actual facts owner needs no uninitialized transaction read.
-        producerDrains++; void producer()
-        return source
-      }
-      return action
+      return drainBeforeTransaction(begin(...args), () => { producerDrains++ })
     }
     let handle: TeamMountHandle | undefined
     try {

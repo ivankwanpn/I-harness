@@ -210,7 +210,8 @@ describe("subagent tools", () => {
     const read = () => ({ ...view })
     const subscribe = (jobId: string, listener: (v: typeof view) => void) => { expect(jobId).toBe(id); listeners.add(listener); return () => { listeners.delete(listener) } }
     const workflow = { getOutput: read, subscribeJob: subscribe, runWorkflow: vi.fn(), listJobs: () => [], killJob: vi.fn() }
-    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec: { ...exec, getOutput: read, subscribeJob: subscribe }, workflow, agents: createAgentRegistry(), tasks: createTaskRegistry() })
+    // Explicit legacy/custom port: this controlled view is not in the native registry.
+    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec: { ...exec, getJobView: undefined, listJobViews: undefined, observeJobOutput: undefined, readJobOutputFrames: undefined, getOutput: read, subscribeJob: subscribe }, workflow, agents: createAgentRegistry(), tasks: createTaskRegistry() })
     const tool = tools.find(t => t.name === "job_output")!
     const controller = new AbortController()
     const observation = tool.execute({ job_id: id, wait: true, timeout_ms: 100 }, { session, abortSignal: controller.signal })
@@ -787,7 +788,8 @@ describe("job tools bridge", () => {
     const read = await output.execute({ job_id: jobId, wait: true, timeout_ms: 5000 }, {})
     expect((read as { status: string }).status).toBe("completed")
     expect((read as { text: string }).text).toContain("bg done")
-    expect((read as { text: string }).text).toContain("[status: completed]")
+    expect(read).toMatchObject({ native_job: { jobId }, source: { kind: 'unavailable', reason: 'retention-unsupported' }, display_only: true })
+    expect(read).not.toHaveProperty('total_bytes')
   }, 10_000)
 
   it("job_list enumerates both subagent and bash jobs", async () => {

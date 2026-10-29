@@ -1,17 +1,18 @@
-import type { ExecCommand, ExecResult, ExecRunOptions, ExecStreamRunOptions, PromotedRun } from "../index.ts"
+import type { ExecCommand, ExecResult, ExecRunOptions, ExecStreamRunOptions, NativePromotedRun, NativeJobIdentity } from "../index.ts"
 import type { Capture } from "../capture/contracts.ts"
 import { validateInput } from "../capture/input.ts"
 import { registerExecResultOutcome, transferExecutionMetadata } from '../retained-output.ts'
 
 interface JobObservation {
   makeCapture(command: ExecCommand, optionsForRun?: ExecStreamRunOptions, background?: boolean, promotable?: boolean): Promise<Capture>
-  registerJob(capture: Capture): string
+  registerJob(capture: Capture): NativeJobIdentity
+  releaseCapture(capture: Capture): void
   isDisposed(): boolean
   observe?(capture: Capture): Promise<ExecResult['retentionFailure']>
 }
 
 /** Promotion changes observation of one capture; it never launches again. */
-export function createJobObservation({ makeCapture, registerJob, isDisposed, observe }: JobObservation) {
+export function createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed, observe }: JobObservation) {
   async function observed(capture: Capture, result: ExecResult): Promise<ExecResult> {
     const retentionFailure = await observe?.(capture)
     if (!retentionFailure) return result
@@ -19,7 +20,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
     transferExecutionMetadata(result, observation)
     return observation
   }
-  async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
+  async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | NativePromotedRun> {
     validateInput(command)
     if (runOptions && "stream" in runOptions && (runOptions.backgroundAfterMs !== undefined || runOptions.promotionWake !== undefined)) throw new Error("stream cannot be combined with promotion")
     if (runOptions && "stream" in runOptions) {
@@ -37,9 +38,9 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
     const threshold = runOptions && "backgroundAfterMs" in runOptions ? runOptions.backgroundAfterMs : undefined
     const wake = runOptions?.promotionWake
     const capture = await makeCapture(command, streaming, false, threshold !== undefined)
-    if (threshold === undefined && wake === undefined) return capture.complete.then(result => observed(capture, result), async cause => { await observe?.(capture); throw cause })
+    if (threshold === undefined && wake === undefined) return capture.complete.then(result => observed(capture, result), async cause => { await observe?.(capture); throw cause }).finally(() => releaseCapture(capture))
     const started = Date.now()
-    return new Promise<ExecResult | PromotedRun>((resolve, reject) => {
+    return new Promise<ExecResult | NativePromotedRun>((resolve, reject) => {
       let finished = false
       let timer: ReturnType<typeof setTimeout> | undefined
       let unsubscribe: (() => void) | undefined
@@ -55,7 +56,12 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
         unsubscribe = undefined
         if (errors.length) { reject(errors.length === 1 ? errors[0] : new AggregateError(errors, "Execution observation failed")); return }
         if ("result" in outcome) { void observed(capture, outcome.result).then(resolve, reject) }
-        else if ("reason" in outcome) resolve({ jobId: registerJob(capture), promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
+        else if ("reason" in outcome) {
+          try {
+            const nativeJob = registerJob(capture)
+            resolve({ jobId: nativeJob.jobId, nativeJob, promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
+          } catch (error) { reject(error) }
+        }
       }
       // Register capture settlement first. Deferring promotion one microtask
       // gives an already-published completion precedence and lets synchronous
@@ -74,7 +80,7 @@ export function createJobObservation({ makeCapture, registerJob, isDisposed, obs
         }, threshold)
         checkWake()
       } catch (error) { finish({ error }) }
-    })
+    }).finally(() => releaseCapture(capture))
   }
 
   return run

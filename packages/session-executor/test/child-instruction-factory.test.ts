@@ -50,7 +50,7 @@ it('constructs a minimal lease with no reads, actions or inherited publication; 
   const f = await fixture(), create = vi.spyOn(f.environment.host, 'create'), action = vi.spyOn(f.factOwner, 'beginAction')
   try {
     const lease = f.host.create(f.input)
-    expect(Object.keys(lease).sort()).toEqual(['close', 'requestContext', 'retire'])
+    expect(Object.keys(lease).sort()).toEqual(['close', 'requestContext', 'retire', 'settleOriginals'])
     expect(create).not.toHaveBeenCalled(); expect(action).not.toHaveBeenCalled(); expect(f.child.events).toEqual([])
     expect(() => f.host.create(f.input)).toThrow()
     expect(() => f.host.create({ ...f.input, factOwner: createNondurableFactOwner(createSession()) })).toThrow()

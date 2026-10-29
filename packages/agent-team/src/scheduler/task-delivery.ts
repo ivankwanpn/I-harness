@@ -1,5 +1,5 @@
 import { createTeamDeliveryFacts, teamFactOwner } from '../facts.ts'
-import { driveFollowups, ParentNotificationStoppedError, type FollowupDeps, type ChildAgentEntry, type JobRegistry } from "@i-harness/subagent"
+import { driveFollowups, ParentNotificationStoppedError, type FollowupDeps, type JobRegistry } from "@i-harness/subagent"
 import type { TeamDeps, TeamSubagentDeps } from "../scheduler.ts"
 import type { TeamFoldState } from "../fold.ts"
 import type { createActivity } from "../activity.ts"
@@ -12,12 +12,16 @@ export function createTaskDelivery(
   teamId: string,
   state: TeamFoldState,
   deps: Pick<TeamDeps, "parentSession" | "parentNotify" | "factOwner">,
-  sub: Pick<TeamSubagentDeps, "childSessions" | "table" | "agents" | "jobs" | "ensureResident" | "followupGeneration">,
+  sub: Pick<TeamSubagentDeps, "childSessions" | "table" | "agents" | "jobs" | "ensureResident" | "followupGeneration" | "followupActivation" | "captureFollowupGeneration">,
   teamJobs: JobRegistry,
   activity: Pick<ReturnType<typeof createActivity>, "notify">,
   isUnmounted: () => boolean,
 ) {
   const recordDelivery=createTeamDeliveryFacts()
+  const ensureResident = sub.ensureResident?.bind(sub)
+  const openGeneration = sub.followupGeneration?.bind(sub)
+  const captureGeneration = sub.captureFollowupGeneration?.bind(sub)
+  const activation = sub.followupActivation
   const queued = (via: 'no-target-call' | 'bridge-false' | 'target-owned', sendFailure: DeliveryOutcome['sendFailure'] = { occurred: false }): DeliveryOutcome => ({ kind: 'queued', via, sendFailure })
   const consumed = (via: 'target' | 'parent-stop' = 'target', sendFailure: DeliveryOutcome['sendFailure'] = { occurred: false }): DeliveryOutcome => ({ kind: 'consumed', via, sendFailure })
   const realDeliver = async (targetId: string, messageId: string, content: string, delivery: "quiet" | "wakeup", _signal?: AbortSignal): Promise<DeliveryOutcome> => {
@@ -59,9 +63,9 @@ export function createTaskDelivery(
     // conservative message-stays-queued behavior.
     if (!entry) return queued('no-target-call')
     if (entry.status === "error") {
-      if (!sub.ensureResident) return queued('no-target-call')
+      if (!ensureResident) return queued('no-target-call')
       let ok: boolean
-      try { ok = await sub.ensureResident(entry) }
+      try { ok = await ensureResident(entry) }
       catch (error) { return queued('no-target-call', { occurred: true, error }) }
       if (!ok) return queued('no-target-call')
     }
@@ -82,7 +86,7 @@ export function createTaskDelivery(
       // even when the gate above did not rebuild (e.g. a waiting entry whose
       // registry entry was dropped). Without the seam this is the unchanged
       // sub object (structural FollowupDeps).
-      const wakeDeps: FollowupDeps = { ...sub, jobs: teamJobs, openGeneration: sub.followupGeneration, ...(sub.ensureResident ? { rebuild: (e: ChildAgentEntry, controller: AbortController) => sub.ensureResident!(e, controller) } : {}) }
+      const wakeDeps: FollowupDeps = { ...sub, jobs: teamJobs, activation, captureGeneration, openGeneration, ...(ensureResident ? { rebuild: ensureResident } : {}) }
       const chain = driveFollowups(wakeDeps, entry, entry.sessionId)
       // M19 Ruling 26: the followup drain flips the child's status
       // (waiting→running→waiting); a wait_agent waiter must wake on that
