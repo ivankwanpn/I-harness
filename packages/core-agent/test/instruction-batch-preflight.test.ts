@@ -5,6 +5,23 @@ import { createToolRegistry, instructionReplan, nativePlanValidationFailure, typ
 import { executeToolCalls } from '../src/execute-tool-calls.ts'
 
 // Controlled acceptance fixture, without a physical transport or source authority.
+it.each(['replan', 'abort'] as const)('honors Stop while an initial preflight refusal is held (%s)', async failure => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), stop = new AbortController()
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let bodies = 0
+  tools.register({ name: 'write', description: '', inputSchema: {}, execute: async () => { bodies++ } })
+  const batch: AcceptedInstructionBatch = { bind() { return Object.freeze({ kind: 'accepted-instruction-call' }) }, async preflight() { entered.resolve(); await release.promise; if (failure === 'abort') stop.signal.throwIfAborted(); throw instructionReplan({ code: 'INSTRUCTIONS_REPLAN_REQUIRED', reason: 'changed-dependency', currentFingerprint: 'issued' }) }, async release() {} }
+  const work = executeToolCalls(ctx, session, tools, [{ callId: 'stopped', name: 'write', args: {} }], { maxParallel: 1, instructionBatch: batch, signal: stop.signal })
+  try {
+    await entered.promise; stop.abort(); release.resolve()
+    const outcome = await work.then(value => ({ value }), error => ({ error }))
+    expect(bodies).toBe(0)
+    expect(session.events.filter(event => event.type === 'tool/result')).toMatchObject([{ callId: 'stopped', output: { code: 'TOOL_ABORTED_BEFORE_DISPATCH' } }])
+    expect(session.events.filter(event => event.type === 'tool/dispatch')).toEqual([])
+    expect(outcome).toMatchObject({ error: { message: 'agent aborted' } })
+  } finally { release.resolve(); await work.catch(() => {}) }
+})
+
 it('preflights the complete known batch before any exclusive tool body starts', async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), effects: string[] = []
   for (const name of ['first', 'later']) tools.register({ name, description: '', inputSchema: {}, execute: async () => { effects.push(name); return name } })

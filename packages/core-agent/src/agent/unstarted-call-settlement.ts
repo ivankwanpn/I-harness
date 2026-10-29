@@ -11,6 +11,7 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
   type Pending = { handle: CapturedSettlementFact<ProducerFactOutcome>; outcome?: ProducerFactOutcome }
   let calls: Call[] = [], pending: Pending[] | undefined, fault: unknown, hasFault = false, handedOff = false
   let lease: import('./request-context.ts').RequestContextPin | undefined
+  let untransferredCleanup: (() => Promise<void>) | undefined
   const source = deps.registerFactSource(drain)
   const hold = () => source.holdRecovery()
   const failCapture = (error: unknown): never => {
@@ -45,6 +46,10 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
       try { await lease.release(); lease = undefined }
       catch (error) { hold(); throw error }
     }
+    if (untransferredCleanup) {
+      try { await untransferredCleanup(); untransferredCleanup = undefined }
+      catch (error) { hold(); throw error }
+    }
     calls = []; pending = undefined
   }
   return {
@@ -64,6 +69,10 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
     },
     close: () => source.close(),
     async handoff(operation: (takeOwnership: () => import('./request-context.ts').RequestContextPin | undefined) => Promise<void>, afterUntransferred?: () => Promise<void>) {
+      if (untransferredCleanup) throw new Error('Original untransferred cleanup is already owned')
+      // Attach before close/setup can fail: the same source retries this only
+      // after its original results and context lease have genuinely settled.
+      untransferredCleanup = afterUntransferred
       source.assertHeld()
       let primary: unknown, failed = false
       let closing: Promise<void> | undefined
@@ -72,6 +81,7 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
           // Called synchronously only after executeToolCalls registers its
           // genuine source, before any preparation/effect await.
           handedOff = true; calls = []; pending = undefined
+          untransferredCleanup = undefined
           const moved = lease; lease = undefined
           closing = source.close()
           // This close is joined below even if execution rejects first.
@@ -84,10 +94,6 @@ export function createUnstartedCallSettlement(deps: Pick<AgentDeps, 'session' | 
       catch (saving) {
         if (failed) throw savingFailure(primary, [saving], 'Unstarted tool result settlement failed')
         throw saving
-      }
-      if (!handedOff) {
-        try { await afterUntransferred?.() }
-        catch (saving) { if (failed) throw savingFailure(primary, [saving], 'Instruction batch settlement failed'); throw saving }
       }
       if (failed) throw primary
     },

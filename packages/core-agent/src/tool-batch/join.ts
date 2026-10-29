@@ -1,7 +1,7 @@
 import { resolveBatchFacts } from "./facts.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { SessionView as Session } from "@i-harness/core-session"
-import { isInstructionReplan, instructionReplan, registryRequiresInstructionOrigin, type ToolRegistry, type CapturedToolCall, type AcceptedInstructionCall } from "@i-harness/core-tools"
+import { isInstructionReplan, isPolicyRefusal, instructionReplan, registryRequiresInstructionOrigin, type ToolRegistry, type CapturedToolCall, type AcceptedInstructionCall } from "@i-harness/core-tools"
 import type { BatchCall, ExecuteToolCallsOptions } from "./types.ts"
 import { createBatchCancellation, finishCancelledBatch, finishCheckpointFailure } from "./cancel.ts"
 import { createBatchRecords } from "./record.ts"
@@ -81,13 +81,11 @@ export async function executeToolCalls(ctx: PluginContext, session: Session, too
       await opts.instructionBatch?.preflight(entries, cancellation.batchSignal)
     }
     catch (error) {
-      if (!isInstructionReplan(error)) throw error
-      for (let index = 0; index < batch.length; index++) if (!records.getSlot(index)) {
-        const call = batch[index]!
-        records.setSlot(index, { name: call.name, callId: call.callId, synthetic: true, execution: { outcome: 'failed', dispatch: 'not-dispatched' }, output: error.data })
-      }
-      await records.commitReady()
-      return
+      cancellation.observeAbort()
+      if (!cancellation.aborted && (!isInstructionReplan(error) || isPolicyRefusal(error))) throw error
+      // Initial refusal closes admission, but still passes through the original
+      // drain/Stop arbitration before choosing any never-dispatched results.
+      if (!cancellation.aborted && isInstructionReplan(error)) replan.value = error.data
     }
   }
   const isExclusive = (index: number): boolean => captureWholeBatch ? captured.get(index)?.concurrencySafe !== true : tools.get(batch[index]!.name)?.isConcurrencySafe !== true
