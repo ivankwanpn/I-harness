@@ -25,8 +25,11 @@ import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPrepara
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
+import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
+  selected?: {route:SelectedResultsRoute;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -132,7 +135,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function captureBundle(entry:ManagedEntry) {
     if(entry.captureIO)return entry.captureIO
-    const id=entry.bootstrap!.invocation.targetSessionId,claim=await ownership.pinOwnership(id)
+    const id=(entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId,claim=await ownership.pinOwnership(id)
     const held=heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim.assertHeld())
     const bundle:NonNullable<ManagedEntry['captureIO']>={claim,held,issuer:undefined!,settled:true,released:false}
     bundle.issuer=issuingFactOwner(held,()=>{if(!bundle.activeIssue)throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'});bundle.activeIssue()})
@@ -140,7 +143,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function settleCapture(entry:ManagedEntry) {
     const io=entry.captureIO
-    if(io&&!io.settled){await backend.settleBootstrapCaptureIO!(entry.bootstrap!.invocation.targetSessionId,io.held);io.settled=true}
+    if(io&&!io.settled){await backend.settleBootstrapCaptureIO!((entry.bootstrap?.invocation??entry.selected!.route.request.invocation).targetSessionId,io.held);io.settled=true}
   }
   type InspectionResource={request:BootstrapCaptureRequest|ChildBootstrapCaptureRequest;done:Promise<OwnedCaptureInspection>;claim?:Awaited<ReturnType<Ownership['pinOwnership']>>;held?:HeldFactOwner;ioStarted:boolean;ioSettled:boolean;released:boolean}
   const inspections=new Set<InspectionResource>()
@@ -175,7 +178,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   function closeCaptureAdmission() {
     assertOutsideCapture();captureClosed=true
-    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture)revokeManagedEntry(entry)}
+    for(const entry of documents.values()){if(entry.captureIO)entry.captureIO.activeIssue=undefined;if(entry.bootstrap?.capture||entry.selected)revokeManagedEntry(entry)}
     const original=[...inspections]
     return async()=>{
       const results=await Promise.allSettled(original.map(async item=>{await item.done.catch(()=>{});if(inspections.has(item))await cleanupInspection(item)}))
@@ -548,7 +551,40 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       }).finally(async()=>{if(owned.flight===flight)owned.flight=undefined;if(!b.issued&&!owned.document&&documents.get(id)===owned&&(!owned.captureIO||owned.captureIO.settled)){await releaseCapture(owned);documents.delete(id)}})
       owned.flight=flight;return flight
     }
+  function captureSelected(input:SelectedResultsRoute,guard:()=>void,capture:()=>Promise<unknown>) {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]}).selectedCapture
+    if(!selected||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
+    if(typeof guard!=='function'||typeof capture!=='function'||utilTypes.isProxy(guard)||utilTypes.isProxy(capture))throw TypeError('Invalid selected capture')
+    if(captureClosed)throw Error('Selected capture closed')
+    let entry=documents.get(id)
+    if(entry&&(!entry.selected||!sameBootstrapData(entry.selected.route,route)))throw Error('Selected target conflict')
+    if(!entry){entry={selected:{route,issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}};documents.set(id,entry)}
+    const owned=entry,selectedEntry=owned.selected!
+    if(selectedEntry.capture&&selectedEntry.capture!==capture)throw Error('Original selected capture required')
+    selectedEntry.capture??=capture
+    if(owned.flight)return owned.flight as ReturnType<ReturnType<typeof createSelectedCaptureAttempt>['capture']>
+    const check=()=>{if(captureClosed||owned.revoked)throw Error('Selected capture revoked');guard()}
+    const flight=Promise.resolve().then(async()=>{
+      await settleCapture(owned);check();await backend.checkBootstrapCaptureRoot!();check()
+      const io=await captureBundle(owned);check()
+      selectedEntry.attempt??=createSelectedCaptureAttempt({reserveSelectedCapture(...args){io.settled=false;return selected.reserveSelectedCapture(...args)}},io.issuer,route,capture)
+      io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
+      try{return await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture())}
+      finally{io.activeIssue=undefined;await settleCapture(owned)}
+    }).finally(()=>{if(owned.flight===flight)owned.flight=undefined})
+    owned.flight=flight;return flight
+  }
+  async function releaseSelected(input:SelectedResultsRoute) {
+    const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)
+    if(!entry)return
+    if(!entry.selected||!sameBootstrapData(entry.selected.route,route))throw Error('Selected target conflict')
+    entry.captureIO&&(entry.captureIO.activeIssue=undefined)
+    await entry.flight?.catch(()=>{});await releaseCapture(entry)
+    entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
+  }
   return {
+    captureSelected,releaseSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

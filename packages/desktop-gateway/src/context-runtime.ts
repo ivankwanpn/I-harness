@@ -15,6 +15,9 @@ import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '..
 import type {createProjectScopeBroker} from './project-scope.ts'
 import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
 import {assertSelectedResultsNodeAdmission} from '../../session-persistence/src/selected-results-node-admission.ts'
+import {createCompletedPassiveContext} from '@i-harness/core-session/internal/bootstrap'
+import {exportSelectedResultsConversationSeed} from '../../core-session/src/conversation/seed-export.ts'
+import {compileSelectedResultsSemanticSeed} from '../../session-persistence/src/semantic-seed.ts'
 const selectedSignalAborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 const selectedAborted=(signal?:AbortSignal)=>signal===undefined?false:types.isProxy(signal)?(()=>{throw TypeError('Invalid selected signal')})():Reflect.apply(selectedSignalAborted,signal,[]) as boolean
 
@@ -139,7 +142,8 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const uses=new AsyncLocalStorage<{active:boolean}>()
       const useCurrent=()=>{if(!uses.getStore()?.active)throw Error('Selected source use expired');current();retained.assertCurrent()}
       const inherited=Object.freeze({assertCurrent:useCurrent,legacy(){useCurrent();const iterator=retained.reader.legacy()[Symbol.asyncIterator]();return {[Symbol.asyncIterator](){return this},async next(){useCurrent();const value=await iterator.next();useCurrent();return value},async return(){return iterator.return?iterator.return():{done:true as const,value:undefined}}}}})
-      const source=Object.freeze({document,view:witness.view,inherited,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return selectedWork(()=>project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}}))))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
+      const projectId=project.sourceGetter().projectId
+      const source=Object.freeze({document,view:witness.view,inherited,projectId,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return selectedWork(()=>project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}}))))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
       selectedSources.add(source);return source
     }catch(error){
       binding?.revoke();let failure=error
@@ -155,6 +159,9 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     assertAvailable();assertSelectedResultsNodeAdmission(input);const operation=readSelectedResultsOperation(input),key=operation.invocation.operationId,encoded=JSON.stringify(operation)
     if(selectedOperations.has(key))throw Error('Selected operation already owned');selectedOperations.set(key,encoded)
     let original:Awaited<ReturnType<typeof acquireSelectedSourceObservation>>|undefined,firstStarted=false,retired=false,active:Promise<unknown>|undefined
+    let captureSlot:{source:NonNullable<typeof original>;assertCurrent():void}|undefined
+    const targetOwner=selectedSourceFor(options.coordinator as SessionCoordinator),route={protocol:'public-results-v1' as const,request:{invocation:operation.invocation,core:operation.prepared.core,requestIntent:operation.prepared.requestIntent}}
+    const capture=async()=>{const slot=captureSlot;if(!slot)throw Error('Selected source handoff unavailable');slot.assertCurrent();const context=createCompletedPassiveContext({kind:'held-public-fork',sourceSessionId:operation.prepared.core.sourceSessionId,view:slot.source.view,factOwner:slot.source.document,assertCurrent:slot.assertCurrent},operation.prepared.core.selection);if(context.kind!=='ready')throw Error('Selected source unavailable');const exported=await exportSelectedResultsConversationSeed(context.context,slot.source.inherited);slot.assertCurrent();if(exported.kind!=='seed')throw Error('Selected source export refused');return {invocation:operation.invocation,target:{kind:'new'},metadata:operation.prepared.core.metadata,lineage:{origin:'fork',parentSession:operation.prepared.core.sourceSessionId},seed:compileSelectedResultsSemanticSeed(exported)}}
     const handoffs=new AsyncLocalStorage<{active:boolean}>()
     const available=()=>{assertAvailable();if(retired)throw Error('Selected operation retired')}
     const sourceHandoff=async<T>(source:NonNullable<typeof original>,work:(handoff:{source:{sourceSessionId:string;document:typeof source.document;view:typeof source.view;events:typeof source.view.events;eventCount:number;inherited:typeof source.inherited};assertCurrent():void})=>Promise<T>,signal?:AbortSignal)=>{
@@ -163,16 +170,20 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const held=Object.freeze({sourceSessionId:operation.prepared.core.sourceSessionId,document:source.document,view:source.view,events:source.view.events,eventCount:source.view.events.length,inherited:source.inherited})
       // One immutable handle is retained across all handoffs.
       const stable=holderSource??(holderSource=held)
-      return source.use(()=>handoffs.run(entry,async()=>{try{guard();const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{entry.active=false}}))
+      return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{captureSlot=undefined;entry.active=false}}))
     }
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
+    const qualifyProject=()=>{const expected=operation.prepared.requestIntent.project;if(expected.kind==='project'&&original?.projectId!==expected.projectId||expected.kind!=='project'&&original?.projectId!==undefined)throw Error('Selected project mismatch')}
     const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
-    return Object.freeze({
+    const holder=Object.freeze({
       first<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(firstStarted)throw Error('Selected first handoff already entered');if(selectedAborted(signal))throw Error('Selected handoff cancelled');const source=await acquireSelectedSourceObservation(operation.prepared.core.sourceSessionId);original=source;firstStarted=true;if(retired||closed){await source.close();throw Error('Selected operation retired')}return sourceHandoff(source,work,signal)})},
       warm<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(!original)throw Error('Original selected source unavailable');return sourceHandoff(original,work,signal)})},
       passive<T>(work:(handoff:{assertCurrent():never})=>Promise<T>){return single(()=>work({assertCurrent():never{throw Error('Passive selected handoff cannot issue')}}))},
-      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
+      captureFirst(signal?:AbortSignal){return holder.first<Awaited<ReturnType<typeof targetOwner.captureSelected>>>(handoff=>{qualifyProject();return targetOwner.captureSelected(route,handoff.assertCurrent,capture)},signal)},
+      captureWarm(signal?:AbortSignal){return holder.warm<Awaited<ReturnType<typeof targetOwner.captureSelected>>>(handoff=>{qualifyProject();return targetOwner.captureSelected(route,handoff.assertCurrent,capture)},signal)},
+      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});await targetOwner.releaseSelected(route);if(original)await original.close()},
     })
+    return holder
   }
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
@@ -325,3 +336,6 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     },
   }
 }
+
+
+

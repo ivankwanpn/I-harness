@@ -40,7 +40,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     return document
   }
   function assertEntry(entry:ManagedEntry|undefined) {
-    if(entry?.bootstrap && !entry.ready)throw new FactRecoveryRequiredError()
+    if((entry?.bootstrap||entry?.selected) && !entry.ready)throw new FactRecoveryRequiredError()
   }
   async function closeOne(id:string) {
     bootstrap.assertOutsideCapture(id)
@@ -52,7 +52,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.document)await entry.document.close()
-    else {await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
+    else {if(entry.selected)await bootstrap.releaseSelected(entry.selected.route);else await bootstrap.releaseCapture(entry);if(documents.get(id)===entry)documents.delete(id)}
     outcome='settled'
     } finally { token?.end(outcome) }
   }
