@@ -196,6 +196,7 @@ export async function dispatchDesktopRequest(
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
     if (value.kind.startsWith("desktop/session/subagents/") && !runtime.info.capabilities["desktop-subagent-catalog"]?.includes("1")) throw new Error("Subagent catalog unavailable")
+    if (value.kind.startsWith('desktop/instructions/') && !runtime.info.capabilities['desktop-instructions']?.includes('1')) throw new Error('Instruction observation unavailable')
     if (value.kind === "desktop/approval-rules/add") {
       const navigation = await runtime.client.request("desktop/session/navigation/state", {})
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
