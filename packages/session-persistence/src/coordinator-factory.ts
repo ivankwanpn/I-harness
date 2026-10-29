@@ -123,7 +123,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
-  selectedSources.set(coordinator,Object.freeze({acquire:observations.acquireSelectedBindingRead,cleanupForError:observations.cleanupForError,captureSelected:managed.captureSelected,reconcileSelected:managed.reconcileSelected,releaseSelected:managed.releaseSelected,retain(document,onRevoke){return retainSelectedSourceRead(document,ownership,onRevoke)}}))
+  selectedSources.set(coordinator,Object.freeze({acquire:observations.acquireSelectedBindingRead,cleanupForError:observations.cleanupForError,captureSelected(route,guard,capture){return observations.withSelectedBootstrapMutation(route,()=>managed.captureSelected(route,guard,capture))},reconcileSelected(route){return observations.withSelectedBootstrapMutation(route,()=>managed.reconcileSelected(route))},releaseSelected:managed.releaseSelected,retain(document,onRevoke){return retainSelectedSourceRead(document,ownership,onRevoke)}}))
   if (processLatches) onConstruct?.({ managed, latches: processLatches })
   return coordinator
 }

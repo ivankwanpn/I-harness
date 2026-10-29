@@ -95,3 +95,10 @@ it('keeps the original resources when dependent close fails and retries that sam
   await retained.release();await cleanup!.retry();expect(attempts).toBe(2)
  } finally {await bindings.closeAdmission()()}
 })
+import { createSelectedResultsIntent,readSelectedResultsCore } from '../src/selected-results-fork-contract.ts'
+it('selected target admission revokes and joins the original binding owner before work',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-target-fence-')),backend=createJsonlBackend(root),ownership=createOwnership({lockRoot:root},{lock:{enabled:true}}),bindings=createBindingObservations(backend,ownership);await backend.create('target',{sessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',formatVersion:CURRENT_FORMAT_VERSION})
+ const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}),route={protocol:'public-results-v1' as const,request:{core,requestIntent:intent,invocation:{version:1 as const,operationId:'op',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}}
+ const held=await bindings.acquireSelectedBindingRead({sessionIds:['target']}),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),active=held.use(async()=>{entered.resolve();await leave.promise}).catch(error=>error);await entered.promise
+ let reached=false;const work=bindings.withSelectedBootstrapMutation(route,async()=>{reached=true;return 'done'});expect(()=>held.assertCurrent()).toThrow();await Promise.resolve();expect(reached).toBe(false);leave.resolve();await active;expect(await work).toBe('done');await held.release();await bindings.closeAdmission()()
+})

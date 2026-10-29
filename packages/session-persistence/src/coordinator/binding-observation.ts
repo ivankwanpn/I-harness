@@ -1,4 +1,5 @@
 import { captureChildBootstrapCaptureRequest, type ChildBootstrapCaptureRequest } from './child-bootstrap-intent.ts'
+import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { types as utilTypes } from 'node:util'
@@ -51,7 +52,7 @@ export function createBindingObservations(
   // Preserve the original owner's unsupported-before-capture decision.
   const bootstrapSupported = () => ownership.lockEnabled && !!backend.prepareBootstrapHeader && !!backend.reconcileBootstrapHeader
     && !!backend.readBootstrapState && !!backend.confirmBootstrapFrames && !!backend.appendOwnedBatch && !!backend.reconcileOwnedBatch
-  async function bootstrapMutation(original: BootstrapInvocation, run: () => Promise<BootstrapOutcome>): Promise<BootstrapOutcome> {
+  async function bootstrapMutation<T>(original: BootstrapInvocation, run: () => Promise<T>): Promise<T> {
     if (deletedIds.has(original.targetSessionId)) throw new Failure('deleted')
     if (retiringIds.has(original.targetSessionId)) throw new Failure('conflict')
     const allowed: Scope[] = []
@@ -65,6 +66,11 @@ export function createBindingObservations(
     // observations of this identity revoke/join before the original owner runs.
     const admission = admitMutation([original.targetSessionId], [], false, allowed)
     try { await admission.join(); return await run() } finally { admission.finish() }
+  }
+  function withSelectedBootstrapMutation<T>(input:SelectedResultsRoute,run:()=>Promise<T>):Promise<T> {
+    const route=captureSelectedResultsRoute(input)
+    if(typeof run!=='function'||utilTypes.isProxy(run))throw new TypeError('Invalid selected target operation')
+    return bootstrapMutation(route.request.invocation,run)
   }
   function captureBootstrapGuards(guards: BootstrapGuards): BootstrapGuards {
     const port = Object.getOwnPropertyDescriptor(guards, 'targetPreparation')
@@ -429,7 +435,7 @@ export function createBindingObservations(
       },
     })
   }
-  return { acquireSelectedBindingRead, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
+  return { acquireSelectedBindingRead, withSelectedBootstrapMutation, withSessionBindingObservation, withExistingSessionBindingObservation, beginMutation, beginRetirement, closeAdmission, assertSessionAdmission, assertOutsideObservedSession, assertOutsideObservedDocument, withBootstrapRequest, withBootstrapResume, withBootstrapCapture, withChildBootstrapCapture, withChildBootstrapResume,
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? cleanupErrors.get(error) : undefined } }
 }
 export type BindingObservations = ReturnType<typeof createBindingObservations>
