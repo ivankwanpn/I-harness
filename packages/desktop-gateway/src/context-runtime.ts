@@ -13,6 +13,8 @@ import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProje
 import {selectedSourceFor} from '@i-harness/session-persistence/internal/selected-source-owner'
 import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
 import type {createProjectScopeBroker} from './project-scope.ts'
+import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
+import {assertSelectedResultsNodeAdmission} from '../../session-persistence/src/selected-results-node-admission.ts'
 
 interface NativeContextOptions {
   workspace:string;storageRoot:string
@@ -146,6 +148,30 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       throw failure
     }
   }
+  const selectedOperations=new Map<string,string>()
+  function createSelectedSourceHolder(input:unknown) {
+    assertAvailable();assertSelectedResultsNodeAdmission(input);const operation=readSelectedResultsOperation(input),key=operation.invocation.operationId,encoded=JSON.stringify(operation)
+    if(selectedOperations.has(key))throw Error('Selected operation already owned');selectedOperations.set(key,encoded)
+    let original:Awaited<ReturnType<typeof acquireSelectedSourceObservation>>|undefined,firstStarted=false,retired=false,active:Promise<unknown>|undefined
+    const handoffs=new AsyncLocalStorage<{active:boolean}>()
+    const available=()=>{assertAvailable();if(retired)throw Error('Selected operation retired')}
+    const sourceHandoff=async<T>(source:NonNullable<typeof original>,work:(handoff:{source:{sourceSessionId:string;document:typeof source.document;view:typeof source.view;events:typeof source.view.events;eventCount:number;inherited:typeof source.inherited};assertCurrent():void})=>Promise<T>,signal?:AbortSignal)=>{
+      available();if(signal?.aborted)throw Error('Selected handoff cancelled');source.assertCurrent()
+      const entry={active:true},guard=()=>{available();if(!entry.active||signal?.aborted)throw Error('Selected handoff expired');source.assertCurrent()}
+      const held=Object.freeze({sourceSessionId:operation.prepared.core.sourceSessionId,document:source.document,view:source.view,events:source.view.events,eventCount:source.view.events.length,inherited:source.inherited})
+      // One immutable handle is retained across all handoffs.
+      const stable=holderSource??(holderSource=held)
+      return source.use(()=>handoffs.run(entry,async()=>{try{guard();const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{entry.active=false}}))
+    }
+    let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
+    const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
+    return Object.freeze({
+      first<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(firstStarted)throw Error('Selected first handoff already entered');if(signal?.aborted)throw Error('Selected handoff cancelled');const source=await acquireSelectedSourceObservation(operation.prepared.core.sourceSessionId);original=source;firstStarted=true;if(retired||closed){await source.close();throw Error('Selected operation retired')}return sourceHandoff(source,work,signal)})},
+      warm<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(!original)throw Error('Original selected source unavailable');return sourceHandoff(original,work,signal)})},
+      passive<T>(work:(handoff:{assertCurrent():never})=>Promise<T>){return single(()=>work({assertCurrent():never{throw Error('Passive selected handoff cannot issue')}}))},
+      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
+    })
+  }
   // The supplied service is Gateway's fast path. Capture broker currentness
   // around its real readers as source identity alone cannot detect ABA.
   async function guardedRead<T>(sessionId:string, operation:()=>Promise<T>):Promise<T>{
@@ -250,7 +276,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     refreshing=work
     try{await work}catch{/* The service preserves job error/outcome for its UI. */}finally{if(refreshing===work)refreshing=undefined}
   }
-  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,
+  return{workspaceId:workspaceKey,workspaceKey,humanSessionId,contextOutput,codeRetrieval,sourceFor,prepareBootstrapTransfer,observations,withResultObservation,withLegacyReadObservation,acquireSelectedSourceObservation,createSelectedSourceHolder,
     async configureReferences(next:NativeReferenceSource[]){
       if(JSON.stringify(references)===JSON.stringify(next))return
       // Visibility changes before awaiting drainage, so old snippets cannot
