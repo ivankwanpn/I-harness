@@ -1,11 +1,13 @@
 import type { PersistenceBackend } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import { createBindingObservations } from './binding-observation.ts'
+import type { createProcessReadLatches } from './process-read-latches.ts'
 
 export function createDocuments(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'>>,
   ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'>>,
   report: (error: unknown) => void,
+  processLatches?: ReturnType<typeof createProcessReadLatches>,
 ) {
   const { lockEnabled, acquireLease } = ownership
   const observations = createBindingObservations(backend, ownership)
@@ -27,8 +29,11 @@ export function createDocuments(
   }
   async function putDocumentStrict(key: string, data: unknown) {
     if (deletedDocuments.has(key)) throw new Error('Session document is deleted')
-    const admission = observations.beginMutation([], [key])
+    const token = processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' })
+    let outcome: 'settled' | 'unknown' = 'unknown'
+    let admission: ReturnType<typeof observations.beginMutation> | undefined
     try {
+      admission = observations.beginMutation([], [key])
       await admission.join()
       if (deletedDocuments.has(key)) throw new Error('Session document is deleted')
       const p = docChain.then(() => {
@@ -37,11 +42,14 @@ export function createDocuments(
       })
       docChain = p.catch(() => {})
       await p
-    } finally { admission.finish() }
+      outcome = 'settled'
+    } finally { try { admission?.finish() } catch (error) { outcome = 'unknown'; throw error } finally { token?.end(outcome) } }
   }
   return {
     observations, withDocumentLeases,
-    closeAdmissions(keys: string[]) { for (const key of keys) deletedDocuments.add(key) },
+    // Deletion closes this key for this coordinator lifetime; the retained token
+    // keeps a later capture from treating the retired document as available.
+    closeAdmissions(keys: string[]) { for (const key of keys) { if (!deletedDocuments.has(key)) processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' }); deletedDocuments.add(key) } },
     pendingWrites: () => docChain,
     putDocumentStrict,
     async putDocument(key: string, data: unknown) { observations.assertOutsideObservedDocument(key); try { await putDocumentStrict(key, data) } catch (error) { report(error) } },

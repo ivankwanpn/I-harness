@@ -1,15 +1,8 @@
+import { createSessionCoordinatorCore } from './coordinator-factory.ts'
 export { captureBootstrapRoute, captureBootstrapCaptureRoute, childBootstrapPathKey, routeInvocation, routeForReservation, encodeOwnedCaptureReservation, parseOwnedCaptureReservation, validateOwnedCaptureStage, validateChildCaptureStage } from './coordinator/bootstrap-route.ts'
 export type { BootstrapRoute, BootstrapCaptureRoute, BootstrapRouteBackend, ResolvedBootstrapBirth } from './coordinator/bootstrap-route.ts'
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from "./coordinator/types.ts"
-import { createOwnership } from "./coordinator/ownership.ts"
-import { createMutations } from "./coordinator/mutations.ts"
-import { createDocuments } from "./coordinator/documents.ts"
-import { createLoads } from "./coordinator/load.ts"
-import { createLifecycle } from "./coordinator/lifecycle.ts"
-import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
-import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
-import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
 export * from './fork-contract.ts'
 export { createForkSessionController, ForkAdmissionError, ForkTargetPolicyDeniedError } from './fork-controller.ts'
 export type { ForkSessionController, ForkHost, ForkExecutionControl, ForkSourceWitness, ForkHandoffMode, ForkHandoff } from './fork-controller.ts'
@@ -32,6 +25,7 @@ export type {
   SessionMeta, SessionModelSelection, PersistenceBackend, SessionArtifactManifest,
   CoordinatorOptions, SessionCoordinator, ObservedDocument, SessionBindingObservationRequest, SessionBindingObservation, ExistingSessionBindingObservationRequest, ExistingSessionBindingObservation,
 } from "./coordinator/types.ts"
+export type { ProcessReadOptions, ProcessReadInitial, ProcessReadUpdate, ProcessReadObservation } from './coordinator/process-read-owner.ts'
 export { SessionBindingObservationError } from './coordinator/types.ts'
 export { SessionFormatUnsupportedError, registerUpgrade, registerEventType } from "./format/registry.ts"
 
@@ -53,101 +47,8 @@ export {
 export { SessionLockConflictError, SessionLockUnsupportedError } from "@i-harness/fs-lock"
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
-  const report = opts?.reportBackgroundFailure
-    ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
-  const maxDelayMs = opts?.maxDelayMs ?? 200
-  const ownership = createOwnership(backend, opts)
-  let managed: ReturnType<typeof createManagedDocuments>
-  const documents = createDocuments(backend, ownership, report)
-  const observations = documents.observations
-  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations)
-  const loads = createLoads(backend, ownership, mutations)
-  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations)
-  const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed)
-
-  async function retire<T>(id: string, run: () => Promise<T>) {
-    managed.assertOutsideCapture(id)
-    const admission = observations.beginRetirement(id)
-    try { await admission.join(); return await run() } finally { admission.finish() }
-  }
-  const coordinator: SessionCoordinator = {
-    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
-    bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards)) },
-    resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload)) },
-    ...(managed.captureSupported()?{
-      inspectBootstrapCapture:managed.inspectBootstrapCapture,
-      bootstrapSemanticTargetWithCapture(request:import('./coordinator/bootstrap-types.ts').BootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
-        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withBootstrapCapture(request,guards,capture,managed.bootstrapSemanticTargetWithCapture)
-      },
-    }:{}),
-    ...(managed.childSupported()?{
-      inspectChildBootstrapCapture:managed.inspectChildBootstrapCapture,
-      bootstrapChildTargetWithCapture(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,capture:()=>Promise<import('./coordinator/bootstrap-types.ts').BootstrapRequest>){
-        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withChildBootstrapCapture(request,guards,capture,managed.bootstrapChildTargetWithCapture)
-      },
-      resumeChildTarget(request:import('./coordinator/child-bootstrap-intent.ts').ChildBootstrapCaptureRequest,guards:import('./coordinator/bootstrap-types.ts').BootstrapGuards,payload?:import('./coordinator/bootstrap-types.ts').BootstrapRequest){
-        if(managed.captureSelfConflict(request,true))return Promise.resolve<import('./coordinator/bootstrap-types.ts').BootstrapOutcome>({kind:'refused',reason:'conflict'})
-        return observations.withChildBootstrapResume(request,guards,payload,managed.resumeChildTarget)
-      },
-    }:{}),    inspectBootstrap: managed.inspectBootstrap,
-    ...(backend.storageRoot === undefined ? {} : { storageRoot: backend.storageRoot }),
-    async openManagedDocument(sessionId) { managed.assertOutsideCapture(sessionId); observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); return managed.open(sessionId) },
-    revokeManagedDocumentNewWork: managed.revoke,
-    closeManagedDocument(sessionId) { return retire(sessionId, () => managed.closeOne(sessionId)) },
-    ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
-    ...(backend.deleteOwnedSession ? {
-      async deleteOwnedSession(sessionId:string,manifest:import('./coordinator/types.ts').SessionArtifactManifest){
-        managed.assertOutsideCapture(sessionId)
-        return lifecycle.deleteOwnedSession(sessionId,manifest)
-      },onDocumentDeleted:lifecycle.onDocumentDeleted,
-    }:{}),
-    ensureWritableFormat: mutations.ensureWritableFormat,
-    create: mutations.create,
-    append(sessionId, events) {
-      if (managed.has(sessionId)) return Promise.reject(new Error('Managed document requires fact admission'))
-      return mutations.append(sessionId, events)
-    },
-    enqueue(sessionId, events) {
-      if (managed.has(sessionId)) throw new Error('Managed document requires fact admission')
-      mutations.enqueue(sessionId, events)
-    },
-    async snapshot(sessionId) { const session = await managed.snapshot(sessionId); return session ? { session } : loads.snapshot(sessionId) },
-    async load(sessionId) { observations.assertOutsideObservedSession(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.load(sessionId) },
-    async loadOwned(sessionId) { observations.assertOutsideObservedSession(sessionId); observations.assertSessionAdmission(sessionId); const session = await managed.snapshot(sessionId); return session ? { session } : loads.loadOwned(sessionId) },
-    async list() { return backend.list() },
-    async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
-    updateMeta: mutations.updateMeta,
-    flush: mutations.flush,
-    async close() {
-      managed.assertOutsideCapture()
-      assertOutsideForkController(coordinator)
-      const join = observations.closeAdmission()
-      const joinCapture = managed.closeCaptureAdmission()
-      const joinFork = closeForkControllerAdmission(coordinator)
-      const errors: unknown[] = []
-      const joined=await Promise.allSettled([join(),joinCapture(),joinFork().then(() => managed.close())])
-      for(const result of joined)if(result.status==='rejected')errors.push(result.reason)
-      // Dependent original leases survive unresolved observation/managed work.
-      if (errors.length === 0) await lifecycle.close()
-      else {
-        try { await lifecycle.close(false) } catch (error) { errors.push(error) }
-        throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
-      }
-    },
-    putDocument: documents.putDocument,
-    putDocumentStrict: documents.putDocumentStrict,
-    getDocument: documents.getDocument,
-    ownerOf: ownership.ownerOf,
-    hasLiveOwnership: ownership.hasLiveOwnership,
-    adoptOwnership: mutations.adoptOwnership,
-    releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
-  }
-  associateObservationCleanupOwner(coordinator, observations.cleanupForError)
-  return coordinator
+  return createSessionCoordinatorCore(backend, opts)
 }
-
 export { ownedContextReadiness } from "./context-readiness.ts"
 export type { HeldFactOwner, IssuingFactOwner, BackendFactOutcome, OwnedFactBackend, ManagedDocument } from './coordinator/fact-types.ts'
 export { isHeldFactOwner } from './coordinator/fact-owner.ts'

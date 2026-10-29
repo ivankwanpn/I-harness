@@ -7,6 +7,7 @@
  */
 
 import type { SessionEvent } from "@i-harness/core-session"
+type MutationWitness = { end(outcome: 'settled' | 'unknown'): void }
 
 /** Dependencies and scheduling policy for one live session's write controller. */
 export interface SessionWriteBehindOptions {
@@ -14,6 +15,8 @@ export interface SessionWriteBehindOptions {
   maxDelayMs: number
   /** Persist one stable ordered prefix; resolves only after backend durability. */
   write: (events: SessionEvent[]) => Promise<void>
+  /** Internal witness stays with the batch until its eventual successful write. */
+  beginWrite?: () => MutationWitness | undefined
   /** Observe a detached background write failure without rejecting the producer. */
   reportBackgroundFailure: (error: unknown) => void
 }
@@ -23,7 +26,7 @@ export interface SessionWriteBehindOptions {
  * write, failure retention, and explicit quiescence barrier.
  */
 export class SessionWriteBehind {
-  private pending: SessionEvent[] = []
+  private pending: { event: SessionEvent; witnesses: MutationWitness[]; callbackWitness?: MutationWitness }[] = []
   private timer: ReturnType<typeof setTimeout> | undefined
   private active: Promise<void> | undefined
   private barrier: Promise<void> | undefined
@@ -38,9 +41,9 @@ export class SessionWriteBehind {
   }
 
   /** Copy one event into the persistence-owned queue and start a fixed deadline. */
-  enqueue(event: SessionEvent): void {
+  enqueue(event: SessionEvent, witness?: MutationWitness): void {
     const wasEmpty = this.pending.length === 0
-    this.pending.push(structuredClone(event))
+    this.pending.push({ event: structuredClone(event), witnesses: witness ? [witness] : [] })
     if (this.barrier !== undefined) return
     if (this.automaticPaused) {
       this.automaticPaused = false
@@ -122,7 +125,12 @@ export class SessionWriteBehind {
     const batch = this.pending.splice(0)
     this.cancelTimer()
     this.deadlineExpired = false
-    const operation = Promise.resolve().then(() => this.options.write(batch))
+    const operation = Promise.resolve().then(() => {
+      // The callback owns this retained prefix across attempts. Reusing its
+      // original witness bounds debt by queued work rather than retry history.
+      batch[0]!.callbackWitness ??= this.options.beginWrite?.()
+      return this.options.write(batch.map(item => item.event))
+    })
     const active = operation
       .catch((error: unknown) => {
         this.pending = batch.concat(this.pending)
@@ -132,6 +140,7 @@ export class SessionWriteBehind {
         if (background) this.options.reportBackgroundFailure(error)
         throw error
       })
+      .then(() => { for (const item of batch) { for (const witness of item.witnesses) witness.end('settled'); item.callbackWitness?.end('settled') } })
       .finally(() => {
         this.active = undefined
       })
