@@ -15,8 +15,9 @@ import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/in
 import { createSessionService, createDurableSessionLoader } from '../src/index.ts'
 import { produceFormat12RetainedResult } from './helpers/format12-retained-runtime.ts'
 import { controlledModel } from './controlled-model.ts'
+import { RecipientDeliveryRecoveryError } from '../src/lifecycle/recipient-delivery.ts'
 
-const cuts = ['before-first-receipt', 'end-landed-unknown', 'end-never-issued', 'end-absent-issued', 'end-torn', 'end-conflicted', 'receipt-landed-unknown', 'receipt-before-source-ack', 'scheduled-before-claim', 'claim-landed-unknown', 'close-before-issue', 'close-landed-unknown', 'close-confirmed'] as const
+const cuts = ['before-first-receipt', 'before-first-receipt-transient', 'end-landed-unknown', 'end-never-issued', 'end-absent-issued', 'end-torn', 'end-conflicted', 'receipt-landed-unknown', 'receipt-before-source-ack', 'scheduled-before-claim', 'claim-landed-unknown', 'close-before-issue', 'close-landed-unknown', 'close-confirmed'] as const
 it.each(cuts)('cold original source qualifies from actual physical proof at %s', async mode => {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-cold-')), config = join(root, 'config'), nonce = randomUUID()
   await mkdir(config)
@@ -39,7 +40,8 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Fixture server address unavailable')
   const endpoint = 'http://127.0.0.1:' + address.port
-  const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./helpers/delivery-crash.mts', import.meta.url)), root, endpoint, nonce, mode], {
+  const cutMode = mode === 'before-first-receipt-transient' ? 'before-first-receipt' : mode
+  const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('./helpers/delivery-crash.mts', import.meta.url)), root, endpoint, nonce, cutMode], {
     cwd: fileURLToPath(new URL('../', import.meta.url)), windowsHide: true, env: { ...process.env, IH_CONFIG_DIR: config }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   })
   let stdout = '', stderr = '', cut: any, recoveryError: unknown, retainedRead: unknown
@@ -52,7 +54,7 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
   try {
     const exit = await Promise.race([exited, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('Original cut not reached\n' + stderr)), 15000) })]); clearTimeout(timer)
     expect(exit).toEqual({ code: 0, signal: null })
-    expect(cut).toMatchObject({ nonce, kind: mode })
+    expect(cut).toMatchObject({ nonce, kind: cutMode })
     if (mode === 'scheduled-before-claim') {
       expect(cut.taskDocument.notifications).toEqual([expect.objectContaining({ status: 'delivered', timeDelivered: expect.any(Number) })])
       expect(cut.taskDocument.notifications[0]).not.toHaveProperty('timeWoken')
@@ -66,6 +68,18 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
     if (mode === 'end-absent-issued') expect(cut).toMatchObject({ originalWriteAttempts: 1, observedOutcome: { kind: 'absent', key: cut.key } })
     expect(childCount).toBe(1)
     const beforeRequests = parentCount
+    let refusals = 0
+    if (mode === 'before-first-receipt-transient') {
+      const document = await coordinator.openManagedDocument('parent'), register = document.registerReceivedInputSource.bind(document)
+      document.registerReceivedInputSource = (...args) => {
+        const source = register(...args), capture = source.captureDeliveryAdmission.bind(source)
+        source.captureDeliveryAdmission = (...input) => {
+          if (++refusals <= 3) throw new RecipientDeliveryRecoveryError({ kind: 'retryable', phase: 'temporary-admission' })
+          return capture(...input)
+        }
+        return source
+      }
+    }
     const model = createOpenAICompatibleClient({ apiKey: 'fixture-only', model: 'parent', baseUrl: endpoint })
     service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), contextOutput: output,
       model, modelPolicy: 'test-mock', codeMode: { mode: 'off' }, sandbox: 'danger-full-access', contextWindow: 100000, approveAll: true })
@@ -95,6 +109,7 @@ it.each(cuts)('cold original source qualifies from actual physical proof at %s',
     expect(published!.session).toBe((await coordinator.openManagedDocument('parent')).view)
     if (missing || consumed || fenced) expect(parentCount).toBe(beforeRequests)
     else expect(parentCount).toBe(beforeRequests + 1)
+    if (mode === 'before-first-receipt-transient') expect(refusals).toBe(4)
     if (fenced) expect(readDeliveries(published!.session).activeGeneration()).toBeUndefined()
     if (mode === 'close-before-issue') {
       // The vanished synchronous fence has no durable close claim.

@@ -888,8 +888,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         if (creating.get(sessionId) === row) row.residentActivation.activate()
         // Recovery admission needs the exact published parent and its lane.
         // Waking schedules through submit without awaiting that turn here.
-        try { await assembly.drainParentNotifications?.(); await deliveryDrain.reconcile() }
+        try { await assembly.drainParentNotifications?.() }
         catch (error) { d.warn(`[i-harness] parent notification recovery failed: ${error instanceof Error ? error.message : String(error)}`) }
+        // Initial source admission may have failed before emitting any fact.
+        // Activate the published retry owner even when that attempt rejected.
+        await deliveryDrain.reconcile()
         return assembly
       })().catch(error => {
         row.residentActivation.retire()
