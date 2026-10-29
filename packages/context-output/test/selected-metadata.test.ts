@@ -52,3 +52,8 @@ it('refuses the retained plan after original target grant revocation',async()=>{
 it('retains acquisition cleanup debt in the original service until close retries it',async()=>{
  const f=await legacyFixture();try{expect((await f.run()).kind).toBe('ready');const observation=await f.observation();io.failClose=2;await expect(acquireSelectedMetadata(f.service(),observation)).rejects.toThrow('cleanup unresolved');await expect(acquireSelectedMetadata(f.service(),observation)).rejects.toThrow('cleanup unresolved');await f.service().close();expect(io.failClose).toBe(0)}finally{io.failClose=0;await f.close()}
 })
+it('joins iterator return and owner close on the same pending original step',async()=>{
+ const f=await legacyFixture();try{expect((await f.run()).kind).toBe('ready');const owner=await acquireSelectedMetadata(f.service(),await f.observation()),iterator=owner.reader.legacy()[Symbol.asyncIterator](),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();io.entered=entered.resolve;io.delay=leave.promise
+ const next=iterator.next().catch(error=>error);await entered.promise;let returned=false,closed=false;const returning=iterator.return!().then(()=>{returned=true}),closing=owner.close().then(()=>{closed=true});await Promise.resolve();expect(returned).toBe(false);expect(closed).toBe(false);leave.resolve();await next;await returning;await closing;expect(returned&&closed).toBe(true)
+ }finally{io.delay=undefined;io.entered=undefined;await f.close()}
+})
