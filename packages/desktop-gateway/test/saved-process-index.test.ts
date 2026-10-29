@@ -42,6 +42,44 @@ it('explicit native instance does not acquire or conflict with a new same-id leg
   fixed.append(3, [{ type: 'tool/call', callId: 'legacy', name: 'shell', args: {}, seq: 4 }, { type: 'tool/result', callId: 'legacy', name: 'shell', output: { job_id: 'j' }, seq: 5 }])
   expect(fixed.current().nativeJob?.instanceId).toBe('a')
 })
+it('initial same-id legacy declaration preserves fully matched native snapshot and immutable evidence', () => {
+  const legacy = [{ type: 'tool/call', callId: 'legacy', name: 'shell', args: {}, seq: 4 }, { type: 'tool/result', callId: 'legacy', name: 'shell', output: { job_id: 'j' }, seq: 5 }]
+  const prefix = originalPair('prefix', 'job_output', { job_id: 'j', job_instance_id: 'a' }, { job_id: 'j', native_job: nativeFor(), text: 'prefix' }, 6)
+  const events = [...startingFacts(), ...legacy, ...prefix]
+  const index = buildSavedProcessIndex(events, 'owner')
+  expect(index.select('j').kind).toBe('ambiguous-selector')
+  expect(index.select('j', 'a')).toMatchObject({ kind: 'selected', candidate: { snapshot: { text: 'prefix' }, observation: { callId: 'prefix' }, sourceObservation: { callId: 'prefix' } } })
+  const conflicting = originalPair('tail', 'job_output', { job_id: 'j', job_instance_id: 'a', offset_bytes: 6 }, { job_id: 'j', native_job: nativeFor(), text: 'later', offset_bytes: 6, digest: 'b'.repeat(64) }, 9)
+  expect(buildSavedProcessIndex([...events, ...conflicting], 'owner').select('j', 'a').kind).toBe('conflict')
+  const fixed = createFixedSavedSelection(selectedInitial(events), 'owner', 'j', 'a')
+  fixed.append(events.length, conflicting)
+  expect(() => fixed.current()).toThrow(/conflict/)
+})
+it.each(['jobId', 'sourceId'] as const)('same original native instance with changed %s conflicts in initial and suffix paths', field => {
+  const native = { ...nativeFor(), [field]: 'other' }
+  const changed = originalPair('redeclaration', 'shell', {}, { job_id: native.jobId, native_job: native }, 4)
+  expect(buildSavedProcessIndex([...startingFacts(), ...changed], 'owner').select('j', 'a').kind).toBe('conflict')
+  for (const selector of [undefined, 'a']) {
+    const fixed = createFixedSavedSelection(selectedInitial(startingFacts()), 'owner', 'j', selector)
+    fixed.append(3, changed)
+    expect(() => fixed.current()).toThrow(/conflict/)
+  }
+})
+it('unrelated foreign native identity stays unrelated while explicit selection preserves its original evidence', () => {
+  const other = originalPair('other', 'shell', {}, { job_id: 'other', native_job: { ...nativeFor('c'), jobId: 'other', sourceId: 'different' } }, 4)
+  const nativeB = originalPair('same-id', 'shell', {}, { job_id: 'j', native_job: nativeFor('b') }, 7)
+  const index = buildSavedProcessIndex([...startingFacts(), ...other, ...nativeB], 'owner')
+  expect(index.select('j').kind).toBe('ambiguous-selector'); expect(index.select('j', 'a').kind).toBe('selected')
+  const fixed = createFixedSavedSelection(selectedInitial(startingFacts()), 'owner', 'j', 'a')
+  fixed.append(3, other); fixed.append(6, nativeB)
+  expect(fixed.current().nativeJob).toEqual(nativeFor())
+})
+it('unsupported foreign-owner declaration never becomes an owned competitor in initial or suffix indexing', () => {
+  const foreign = originalPair('foreign', 'shell', {}, { job_id: 'j', native_job: { ...nativeFor('foreign'), ownerSessionId: 'elsewhere' } }, 4)
+  expect(buildSavedProcessIndex([...startingFacts(), ...foreign], 'owner').select('j').kind).toBe('selected')
+  const fixed = createFixedSavedSelection(selectedInitial(startingFacts()), 'owner', 'j')
+  fixed.append(3, foreign); expect(fixed.current().nativeJob).toEqual(nativeFor())
+})
 it('unrelated orphan results cannot invalidate an original fixed selection', () => {
   const fixed = createFixedSavedSelection(selectedInitial(startingFacts()), 'owner', 'j', 'a')
   fixed.append(3, [{ type: 'tool/result', callId: 'foreign', name: 'other', output: 'text', seq: 4 }])

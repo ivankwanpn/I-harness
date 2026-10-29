@@ -45,8 +45,8 @@ export function decodeSavedCalls(events: readonly unknown[], owner: string): Sav
   const windows: { calls: number[]; results: number[]; dispatches: number[] }[] = []
   for (const group of groups.values()) {
     if (group.calls.length <= 1) { windows.push(group); continue }
-    // Reuse can only be disambiguated when each complete ordered invocation
-    // has an explicit dispatch referencing that invocation's original seq.
+    // Original call positions delimit sequential invocations. Any supplied
+    // dispatch must reference that invocation's original call sequence.
     const split = group.calls.map(ci => ({ calls: [ci], results: [] as number[], dispatches: [] as number[] }))
     let slot = 0
     for (const ri of group.results) { while (slot + 1 < group.calls.length && ri > group.calls[slot + 1]!) slot++; split[slot]!.results.push(ri) }
@@ -128,6 +128,12 @@ function identity(value: unknown, owner: string, id: string): NativeIdentity | u
   if (!n || n.version !== 1 || n.jobId !== id || n.ownerSessionId !== owner || typeof n.instanceId !== 'string' || !n.instanceId || typeof n.sourceId !== 'string' || !n.sourceId) return
   return { version: 1, jobId: id, instanceId: n.instanceId, ownerSessionId: owner, sourceId: n.sourceId }
 }
+/** A short ID never makes a different instance relevant, or hides a mutation
+ * of the original instance's immutable job/source identity. */
+function nativeRelation(original: NativeIdentity, observed: NativeIdentity): 'same' | 'conflict' | 'other' {
+  if (original.ownerSessionId !== observed.ownerSessionId || original.instanceId !== observed.instanceId) return 'other'
+  return original.jobId === observed.jobId && original.sourceId === observed.sourceId ? 'same' : 'conflict'
+}
 export function buildSavedProcessIndex(events: readonly unknown[], owner: string) {
   const calls = decodeSavedCalls(events, owner)
   const candidates: SavedCandidate[] = []
@@ -150,7 +156,7 @@ export function buildSavedProcessIndex(events: readonly unknown[], owner: string
       if (call.provenance === 'inline' && !nativeJob) continue
       const same = nativeJob && byInstance.get(nativeJob.instanceId)
       if (same) {
-        if (same.id !== nativeJob!.jobId || same.nativeJob!.sourceId !== nativeJob!.sourceId) same.conflict = true
+        if (nativeRelation(same.nativeJob!, nativeJob!) === 'conflict') same.conflict = true
       } else {
         const candidate = { id: value.job_id, nativeJob, declaration: call, conflict: false }
         candidates.push(candidate)
@@ -162,7 +168,10 @@ export function buildSavedProcessIndex(events: readonly unknown[], owner: string
     if (call.name !== 'job_output' || typeof args.job_id !== 'string') continue
     const n = call.provenance === 'inline' ? identity(value.native_job, owner, args.job_id) : undefined
     const nativeCandidate = n && byInstance.get(n.instanceId)
-    const matches = [...legacyById.get(args.job_id) ?? [], ...(nativeCandidate?.id === args.job_id && nativeCandidate.nativeJob?.sourceId === n?.sourceId ? [nativeCandidate] : [])]
+    // A fully bound modern observation belongs only to its native instance.
+    // Legacy compatibility never competes for or absorbs that observation.
+    const matches = call.provenance === 'legacy' ? legacyById.get(args.job_id) ?? []
+      : n && nativeCandidate?.nativeJob && nativeRelation(nativeCandidate.nativeJob, n) === 'same' ? [nativeCandidate] : []
     if (matches.length !== 1) continue
     const c = matches[0]!
     if (c.nativeJob && (args.job_instance_id !== undefined && args.job_instance_id !== c.nativeJob.instanceId || args.source_id !== undefined && args.source_id !== c.nativeJob.sourceId)) continue
@@ -228,12 +237,14 @@ export function createFixedSavedSelection(initial: SavedProcessInitial, owner: s
     if (call.name === 'job_output' && value && !('error' in value) && fixed.nativeJob && args.job_id === id) {
       const n = identity(value.native_job, owner, id)
       if (n?.instanceId === fixed.nativeJob.instanceId && (args.job_instance_id === undefined || args.job_instance_id === n.instanceId) && (args.source_id === undefined || args.source_id === n.sourceId)) {
-        if (n.sourceId !== fixed.nativeJob.sourceId || remember(evidence, value)) failed = true
+        if (nativeRelation(fixed.nativeJob, n) === 'conflict' || remember(evidence, value)) failed = true
       }
     }
-    if (!initialPass && shell({ name: call.name }) && value?.job_id === id && !('error' in value)) {
-      const n = call.provenance === 'inline' ? identity(value.native_job, owner, id) : undefined
-      if (n?.instanceId === fixed.nativeJob?.instanceId && n?.sourceId !== fixed.nativeJob?.sourceId || instanceId === undefined && (!n || n.instanceId !== fixed.nativeJob?.instanceId)) failed = true
+    if (!initialPass && shell({ name: call.name }) && value && typeof value.job_id === 'string' && !('error' in value)) {
+      const n = call.provenance === 'inline' ? identity(value.native_job, owner, value.job_id) : undefined
+      if (call.provenance === 'inline' && !n) return
+      const relation = n && fixed.nativeJob ? nativeRelation(fixed.nativeJob, n) : 'other'
+      if (relation === 'conflict' || value.job_id === id && instanceId === undefined && relation !== 'same') failed = true
     }
   }
   function consume(raw: unknown, index: number, initialPass: boolean) {
