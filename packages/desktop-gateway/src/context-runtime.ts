@@ -108,8 +108,11 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
   const selectedSources=new Set<{close():Promise<void>;revoke():void}>()
   const selectedAcquisitions=new Set<Promise<unknown>>()
   const selectedCleanupDebt=new Set<{retry():Promise<void>}>()
+  const selectedContext=new AsyncLocalStorage<readonly {active:boolean}[]>()
+  async function selectedWork<T>(work:()=>Promise<T>):Promise<T>{const entry={active:true};try{return await selectedContext.run([...(selectedContext.getStore()??[]),entry],work)}finally{entry.active=false}}
+  let closeFlight:Promise<void>|undefined,disposed=false,cancelled=false,coreClosed=false,codeClosed=false
   function acquireSelectedSourceObservation(sessionId:string) {
-    assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const flight=Promise.resolve().then(()=>acquireSelectedSource(sessionId));selectedAcquisitions.add(flight)
+    assertAvailable();if(selectedCleanupDebt.size)throw Error('Selected source cleanup unresolved');const flight=Promise.resolve().then(()=>selectedWork(()=>acquireSelectedSource(sessionId)));selectedAcquisitions.add(flight)
     void flight.finally(()=>selectedAcquisitions.delete(flight)).catch(()=>{});return flight
   }
   async function acquireSelectedSource(sessionId:string) {
@@ -125,13 +128,14 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const project=await options.retainSelectedProjectRead(ids,binding,sessionId);current()
       const result=observations.retainSelected({sessionId,sessionIds:ids,observation:binding.observation,document,currentSource(){return canonicalSource(project.sourceGetter)},assertHostCurrent(){current();project.assertCurrent()}})
       let metadata:Awaited<ReturnType<typeof bridge.acquireSelectedMetadata>>|undefined
-      project.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadata)await metadata.close();await result.close();witness.unsubscribe()}})
-      await project.use(()=>result.use(async()=>{const originalRead=legacyObservationFor(result.observation);metadata=await bridge.acquireSelectedMetadata(originalRead);current()}));current()
+      let metadataCleanup:ReturnType<typeof bridge.selectedMetadataCleanupFor>
+      project.attachResult({revoke(){result.revoke();metadata?.revoke()},async close(){if(metadataCleanup){await metadataCleanup.retry();metadataCleanup=undefined}if(metadata)await metadata.close();await result.close();witness.unsubscribe()}})
+      await project.use(()=>result.use(async()=>{const originalRead=legacyObservationFor(result.observation);try{metadata=await bridge.acquireSelectedMetadata(originalRead)}catch(error){metadataCleanup=bridge.selectedMetadataCleanupFor(error);throw error}current()}));current()
       const retained=metadata!
       const uses=new AsyncLocalStorage<{active:boolean}>()
       const useCurrent=()=>{if(!uses.getStore()?.active)throw Error('Selected source use expired');current();retained.assertCurrent()}
       const inherited=Object.freeze({assertCurrent:useCurrent,legacy(){useCurrent();const iterator=retained.reader.legacy()[Symbol.asyncIterator]();return {[Symbol.asyncIterator](){return this},async next(){useCurrent();const value=await iterator.next();useCurrent();return value},async return(){return iterator.return?iterator.return():{done:true as const,value:undefined}}}}})
-      const source=Object.freeze({document,view:witness.view,inherited,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}})))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
+      const source=Object.freeze({document,view:witness.view,inherited,assertCurrent(){current();project.assertCurrent();result.assertCurrent();retained.assertCurrent()},use<T>(work:()=>Promise<T>){const entry={active:true};return selectedWork(()=>project.use(()=>result.use(()=>uses.run(entry,async()=>{try{return await work()}finally{entry.active=false}}))))},revoke(){binding!.revoke()},async close(){await project.close();selectedSources.delete(source)}})
       selectedSources.add(source);return source
     }catch(error){
       binding?.revoke();let failure=error
@@ -271,8 +275,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       if(!active&&timer){clearInterval(timer);timer=undefined}
       if(active&&!timer){timer=setInterval(()=>{void autoRefresh()},30000);timer.unref?.();void autoRefresh()}
     },
-    async close(){
-      if(closed&&!selectedSources.size&&!selectedAcquisitions.size&&!selectedCleanupDebt.size)return;closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+    close(){
+      if(selectedContext.getStore()?.some(entry=>entry.active))return Promise.reject(Error('Native selected source self-close'))
+      if(disposed)return Promise.resolve()
+      if(closeFlight)return closeFlight
+      closed=true;bridge.retireBridge();if(timer)clearInterval(timer)
+      const task=(async()=>{
       for(const source of selectedSources)source.revoke()
       await Promise.allSettled([...selectedAcquisitions])
       const cleanup=await Promise.allSettled([...selectedCleanupDebt].map(debt=>debt.retry())),cleanupErrors=cleanup.flatMap(value=>value.status==='rejected'?[value.reason]:[])
@@ -280,8 +288,12 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       for(const source of selectedSources)source.revoke()
       const settled=await Promise.allSettled([...selectedSources].map(source=>source.close())),errors=settled.flatMap(value=>value.status==='rejected'?[value.reason]:[])
       if(errors.length)throw new AggregateError(errors,'Selected source cleanup unresolved')
-      await codeRetrieval.cancel();await refreshing
-      await Promise.all([contextOutput.close(),codeRetrieval.close()])
+      if(!cancelled){await codeRetrieval.cancel();await refreshing;cancelled=true}
+      if(!coreClosed){await contextOutput.close();coreClosed=true}
+      if(!codeClosed){await codeRetrieval.close();codeClosed=true}
+      disposed=true
+      })()
+      closeFlight=task;void task.finally(()=>{if(closeFlight===task)closeFlight=undefined}).catch(()=>{});return task
     },
   }
 }

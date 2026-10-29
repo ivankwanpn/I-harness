@@ -3,7 +3,7 @@ import { createContextOutputService, type ContextCapture, type ContextOutputServ
 import type { ManagedArtifactRef } from '@i-harness/core-session'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
 import { lookupProcessReadContext } from '@i-harness/session-persistence/internal/process-read-context'
-import { acquireSelectedMetadata as acquireCoreSelectedMetadata } from '../../../context-output/src/service.ts'
+import { acquireSelectedMetadata as acquireCoreSelectedMetadata, selectedMetadataCleanupFor } from '../../../context-output/src/service.ts'
 
 type ServiceOptions = Parameters<typeof createContextOutputService>[0]
 type Policy = Omit<ServiceOptions, 'authorizeResult'> & {
@@ -79,8 +79,8 @@ export function createProcessAwareResultService(policy: Policy) {
   const acquireSelectedMetadata=async(observation:Parameters<typeof acquireCoreSelectedMetadata>[1])=>{
     if(retired)throw Error('Original result service retired')
     const selected=await acquireCoreSelectedMetadata(service,observation)
-    if(retired){try{await selected.close()}catch(error){throw new AggregateError([error],'Retired selected metadata cleanup unresolved')}throw Error('Original result service retired')}
+    if(retired){await selected.close();throw Error('Original result service retired')}
     return selected
   }
-  return { service, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, retireBridge() { retired = true } }
+  return { service, withPage: bridge.withPage.bind(bridge), acquireSelectedMetadata, selectedMetadataCleanupFor:(error:unknown)=>selectedMetadataCleanupFor(service,error), retireBridge() { retired = true } }
 }
