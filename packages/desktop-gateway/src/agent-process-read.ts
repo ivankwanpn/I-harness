@@ -1,3 +1,4 @@
+import { createFixedFactSelection, type SavedFactEvidence } from './saved-fact-selection.ts'
 import { createHash } from 'node:crypto'
 import type { SessionView } from '@i-harness/core-session'
 import type { SessionCoordinator, SessionMeta, ProcessReadInitial, ProcessReadUpdate } from '@i-harness/session-persistence'
@@ -10,6 +11,7 @@ export interface AgentProcessReadContext {
   session: SessionView
   document: unknown
   select(id: string, instanceId?: string): void
+  selectTerminal(id: string, evidence: readonly SavedFactEvidence[]): void
   checkpoint(): Promise<void>
   assertCurrent(): void
   page(query: ResultPageQuery): Promise<ResultPageResult>
@@ -39,17 +41,19 @@ export function createAgentProcessReadRunner(options: {
     }
     await policy()
     const delivered: Extract<ProcessReadUpdate, { kind: 'suffix' }>[] = []
+    const facts: ReturnType<typeof createFixedFactSelection>[] = []
     let context!: AgentProcessReadContext, checks: FixedSavedSelection[] = []
     const bindingKey = `desktop-session-project-${createHash('sha256').update(id).digest('hex')}`
-    const apply = (update: ProcessReadUpdate) => { if (update.kind === 'suffix') { delivered.push(update); for (const selected of checks) selected.append(update.from, update.events) } }
+    const apply = (update: ProcessReadUpdate) => { if (update.kind === 'suffix') { delivered.push(update); for (const selected of checks) selected.append(update.from, update.events); for (const selected of facts) selected.append(update.from, update.events) } }
     return coordinator.withProcessReadObservation(id, { documentKeys: [id, bindingKey] }, async observation => {
       const initial: ProcessReadInitial = observation.initial
       const document = initial.documents.get(id)
-      const assert = () => { synchronous(); observation.assertCurrent(); for (const selected of checks) selected.current() }
+      const assert = () => { synchronous(); observation.assertCurrent(); for (const selected of checks) selected.current(); for (const selected of facts) selected.assertCurrent() }
       const checkpoint = async () => { synchronous(); apply(await observation.check()); assert(); await policy(); assert() }
       const index = buildObservedSavedProcessIndex(initial, id)
       context = { index, session: initial.session, document: document?.kind === 'present' ? document.value : undefined,
         select(jobId, instanceId) { const selected = createFixedSavedSelection(initial, id, jobId, instanceId, index); for (const update of delivered) selected.append(update.from, update.events); checks.push(selected); assert() },
+        selectTerminal(terminalId, evidence) { const selected = createFixedFactSelection(initial.session, evidence, id, terminalId); for (const update of delivered) selected.append(update.from, update.events); facts.push(selected); assert() },
         assertCurrent: assert, checkpoint,
         async page(query) { await checkpoint(); if (!options.readResultPage) throw new Error('Process result reader unavailable'); const page = await options.readResultPage(id, query); await checkpoint(); return page },
       }

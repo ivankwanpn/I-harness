@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { sameManagedArtifactRef, validManagedArtifactRef, type SessionView, type ManagedArtifactRef } from "@i-harness/core-session"
 type Fact = Record<string, any>
 type Cut = { cutFrom: number; markerSeq: number }
-function effectiveCuts(events: readonly unknown[]): Cut[] {
+export function effectiveCuts(events: readonly unknown[]): Cut[] {
   const cuts: Cut[] = []
   for (const raw of events) {
     const e = object(raw)
@@ -14,7 +14,7 @@ function effectiveCuts(events: readonly unknown[]): Cut[] {
   for (const cut of cuts) { const last = merged.at(-1); if (last && cut.cutFrom < last.markerSeq) last.markerSeq = Math.max(last.markerSeq, cut.markerSeq); else merged.push({ ...cut }) }
   return merged
 }
-function hidden(seq: unknown, cuts: Cut[]): boolean {
+export function hidden(seq: unknown, cuts: Cut[]): boolean {
   if (typeof seq !== 'number') return false
   let lo = 0, hi = cuts.length
   while (lo < hi) { const mid = (lo + hi) >>> 1; if (cuts[mid]!.cutFrom <= seq) lo = mid + 1; else hi = mid }

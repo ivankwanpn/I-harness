@@ -1,9 +1,11 @@
+import { savedTerminals } from './saved-terminals.ts'
+import { createFixedFactSelection, savedCallEvidence } from './saved-fact-selection.ts'
+import { createFixedSavedSelection } from './saved-process-index.ts'
 import { buildSavedProcessIndex, type SavedCall, type NativeIdentity } from './saved-process-index.ts'
-import { hydrateSavedCandidate } from './saved-result-json.ts'
+import { hydrateSavedCandidate, hydrateSavedInlineCatalog } from './saved-result-json.ts'
 import type { AgentProcessReadRunner, AgentProcessReadContext } from './agent-process-read.ts'
 import { sameManagedArtifactRef, validManagedArtifactRef, type ExecFrameCursor, type ManagedArtifactRef } from '@i-harness/core-session'
 import { randomUUID } from "node:crypto"
-import type { SessionEventView as SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import type { TerminalView } from "@i-harness/terminal"
@@ -28,49 +30,6 @@ export type AgentProcessesRequest =
   | ({ kind: "desktop/session/processes/job-output"; workspaceId: string; sessionId: string; id: string } & JobOutputQuery)
   | { kind: "desktop/session/processes/terminal-output"; workspaceId: string; sessionId: string; id: string }
 
-function savedTerminals(events: readonly SessionEvent[], sessionId: string) {
-  const calls = new Map<string, { name: string; args: Record<string, unknown> }>()
-  const terminals = new Map<string, AgentProcessesView["terminals"][number] & { text: string; truncated: boolean; dropped: boolean; endOffset?: number }>()
-  const names = new Set(["terminal_open", "process_spawn", "terminal_read", "terminal_close", "terminal_signal", "process_kill", "process_resize_pty"])
-  for (const event of events) {
-    if ((event.type === "tool/call" || event.type === "code/call") && names.has(event.name)) {
-      calls.set(event.callId, { name: event.name, args: event.args && typeof event.args === "object" ? event.args as Record<string, unknown> : {} })
-      if (calls.size > 512) calls.delete(calls.keys().next().value!)
-      continue
-    }
-    if (event.type !== "tool/result" && event.type !== "code/result") continue
-    const call = calls.get(event.callId); calls.delete(event.callId)
-    if (!call || call.name !== event.name || !event.output || typeof event.output !== "object") continue
-    const result = event.output as Record<string, unknown>
-    if ("error" in result || result.ownerSessionId !== undefined && result.ownerSessionId !== sessionId) continue
-    const id = typeof result.id === "string" ? result.id : call.args.id
-    if (typeof id !== "string" || !id || id.length > 256 || call.args.id !== undefined && call.args.id !== id) continue
-    let row = terminals.get(id)
-    if (!row) {
-      row = { id, ownerSessionId: sessionId, status: "running", live: false, canControl: false, outputAvailable: false, outputReason: "No terminal_read output was saved", text: "", truncated: false, dropped: false }
-      terminals.set(id, row)
-      if (terminals.size > 200) terminals.delete(terminals.keys().next().value!)
-    }
-    if (typeof result.command === "string") row.command = result.command.slice(0, 256)
-    else if (typeof call.args.command === "string") row.command = call.args.command.slice(0, 256)
-    if (typeof result.beganAt === "string") row.beganAt = result.beganAt.slice(0, 128)
-    for (const field of ["pid", "cols", "rows"] as const) if (typeof result[field] === "number" && Number.isSafeInteger(result[field]) && result[field] > 0) row[field] = result[field]
-    if (result.status === "running" || result.status === "exited") row.status = result.status
-    if (typeof result.exitCode === "number" && Number.isSafeInteger(result.exitCode)) row.exitCode = result.exitCode
-    if (event.name !== "terminal_read" || typeof result.data !== "string") continue
-    const data = result.data
-    const end = typeof result.nextOffset === "number" && Number.isSafeInteger(result.nextOffset) && result.nextOffset >= data.length ? result.nextOffset : undefined
-    const start = end === undefined ? undefined : end - data.length
-    const extra = start !== undefined && row.endOffset !== undefined ? data.slice(Math.max(0, row.endOffset - start)) : data
-    row.dropped ||= result.dropped === true || start !== undefined && start > (row.endOffset ?? 0)
-    if (end !== undefined) row.endOffset = Math.max(row.endOffset ?? 0, end)
-    row.truncated ||= result.truncated === true || row.text.length + extra.length > 131072
-    row.text = (row.text + extra).slice(-131072); row.outputAvailable = !!row.text
-    row.outputReason = "Only saved terminal_read snapshots are available; output between reads or after the last read may be missing"
-  }
-  return terminals
-}
-
 /** Saved shell tool results are evidence of submission/output, never of a
  * live process. A saved running state remains explicitly unconfirmed. */
 function savedShellJobs(index: ReturnType<typeof buildSavedProcessIndex>) {
@@ -89,9 +48,30 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
     const { meta } = await coordinator.profile(id)
     if (meta.archived) throw new Error('Conversation unavailable')
     const assembly = service.liveAssembly(id), session = assembly?.session ?? await readDesktopSnapshot(coordinator, id)
-    const context: AgentProcessReadContext = { index: buildSavedProcessIndex(session.events, id), session, document: await coordinator.getDocument(id), select() {},
-      assertCurrent() { if (service.liveAssembly(id) !== assembly) throw new Error('Process owner changed') },
-      async checkpoint() { context.assertCurrent(); if ((await coordinator.profile(id)).meta.archived) throw new Error('Conversation unavailable'); context.assertCurrent() },
+    const index = buildSavedProcessIndex(session.events, id)
+    const checks: { id: string; instanceId?: string; cursor: number; selected: ReturnType<typeof createFixedSavedSelection>; facts: ReturnType<typeof createFixedFactSelection> }[] = []
+    const terminals: ReturnType<typeof createFixedFactSelection>[] = []
+    const document = await coordinator.getDocument(id)
+    const original = () => { if (service.liveAssembly(id) !== assembly) throw new Error('Process owner changed') }
+    async function revalidate() {
+      original(); const fresh = await readDesktopSnapshot(coordinator, id, original); original()
+      const current = checks.length ? buildSavedProcessIndex(fresh.events, id) : undefined
+      for (const check of checks) {
+        check.facts.revalidate(fresh)
+        if (fresh.events.length > check.cursor) { check.selected.append(check.cursor, fresh.events.slice(check.cursor)); check.cursor = fresh.events.length }
+        if (current!.select(check.id, check.instanceId).kind !== 'selected') throw new Error('Saved job selection changed')
+        check.selected.current()
+      }
+      for (const terminal of terminals) terminal.revalidate(fresh)
+    }
+    const context: AgentProcessReadContext = { index, session, document,
+      select(jobId, instanceId) {
+        const selected = createFixedSavedSelection({ session, highWater: session.events.length }, id, jobId, instanceId, index), fixed = selected.current()
+        checks.push({ id: jobId, instanceId, cursor: session.events.length, selected, facts: createFixedFactSelection(session, savedCallEvidence(session, [fixed.declaration, fixed.observation, fixed.sourceObservation]), id) })
+      },
+      selectTerminal(terminalId, evidence) { terminals.push(createFixedFactSelection(session, evidence, id, terminalId)) },
+      assertCurrent() { original(); for (const check of checks) { check.selected.current(); check.facts.assertCurrent() }; for (const terminal of terminals) terminal.assertCurrent() },
+      async checkpoint() { await revalidate(); if ((await coordinator.profile(id)).meta.archived) throw new Error('Conversation unavailable'); original(); await revalidate(); context.assertCurrent() },
       async page() { throw new Error('Host process reader unavailable') } }
     const result = await work(context); await context.checkpoint(); return result
   })
@@ -135,9 +115,12 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
             return { text: text.slice(0, 131072), truncated: value.truncated === true || text.length > 131072, ownerSessionId: sessionId, live: false }
           }
           if (!options.runRead || !candidate.nativeJob) return unavailable('retained-reader-unavailable')
+          let catalog = candidate.observation?.descriptor?.catalog ?? candidate.observation?.catalog ?? candidate.sourceObservation?.catalog
+          if (!candidate.descriptor) {
+            const inline = await hydrateSavedInlineCatalog(sessionId, candidate, (_id, q) => context.page(q), context.assertCurrent)
+            value = inline.value; catalog = inline.catalog; catalogCompleteness = inline.catalogCompleteness
+          }
           const original = value?.full_result?.args?.ref as ManagedArtifactRef | undefined
-          // Inline records retain their genuine committed envelope catalog too.
-          const catalog = candidate.observation?.descriptor?.catalog ?? candidate.observation?.catalog ?? candidate.sourceObservation?.catalog
           if (!original || !validManagedArtifactRef(original) || !catalog) return unavailable('catalog-unavailable')
           if (query.expectedRef && !sameManagedArtifactRef(query.expectedRef, original)) return unavailable('stale-ref')
           const page = await context.page({ ref: original, cursor: query.cursor, viaCatalog: catalog, maxBytes: 32768 })
@@ -171,7 +154,9 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
       const jobs = new Map<string, JobView & { nativeJob?: NativeIdentity; outputDisposition?: AgentProcessesView["jobs"][number]["outputDisposition"] }>([...projectJobsDoc(context.document), ...foldJobs(session.events)].map(job => [job.kind + ":" + job.jobId, job]))
       const tasks = assembly?.tasks() ?? []
       const background = assembly?.backgroundJobs?.().filter(job => job.ownerSessionId === sessionId) ?? []
-      const terminals = new Map([...savedTerminals(session.events, sessionId).values()].map(({ text: _text, truncated: _truncated, dropped: _dropped, endOffset: _offset, ...row }) => [row.id, row]))
+      const savedPtys = savedTerminals(session.events, sessionId)
+      for (const row of savedPtys.values()) context.selectTerminal(row.id, row.evidence)
+      const terminals = new Map([...savedPtys.values()].map(({ text: _text, truncated: _truncated, dropped: _dropped, endOffset: _offset, evidence: _evidence, ...row }) => [row.id, row]))
       for (const row of assembly?.liveResources?.().terminals ?? []) if (row.ownerSessionId === sessionId) terminals.set(row.id, { ...row, live: true, canControl: row.status === "running", outputAvailable: true })
       for (const job of background) jobs.set(job.kind + ":" + job.id, { jobId: job.id, kind: job.kind, label: job.id, status: job.status, outputAvailable: Boolean(job.output), ...(job.kind === "shell" ? { nativeJob: job.nativeJob } : {}) })
       return { sessionId, live: Boolean(assembly), terminals: [...terminals.values()].slice(-200),
@@ -188,6 +173,7 @@ export function createAgentProcesses(coordinator: SessionCoordinator, service: P
       return runRead(sessionId, async context => {
       const session = context.session
       const row = savedTerminals(session.events, sessionId).get(id)
+      if (row) context.selectTerminal(id, row.evidence)
       if (!row?.outputAvailable) throw new Error("Saved terminal output unavailable for this owner")
       return { text: row.text, truncated: row.truncated, dropped: row.dropped, reason: row.outputReason, ownerSessionId: sessionId, live: false }
       })

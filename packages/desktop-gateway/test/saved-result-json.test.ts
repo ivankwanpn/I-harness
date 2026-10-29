@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { createHash } from 'node:crypto'
-import { hydrateSavedDto, hydrateSavedCandidate, savedResultDescriptor } from '../src/saved-result-json.ts'
+import { hydrateSavedDto, hydrateSavedCandidate, hydrateSavedInlineCatalog, savedResultDescriptor } from '../src/saved-result-json.ts'
 import { buildSavedProcessIndex } from '../src/saved-process-index.ts'
 const sha = (v: string | Buffer) => createHash('sha256').update(v).digest('hex')
 const native = { version: 1 as const, jobId: 'bash-1', instanceId: 'original', ownerSessionId: 'owner', sourceId: 'process:1' }
@@ -184,4 +184,15 @@ it.each([
 it('a present null text_result refuses rather than manufacturing continuation fields', async () => {
   const f = fixture(v => { v.text_result = null })
   await expect(f.run()).rejects.toThrow(/^Native text continuation mismatch$/)
+})
+
+it.each(['valid', 'count', 'entry-shape'] as const)('inline selected catalog %s uses exactly the original catalog reader with no fabricated DTO', async mode => {
+  const f = fixture((_v, c) => { if (mode === 'count') c.entries.push(c.entries[0]); if (mode === 'entry-shape') c.entries[0].extra = true })
+  const candidate = structuredClone(f.candidate!)
+  candidate.descriptor = undefined
+  candidate.observation = { ...candidate.observation!, provenance: 'inline', descriptor: undefined, catalog: f.descriptor.catalog, value: f.value }
+  const result = hydrateSavedInlineCatalog('owner', candidate, f.read, () => {})
+  if (mode === 'valid') expect(await result).toMatchObject({ catalog: f.descriptor.catalog, value: { text: '你好' } })
+  else await expect(result).rejects.toThrow()
+  expect(f.pages()).toBe(1)
 })

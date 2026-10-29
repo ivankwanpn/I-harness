@@ -100,3 +100,19 @@ export async function hydrateSavedCandidate(sessionId: string, candidate: SavedC
   guard()
   return { value, catalogCompleteness: selected.descriptor!.catalog!.completeness }
 }
+
+/** Validate exactly the selected inline catalog, retaining original reader authority. */
+export async function hydrateSavedInlineCatalog(sessionId: string, candidate: SavedCandidate,
+  read: (id: string, query: ResultPageQuery) => Promise<ResultPageResult>, guard: () => void) {
+  const selected = structuredClone(candidate), call = selected.observation ?? selected.sourceObservation, identity = selected.nativeJob
+  if (selected.conflict || !identity || identity.ownerSessionId !== sessionId || !call || call.provenance !== 'inline' || call.name !== 'job_output' || !call.catalog) throw new Error('Selected inline catalog unavailable')
+  const catalog = Object.freeze({ ...call.catalog }), args = call.args as Record<string, unknown>, value = call.value as Record<string, any>
+  if (!args || typeof args !== 'object' || Array.isArray(args) || args.job_id !== identity.jobId || args.job_instance_id !== undefined && args.job_instance_id !== identity.instanceId
+    || args.source_id !== undefined && args.source_id !== identity.sourceId || ['offset_bytes', 'digest', 'source_id', 'field'].some(k => args[k] !== undefined) && args.job_instance_id === undefined
+    || args.offset_bytes !== undefined && (!Number.isSafeInteger(args.offset_bytes) || (args.offset_bytes as number) < 0)
+    || ['cursor', 'body', 'result_revision', 'ref_revision', 'ref_id'].some(k => args[k] !== undefined) || args.field !== undefined && args.field !== 'text') throw new Error('Original inline call selectors mismatch')
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Original inline value unavailable')
+  const parsed = await hydrateJson(sessionId, catalog, read, guard, 'Catalog')
+  validateSavedOutput(value, identity, args, parsed, args.offset_bytes as number ?? 0)
+  guard(); return { value, catalog, catalogCompleteness: catalog.completeness }
+}

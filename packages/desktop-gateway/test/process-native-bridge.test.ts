@@ -73,6 +73,16 @@ it('reads real catalog members through the injected native service without visib
     { type: 'tool/call', callId: 'dto', name: 'job_output', args: { job_id: 'bash-1', job_instance_id: nativeJob.instanceId } },
     { type: 'tool/result', callId: 'dto', name: 'job_output', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: 'non-authority', media: [], retention: { kind: 'artifact', ref: dto.ref }, dependencies: { kind: 'artifact-set', ref: catalog.ref, count: 1 } } },
   ])
+  // Same owner, genuine catalog membership and bytes, contradictory selected native source.
+  const wrongNative = { ...nativeJob, jobId: 'bash-2', instanceId: 'wrong-source-instance', sourceId: 'selected-source-A' }
+  const wrongValue = { ...dtoValue, job_id: wrongNative.jobId, native_job: wrongNative, full_result: { ...dtoValue.full_result, args: { ...dtoValue.full_result.args, ref: { ...member.ref } } } }
+  const wrongSubmit = { job_id: wrongNative.jobId, native_job: wrongNative }
+  await coordinator.append('s', [
+    { type: 'tool/call', callId: 'wrong-start', name: 'shell', args: {} },
+    { type: 'tool/result', callId: 'wrong-start', name: 'shell', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'inline', value: wrongSubmit, encodedBytes: Buffer.byteLength(JSON.stringify(wrongSubmit)) } } },
+    { type: 'tool/call', callId: 'wrong-inline', name: 'job_output', args: { job_id: wrongNative.jobId, job_instance_id: wrongNative.instanceId } },
+    { type: 'tool/result', callId: 'wrong-inline', name: 'job_output', envelope: { version: 1, execution: { outcome: 'succeeded', dispatch: 'dispatched' }, preview: '', media: [], retention: { kind: 'inline', value: wrongValue, encodedBytes: Buffer.byteLength(JSON.stringify(wrongValue)) }, dependencies: { kind: 'artifact-set', ref: catalog.ref, count: 1 } } },
+  ])
   const reader = createSessionService({ workspace: root, coordinator, sessionId: 's', contextOutput: output, contextOutputSourceFor: native.sourceFor, contextOutputSettingsPath: settings, resultReadScopeFor: resolveScope })
   try {
     trace.path = join(sessions, 's.jsonl'); const historyBytes = (await stat(trace.path)).size; trace.reads = []; trace.fullReads = 0; trace.builds = 0; trace.decodes = 0; trace.active = true
@@ -105,6 +115,11 @@ it('reads real catalog members through the injected native service without visib
     expect(passiveRows.jobs).toContainEqual(expect.objectContaining({ jobId: 'bash-1', outputAvailable: true, live: false, canCancel: false }))
     expect(selectedPages).toBe(0); expect(reader.hasAssembly('s')).toBe(false); expect(trace.snapshots).toBe(0); expect(trace.fullReads).toBe(0); expect(trace.gatewayBuilds).toBe(1)
     console.log(JSON.stringify({ control: 'gateway-passive-process-list', artifactPages: selectedPages, gatewayBuilds: trace.gatewayBuilds, snapshots: trace.snapshots, fullReadFileCalls: trace.fullReads, hasAssembly: reader.hasAssembly('s') }))
+    let wrongSourceBodyPages = 0, wrongSourceCatalogPages = 0
+    const sourceChecked = createAgentProcesses(coordinator, reader, { runRead: createAgentProcessReadRunner({ coordinator, service: reader, isConversation, fence, resultReadScopeFor: resolveScope,
+      readResultPage: async (id, query) => { if (query.ref.codec === 'exec-frames-v1') wrongSourceBodyPages++; else wrongSourceCatalogPages++; return conversationRead(id, query) } }) })
+    expect(await sourceChecked.jobOutput('s', wrongNative.jobId, { backend: 'shell', mode: 'frames', instanceId: wrongNative.instanceId })).toEqual({ kind: 'unavailable', reason: 'unavailable' })
+    expect(wrongSourceCatalogPages).toBe(1); expect(wrongSourceBodyPages).toBe(0)
     let publishBodies = 0
     trace.reads = []; trace.active = true
     trace.afterRead = async path => { if (path.endsWith('body')) publishBodies++ }
