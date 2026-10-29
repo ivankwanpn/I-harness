@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { Dir } from 'node:fs'
 import { mkdir, readFile, readdir, rename, rm, writeFile, open } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { LegacyIndexLifecycle, type IndexUse, type RebuildSink, type PendingCaptureIndex } from './legacy/index-lifecycle.ts'
@@ -70,13 +71,19 @@ export class ContextStore {
     this.fileDebt.add(original)
     await this.closeLegacyRetirement(original); this.fileDebt.delete(original)
   }
+  readonly retireLegacyDirectory = async (directory: Dir): Promise<void> => {
+    let held = true
+    const original = new LeaseRetirement({ get held() { return held }, async release() { await directory.close(); held = false } })
+    this.fileDebt.add(original)
+    await this.closeLegacyRetirement(original); this.fileDebt.delete(original)
+  }
   async joinLegacyFiles(): Promise<void> {
     const settled = await Promise.allSettled([...this.fileDebt].map(async original => { await this.closeLegacyRetirement(original); this.fileDebt.delete(original) }))
     const failures = settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : [])
     failuresTogether(failures, 'Original legacy file cleanup remains unresolved')
   }
 
-  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }) {
+  constructor(root: string, readonly workspaceId: string, private readonly owner?: WorkspaceMutationOwner, private readonly assertLease: LegacyUseGate['assertLease'] = () => { throw Error('Legacy creating gate unavailable') }, private readonly beforeAuthorityChange?: (sessions?: readonly string[]) => void) {
     this.root = resolve(root)
     this.directory = resolve(root, 'context-output', digest(workspaceId))
     this.ledger = new OwnerLedger(this.directory, this.retireLegacyFile)
@@ -404,6 +411,7 @@ export class ContextStore {
       // The existing canonical map is the deduplication boundary across rows
       // and roots. No row/ref membership graph or cleanup reserve is allocated.
       if (!artifact || artifact.ref.expiresAt > Date.now() || !same(commitment(artifact.ref), c)) return
+        this.beforeAuthorityChange?.([...(this.owners.get(c.refId) ?? [])])
       await terminalSlots(this.directory, expiryBase(this.directory, c), expiredTuple(this.workspaceId, c), () => this.assertTurn(turn), this.retireLegacyFile)
       await this.remove(turn, c.refId)
     })
@@ -548,6 +556,7 @@ export class ContextStore {
   }
   async clear(turn: WorkspaceMutationTurn, lease: LegacyUseLease, quota: number, sessionId?: string): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive')
+    this.beforeAuthorityChange?.(sessionId === undefined ? undefined : [sessionId])
     await this.joinLegacyFiles()
     await this.cleanupIndex(turn, lease, async () => {
       await this.revokeLegacyTargets(turn, sessionId)
@@ -589,6 +598,7 @@ export class ContextStore {
   }
   private async remove(turn: WorkspaceMutationTurn, id: string): Promise<void> {
     this.assertTurn(turn)
+    this.beforeAuthorityChange?.([...(this.owners.get(id) ?? [])])
     this.owners.delete(id)
     this.index.invalidate(Error('Canonical context removal'))
     const path = this.path('owners', id)

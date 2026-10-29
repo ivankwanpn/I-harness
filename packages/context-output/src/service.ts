@@ -80,6 +80,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const jobs = new Map<AbortController, Promise<unknown>>()
   const selectedReaders=new Set<SelectedMetadataOwner>()
   const selectedReaderIds=new WeakMap<SelectedMetadataOwner,string>()
+  const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke()}
   let selectedAcquisitionDebt:unknown
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
@@ -108,7 +109,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     if (!opening) {
       // Reject impossible startup budgets without creating even a lock path.
       if (mode === 'query' && config.maxDiskBytes < 65536) throw new Error('Context disk quota cannot fit an index')
-      const next = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease))
+      const next = candidate ?? (candidate = new ContextStore(options.root, workspaceId, owner, gate.assertLease, revokeSelectedAuthorities))
       opening = (async () => {
         try {
           await next.acquireLifetime(signal)
@@ -445,7 +446,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     const sessionId=sessionField.value
     if(selectedAcquisitionDebt)throw selectedAcquisitionDebt
     const withRead=<T>(work:(current:ContextStore)=>Promise<T>)=>run(undefined,async signal=>{
-      if(!store)await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease));await current.acquireLifetime(signal)})
+      if(!store)await gate.exclusive(signal,async lease=>{gate.assertLease(lease,'exclusive');assertOpen();const current=candidate??(candidate=new ContextStore(options.root,workspaceId,owner,gate.assertLease,revokeSelectedAuthorities));await current.acquireLifetime(signal)})
       return gate.shared(signal,async lease=>{gate.assertLease(lease);assertOpen();const current=store??candidate;if(!current)throw Error('Original metadata store unavailable');return work(current)})
     })
     let selected!:SelectedMetadataOwner

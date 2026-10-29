@@ -15,7 +15,7 @@ export async function writeAll(handle: FileHandle, bytes: Uint8Array, position: 
     offset += result.bytesWritten
   }
 }
-const pendingPath = (path: string, bytes: Buffer) => `${path}.${createHash('sha256').update(bytes).digest('hex')}.pending`
+export const pendingPath = (path: string, bytes: Buffer) => `${path}.${createHash('sha256').update(bytes).digest('hex')}.pending`
 export async function readExact(handle: FileHandle, length: number, position: number): Promise<Buffer> {
   if (!Number.isSafeInteger(position + length) || position < 0 || length < 0) throw new Error('Artifact range overflow')
   const bytes = Buffer.alloc(length)
