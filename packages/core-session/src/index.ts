@@ -120,4 +120,5 @@ export { semanticSeedResultRefs, sameManagedArtifactRef } from './results/seed-r
 
 export * from './events/delivery.ts'
 export { readDeliveries, validateDeliveryFrame } from './conversation/delivery.ts'
+export { isBoundDeliveryInput, isDeliveryExecutable, subscribeDeliveryControl } from './managed/delivery-control.ts'
 export type { DeliveryState, DeliveryActionOrigin, DeliveryOriginLookup } from './conversation/delivery.ts'

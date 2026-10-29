@@ -476,3 +476,18 @@ it("returns actual completion when capture settles before steer at the same cloc
     expect(vi.getTimerCount()).toBe(0)
   } finally { finish.resolve(); f.root.resolve({ exitCode: 0 }); await f.exec.dispose(); vi.useRealTimers() }
 })
+
+it('promotes the same held capture for a background event', async () => {
+  const finish = deferred<void>(), background = steerFixture()
+  const f = fixture({ output: (async function* () { await finish.promise; yield { channel: 'stdout', data: Buffer.from('original output') } })() })
+  const pending = f.exec.run({ argv: ['fixture'] }, { backgroundEventWake: background.source })
+  try {
+    await vi.waitFor(() => expect(background.listenerCount()).toBe(1))
+    background.admit()
+    const result = await pending
+    expect(result).toMatchObject({ promoted: true, promotionReason: 'background-event', jobId: 'bash-1' })
+    expect(f.counts()).toEqual({ commits: 1, releases: 0 })
+    expect(f.observationCounts().aborts).toBe(0)
+    expect(background.listenerCount()).toBe(0)
+  } finally { finish.resolve(); f.root.resolve({ exitCode: 0 }); await f.exec.dispose() }
+})

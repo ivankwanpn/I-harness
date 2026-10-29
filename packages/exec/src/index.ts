@@ -51,18 +51,19 @@ export interface ExecStreamRunOptions {
   stream: { maxBytes: number; onStdout(chunk: Buffer): void | "stop" }
   backgroundAfterMs?: never
   promotionWake?: never
+  backgroundEventWake?: never
 }
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
 interface ExecPromotionWake {
   pending(): boolean
   subscribe(listener: () => void): () => void
 }
-export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake }
+export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake; backgroundEventWake?: ExecPromotionWake }
 /** Original prelaunch provenance, never an authorization capability. */
 export type NativeJobIdentity = Readonly<{ version: 1; instanceId: string; jobId: string; ownerSessionId: string; sourceId: string }>
 export interface BackgroundRun { jobId: string; nativeJob?: NativeJobIdentity }
 export interface NativeBackgroundRun extends BackgroundRun { nativeJob: NativeJobIdentity }
-export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
+export interface PromotedRun extends BackgroundRun { promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" | "background-event" }
 export interface NativePromotedRun extends PromotedRun { nativeJob: NativeJobIdentity }
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"

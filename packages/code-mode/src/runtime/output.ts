@@ -99,7 +99,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         });
         track(cell.admission, cell);
     }
-    async function project(cell: Cell, tokens: number, steered: boolean, signal?: AbortSignal, passive = false): Promise<CodeModeObservation> {
+    async function project(cell: Cell, tokens: number, steered: "user-steer" | "background-event" | undefined, signal?: AbortSignal, passive = false): Promise<CodeModeObservation> {
         const admitted = cell.items;
         const incomplete = cell.textIncomplete;
         let truncated = cell.truncated;
@@ -252,7 +252,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
             const status = cell.items.length || cell.truncated || cell.textIncomplete || cell.status === 'running' && cell.pendingItems ? 'running' : cell.status;
             const out: CodeModeObservation = {
                 cellId: cell.id, status, items, text, truncated,
-                ...(steered && cell.status === 'running' && !signal?.aborted ? { yielded: true as const, yieldReason: 'user-steer' as const } : {}),
+                ...(steered && cell.status === 'running' && !signal?.aborted ? { yielded: true as const, yieldReason: steered } : {}),
                 ...(textRetention ? { textRetention } : {}),
                 ...(error === undefined ? {} : { error }), ...(cell.policyRefusal ? { policyRefusal: true } : {})
             };
@@ -294,7 +294,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                 }
                 projecting = true;
                 retained.progress();
-                const projection = project(cell, tokens, false, undefined, true).then(output => {
+                const projection = project(cell, tokens, undefined, undefined, true).then(output => {
                     retained.ready(output);
                     finished = true;
                     cleanup();
@@ -321,7 +321,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
         observation?.retained?.observed();
         cell.observer = true;
         let removeAbort: (() => void) | undefined;
-        let steered = false;
+        let steered: "user-steer" | "background-event" | undefined;
         let retained = false;
         try {
             if (terminate && cell.status === 'running')
@@ -345,9 +345,9 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                             };
                         }
                     },
-                    timeoutMs: duration, abortSignal: signal, userSteer: observation?.userSteer,
+                    timeoutMs: duration, abortSignal: signal, userSteer: observation?.userSteer, backgroundEvent: observation?.backgroundEvent,
                 });
-                steered = reason === 'user-steer';
+                steered = reason === 'user-steer' || reason === 'background-event' ? reason : undefined;
             }
             if (cell.recoveryRequired || cell.terminalReceiptPending)
                 throw new FactRecoveryRequiredError();

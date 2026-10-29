@@ -1,6 +1,6 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { NativeJobIdentity } from '@i-harness/exec'
-import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, backgroundEventForTool, userSteerForTool } from "@i-harness/core-tools"
 import { ESCALATION_TARGETS, SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ShellToolDeps } from "../types.ts"
 import { getArgv } from "../command/argv.ts"
@@ -85,9 +85,11 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
         const cmd = { argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
         const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
@@ -140,9 +142,11 @@ export function createNativeShellTools(deps: NativeDeps, bashBindings: WeakMap<o
         const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
         const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)

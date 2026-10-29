@@ -1,5 +1,5 @@
 import type { ToolExec } from '@i-harness/core-tools'
-import { userSteerForTool, waitForObservation } from '@i-harness/core-tools'
+import { backgroundEventForTool, userSteerForTool, waitForObservation } from '@i-harness/core-tools'
 import type { BackgroundJobView, ExecService, NativeJobIdentity } from '@i-harness/exec'
 import { sameManagedArtifactRef } from '@i-harness/core-session'
 import { readExecTextWindow, ExecTextWindowError } from '../../../context-output/src/artifact/exec-text-window.ts'
@@ -53,7 +53,7 @@ export async function nativeJobOutput(service: ExecService, selected: Background
   const reason = args.wait === true ? await waitForObservation({ ready: () => { current(); return latest.status !== 'running' },
     changes: { subscribe: wake => service.subscribeJob(identity.jobId, wake) },
     timeoutMs: args.timeout_ms === Infinity || Number.isNaN(args.timeout_ms) ? undefined : Math.max(0, args.timeout_ms as number ?? 30000),
-    abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+    abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec),
   }) : undefined
   current()
   const observation = await service.observeJobOutput(identity.jobId, { jobInstanceId: identity.instanceId, sourceId: identity.sourceId, signal: exec.abortSignal })
@@ -63,7 +63,7 @@ export async function nativeJobOutput(service: ExecService, selected: Background
   const base: Record<string, unknown> = { job_id: identity.jobId, native_job: identity, status: latest.status,
     ...(latest.outputDiagnostics ? { output_diagnostics: { ...latest.outputDiagnostics } } : {}),
     source: source.kind === 'unavailable' ? { kind: source.kind, reason: knownReasons.has(source.reason) ? source.reason : 'unavailable' } : { kind: source.kind },
-    ...(reason === 'user-steer' && latest.status === 'running' ? { yielded: true, yield_reason: 'user-steer' } : {}) }
+    ...((reason === 'user-steer' || reason === 'background-event') && latest.status === 'running' ? { yielded: true, yield_reason: reason } : {}) }
   groups.push({ source: base.source })
   if (source.kind !== 'retained-summary') {
     if (continuation) return refuse(source.kind === 'pending' ? 'output-pending' : 'output-unavailable')
