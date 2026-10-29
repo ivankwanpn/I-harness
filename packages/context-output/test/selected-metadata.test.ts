@@ -61,3 +61,6 @@ it('refuses retained metadata once the original canonical grant expires',async()
  const f=await legacyFixture();let clock:ReturnType<typeof vi.spyOn>|undefined
  try{expect((await f.run()).kind).toBe('ready');const owner=await acquireSelectedMetadata(f.service(),await f.observation()),iterator=owner.reader.legacy()[Symbol.asyncIterator]();clock=vi.spyOn(Date,'now').mockReturnValue(f.visible.expiresAt+1);await expect(iterator.next()).rejects.toThrow();clock.mockRestore();clock=undefined;await owner.close()}finally{clock?.mockRestore();await f.close()}
 })
+it('refuses a changed original page after reader acquisition without repairing it',async()=>{
+ const f=await legacyFixture();try{expect((await f.run()).kind).toBe('ready');const owner=await acquireSelectedMetadata(f.service(),await f.observation()),path=join(f.root,'context-output',createHash('sha256').update('workspace').digest('hex'),'legacy-fork-v1',recordHash('binding',f.request.invocation),'pages','0-0.json'),{readFile}=await import('node:fs/promises'),before=await readFile(path);await writeFile(path,'{}');await expect(owner.reader.legacy()[Symbol.asyncIterator]().next()).rejects.toThrow();expect((await readFile(path)).toString()).toBe('{}');await writeFile(path,before);await owner.close()}finally{await f.close()}
+})
