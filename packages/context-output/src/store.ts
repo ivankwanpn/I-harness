@@ -254,9 +254,10 @@ export class ContextStore {
   }
   legacyPageHint(use: IndexUse,binding: string, name: string): boolean { return !!use.get('SELECT 1 FROM legacy_pages WHERE binding=? AND name=?', [binding, name]) }
   legacyPageCount(use: IndexUse,binding: string): number { return Number(use.get('SELECT COUNT(*) AS count FROM legacy_pages WHERE binding=?', [binding])!.count) }
-  async canonicalRef(c: LegacyCommitment, sessionId?: string): Promise<ContextResultRef> {
+  async canonicalRef(c: LegacyCommitment, sessionId?: string, bounded = false): Promise<ContextResultRef> {
     await ownedPath(this.directory, this.path('artifacts', c.refId)); await ownedPath(this.directory, this.path('owners', c.refId))
-    const artifact = JSON.parse(await readFile(this.path('artifacts', c.refId), 'utf8')) as Artifact
+    const budget = Math.min(Number.MAX_SAFE_INTEGER, c.metadataEncodedBytes * 2 + 4096)
+    const artifact = bounded ? await boundedJson(this.path('artifacts', c.refId), budget, this.retireLegacyFile) as Artifact : JSON.parse(await readFile(this.path('artifacts', c.refId), 'utf8')) as Artifact
     if (artifact.ref && !artifact.ref.source && artifact.source) artifact.ref.source = artifact.source
     if (!same(commitment(artifact.ref), c) || artifact.ref.workspaceId !== this.workspaceId || referenceId(artifact.ref.workspaceId, artifact.ref.sessionId, artifact.ref.callId, artifact.ref.revision) !== c.refId || artifact.ref.expiresAt <= Date.now()) throw Error('Legacy manifest changed or expired')
     const owners = await readLedger(this.path('owners', c.refId), this.retireLegacyFile)

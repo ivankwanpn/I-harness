@@ -73,7 +73,7 @@ function immutableBytes(value: unknown): Buffer {
   if (bytes.length > 65536) throw new MetadataConflict('Artifact metadata exceeds limit')
   return bytes
 }
-async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<{ final: boolean; pending: boolean }> {
+export async function inspectImmutable(root: string, path: string, bytes: Buffer, retire?: RetireFile): Promise<{ final: boolean; pending: boolean }> {
   const temporary = pendingPath(path, bytes)
   try {
     if (resolve(dirname(path)) === resolve(root)) {
