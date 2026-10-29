@@ -146,7 +146,14 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
     workFlight = work()
     const result = await (aborted ? Promise.race([workFlight, aborted]) : workFlight)
     completed = result.cause === undefined
-    if (instruction) { instruction.assertCurrent(); controller.signal.throwIfAborted(); instruction.finish(completed ? 'completed' : 'failed'); cleanupAttempted = true; await instruction.close(); instruction = undefined }
+    if (instruction) {
+      instruction.assertCurrent(); controller.signal.throwIfAborted(); instruction.finish(completed ? 'completed' : 'failed'); cleanupAttempted = true
+      const cleanup = instruction.close()
+      // The factory already owns this exact flight. Failure may return promptly;
+      // its later settlement is cleanup only and cannot commit this pool entry.
+      await (aborted ? Promise.race([cleanup, aborted]) : cleanup)
+      instruction = undefined
+    }
     controller.signal.throwIfAborted()
     commitReview?.()
     return result

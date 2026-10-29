@@ -41,13 +41,35 @@ export function createIsolatedInstructionHost(options: { environment: Instructio
     let view: ReturnType<typeof instructionView> | undefined, invocation: OwnedPreparedStreamInvocation | undefined
     let closed = false, generationClosed = false, generationCloseFailed = false, fenced = false, acquiring = true, flight: Promise<void> | undefined
     let disposition: 'completed' | 'failed' | 'stopped' = 'failed', dispositionSet = false
+    let externallyRetired = false, sourceRetirementStarted = false
+    let validateFinal: ((readSource: boolean) => void) | undefined
     const acquired = Promise.withResolvers<void>()
     const holder = {
-      retire() { fenced = true; if (!dispositionSet) disposition = 'stopped' },
+      retire() { fenced = true; externallyRetired = true; if (!dispositionSet) disposition = 'stopped' },
       close() {
         fenced = true
         if (flight) return flight
-        const pending = (async () => { if (acquiring) await acquired.promise; let failure: unknown, failed = false; if (invocation) try { await invocation.drain() } catch (error) { failure = error; failed = true; failures.add(error) }; if (!generationClosed) { if (generationCloseFailed) { if (!recoverGeneration) throw Object.assign(new Error('Original generation close recovery unavailable'), { code: 'FACT_RECOVERY_REQUIRED' }); await recoverGeneration() } else try { await closeGeneration?.(disposition) } catch (error) { generationCloseFailed = true; throw error }; generationClosed = true }; if (!closed) { await view?.retire(); closed = true; leases.delete(holder) }; if (failed) throw failure })()
+        const pending = (async () => {
+          if (acquiring) await acquired.promise
+          let failure: unknown, failed = false
+          const deny = (error: unknown) => { if (!failed) { failure = error; failed = true }; failures.add(error) }
+          if (invocation) try { await invocation.drain() } catch (error) { deny(error) }
+          if (!generationClosed) {
+            if (generationCloseFailed) {
+              if (!recoverGeneration) throw Object.assign(new Error('Original generation close recovery unavailable'), { code: 'FACT_RECOVERY_REQUIRED' })
+              await recoverGeneration()
+            } else try { await closeGeneration?.(disposition) } catch (error) { generationCloseFailed = true; throw error }
+            generationClosed = true
+          }
+          // Check observed source state after the generation await, immediately
+          // before our own retirement fences that service. Retry never mistakes
+          // the service's own close publication for an external invalidation.
+          if (disposition === 'completed') try { validateFinal?.(!sourceRetirementStarted) } catch (error) { deny(error) }
+          if (!closed) { sourceRetirementStarted = true; await view?.retire(); closed = true; leases.delete(holder) }
+          // Policy/authority/lifetime can also change during source cleanup.
+          if (disposition === 'completed') try { validateFinal?.(false) } catch (error) { deny(error) }
+          if (failed) throw failure
+        })()
         flight = pending; void pending.catch(() => { if (flight === pending) flight = undefined }); return pending
       },
     }
@@ -63,15 +85,17 @@ export function createIsolatedInstructionHost(options: { environment: Instructio
       const snapshot = await view.service.prepare([{ path: options.cwd, kind: 'directory' }])
       const identity = JSON.stringify([policy.generation, authority.identity, snapshot.fingerprint, snapshot.candidates, snapshot.applicable])
       let stale = false
-      const assertCurrent = () => {
+      const checkCurrent = (readSource: boolean, finalizing = false) => {
         if (stale) throw unavailable()
         try {
           const currentPolicy = policyCurrent()
-          if (fenced || input.signal.aborted || !lifetimeAvailable() || currentPolicy.kind !== 'ready' || currentPolicy.generation !== policy.generation || scope().identity !== authority.identity) throw unavailable()
+          if ((!finalizing && fenced) || externallyRetired || input.signal.aborted || !lifetimeAvailable() || currentPolicy.kind !== 'ready' || currentPolicy.generation !== policy.generation || scope().identity !== authority.identity) throw unavailable()
           const current = view!.service.snapshot()
-          if (!current.complete || current.reliability !== 'ready' || JSON.stringify([policy.generation, authority.identity, current.fingerprint, current.candidates, current.applicable]) !== identity) throw unavailable()
+          if (readSource && (!current.complete || current.reliability !== 'ready' || JSON.stringify([policy.generation, authority.identity, current.fingerprint, current.candidates, current.applicable]) !== identity)) throw unavailable()
         } catch (error) { stale = true; throw error }
       }
+      const assertCurrent = () => checkCurrent(true)
+      validateFinal = readSource => checkCurrent(readSource, true)
       assertCurrent()
       let bound = false
       const lease: IsolatedInstructionLease = Object.freeze({ text: snapshot.text, poolIdentity: identity, assertCurrent, retire: holder.retire, close: holder.close, finish(value: 'completed' | 'failed' | 'stopped') { if (!fenced) { disposition = value; dispositionSet = true } },

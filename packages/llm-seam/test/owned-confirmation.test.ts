@@ -51,6 +51,20 @@ it('fixed retry/wait/observation/signal caps derive the one handle actually exec
 // Package-private until a genuine cooperation consumer is introduced.
 const read = (confirmation: ExecutionConfirmation, prepared: PreparedModelRequest) => payloadModule.readOwnedExecutionConfirmation(confirmation, prepared)
 
+it('refuses the exposed raw owned base before opening an auxiliary stream', async () => {
+  const server = await loopback(), terminal = http(server.url), raw = preparedExecutionSource(terminal)
+  let failure: unknown, confirmation: ExecutionConfirmation | undefined
+  try {
+    const invocation = openOwnedPreparedStream(raw, { confirmExecution: value => { confirmation = value } })
+    for await (const _event of invocation.stream) {}
+    await invocation.drain()
+    expect(invocation.state()).toBe('settled')
+    expect(readDrainedOwnedExecutionConfirmation(invocation, confirmation!, raw)).toBeUndefined()
+  } catch (error) { failure = error }
+  expect(server.received).toHaveLength(0)
+  expect(failure).toMatchObject({ code: 'GENERATION_UNSUPPORTED' })
+})
+
 it('makes original confirmation evidence available only after issue and observed successful completion for the exact executed source', async () => {
   const server = await loopback(), before: unknown[] = []
   let confirmation: ExecutionConfirmation | undefined

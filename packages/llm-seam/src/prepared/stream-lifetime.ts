@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { LLMStreamEvent } from '../index.ts'
 import type { PreparedModelRequest, PreparedStreamControl } from './types.ts'
-import { assertOwnedPreparedTerminal } from './owned-terminal.ts'
+import { ownedPreparedStreamConstructor } from './owned-terminal.ts'
 import { readOwnedExecutionConfirmation } from './payload.ts'
 import type { ExecutionConfirmation } from './execution.ts'
 
@@ -67,14 +67,14 @@ export function associateOwnedConfirmation(confirmation: ExecutionConfirmation):
   const node = active.getStore(); if (node) confirmations.set(confirmation, node)
 }
 export function openOwnedPreparedStream(prepared: PreparedModelRequest, control: PreparedStreamControl): OwnedPreparedStreamInvocation {
-  assertOwnedPreparedTerminal(prepared)
+  const stream = ownedPreparedStreamConstructor(prepared)
   let resolve!: () => void, reject!: (error: unknown) => void
   const done = new Promise<void>((yes, no) => { resolve = yes; reject = no }); void done.catch(() => {})
   const root: Root = { prepared, nodes: new Set(), errors: [], nextOrder: 0, sealed: false, status: 'open', done, resolve, reject }
   const context: Node = { root, terminal: false, pending: 1 }
   let iterator: AsyncIterator<LLMStreamEvent>
   try {
-    const iterable = active.run(context, () => prepared.stream(control))
+    const iterable = active.run(context, () => stream(control))
     const getIterator = method(iterable, Symbol.asyncIterator)
     if (!getIterator) throw new TypeError('Owned async iterator unavailable')
     iterator = getIterator()
