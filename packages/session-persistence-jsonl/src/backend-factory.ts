@@ -12,10 +12,12 @@ import { bootstrapNamespace } from './backend/bootstrap-capture.ts'
 import { createJsonlProcessReadCapability } from './backend/process-read.ts'
 import { assembleSessionCoordinatorWithProcessStorage } from '@i-harness/session-persistence/internal/process-read-assembly'
 import type { CoordinatorOptions, SessionCoordinator } from '@i-harness/session-persistence'
+import { createTaskDocumentObservation } from './backend/task-document-observation.ts'
+import type { HeldTaskDocumentScope } from '@i-harness/session-persistence'
 
 // Only the original constructor below can associate a backend. Byte adapters
 // and callers with structurally identical objects cannot mint this identity.
-const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void }>()
+const processReadOwners = new WeakMap<object, { capability: ReturnType<typeof createJsonlProcessReadCapability>; assertOriginal(): void; openTask(scope: HeldTaskDocumentScope): ReturnType<typeof createTaskDocumentObservation> }>()
 export function lookupJsonlProcessRead(backend: object) {
   const owner = processReadOwners.get(backend)
   if (!owner) return undefined
@@ -28,6 +30,10 @@ export function createJsonlSessionCoordinator(root: string, options?: Coordinato
     capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) },
     captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) },
   })
+}
+export function createJsonlTaskDocumentCoordinator(root: string, options: CoordinatorOptions | undefined, validator: { validate(value: unknown): void }): SessionCoordinator {
+  const backend = createJsonlBackend(root), owner = processReadOwners.get(backend)!
+  return assembleSessionCoordinatorWithProcessStorage(backend, options, { capture(id, keys) { owner.assertOriginal(); return owner.capability.capture(id, keys) }, captureManagedAuxiliary(id, keys) { owner.assertOriginal(); return owner.capability.captureManagedAuxiliary(id, keys) } }, { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } })
 }
 
 // C5 blank-probe cap (DSH coldBlankProbeMaxBytes parity, DSH default 1024): a
@@ -413,7 +419,21 @@ export function createJsonlBackend(root: string): PersistenceBackend {
   }
   const capability = Object.freeze(createJsonlProcessReadCapability({ assertOriginal, root: rootPath, file: filePath, document: docPath, checkDeleted: assertNotDeleted,
     async checkNamespace(id) { if ((await bootstrapNamespace(filePath(id))).length) throw new Error('PROCESS_READ_UNAVAILABLE') } }))
-  processReadOwners.set(backend, { capability, assertOriginal })
+  processReadOwners.set(backend, { capability, assertOriginal, openTask(scope) {
+    assertOriginal(); const original = createTaskDocumentObservation(rootPath, docPath(scope.key), scope)
+    async function available() {
+      for (const path of [tombPath('session', scope.parentSessionId), tombPath('document', scope.key)]) {
+        try { await lstat(path); throw Object.assign(new Error('Task document is deleted'), { code: 'SESSION_DELETED' }) }
+        catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw error }
+      }
+    }
+    const session = Object.freeze({
+      async observe() { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.observe(); await available(); assertOriginal(); return result },
+      async confirm(witness: Parameters<typeof original.confirm>[0]) { if (this !== session) throw new TypeError('Invalid task backend receiver'); assertOriginal(); await available(); const result = await original.confirm(witness); await available(); assertOriginal(); return result },
+      settleResources() { if (this !== session) return Promise.reject(new TypeError('Invalid task backend receiver')); return original.settleResources() },
+    })
+    return session
+  } })
   return backend
 }
 

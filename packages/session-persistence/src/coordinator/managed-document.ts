@@ -85,7 +85,7 @@ export function retainSelectedSourceRead(document:ManagedDocument,ownership:Owne
 }
 /** One owned document, one staged suffix, one private Session/index. All disk
  * mutations join the coordinator's existing session operation lane. */
-export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>): ManagedDocument & {
+export function createManagedDocument(id: string, source: Session, initialPrefix: JournalPrefix, backend: PersistenceBackend, ownership: Ownership, options: CoordinatorOptions | undefined, report: (error: unknown) => void, bootstrap?: { operationId: string; bind(control: BootstrapDocumentControl): void }, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: () => void = () => {}): ManagedDocument & {
     assertObservable(): void;
 } {
     const state = (bootstrap ? createBootstrapManagedSessionState : createManagedSessionState)(source, { sessionId: id }), incarnation = randomUUID();
@@ -144,6 +144,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         }
     };
     const failSource = () => {
+        assertTaskOutside();
         fenceFault();
         sourceFault = true;
         invalidateSelected();
@@ -321,6 +322,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         } finally { selectedAdmissions--; }
     }
     async function admit(draft: FactGroupDraft | CapturedFactGroup, authorization: Authorization, captured = false): Promise<FactOutcome> {
+        assertTaskOutside();
         const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'managed-append', managedOwner: owner });
         let settled = false;
         const settle = (outcome: FactOutcome) => {
@@ -346,6 +348,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
             assertAuthorized(rootAuthorization);
         },
         revokeNewWork() {
+            assertTaskOutside();
             const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' });
             let outcome: 'settled' | 'unknown' = 'unknown';
             try {
@@ -431,10 +434,12 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                         reconcile: key => document.reconcile(key), status: group => sourceDispositions.get(group),
                         quarantineCapture: failSource,
                         onCloseRequested() {
+                            assertTaskOutside();
                             const entry = sourceDrains.get(source);
                             if (entry) entry.closeRequested = true;
                         },
                         holdRecovery() {
+                            assertTaskOutside();
                             if (!sourceDrains.has(source)) throw new FactRecoveryRequiredError();
                             if (!recoveryWitnesses.has(source)) { const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }); if (token) recoveryWitnesses.set(source, token); }
                             recoveryHolds.add(source); invalidateSelected(); capacity.holdOptional(source);
@@ -443,7 +448,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                                 queue.splice(index, 1); entry.ticket.release(); entry.resolve({ kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' });
                             }
                         },
-                        releaseRecovery() { recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) },
+                        releaseRecovery() { assertTaskOutside(); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) },
                     }, () => { sourceDrains.delete(source); recoveryHolds.delete(source); capacity.releaseOptional(source); releaseRecoveryWitness(source) }, reconcilePending, checkpointOwner);
                     required.source = source;
                     bindFactSettlementSource(state.view, document, source, id);
@@ -462,6 +467,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
         },
         view: state.view,
         async reconcile(key) {
+            assertTaskOutside();
             const original = pending && sameBatchKey(key, pending.batch.key) ? pending : undefined;
             const witness = original
                 ? original.processReconciliation ??= { token: processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' }), users: 0 }
@@ -510,6 +516,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
                 throw new FactRecoveryRequiredError();
         },
         settleFinishedActions() {
+            assertTaskOutside();
             held.assertHeld();
             if (closing || closed) throw Object.assign(new Error('FACT_CLOSED'), { code: 'FACT_CLOSED' });
             if (settlingFinished) return settlingFinished;
@@ -554,6 +561,7 @@ export function createManagedDocument(id: string, source: Session, initialPrefix
     };
     bootstrap?.bind({ held, ready() { bootstrapReady = true; },
         async admit(phase, events, guards) {
+            assertTaskOutside();
             const assertSource = () => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'), { code: 'FACT_CANCELLED' }); guards.assertCurrent(); };
             const authorization: Authorization = { action: { stopped: false, signal: guards.signal }, required: false, source: bootstrap, assertSource };
             if (pending || quarantined || closed || closing) return { kind: 'not-issued', code: 'FACT_RECOVERY_REQUIRED' };

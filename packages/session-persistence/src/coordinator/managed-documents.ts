@@ -13,7 +13,7 @@ import type { createProcessReadLatches } from './process-read-latches.ts'
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -23,16 +23,17 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined, processLatches)
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined, processLatches, () => assertTaskOutside(id))
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
-    document.revokeNewWork=()=>{markManagedEntryRevoked(entry);revoke()}
+    document.revokeNewWork=()=>{assertTaskOutside(id);void revokeTaskOperations(id);markManagedEntryRevoked(entry);revoke()}
     const close=document.close
     document.close=async()=>{
+      assertTaskOutside(id)
       const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       let outcome:'settled'|'unknown'='unknown'
-      try {await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
+      try {await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
       finally {token?.end(outcome)}
     }
     if(entry.revoked)document.revokeNewWork()
@@ -43,6 +44,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     if(entry?.bootstrap && !entry.ready)throw new FactRecoveryRequiredError()
   }
   async function closeOne(id:string) {
+    assertTaskOutside(id)
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
     const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
@@ -85,7 +87,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
         readiness.assertCurrent()
       }
       check()
-      const parent = Object.freeze({ assertCurrent() {
+      const parent = Object.freeze({ id, assertCurrent() {
         if (this !== parent) throw new TypeError('Invalid parent receiver')
         check()
       } })
@@ -93,7 +95,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     },
     has:(id:string)=>documents.has(id),
     assertMutation(id:string){assertEntry(documents.get(id))},
-    revoke(id:string){bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
+    revoke(id:string){assertTaskOutside(id);bootstrap.assertOutsideCapture(id);const entry=documents.get(id);if(entry)revokeManagedEntry(entry)},
     async assertObservable(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable()},
     async snapshot(id:string){const entry=documents.get(id);assertEntry(entry);await entry?.flight;entry?.document?.assertObservable();return entry?.document?.view},
     closeOne,

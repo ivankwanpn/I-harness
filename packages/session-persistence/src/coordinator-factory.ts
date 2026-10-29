@@ -12,22 +12,25 @@ import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
 import { captureBootstrapInvocation } from './coordinator/bootstrap-header.ts'
 import type { BootstrapOutcome, BootstrapInvocation } from './coordinator/bootstrap-types.ts'
 import { types as utilTypes } from 'node:util'
-export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void): SessionCoordinator {
+import type { TaskDocumentConfiguration } from './coordinator/task-document-operation.ts'
+import { associateTaskDocumentOperations } from './coordinator/task-document-association.ts'
+export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?: CoordinatorOptions, storage?: ProcessReadStorage, onConstruct?: (owners: { managed: ReturnType<typeof createManagedDocuments>; latches: ReturnType<typeof createProcessReadLatches> }) => void, taskStorage?: Omit<TaskDocumentConfiguration, 'captureParent'>): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
   const ownership = createOwnership(backend, opts)
   let managed: ReturnType<typeof createManagedDocuments>
   const processLatches = storage ? createProcessReadLatches() : undefined
-  const documents = createDocuments(backend, ownership, report, processLatches)
+  const documents = createDocuments(backend, ownership, report, processLatches, taskStorage && { ...taskStorage, captureParent: document => managed.captureParent(document) })
   const observations = documents.observations
   const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches)
   const loads = createLoads(backend, ownership, mutations, processLatches)
-  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches)
+  managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id))
   const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, processLatches)
 
   async function retire<T>(id: string, run: () => Promise<T>) {
     managed.assertOutsideCapture(id)
+    observations.assertOutsideOwnedOperations([id])
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
     try {
@@ -42,6 +45,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       const value = wrapped && input && typeof input === 'object' ? Object.getOwnPropertyDescriptor(input, 'invocation')?.value : input
       invocation = captureBootstrapInvocation(value)
     } catch { return run() }
+    observations.assertOutsideOwnedOperations([invocation.targetSessionId])
     return managed.trackBootstrapInvocation(invocation, run)
   }
   const coordinator: SessionCoordinator = {
@@ -93,10 +97,11 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     async list() { return backend.list() },
     async profile(sessionId) { observations.assertOutsideObservedSession(sessionId); return backend.profile(sessionId) },
     updateMeta: mutations.updateMeta,
-    flush: mutations.flush,
+    async flush(id) { observations.assertOutsideOwnedOperations([id]); await mutations.flush(id); await documents.joinTaskDocumentIO() },
     async close() {
       managed.assertOutsideCapture()
       assertOutsideForkController(coordinator)
+      observations.assertOutsideOwnedOperations([], [], true)
       processLatches?.closeAdmission()
       const join = observations.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
@@ -120,6 +125,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
+  if (documents.taskOperations) associateTaskDocumentOperations(coordinator, documents.taskOperations)
   if (processLatches) onConstruct?.({ managed, latches: processLatches })
   return coordinator
 }

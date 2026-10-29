@@ -61,6 +61,7 @@ export function createMutations(
     try { await admission?.join(); return await run() } finally { admission?.finish() }
   }
   async function processMutation<T>(id: string, run: () => Promise<T>): Promise<T> {
+    observations?.assertOutsideOwnedOperations([id])
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
     try { const value = await run(); outcome = 'settled'; return value } finally { token?.end(outcome) }
@@ -106,6 +107,7 @@ export function createMutations(
     },
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
+      observations?.assertOutsideOwnedOperations([sessionId])
       const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: [], kind: 'other' })
       let outcome: 'settled' | 'unknown' = 'unknown'
       try {
@@ -119,6 +121,7 @@ export function createMutations(
     },
     enqueue(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
+      observations?.assertOutsideOwnedOperations([sessionId])
       preflightBatchShape(CURRENT_FORMAT_VERSION, events)
       const wb = writeBehindFor(sessionId)
       for (const ev of events) {
@@ -141,6 +144,7 @@ export function createMutations(
       })))
     },
     async flush(sessionId: string) {
+      observations?.assertOutsideOwnedOperations([sessionId])
       const wb = writeBehinds.get(sessionId)
       if (wb) await wb.flush()
     },

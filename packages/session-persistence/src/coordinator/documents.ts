@@ -2,18 +2,22 @@ import type { PersistenceBackend } from "./types.ts"
 import type { Ownership } from "./ownership.ts"
 import { createBindingObservations } from './binding-observation.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import { createTaskDocumentOperations, type TaskDocumentConfiguration } from './task-document-operation.ts'
 
 export function createDocuments(
   backend: Pick<PersistenceBackend, 'putDocument'|'getDocument'> & Partial<Pick<PersistenceBackend, 'profile'|'readDocumentObserved'>>,
   ownership: Pick<Ownership, 'lockEnabled'|'acquireLease'> & Partial<Pick<Ownership, 'pinOwnership'|'withSessionOperation'>>,
   report: (error: unknown) => void,
   processLatches?: ReturnType<typeof createProcessReadLatches>,
+  taskConfiguration?: TaskDocumentConfiguration,
 ) {
   const { lockEnabled, acquireLease } = ownership
   const observations = createBindingObservations(backend, ownership)
   const deletedDocuments = new Set<string>()
   const disposalDebt = new Set<Awaited<ReturnType<Ownership['acquireLease']>>>()
   let docChain: Promise<void> = Promise.resolve()
+  const taskOperations = taskConfiguration && ownership.pinOwnership && ownership.withSessionOperation
+    ? createTaskDocumentOperations(ownership as Ownership, observations, taskConfiguration, run => { const p = docChain.then(run); docChain = p.then(() => {}, () => {}); return p }) : undefined
   async function withDocumentLeases<T>(keys: readonly string[], run: () => Promise<T>): Promise<T> {
     const locks: Awaited<ReturnType<Ownership['acquireLease']>>[] = []
     let result: T | undefined, failure: unknown, failed = false
@@ -28,6 +32,7 @@ export function createDocuments(
     return result as T
   }
   async function putDocumentStrict(key: string, data: unknown) {
+    observations.assertOutsideObservedDocument(key)
     if (deletedDocuments.has(key)) throw new Error('Session document is deleted')
     const token = processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
@@ -46,11 +51,12 @@ export function createDocuments(
     } finally { try { admission?.finish() } catch (error) { outcome = 'unknown'; throw error } finally { token?.end(outcome) } }
   }
   return {
-    observations, withDocumentLeases,
+    observations, withDocumentLeases, taskOperations,
     // Deletion closes this key for this coordinator lifetime; the retained token
     // keeps a later capture from treating the retired document as available.
     closeAdmissions(keys: string[]) { for (const key of keys) { if (!deletedDocuments.has(key)) processLatches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' }); deletedDocuments.add(key) } },
     pendingWrites: () => docChain,
+    async joinTaskDocumentIO() { await taskOperations?.joinTaskDocumentIO() },
     putDocumentStrict,
     async putDocument(key: string, data: unknown) { observations.assertOutsideObservedDocument(key); try { await putDocumentStrict(key, data) } catch (error) { report(error) } },
     async getDocument(key: string) { return backend.getDocument(key) },

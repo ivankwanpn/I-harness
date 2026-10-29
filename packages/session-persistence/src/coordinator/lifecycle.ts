@@ -10,8 +10,8 @@ export function createLifecycle(
     Pick<Ownership, "withSessionOperation" | "ensureOwnership" | "releaseOwnershipUnlocked" | "pendingOperations" | "releaseHeldLocks">,
   { closeAdmission, pendingWriteBehind, removeWriteBehind, flushWriteBehinds, cancelAutomaticWaits, clearConversationIndexes }:
     Pick<Mutations, "closeAdmission" | "pendingWriteBehind" | "removeWriteBehind" | "flushWriteBehinds" | "cancelAutomaticWaits" | "clearConversationIndexes">,
-  { closeAdmissions: closeDocumentAdmissions, pendingWrites: pendingDocuments, observations, withDocumentLeases, retryDisposals }:
-    Pick<Documents, "closeAdmissions" | "pendingWrites" | "observations" | "withDocumentLeases" | "retryDisposals">,
+  { closeAdmissions: closeDocumentAdmissions, pendingWrites: pendingDocuments, observations, withDocumentLeases, retryDisposals, joinTaskDocumentIO }:
+    Pick<Documents, "closeAdmissions" | "pendingWrites" | "observations" | "withDocumentLeases" | "retryDisposals" | "joinTaskDocumentIO">,
   managed: { revoke(sessionId: string): void; closeOne(sessionId: string): Promise<void> },
   processLatches?: ReturnType<typeof createProcessReadLatches>,
 ) {
@@ -24,6 +24,7 @@ export function createLifecycle(
     async deleteOwnedSession(sessionId: string, manifest: SessionArtifactManifest) {
       // Admission, keyed leases and the backend must consume one captured set.
       manifest = { documents: [...manifest.documents], ...(manifest.files === undefined ? {} : { files: [...manifest.files] }) }
+      observations.assertOutsideOwnedOperations([sessionId], manifest.documents)
       const token = processLatches?.beginMutation({ sessionIds: [sessionId], documentKeys: manifest.documents, kind: 'other' })
       let outcome: 'settled' | 'unknown' = 'unknown'
       try {
@@ -58,12 +59,13 @@ export function createLifecycle(
       cancelAutomaticWaits()
       await pendingDocuments()
       await Promise.allSettled(pendingOperations())
+      const taskCleanup = await Promise.allSettled([joinTaskDocumentIO()])
       // Unknown managed/observation work still depends on its original actual
       // owners. Independent drainage may proceed without retiring those leases.
-      const released = releaseOwners ? await Promise.allSettled(releaseHeldLocks()) : []
+      const released = releaseOwners && taskCleanup.every(result => result.status === 'fulfilled') ? await Promise.allSettled(releaseHeldLocks()) : []
       const disposed = await Promise.allSettled([retryDisposals()])
       clearConversationIndexes()
-      const failures = [...flushed, ...released, ...disposed].flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      const failures = [...flushed, ...taskCleanup, ...released, ...disposed].flatMap(result => result.status === "rejected" ? [result.reason] : [])
       if (failures.length > 0) throw new AggregateError(failures, "Failed to persist sessions during shutdown")
     },
   }
