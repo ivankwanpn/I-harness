@@ -123,6 +123,9 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     bindForegroundHandoff(taskId) {
       const task = records.get(taskId)
       if (!task || task.delivery !== 'tool') throw new Error('Original foreground task unavailable')
+      // A recipient binding certifies source identity, not owned task storage.
+      // Unsupported compositions keep their original tool/manual route.
+      if (!opts.coordinator || !opts.stateId || !opts.reportPolicy || !opts.ownedTask) return () => ({ kind: 'manual' })
       let selected: ReturnType<TaskRegistry['bindForegroundHandoff']> extends () => infer R ? R : never
       return () => {
         if (selected) return selected

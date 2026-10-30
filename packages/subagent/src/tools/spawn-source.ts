@@ -70,7 +70,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
   const publishResult = () => {
     if (!retainPublished || !retained || resultPublished) return
     if (handoff?.kind === 'parent' && !handoffReleased) retained.unavailable()
-    else if (background || handoff?.kind === 'parent') { retained.ready(identity()); resultPublished = true }
+    else if (background || handoff?.kind === 'parent' || handoff?.kind === 'manual') { retained.ready(identity()); resultPublished = true }
     else if (terminalSaved && taskSaved && terminalOutput) { retained.ready(terminalOutput); resultPublished = true }
     else retained.unavailable()
   }
@@ -81,7 +81,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     try { await pending } finally { if (saving === pending) saving = undefined }
   }
   const completed = () => {
-    if (terminalSaved && taskSaved && (!handoff || handoff.kind === 'ready' || handoffReleased) && !terminalSignalled) {
+    if (terminalSaved && taskSaved && (handoff?.kind !== 'parent' || handoffReleased) && !terminalSignalled) {
       terminalSignalled = true
       try { onTerminalCommitted?.() } catch { /* Observers cannot replace the original outcome. */ }
     }
@@ -136,7 +136,13 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
         await handoff.save.retry(); handoff.save.assertHandoff(); handoff.save.release(); handoffAcknowledged = true; handoffReleased = true
       }
       if (handoff?.kind === 'parent' && handoffAcknowledged && !handoffReleased) { handoff.save.assertHandoff(); handoff.save.release(); handoffReleased = true }
-      // This hook never calls prepareEnd or captures a new terminal/result.
+      // Resume the retained preparation owned by this original invocation. Its
+      // registry consumer retries the exact captured save before end capture.
+      if (terminalSaved && taskSaved) { completed(); return }
+      if (!terminal && prepareEnd) {
+        if (terminalSettlement) try { await terminalSettlement } catch { /* Resume the same preparation below. */ }
+        await settleTerminal(); terminalReady.resolve(); await closeSource(); return
+      }
       if (!terminal) { completed(); return }
       source.assertHeld()
       if (terminalSettlement) {
@@ -166,6 +172,7 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
     async handoffToParent() {
       if (!beginHandoff) throw new FactRecoveryRequiredError()
       handoff ??= beginHandoff()
+      if (handoff.kind === 'manual') return 'manual' as const
       if (handoff.kind === 'ready') return 'ready' as const
       handoffConsumerPending = true
       try { await handoff.save.done; handoff.save.assertHandoff() }
@@ -210,13 +217,13 @@ export function createSpawnSource(owner: FactOwner, signal?: AbortSignal, retain
       terminalEvent ??= Object.freeze({ ...event })
       terminal ??= source.delivery.capture(terminalEvent)
       terminalOutput ??= output
-      try { await settleTerminal(); terminalReady.resolve(); if (!handoff || handoff.kind === 'ready' || handoffReleased) await closeSource() }
+      try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
       catch (error) { terminalReady.reject(error); throw error }
     },
     async prepareEnd(prepare: NonNullable<typeof prepareEnd>) {
       prepareEnd ??= prepare
       settling = true
-      try { await settleTerminal(); terminalReady.resolve(); if (!handoff || handoff.kind === 'ready' || handoffReleased) await closeSource() }
+      try { await settleTerminal(); terminalReady.resolve(); if (handoff?.kind !== 'parent' || handoffReleased) await closeSource() }
       catch (error) { terminalReady.reject(error); throw error }
     },
     async foreground() {

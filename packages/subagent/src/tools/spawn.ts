@@ -236,8 +236,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
               const route = await source.handoffToParent()
               if (exec.abortSignal?.aborted) { source.abandonHandoff(); observationAborted = true; exec.abortSignal.throwIfAborted() }
               if (route === 'ready') return await source.foreground()
-              source.assertHandoff()
-              source.consumeHandoff()
+              if (route === 'parent') { source.assertHandoff(); source.consumeHandoff() }
               settled = deps.tasks.get(task.id)
             }
             const steered = reason === "user-steer" || reason === "background-event"

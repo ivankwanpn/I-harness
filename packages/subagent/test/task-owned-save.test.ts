@@ -406,3 +406,90 @@ it('joins original terminal retention while a later writer capture is queued', a
     expect(handoff.publications).toBe(2)
   } finally { release.resolve(); fault.target = ''; handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+import { createSpawnTool } from '../src/tools/spawn.ts'
+import { createRoleRegistry } from '../src/roles.ts'
+import { createAgentTable } from '../src/agent-table.ts'
+import { createJobRegistry } from '../src/jobs.ts'
+import { createAgentRegistry } from '@i-harness/core-agent'
+import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { receivedInputsFor } from '../../session-executor/src/lifecycle/received-inputs.ts'
+import { fixtureGenerationFor, controlledModel } from './generation-fixture.ts'
+
+async function foregroundFixture(owned: boolean, custom = false, deadline = false) {
+  const root = await mkdtemp(join(tmpdir(), 'ih-actual-handoff-'))
+  const base = owned ? createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true } })
+  const coordinator = custom ? { ...base } : base
+  await coordinator.create({ sessionId: 'parent' })
+  const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+  if (owned) await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+  const tasks = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ...(owned ? { ownedTask: captureOwnedTaskContext(base, document, document.view, 'parent') } : {}) })
+  const context = createContext(), tools = createToolRegistry(context), table = createAgentTable(), roles = createRoleRegistry()
+  roles.register({ name: 'probe', description: '', systemPrompt: 'probe', tools: [] })
+  const received = receivedInputsFor(document, 'parent')
+  await received.inbox.admit({ inputId: 'human', text: 'launch original', intent: 'user', delivery: 'queue', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } })
+  const action = document.beginAction()
+  const out = await action.facts.tools.call({ type: 'tool/call', callId: 'original', name: 'spawn_agent', args: { background: false } })
+  const { committedFactSeqs } = await import('@i-harness/core-session')
+  const [callSeq] = committedFactSeqs(out)
+  committedFactSeqs(await action.facts.tools.dispatch('original', { kind: 'prior', seq: callSeq!, expectedType: 'tool/call' }))
+  const started = Promise.withResolvers<void>(), finish = Promise.withResolvers<void>()
+  let launches = 0, hints = 0, unregisters = 0, bound = 0
+  let source: { reconcileTerminal(): Promise<void> } | undefined
+  const spawn = createSpawnTool({ generationFactoryFor: fixtureGenerationFor, tasks, table, roles, jobs: createJobRegistry(), parentCtx: context, parentRegistry: tools,
+    parentSession: document.view, factOwner: document, childSessions: { coordinator, parentSessionId: 'parent' }, agents: createAgentRegistry(), exec: {} as import('@i-harness/exec').ExecService,
+    parentModel: controlledModel(async function* () { launches++; started.resolve(); await finish.promise; yield { type: 'text/chunk', text: 'actual original terminal' }; yield { type: 'end' } }),
+    resolveModel: async () => ({ status: 'unconfigured', reason: 'unused' }), notificationNamespace: 'original', ...(deadline ? { foregroundWaitMs: 0 } : {}),
+    parentNotify: { admit: async () => {}, wake() {}, async prepareTaskDelivery(input) { const result = await received.delivery.prepareLaunch(input.namespace, input.taskId, input.callSeq); if (result.kind === 'bound') bound++; return result } },
+    registerDeliverySource(_id, original) { source = original; return () => { unregisters++ } }, onTaskTerminalCommitted() { hints++ },
+  })
+  return { root, path, document, tasks, table, started, finish, received, counts: () => ({ launches, hints, unregisters, bound }), source: () => source!,
+    run: (code = false) => spawn.execute({ task_name: 'held', message: 'original', agent_type: 'probe', background: false }, { session: document.view, sessionId: 'parent', callEventSeq: callSeq!, callId: 'original', ...(code ? { resultConsumer: 'code' as const } : {}) }),
+    async close() { finish.resolve(); for (const entry of table.entries().values()) await entry.followupChain?.catch(() => {}); action.finish(); await coordinator.close(); await context.scope.unmount(); await rm(root, { recursive: true, force: true }) },
+  }
+}
+
+it.each([{ custom: false, deadline: false }, { custom: false, deadline: true }, { custom: true, deadline: false }, { custom: true, deadline: true }])('actual bound unsupported foreground preserves manual ID return $custom/$deadline', async ({ custom, deadline }) => {
+  const f = await foregroundFixture(false, custom, deadline)
+  const running = f.run(); void running.catch(() => {})
+  try {
+    await f.started.promise
+    if (!deadline) await f.received.inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } })
+    expect(await running).toMatchObject({ task_id: 'task-1', agent_path: 'root/held', timed_out: deadline, ...(!deadline ? { yielded: true, yield_reason: 'user-steer' } : {}) })
+    expect(f.counts()).toMatchObject({ launches: 1, bound: 1 })
+    expect(f.tasks.get('task-1')).toMatchObject({ delivery: 'tool' }); expect(f.tasks.get('task-1')!.outcome).toBeUndefined()
+    f.finish.resolve(); await f.table.get('root/held')!.followupChain
+    expect(f.tasks.get('task-1')).toMatchObject({ delivery: 'tool', outcome: 'completed', resultText: 'actual original terminal' }); expect(f.tasks.notifications()).toEqual([])
+  } finally { f.finish.resolve(); await running.catch(() => {}); await f.close() }
+})
+
+it('actual nested code foreground remains unbound and returns its original deadline IDs', async () => {
+  const f = await foregroundFixture(false, true, true)
+  try { expect(await f.run(true)).toMatchObject({ task_id: 'task-1', timed_out: true }); await f.started.promise; expect(f.counts()).toMatchObject({ bound: 0, launches: 1 }); expect(f.tasks.get('task-1')!.delivery).toBe('tool') }
+  finally { await f.close() }
+})
+
+it('actual spawn reconciliation resumes pre-terminal preparation after original handoff debt', async () => {
+  const f = await foregroundFixture(true)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const running = f.run(); void running.catch(() => {})
+  try {
+    await f.started.promise; await f.tasks.flushPersistence()
+    fault.target = f.path; fault.failFinalClose = true; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
+    await f.received.inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer', provenance: { kind: 'human', authority: 'request', scope: 'turn', producer: 'session.prompt' } })
+    await entered.promise; f.finish.resolve()
+    await vi.waitFor(() => expect(f.tasks.get('task-1')!.outcome).toBe('completed'))
+    handoff.closeGate = undefined; release.resolve()
+    await expect(running).rejects.toMatchObject({ code: 'FACT_RECOVERY_REQUIRED' })
+    await expect(f.table.get('root/held')!.followupChain).rejects.toThrow('Earlier owned task save requires resolution')
+    expect(f.document.view.events.filter(e => e.type === 'subagent/end')).toHaveLength(0)
+    expect(f.tasks.notifications()).toHaveLength(1); expect(f.counts()).toMatchObject({ hints: 0, unregisters: 0, launches: 1 })
+    fault.failFinalClose = false
+    await f.source().reconcileTerminal()
+    expect(f.document.view.events.filter(e => e.type === 'subagent/end')).toEqual([expect.objectContaining({ taskId: 'task-1', outcome: 'completed', resultText: 'actual original terminal' })])
+    expect(f.tasks.get('task-1')!.retention).toBe('durable'); expect(f.tasks.notifications()).toHaveLength(1)
+    expect(f.counts()).toMatchObject({ hints: 1, unregisters: 1, launches: 1 })
+    await f.source().reconcileTerminal()
+    expect(f.counts()).toMatchObject({ hints: 1, unregisters: 1, launches: 1 })
+  } finally { release.resolve(); fault.failFinalClose = false; fault.target = ''; handoff.closeGate = undefined; handoff.closeEntered = undefined; await f.close() }
+})
