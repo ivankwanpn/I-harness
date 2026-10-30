@@ -38,6 +38,7 @@ type Context = { id: string; active: boolean }
 type Outcome<T> = { ok: true; value: T } | { ok: false; error: unknown }
 type Reference = {
   owner: Owner; active: boolean; counted: boolean; cleaned: boolean; busy: boolean; signal?: AbortSignal
+  acquisition: Promise<void>; read?: Promise<void>
   abort?: () => void; attached: boolean; notified: boolean; retired(operation: RetainedCleanupOperation): void
   cleanup: ReturnType<typeof createRetainedCleanupTarget>
 }
@@ -191,9 +192,14 @@ export function createRetainedBindings(
     let owner = owners.get(id), fresh = false
     if (owner?.retired) throw new Failure('conflict')
     if (!owner) { owner = createOwner(id, key); fresh = true }
-    const reference: Reference = { owner, active: true, counted: true, cleaned: false, busy: false, signal, attached: false, notified: false, retired, cleanup: undefined! }
+    const reference: Reference = { owner, active: true, counted: true, cleaned: false, busy: false, acquisition: owner.acquired.promise, signal, attached: false, notified: false, retired, cleanup: undefined! }
     reference.cleanup = createRetainedCleanupTarget(async () => {
       if (reference.signal && reference.attached) { Reflect.apply(removeListener, reference.signal, ['abort', reference.abort]); reference.attached = false }
+      // Fencing this reference closes new work immediately, but a shared owner
+      // stays current for siblings. Keep this slot until its admitted work drains.
+      // Join setup itself, never the public acquire promise that may join us.
+      await reference.acquisition
+      await reference.read
       reference.cleaned = true; forget(reference)
     }, operation => {
       reference.active = false
@@ -251,6 +257,7 @@ export function createRetainedBindings(
         if (reference.busy) throw new Failure('conflict')
         reference.busy = true
         const lifetime = Promise.withResolvers<void>(); owner.reads.add(lifetime.promise)
+        reference.read = lifetime.promise
         const frame: Context = { id, active: true }
         let profile: Promise<InspectorProfile> | undefined, profileOutcome: Outcome<InspectorProfile> | undefined
         const port = () => {
@@ -276,7 +283,7 @@ export function createRetainedBindings(
           if (!callback.ok) throw callback.error
           if (profileOutcome && !profileOutcome.ok) throw profileOutcome.error
           ref.assertCurrent(); return callback.value
-        })().finally(() => { reference.busy = false; owner.reads.delete(lifetime.promise); lifetime.resolve() })
+        })().finally(() => { reference.busy = false; reference.read = undefined; owner.reads.delete(lifetime.promise); lifetime.resolve() })
         return work
       },
     })
