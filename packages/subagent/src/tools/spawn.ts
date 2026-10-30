@@ -3,7 +3,7 @@ import type { Tool } from "@i-harness/core-tools"
 import type { SubagentToolDeps } from "./types.ts"
 import { subagentFactOwner } from '../facts.ts'
 import { createSpawnSource, spawnObservation } from './spawn-source.ts'
-import { userSteerForTool, waitForObservation } from "@i-harness/core-tools"
+import { backgroundEventForTool, userSteerForTool, waitForObservation } from "@i-harness/core-tools"
 import { declaredRoleModel, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated } from "../child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord } from "../task-protocol.ts"
 
@@ -53,7 +53,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
   }
   const spawnTool: Tool<
     { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
-    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean; yielded?: true; yield_reason?: "user-steer" }
+    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean; yielded?: true; yield_reason?: "user-steer" | "background-event" }
   > = {
     name: "spawn_agent",
     get description() { return roleMetadata().description },
@@ -126,11 +126,12 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
       try {
         const resultStore = await deps.tasks.prepareResult(task.id, exec, source.settlementHeld)
         await deps.tasks.flushPersistence()
-        const preparation = delivery === 'parent' && exec.resultConsumer !== 'code' && exec.session === deps.parentSession
+        const preparation = exec.resultConsumer !== 'code' && exec.session === deps.parentSession
           && exec.sessionId === deps.childSessions?.parentSessionId && deps.notificationNamespace && exec.callEventSeq !== undefined
           ? await deps.parentNotify?.prepareTaskDelivery?.({ sessionId: exec.sessionId!, namespace: deps.notificationNamespace, taskId: task.id, callSeq: exec.callEventSeq }) : undefined
         if (preparation?.kind === 'bound') unregisterDelivery = deps.registerDeliverySource?.(task.id, source)
         await source.start({ type: "subagent/start", version: 1, taskId: task.id, agentPath: task.agentPath, role: role.name, description: args.task_name, ...(identity.parentSessionId !== "" ? { parentSessionId: identity.parentSessionId } : {}) }, preparation?.kind === 'bound' ? preparation.binding : undefined)
+        if (preparation?.kind === 'bound' && delivery === 'tool') source.bindHandoff(deps.tasks.bindForegroundHandoff(task.id))
         const executed = await spawnChild({
           signal: exec.abortSignal,
           generationFactoryFor: deps.generationFactoryFor, modelActionTimeoutMs: deps.modelActionTimeoutMs, modelActionMaxAttempts: deps.modelActionMaxAttempts,
@@ -219,7 +220,7 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
             ready: () => deps.tasks.get(task.id)?.outcome !== undefined,
             changes: { subscribe: wake => deps.tasks.subscribe(task.id, wake) },
             timeoutMs: deps.foregroundWaitMs ?? 300_000,
-            abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+            abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec),
           }).catch(error => {
             if (exec.abortSignal?.aborted && error === exec.abortSignal.reason) observationAborted = true
             throw error
@@ -228,12 +229,21 @@ export function createSpawnTool(deps: SubagentToolDeps): Tool {
             observationAborted = true
             exec.abortSignal.throwIfAborted()
           }
-          const settled = deps.tasks.get(task.id)
+          let settled = deps.tasks.get(task.id)
           if (settled?.outcome === undefined) {
-            const steered = reason === "user-steer"
+            if (preparation?.kind === 'bound') {
+              await deps.tasks.flushPersistence()
+              const route = await source.handoffToParent()
+              if (exec.abortSignal?.aborted) { source.abandonHandoff(); observationAborted = true; exec.abortSignal.throwIfAborted() }
+              if (route === 'ready') return await source.foreground()
+              source.assertHandoff()
+              source.consumeHandoff()
+              settled = deps.tasks.get(task.id)
+            }
+            const steered = reason === "user-steer" || reason === "background-event"
             return { ...base, status: settled?.status ?? "unknown",
-              message: steered ? `wait yielded to new user input for ${executed.path} (still running)` : `wait timed out for ${executed.path} (still running)`,
-              timed_out: reason === "deadline", ...(steered ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
+              message: steered ? `wait yielded to ${reason === "background-event" ? "a background completion" : "new user input"} for ${executed.path}` : `wait timed out for ${executed.path}`,
+              timed_out: reason === "deadline", ...(steered ? { yielded: true as const, yield_reason: reason } : {}) }
           }
           return await source.foreground()
         }

@@ -98,6 +98,7 @@ export interface TaskRegistryOptions {
   onTerminalized?: (task: TaskRecord) => void
 }
 export interface TaskRegistry {
+  bindForegroundHandoff(taskId: string): () => { kind: 'ready' } | { kind: 'parent'; save: import('./persistence.ts').OwnedTaskSave }
   prepareResult(taskId: string, context?: import('@i-harness/core-tools').ToolExec, current?: () => boolean): Promise<TaskResultStore | undefined>
   /** Qualify restored current rows from the original parent's committed F1 facts. */
   qualifyRestoredResults(): Promise<void>

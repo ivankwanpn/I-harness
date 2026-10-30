@@ -17,6 +17,8 @@ import { taskDocumentOperationsFor } from '@i-harness/session-persistence/intern
 import { taskDocumentStorageContract } from '../src/task/storage-contract.ts'
 import { TaskPersistence } from '../src/task/persistence.ts'
 import { createTaskRegistry } from '../src/task/registry.ts'
+import { createSpawnSource } from '../src/tools/spawn-source.ts'
+import { createNondurableFactOwner, createSession } from '@i-harness/core-session'
 import { lastOriginalTaskSave } from '../src/task/save-owner.ts'
 import { SHIPPING_REPORT_POLICY } from '../src/report-policy.ts'
 import { captureOwnedTaskContext } from '../src/task/owned-context.ts'
@@ -155,9 +157,9 @@ it('does not let a later save or flush acknowledge the original unknown candidat
     await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
     let snapshot = { formatVersion: 2 as 1 | 2, tasks: [], notifications: [] }, persistence = new TaskPersistence(coordinator, 'parent', true, () => snapshot, captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
     fault.target = path; fault.afterRename = true; await expect(persistence.save()).rejects.toThrow(); const original = persistence.lastOwnedSave()!
-    snapshot = { formatVersion: 1, tasks: [], notifications: [] }; await expect(persistence.save()).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
+    snapshot = { formatVersion: 1, tasks: [], notifications: [] }; const blocked = persistence.captureSave()!; await expect(blocked.done).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
     expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(2); fault.afterRename = false
-    await original.retry(); expect(original.outcome()?.kind).toBe('committed'); await persistence.save(); await persistence.flush()
+    await original.retry(); expect(original.outcome()?.kind).toBe('committed'); await blocked.retry(); await persistence.flush()
     expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(1)
   } finally { fault.afterRename = false; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
@@ -170,10 +172,10 @@ it('gates a newer already-queued snapshot behind the first uncertain save', asyn
     let snapshot = { formatVersion: 2 as 1 | 2, tasks: [], notifications: [] }; const persistence = new TaskPersistence(coordinator, 'parent', true, () => snapshot, captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
     fault.target = path; fault.afterRename = true; fault.entered = entered.resolve; fault.gate = release.promise
     const first = persistence.save(); void first.catch(() => {}); await entered.promise
-    const original = persistence.lastOwnedSave()!; snapshot = { formatVersion: 1, tasks: [], notifications: [] }; const second = persistence.save(); void second.catch(() => {})
-    fault.gate = undefined; release.resolve(); await expect(first).rejects.toThrow(); await expect(second).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
+    const original = persistence.lastOwnedSave()!; snapshot = { formatVersion: 1, tasks: [], notifications: [] }; const second = persistence.captureSave()!; void second.done.catch(() => {})
+    fault.gate = undefined; release.resolve(); await expect(first).rejects.toThrow(); await expect(second.done).rejects.toThrow(); await expect(persistence.flush()).rejects.toThrow()
     expect(persistence.lastOwnedSave()).toBe(original); expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(2)
-    fault.afterRename = false; await original.retry(); await persistence.flush()
+    fault.afterRename = false; await original.retry(); await second.retry(); await persistence.flush()
   } finally { fault.gate = undefined; fault.entered = undefined; fault.afterRename = false; release.resolve(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -266,4 +268,141 @@ it('preserves the original unknown write outcome after external revocation', asy
     const other = coordinator.putDocumentStrict!('task-parent', { formatVersion: 1, tasks: [], notifications: [] }); fault.writeGate = undefined; release.resolve()
     await expect(save).rejects.toThrow(); await other; expect(original.outcome()?.kind).toBe('unknown'); await expect(persistence.flush()).rejects.toThrow()
   } finally { fault.writeGate = undefined; fault.writeEntered = undefined; release.resolve(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('resumes three original captures in writer order after cleanup debt', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-task-ordered-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    let version: 1 | 2 = 2
+    const persistence = new TaskPersistence(coordinator, 'parent', true, () => ({ formatVersion: version, tasks: [], notifications: [] }), captureOwnedTaskContext(coordinator, document, document.view, 'parent'))
+    fault.target = path; fault.failFinalClose = true; handoff.publications = handoff.temps = handoff.syncs = 0
+    const first = persistence.captureSave()!; void first.done.catch(() => {})
+    version = 1; const second = persistence.captureSave()!; void second.done.catch(() => {})
+    version = 2; const third = persistence.captureSave()!; void third.done.catch(() => {})
+    await expect(first.done).rejects.toBeNull(); await expect(second.done).rejects.toThrow(); await expect(third.done).rejects.toThrow()
+    await expect(third.retry()).rejects.toThrow(); expect(handoff.publications).toBe(1)
+    fault.failFinalClose = false; await first.retry(); first.assertHandoff()
+    await expect(third.retry()).rejects.toThrow(); expect(handoff.publications).toBe(1)
+    version = 2; await second.retry(); second.assertHandoff()
+    expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(1)
+    await third.retry(); third.assertHandoff(); await persistence.flush()
+    expect(JSON.parse(await readFile(path, 'utf8')).formatVersion).toBe(2)
+    expect(handoff.publications).toBe(3)
+  } finally { fault.failFinalClose = false; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each(['terminal-before', 'terminal-after'] as const)('foreground route CAS chooses one original route: %s', async timing => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-route-cas-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
+    const begin = registry.bindForegroundHandoff(task.id)
+    if (timing === 'terminal-before') registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'done' })
+    const route = begin(); expect(begin()).toBe(route)
+    if (timing === 'terminal-after') {
+      expect(route.kind).toBe('parent'); registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'done' })
+      if (route.kind === 'parent') { await route.save.done; route.save.assertHandoff(); route.save.release() }
+      await vi.waitFor(() => expect(registry.notifications()).toHaveLength(1))
+      expect(registry.notifications()[0]?.submissionId).toBe(task.id)
+    } else { expect(route.kind).toBe('ready'); expect(registry.notifications()).toHaveLength(0) }
+    await registry.flushPersistence()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('keeps terminal snapshot behind the original held foreground handoff save', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-route-gate-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
+    fault.target = path; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
+    const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent')
+    await entered.promise; registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'original terminal' })
+    expect(registry.notifications()).toHaveLength(1); expect(task.retention).not.toBe('durable')
+    handoff.closeGate = undefined; release.resolve(); await route.save.done; route.save.assertHandoff(); route.save.release()
+    await vi.waitFor(() => expect(task.retention).toBe('durable')); await registry.flushPersistence()
+    const saved = JSON.parse(await readFile(path, 'utf8')); expect(saved.tasks[0]).toMatchObject({ delivery: 'parent', outcome: 'completed', resultText: 'original terminal' }); expect(saved.notifications).toHaveLength(1)
+  } finally { release.resolve(); handoff.closeGate = undefined; handoff.closeEntered = undefined; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('resumes the original terminal save after the handoff close debt clears', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-route-debt-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
+    fault.target = path; fault.failFinalClose = true; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
+    const route = registry.bindForegroundHandoff(task.id)(); if (route.kind !== 'parent') throw new Error('expected parent'); void route.save.done.catch(() => {})
+    await entered.promise; registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'terminal body' }); handoff.closeGate = undefined; release.resolve()
+    await expect(route.save.done).rejects.toBeNull(); expect(task.retention).not.toBe('durable')
+    expect(registry.notifications()).toHaveLength(1); expect(() => route.save.assertHandoff()).toThrow()
+    await vi.waitFor(() => expect(task.retention).toBe('failed'))
+    fault.failFinalClose = false; await route.save.retry(); route.save.assertHandoff()
+    const terminalSave = lastOriginalTaskSave(registry)!
+    expect(terminalSave).not.toBe(route.save)
+    await expect(terminalSave.retry()).rejects.toThrow('Earlier owned task save requires resolution')
+    expect(JSON.parse(await readFile(path, 'utf8')).tasks[0].outcome).toBeUndefined()
+    route.save.release()
+    await registry.retainResult(task.id); expect(task.retention).toBe('durable'); await registry.flushPersistence()
+    const saved = JSON.parse(await readFile(path, 'utf8')); expect(saved.tasks[0]).toMatchObject({ delivery: 'parent', outcome: 'completed', resultText: 'terminal body' }); expect(saved.notifications).toHaveLength(1)
+  } finally { release.resolve(); fault.failFinalClose = false; handoff.closeGate = undefined; handoff.closeEntered = undefined; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('original spawn source retains its delivery guard until both handoff and terminal saves settle', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-source-barrier-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let source: ReturnType<typeof createSpawnSource> | undefined
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'tool' }); await registry.flushPersistence()
+    let signals = 0
+    const retained = { beforeRead: vi.fn(), observed: vi.fn(), progress: vi.fn(), unavailable: vi.fn(), requireRecovery: vi.fn(), ready: vi.fn() }
+    source = createSpawnSource(createNondurableFactOwner(createSession()), undefined, retained, false, () => { signals++ })
+    source.bindTask(task.id, () => registry.retainResult(task.id)); source.bindHandoff(registry.bindForegroundHandoff(task.id))
+    await source.start({ type: 'subagent/start', version: 1, taskId: task.id, parentSessionId: 'parent', agentPath: 'root/a', role: 'general', description: 'work' })
+    source.published({ path: 'root/a', jobId: 'job-a' }); registry.claim(task.id, 'child', undefined, 'job-a'); await registry.flushPersistence()
+    fault.target = path; handoff.closeEntered = entered.resolve; handoff.closeGate = release.promise
+    const handed = source.handoffToParent(); void handed.catch(() => {}); await entered.promise
+    registry.terminalize({ taskId: task.id, outcome: 'completed', resultText: 'terminal body' }); source.settling()
+    const ending = source.prepareEnd(async () => ({ event: { type: 'subagent/end', version: 1, taskId: task.id, outcome: 'completed' } })); void ending.catch(() => {})
+    expect(signals).toBe(0); source.recoverPublished(new Error('held handoff')); expect(retained.unavailable).toHaveBeenCalled(); expect(retained.ready).not.toHaveBeenCalled(); handoff.closeGate = undefined; release.resolve()
+    expect(await handed).toBe('parent'); source.assertHandoff(); source.consumeHandoff(); await ending
+    expect(signals).toBe(1); expect(registry.notifications()).toHaveLength(1)
+  } finally { source?.finish(); release.resolve(); handoff.closeGate = undefined; handoff.closeEntered = undefined; fault.target = ''; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it('joins original terminal retention while a later writer capture is queued', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-terminal-consumer-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  try {
+    await coordinator.create({ sessionId: 'parent' }); const document = await coordinator.openManagedDocument('parent'), path = join(root, 'task-parent.doc.jsonl')
+    await writeFile(path, '{"formatVersion":1,"tasks":[],"notifications":[]}')
+    const registry = createTaskRegistry({ coordinator, stateId: 'parent', reportPolicy: SHIPPING_REPORT_POLICY, ownedTask: captureOwnedTaskContext(coordinator, document, document.view, 'parent') })
+    const task = registry.submit({ identity: { parentSessionId: 'parent' }, agentPath: 'root/a', description: 'work', prompt: 'prompt', agent: 'general', delivery: 'parent' }); await registry.flushPersistence()
+    task.status = 'completed'; task.outcome = 'completed'; task.resultText = 'original terminal'
+    fault.target = path; handoff.cleanupPath = lockPathFor(root, 'doc:task-parent'); handoff.cleanupEntered = entered.resolve; handoff.cleanupGate = release.promise
+    handoff.publications = 0
+    const retaining = registry.retainResult(task.id); void retaining.catch(() => {}); await entered.promise
+    const original = lastOriginalTaskSave(registry)!
+    task.description = 'later captured mutation'
+    const later = registry.save(); void later.catch(() => {})
+    // The source and announcement both ask to retain the same result. They
+    // must join its consumer, not flush a subsequent snapshot over its ack.
+    const joining = registry.retainResult(task.id)
+    void joining.catch(() => {})
+    expect(task.retention).toBe('pending'); expect(handoff.publications).toBe(1)
+    handoff.cleanupGate = undefined; release.resolve()
+    await retaining; await joining; await later; await registry.flushPersistence()
+    expect(task.retention).toBe('durable')
+    expect(original.outcome()).toMatchObject({ kind: 'committed', cleanupPending: false })
+    expect(JSON.parse(await readFile(path, 'utf8')).tasks[0]).toMatchObject({ resultText: 'original terminal', description: 'later captured mutation' })
+    expect(handoff.publications).toBe(2)
+  } finally { release.resolve(); fault.target = ''; handoff.cleanupPath = ''; handoff.cleanupGate = undefined; handoff.cleanupEntered = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

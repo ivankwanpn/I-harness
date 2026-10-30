@@ -15,6 +15,7 @@ export class TaskNotifications {
     const row = this.#rows.find(row => row.id === id)
     if (!row) return false
     Object.assign(row, patch)
+    for (const key of Object.keys(patch) as (keyof typeof patch)[]) if (patch[key] === undefined) delete row[key]
     return true
   }
   restore(rows: TaskNotificationRecord[]): void {

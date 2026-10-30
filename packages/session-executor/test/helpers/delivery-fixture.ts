@@ -5,6 +5,8 @@ import { inspect } from 'node:util'
 import { decodeFactBatch, subscribe, readDeliveries } from '@i-harness/core-session'
 import { createSessionCoordinator, compileSemanticSeed } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskDocumentCoordinator } from '../../../session-persistence-jsonl/src/backend-factory.ts'
+import { taskDocumentStorageContract } from '../../../subagent/src/task/storage-contract.ts'
 import { createContextOutputService } from '@i-harness/context-output'
 import type { LLMRequest } from '@i-harness/llm-seam'
 import { createSessionService, createDurableSessionLoader } from '../../src/index.ts'
@@ -19,10 +21,10 @@ afterEach(() => { for (const restore of [...warningRestorers]) restore() })
 
 /** Only provider/physical backend gates are controlled. Task/source, Inbox,
  * receiver and serial lane are the actual service composition. */
-export async function createDeliveryFixture(options: { failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
+export async function createDeliveryFixture(options: { activeForeground?: boolean; failChild?: boolean; rewindFsWrite?: boolean; holdTerminal?: boolean; holdTerminalUnknown?: boolean; holdTaskSaveFailure?: boolean; expectStopDiagnostics?: boolean; expectedWarnings?: readonly string[]; extensionsFor?: Parameters<typeof createSessionService>[0]['extensionsFor']; failDelivery?: boolean; spawnCount?: number; holdReceiptUnknown?: boolean; holdReceiptReconcile?: boolean; holdOpenUnknown?: boolean; holdReceiptBeforeIssue?: boolean; compatibilityOrigin?: 'synthetic' | 'unknown' | 'delegated' | 'b2'; holdParentStep?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ih-d1a-service-'))
   const backend = createJsonlBackend(join(root, 'sessions'))
-  let coordinator = createSessionCoordinator(backend, { lock: { enabled: true } })
+  let coordinator = options.activeForeground ? createJsonlTaskDocumentCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(backend, { lock: { enabled: true } })
   if (options.compatibilityOrigin === 'b2') {
     const now = Date.now()
     const outcome = await coordinator.bootstrapSemanticTarget({ invocation: { version: 1, operationId: 'delivery-b2-fixture', targetSessionId: 'parent', createdAt: new Date(now).toISOString(), requestDigest: 'a'.repeat(64) }, target: { kind: 'new' }, metadata: {},
@@ -31,6 +33,7 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
       { assertCurrent() {}, dependencies: { async confirm() { throw new Error('Empty B2 fixture has no dependencies') }, async reconcile() { throw new Error('Empty B2 fixture has no dependencies') } } })
     if (outcome.kind !== 'ready') throw new Error('Actual B2 fixture not ready: ' + JSON.stringify(outcome))
   } else await coordinator.create({ sessionId: 'parent', ...(options.compatibilityOrigin === 'delegated' ? { parentSession: 'delegator', origin: 'subagent' as const, subagentProtocolVersion: 1 as const, seedLength: 0 } : {}) })
+  if (options.activeForeground) await backend.putDocument('task-parent', { formatVersion: 1, tasks: [], notifications: [] })
   const originalDocument = await coordinator.openManagedDocument('parent')
   // Retain references to actual original spawn settlement sources for explicit
   // owner recovery controls. No source/received method is replaced.
@@ -70,6 +73,7 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
   const telemetryEvents: TelemetryEvent[] = []
   const telemetry = createTelemetry([{ onEvent(event) { telemetryEvents.push(event) } }])
   const childGate = Promise.withResolvers<void>(), delivery = Promise.withResolvers<void>(), terminal = Promise.withResolvers<void>()
+  const foregroundGate = Promise.withResolvers<void>(), foregroundStarted = Promise.withResolvers<void>()
   const terminalGate = Promise.withResolvers<void>()
   const terminalCommitted = Promise.withResolvers<void>()
   const consumed = Promise.withResolvers<void>(), receiptUnknown = Promise.withResolvers<void>()
@@ -150,8 +154,9 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
     return reconcile(...args)
   }
   const child = controlledModel(async function* () {
-    launches++
-    await childGate.promise
+    const number = ++launches
+    if (options.activeForeground && number === 2) { foregroundStarted.resolve(); await foregroundGate.promise }
+    else await childGate.promise
     yield { type: 'text/chunk', text: 'original child result' }
     if (options.failChild) { yield { type: 'error', error: new Error('Controlled dispatched child failure') }; return }
     yield { type: 'end' }
@@ -163,6 +168,10 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
       for (let i = 0; i < (options.spawnCount ?? 1); i++) yield { type: 'tool_call', call: { id: 'original-spawn-' + i, name: 'spawn_agent', args: { task_name: 'original' + i, agent_type: 'probe', message: 'return original result', fork_turns: 'none' } } }
     }
     else {
+      if (options.activeForeground && parentRequests.length === 2) {
+        yield { type: 'tool_call', call: { id: 'foreground-a', name: 'spawn_agent', args: { task_name: 'held-a', agent_type: 'probe', message: 'hold original work', fork_turns: 'none', background: false } } }
+        yield { type: 'end' }; return
+      }
       if (options.holdParentStep && parentRequests.length === 2) {
         parentStep.resolve(); await parentGate.promise
         yield { type: 'tool_call', call: { id: 'normal-parent-step', name: 'fixture_step', args: {} } }
@@ -199,6 +208,8 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
   return {
     root, output, get service() { return service }, backend, get coordinator() { return coordinator }, parentRequests,
     launchCount: () => launches,
+    waitForForeground: () => foregroundStarted.promise,
+    releaseForeground: () => foregroundGate.resolve(),
     settleOriginalSpawnSources: async () => { for (const original of spawnSources) await original.source.close() },
     async start() {
       if (options.compatibilityOrigin === 'unknown') {
@@ -249,7 +260,7 @@ export async function createDeliveryFixture(options: { failChild?: boolean; rewi
     },
     async close() {
       if (closed) return
-      childGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
+      childGate.resolve(); foregroundGate.resolve(); terminalGate.resolve(); receiptGate.resolve(); receiptReconcileGate.resolve(); parentGate.resolve(); allowReceipt = true; allowOpen = true; allowTerminal = true; allowTaskSave = true
       const failures: unknown[] = []
       off()
       try {
