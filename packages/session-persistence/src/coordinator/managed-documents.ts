@@ -65,12 +65,16 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     assertTaskOutside(id)
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
+    const attachedDocument=()=>entry.document
     if(entry.document){await entry.document.close();return}
     // Retain the original cold fence across failed cleanup instead of poisoning it.
     const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
     let outcome:'settled'|'unknown'='unknown'
     try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{})
+    // The opening flight may have attached this exact entry while close waited.
+    const attached=attachedDocument()
+    if(attached){await attached.close();outcome='settled';return}
     await bootstrap.settleCapture(entry)
     if(entry.headerUnknown)throw new FactRecoveryRequiredError()
     if(entry.selected)await bootstrap.releaseSelected(entry.selected.route,entry.selected.identity);else await bootstrap.releaseCapture(entry)

@@ -1,3 +1,9 @@
+import * as factOwners from '../../session-persistence/src/coordinator/fact-owner.ts'
+const prefixGate=vi.hoisted(()=>({path:'',armed:false,gate:undefined as Promise<void>|undefined,entered:undefined as (()=>void)|undefined}))
+vi.mock('node:fs/promises',async original=>{const real=await original<typeof import('node:fs/promises')>();return {...real,async readFile(...args:Parameters<typeof real.readFile>){const bytes=await real.readFile(...args);if(prefixGate.armed&&String(args[0])===prefixGate.path){prefixGate.armed=false;prefixGate.entered?.();await prefixGate.gate}return bytes}}})
+import * as managedLeaf from '../../session-persistence/src/coordinator/managed-document.ts'
+import { createJsonlBackend } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 import * as managedFactories from '../../session-persistence/src/coordinator/managed-documents.ts'
 import * as bindings from '../../session-persistence/src/coordinator/binding-observation.ts'
 import { lockPathFor } from '../../fs-lock/src/index.ts'
@@ -194,4 +200,23 @@ it.each([undefined,0])('retains direct cold close ownership and retries original
 })
 it('keeps composed ordinary document and coordinator close behavior intact',async()=>{
  const f=await fixture();try{await f.coordinator.create({sessionId:'ordinary'});const document=await f.coordinator.openManagedDocument('ordinary');document.assertReady();await document.close();await document.close();const reopened=await f.coordinator.openManagedDocument('ordinary');expect(reopened).not.toBe(document);reopened.assertReady();await f.coordinator.closeManagedDocument!('ordinary');await f.coordinator.close();expect(f.coordinator.ownerOf!('ordinary')).toBe(false)}finally{await f.coordinator.close()}
+})
+
+it.each(['clean','cleanup-debt'] as const)('closes the exact document attached during an ordinary opening flight: %s',async mode=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'late-attach-')),backend=createJsonlBackend(root),entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),closingEntered=Promise.withResolvers<void>()
+ let registry:ReturnType<typeof managedFactories.createManagedDocuments>|undefined,document:ReturnType<typeof managedLeaf.createManagedDocument>|undefined,resolved:Map<unknown,unknown>|undefined,attempts=0,fail=mode==='cleanup-debt'
+ const makeManaged=managedFactories.createManagedDocuments,factory=vi.spyOn(managedFactories,'createManagedDocuments').mockImplementation((...args)=>{registry=makeManaged(...args);const close=registry.closeOne;vi.spyOn(registry,'closeOne').mockImplementation(async id=>{closingEntered.resolve();return close(id)});return registry})
+ const makeDocument=managedLeaf.createManagedDocument,leaf=vi.spyOn(managedLeaf,'createManagedDocument').mockImplementation((...args)=>{const doc=makeDocument(...args);if(args[0]==='ordinary'){document=doc;const close=doc.close.bind(doc);vi.spyOn(doc,'close').mockImplementation(async()=>{attempts++;if(fail){fail=false;throw undefined}await close()})}return doc})
+ const coordinator=composeJsonlTaskTransitionCoordinator(backend,{lock:{enabled:true}},taskDocumentStorageContract),held=factOwners.heldFactOwner,read=vi.spyOn(factOwners,'heldFactOwner').mockImplementation((...args)=>{const original=held(...args);if(args[0].sessionId==='ordinary'&&args[0].incarnation==='cold-recovery')prefixGate.armed=true;return original})
+ prefixGate.path=join(root,'ordinary.jsonl');prefixGate.gate=leave.promise;prefixGate.entered=entered.resolve
+ const set=Map.prototype.set,map=vi.spyOn(Map.prototype,'set').mockImplementation(function(this:Map<unknown,unknown>,key:unknown,value:unknown){if(key==='ordinary'&&document&&value===document)resolved=this;return set.call(this,key,value)})
+ let opening:Promise<import('../../session-persistence/src/coordinator/fact-types.ts').ManagedDocument>|undefined,closing:Promise<{failed:boolean;cause?:unknown}>|undefined
+ try{
+  await coordinator.create({sessionId:'ordinary'});opening=coordinator.openManagedDocument('ordinary');await entered.promise;expect(document).toBeUndefined();expect(JSON.parse((await readFile(join(root,'ordinary.jsonl'),'utf8')).split('\n')[0]!).formatVersion).toBe(14)
+  closing=coordinator.closeManagedDocument!('ordinary').then(()=>({failed:false}),cause=>({failed:true,cause}));await closingEntered.promise;expect((await prompt(closing)).kind).toBe('pending');leave.resolve();const opened=await opening;expect(opened).toBe(document);expect(()=>opened.assertReady()).toThrow();const outcome=await closing
+  expect(attempts).toBe(1);expect(resolved).toBeDefined()
+  if(mode==='cleanup-debt'){expect(outcome).toEqual({failed:true,cause:undefined});expect(registry!.has('ordinary')).toBe(true);expect(resolved!.get('ordinary')).toBe(opened);expect(()=>registry!.captureProcessReadById('ordinary',[])).toThrow();await coordinator.closeManagedDocument!('ordinary');expect(attempts).toBe(2)}else expect(outcome.failed).toBe(false)
+  expect(registry!.has('ordinary')).toBe(false);expect(resolved!.has('ordinary')).toBe(false);await opened.close();expect(attempts).toBe(mode==='cleanup-debt'?2:1)
+  if(mode==='clean'){read.mockRestore();const next=await coordinator.openManagedDocument('ordinary');expect(next).not.toBe(opened);next.assertReady();await opened.close();next.assertReady()}
+ }finally{fail=false;leave.resolve();prefixGate.path='';prefixGate.armed=false;await opening?.catch(()=>{});await closing;await coordinator.close();map.mockRestore();read.mockRestore();leaf.mockRestore();factory.mockRestore()}
 })
