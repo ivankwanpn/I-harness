@@ -8,7 +8,7 @@ export interface ResultFinalization {
 export type ResultProgram = { kind: 'value'; value: unknown } | { kind: 'unavailable'; reason: 'encoding' }
 export interface SyntheticResultContext { view: SessionView; source: SettlementFacts<ProducerFactOutcome>; callId: string; name: string }
 export interface ToolResultRetention {
-  prepare?(prepared: PreparedCall): Promise<void>
+  prepare?(prepared: PreparedCall, executionOwner?: import('./prepared-body.ts').ToolExecutionOwnerContext): Promise<void>
   capture(prepared: PreparedCall, output: unknown, execution: ResultExecution): ResultFinalization
   captureSynthetic(context: SyntheticResultContext, output: unknown, execution: ResultExecution): ResultFinalization
 }

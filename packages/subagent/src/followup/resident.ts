@@ -60,7 +60,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }))
   if (!executionCurrent() || !record.current()) return false
   executionController.signal.throwIfAborted()
-  const childReg = createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry })
+  const childReg = createToolRegistry(childCtx, { inheritResultRetention: deps.parentRegistry, executionOwner: {view:record.view,factOwner,context:childCtx,...entry.sessionId!==undefined?{sessionId:entry.sessionId}:{}} })
   record.registry = childReg
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
