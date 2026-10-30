@@ -200,3 +200,18 @@ it('joins selected birth binding before managed document closes',async()=>{
   expect(await binding).toBeInstanceOf(Error);await closing;expect(closed).toBe(true)
  }finally{faults.openGate=undefined;faults.openEntered=undefined;await f.close()}
 })
+it('qualifies a checked birth against the complete original route',async()=>{
+ const f=await fixture()
+ try{
+  expect((await f.journal.inspectCheckedBirth(f.route,f.held)).kind).toBe('checked')
+  const changed={...f.route,request:{...f.route.request,invocation:{...f.route.request.invocation,createdAt:'2026-10-29T00:00:00.000Z'}}}
+  expect((await f.journal.inspectCheckedBirth(changed,f.held)).kind).toBe('conflict')
+  const foreign=f.path+'.bootstrap-'+'a'.repeat(64)+'.stage';await writeFile(foreign,'x')
+  await expect(f.journal.inspectCheckedBirth(f.route,f.held)).rejects.toThrow()
+  await unlink(foreign)
+  await writeFile(f.path,Buffer.from(f.built.headerBytes))
+  await expect(f.journal.inspectCheckedBirth(f.route,f.held)).rejects.toThrow()
+  await unlink(f.path)
+  expect((await f.journal.inspectCheckedBirth(f.route,f.held)).kind).toBe('unavailable')
+ }finally{await f.close()}
+})

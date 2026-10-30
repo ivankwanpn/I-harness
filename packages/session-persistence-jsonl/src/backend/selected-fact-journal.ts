@@ -64,6 +64,15 @@ if(birth){
    return birth
   })
  }
+ /** Qualify the entire original route before exposing the held checked birth. */
+ async function inspectCheckedBirth(input:SelectedResultsRoute,owner:HeldFactOwner):Promise<
+  {kind:'checked';birth:Birth}|{kind:'unavailable'}|{kind:'conflict'}> {
+  const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+  const birth=await resolveCheckedBirth(id,owner)
+  if(!birth)return {kind:'unavailable'}
+  if(!same(route,birth.route))return {kind:'conflict'}
+  return {kind:'checked',birth}
+ }
  function bindCheckedBirthLane(id:string,owner:HeldFactOwner,birth:Birth):SelectedLaneScope {
   captureIO.scope(id,owner)
   const checked=checkedBirths.get(birth)
@@ -268,7 +277,7 @@ async function confirmSelectedFrames(path:string,id:string,owner:HeldFactOwner,s
 }
  return {
   resolveBirth:(id:string)=>resolveSelectedBirth(filePath(id),id,assertNotDeleted),
-  resolveCheckedBirth,bindCheckedBirthLane,bindCapturedLane,prepareCapturedCompletion,
+  resolveCheckedBirth,inspectCheckedBirth,bindCheckedBirthLane,bindCapturedLane,prepareCapturedCompletion,
   readJournalPrefix(id:string,owner:HeldFactOwner,scope:SelectedLaneScope){check(id,owner,scope);return captureIO.tracked(id,owner,ledger=>readSelectedJournalPrefix(filePath(id),id,owner,scope,assertNotDeleted,ledger))},
   appendOwnedBatch(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,scope:SelectedLaneScope,prefix:import('@i-harness/core-session').JournalPrefix,batch:import('@i-harness/core-session').EncodedFactBatch){
    check(id,owner,scope);const snapshot=captureBatch(prefix,batch)
