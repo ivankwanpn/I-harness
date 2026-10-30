@@ -36,11 +36,13 @@ export function createLoads(
         // A current-format queued batch must cross its own task transition.
         // Only predecessor work can be drained before the historical proof.
         if (pending?.hasWork && (await read(sessionId)).version >= 14) { await pending.flush(); pending = undefined }
-        return transitions.existing(sessionId, async () => {
+        return transitions.existing(sessionId, async (beforeRepair,markRepair) => {
           invalidateConversation(sessionId)
           const peeked = await read(sessionId)
           preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
           await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
+          await beforeRepair(peeked.version,peeked.events,peeked.meta?.seedLength ?? 0)
+          markRepair()
           const repaired = await backend.repair(sessionId)
           preflightSessionFormat(repaired.version, repaired.events, repaired.meta)
           const migrated = await migrate(repaired.version, guardIgnorable(repaired.events, true), repaired.meta)
