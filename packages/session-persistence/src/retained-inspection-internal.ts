@@ -4,3 +4,5 @@ export type { RetainedExistingBinding, RetainedBindingRequest, InspectorProfile 
 export { assertRetainedBindingReference, assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, requestRetainedReferenceRetirementFor } from './coordinator/retained-binding.ts'
 
 export { runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRetirementSinks } from './coordinator/retained-cleanup.ts'
+
+export { observeColdExecutionWrites } from './coordinator/cold-execution-writes.ts'

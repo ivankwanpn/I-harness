@@ -1,6 +1,7 @@
 import type { PersistenceBackend, CoordinatorOptions, SessionCoordinator } from './coordinator/types.ts'
 import { CURRENT_FORMAT_VERSION } from '@i-harness/core-session'
 import { createOwnership } from './coordinator/ownership.ts'
+import { createColdExecutionWrites, associateColdExecutionWrites } from './coordinator/cold-execution-writes.ts'
 import { createMutations } from './coordinator/mutations.ts'
 import { createDocuments } from './coordinator/documents.ts'
 import { createLoads } from './coordinator/load.ts'
@@ -52,7 +53,8 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
   const documents = createDocuments(backend, ownership, report, processLatches, taskStorage && { ...taskStorage, captureParent: document => managed.captureParent(document) }, transitionStorage)
   const observations = documents.observations
   let loads: ReturnType<typeof createLoads>
-  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined)
+  const coldWrites = createColdExecutionWrites()
+  const mutations = createMutations(backend, ownership, maxDelayMs, report, id => managed?.assertMutation(id), observations, processLatches, documents.taskTransitions, transitionStorage ? async (id, events) => { if (isTaskTransitionDrain(ownership, id)) await runTaskTransitionDrain(ownership, id, () => mutations.appendQueuedDrainUnlocked(id, events)); else await loads.transitionLoad(id, (check, markIssue) => mutations.appendTransitionUnlocked(id, events, check, markIssue), true) } : undefined, coldWrites)
   loads = createLoads(backend, ownership, mutations, processLatches, documents.taskTransitions)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, opts, report, mutations, processLatches, id => observations.assertOutsideOwnedOperations([id]), id => observations.revokeOwnedDocumentOperations(id), documents.taskTransitions)
   const lifecycle = createLifecycle(backend, ownership, mutations, documents, managed, processLatches)
@@ -169,6 +171,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       }
   }
   associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  associateColdExecutionWrites(coordinator, coldWrites)
   observations.associateRetainedCoordinator(coordinator)
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
   if (documents.taskOperations) associateTaskDocumentOperations(coordinator, documents.taskOperations)

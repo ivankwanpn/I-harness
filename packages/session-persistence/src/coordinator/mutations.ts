@@ -1,3 +1,4 @@
+import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import { CURRENT_FORMAT_VERSION, validateSubagentHeader, type SessionEvent } from "@i-harness/core-session"
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
@@ -20,17 +21,33 @@ export function createMutations(
   processLatches?: ReturnType<typeof createProcessReadLatches>,
   transitions?: ReturnType<typeof createTaskDocumentTransitions>,
   transitionWrite?: (id: string, events: SessionEvent[]) => Promise<void>,
+  coldWrites?: ReturnType<typeof createColdExecutionWrites>,
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
   const conversation = createConversationIndexes(backend)
   async function appendUnlocked(sessionId: string, events: SessionEvent[], check?: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue?: () => void, preservePhysical = false) {
+    let issued = false, changed: (() => Promise<boolean>) | undefined
     try {
       const staged = await conversation.stage(sessionId, events, preservePhysical)
+      changed = staged.historyChanged
       check?.(staged.events.map((event, position) => event.seq === undefined ? { ...event, seq: staged.baseLength + position } : event))
-      if (staged.events.length || events.length === 0) { markIssue?.(); await backend.append(sessionId, staged.events) }
+      if (staged.events.length || events.length === 0) { markIssue?.(); issued = true; await backend.append(sessionId, staged.events) }
       staged.commit()
-    } catch (error) { conversation.invalidate(sessionId); throw error }
+      if (staged.events.length) coldWrites?.committed(sessionId)
+    } catch (error) {
+      conversation.invalidate(sessionId)
+      if (issued && changed) {
+        // A rejected acknowledgement can follow durable writes. Recheck only
+        // within this original mutation, never from a listener/read route.
+        // Confirmed rollback stays quiet; uncertainty is a conservative dirty
+        // edge and never a snapshot-ready or successful-operation promise.
+        let dirty = true
+        try { dirty = await changed() } catch { /* unchanged history cannot be confirmed */ }
+        if (dirty) coldWrites?.invalidated(sessionId)
+      }
+      throw error
+    }
   }
   function assertWritableBootstrap(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
 
