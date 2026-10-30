@@ -2,18 +2,17 @@ import { resolve } from 'node:path'
 import { readdir } from 'node:fs/promises'
 import { boundedJson, confirmAtomicJson, ownedPath, type RetireFile } from '../artifact/io.ts'
 import { checkPage, recordHash, fail } from './fork-codec.ts'
-import type { LegacyBinding, LegacyRow, LegacyPage, LegacyPageRef, LegacyRoot } from './fork-types.ts'
+import type { LegacyBindingV1, LegacyBindingV2, LegacyRowV1, LegacyRowV2, LegacyRootV1, LegacyRootV2, LegacyRow, LegacyPage, LegacyPageRef, LegacyRoot } from './fork-types.ts'
 
 export const pageName = (ref: Pick<LegacyPageRef, 'level' | 'firstRow'>) => `${ref.level}-${ref.firstRow}.json`
 /** Only one leaf and a fanout-bounded frontier per level are resident. */
-export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<LegacyRow>, publish: (name: string, page: LegacyPage) => Promise<void>, version:1|2=1): Promise<{ pages: LegacyPageRef | null; observationCount: number }> {
+export async function buildPages<V extends 1|2=1>(binding: V extends 1?LegacyBindingV1:LegacyBindingV2, rows: AsyncIterable<V extends 1?LegacyRowV1:LegacyRowV2>, publish: (name: string, page: Extract<LegacyPage,{version:V}>) => Promise<void>, version:V=1 as V): Promise<{ pages: LegacyPageRef | null; observationCount: number }> {
   const bindingDigest = recordHash('binding', binding,version), frontier: LegacyPageRef[][] = []
   let leaf: LegacyRow[] = [], observationCount = 0, firstRow = 0
   async function directory(level: number, children: LegacyPageRef[]): Promise<LegacyPageRef> {
-    const page: LegacyPage = { version, kind: 'legacy-fork-directory', bindingDigest, level, children }
-    checkPage(page, binding,undefined,version)
+    const page = checkPage({ version, kind: 'legacy-fork-directory', bindingDigest, level, children }, binding,undefined,version)
     const ref = { digest: recordHash('page', page,version), firstRow: children[0]!.firstRow, rows: children.reduce((n, child) => n + child.rows, 0), level }
-    await publish(pageName(ref), page); return ref
+    await publish(pageName(ref), page as Extract<LegacyPage,{version:V}>); return ref
   }
   async function push(ref: LegacyPageRef): Promise<void> {
     const list = frontier[ref.level] ??= []; list.push(ref)
@@ -21,9 +20,8 @@ export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<Leg
   }
   async function flush(): Promise<void> {
     if (!leaf.length) return
-    const page: LegacyPage = { version, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: leaf }
-    checkPage(page, binding,undefined,version)
-    await publish(pageName({ level: 0, firstRow }), page)
+    const page = checkPage({ version, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: leaf }, binding,undefined,version)
+    await publish(pageName({ level: 0, firstRow }), page as Extract<LegacyPage,{version:V}>)
     await push({ digest: recordHash('page', page,version), firstRow, rows: leaf.length, level: 0 })
     firstRow += leaf.length; leaf = []
   }
@@ -42,6 +40,9 @@ export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<Leg
   }
 }
 /** Validate the entire addressed graph, ranges and on-disk EOF on every walk. */
+export function walkPages(directory:string,root:LegacyRootV1,guard:()=>void,groupCount?:number,retire?:RetireFile,visit?:(ref:LegacyPageRef,page:LegacyPage)=>Promise<void>):AsyncGenerator<LegacyRowV1>
+export function walkPages(directory:string,root:LegacyRootV2,guard:()=>void,groupCount?:number,retire?:RetireFile,visit?:(ref:LegacyPageRef,page:LegacyPage)=>Promise<void>):AsyncGenerator<LegacyRowV2>
+export function walkPages(directory:string,root:LegacyRoot,guard:()=>void,groupCount?:number,retire?:RetireFile,visit?:(ref:LegacyPageRef,page:LegacyPage)=>Promise<void>):AsyncGenerator<LegacyRow>
 export async function* walkPages(directory: string, root: LegacyRoot, guard: () => void, groupCount?: number, retire?: RetireFile, visit?: (ref: LegacyPageRef, page: LegacyPage) => Promise<void>): AsyncGenerator<LegacyRow> {
   const version=root.version
   let count = 0, files = 0
@@ -72,6 +73,9 @@ export async function* walkPages(directory: string, root: LegacyRoot, guard: () 
 
 /** A derived row ordinal is only a hint. The actual root and every addressed
  * directory/leaf hash prove the selected row without reconstructing a plan. */
+export function rowProof(directory:string,root:LegacyRootV1,ordinal:number,guard:()=>void,retire?:RetireFile):Promise<LegacyRowV1>
+export function rowProof(directory:string,root:LegacyRootV2,ordinal:number,guard:()=>void,retire?:RetireFile):Promise<LegacyRowV2>
+export function rowProof(directory:string,root:LegacyRoot,ordinal:number,guard:()=>void,retire?:RetireFile):Promise<LegacyRow>
 export async function rowProof(directory: string, root: LegacyRoot, ordinal: number, guard: () => void, retire?: RetireFile): Promise<LegacyRow> {
   if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= root.observationCount || !root.pages) fail()
   const version=root.version

@@ -78,7 +78,7 @@ export async function assertSelectedPlan(store: ContextStore, plan: OriginalSele
 export async function readSelectedPlan(store: ContextStore, observation: LegacyReadObservation, guard: () => void): Promise<OriginalSelectedPlan> {
   if (!observation.bootstrap) throw Error('Original bootstrap required')
   const directory = transferDirectory(store, observation.bootstrap.invocation), path = resolve(directory, 'plan.json')
-  const root = freezeJsonData(checkRoot(JSON.parse((await bytes(store, store.directory, path, 65536, guard)).toString('utf8')))) as LegacyRoot
+  const root = freezeJsonData(checkRoot(JSON.parse((await bytes(store, store.directory, path, 65536, guard)).toString('utf8'))))
   if(root.version===2&&!observation.selectedView||root.version===1&&observation.selectedView)throw Error('Legacy plan and seed version conflict')
   if (root.pages && root.pages.level > 53 || root.observationCount > SELECTED_RESULT_METADATA_LIMITS.rows) throw Error('Original graph exceeds limit')
   const selected=root.version===2?captureSelectedPlanView(observation.selectedView!,root,{sessionId:observation.bootstrap!.invocation.targetSessionId,createdAt:observation.bootstrap!.invocation.createdAt}):undefined

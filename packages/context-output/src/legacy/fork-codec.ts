@@ -3,7 +3,7 @@ import { streamJsonData, captureBootstrapPreparationFacts, canonicalJsonData, va
 import type { ContextResultRef } from '../types.ts'
 import { identity } from '../config.ts'
 import { types } from 'node:util'
-import type { LegacyBinding, LegacyCommitment, LegacyPage, LegacyPageRef, LegacyRoot, LegacyApplied, LegacyRow, LegacyAnchor } from './fork-types.ts'
+import type { LegacyBindingV1, LegacyBindingV2, LegacyPageV1, LegacyPageV2, LegacyRootV1, LegacyRootV2, LegacyAppliedV1, LegacyAppliedV2, LegacyBinding, LegacyCommitment, LegacyPage, LegacyPageRef, LegacyRoot, LegacyApplied, LegacyRow, LegacyAnchor } from './fork-types.ts'
 
 export function fail(): never { throw new TypeError('Invalid legacy fork metadata') }
 export function fields(value: unknown, required: readonly string[], optional: readonly string[] = []): asserts value is Record<string, any> {
@@ -68,18 +68,24 @@ export function checkAnchor(a: LegacyAnchor, total: number, unframed: boolean, e
   fields(a, ['kind'], a.kind === 'manifest' ? ['seq'] : ['manifestSeq', 'ordinal'])
   if (a.kind === 'manifest' ? a.seq !== 0 || extent.kind !== 'unframed' : a.kind !== 'seed-group' || a.manifestSeq !== 0 || !count(a.ordinal) || groupCount !== undefined && a.ordinal >= groupCount) fail()
 }
-export function checkBinding(b: LegacyBinding,version:1|2=1): LegacyBinding {
+export function checkBinding(b: unknown, version?:1): LegacyBindingV1
+export function checkBinding(b: unknown, version:2): LegacyBindingV2
+export function checkBinding(b: unknown, version:1|2): LegacyBinding
+export function checkBinding(b: unknown,version:1|2=1): LegacyBinding {
   data(b); fields(b, ['workspaceId', 'invocation', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId', 'semanticSeedDigest', 'sourceObservationDigest', 'selection', 'targetSourceDigest', 'turnDomainDigest', 'totalTurns', 'unframedPrefix',...(version===2?['selectedResults']:[])])
   if(version===2)validateResultsSummary(b.selectedResults)
   for (const id of [b.workspaceId, b.sourceSessionId, b.targetSessionId, b.targetDocumentId]) identity(id, 'legacy binding')
   if (![b.manifestDigest, b.semanticSeedDigest, b.sourceObservationDigest, b.targetSourceDigest, b.turnDomainDigest].every(hash) || !count(b.totalTurns) || typeof b.unframedPrefix !== 'boolean' || b.targetDocumentId !== b.targetSessionId || b.targetSessionId !== b.invocation.targetSessionId) fail()
   captureBootstrapPreparationFacts({ version: 1, invocation: b.invocation, manifestDigest: b.manifestDigest, seedDigest: b.semanticSeedDigest, sourceObservation: { kind: 'none' }, groupCount: 0 })
   fields(b.selection, ['kind'], ['atSeq']); if (b.selection.kind !== 'completed' || b.selection.atSeq !== undefined && !count(b.selection.atSeq)) fail()
-  return b
+  return b as LegacyBinding
 }
 export function checkPageRef(p: LegacyPageRef): void {
   fields(p, ['digest', 'firstRow', 'rows', 'level']); if (!hash(p.digest) || !count(p.firstRow) || !count(p.rows) || !p.rows || !count(p.level) || !Number.isSafeInteger(p.firstRow + p.rows)) fail()
 }
+export function checkPage(value:unknown,binding:LegacyBinding,groupCount?:number,version?:1): LegacyPageV1
+export function checkPage(value:unknown,binding:LegacyBinding,groupCount: number|undefined,version:2): LegacyPageV2
+export function checkPage(value:unknown,binding:LegacyBinding,groupCount: number|undefined,version:1|2): LegacyPage
 export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: number,version:1|2=1): LegacyPage {
   data(value); const p = value as LegacyPage
   fields(p, ['version', 'kind', 'bindingDigest', ...(p.kind === 'legacy-fork-leaf' ? ['firstRow', 'rows'] : ['level', 'children'])])
@@ -98,6 +104,8 @@ export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: n
   }
   return p
 }
+export function checkRoot<T extends {version:1|2}>(value:T): Extract<LegacyRoot,{version:T['version']}>
+export function checkRoot(value:unknown): LegacyRoot
 export function checkRoot(value: unknown): LegacyRoot {
   data(value); fields(value, ['version', 'kind', 'binding', 'observationCount', 'distinctRefCount', 'pages'])
   const r = value as LegacyRoot;if(r.version!==1&&r.version!==2)fail();checkBinding(r.binding,r.version)
@@ -106,4 +114,10 @@ export function checkRoot(value: unknown): LegacyRoot {
   else { checkPageRef(r.pages); if (r.pages.firstRow !== 0 || r.pages.rows !== r.observationCount) fail() }
   return r
 }
-export const appliedFor = (root: LegacyRoot): LegacyApplied => canonicalRecord({ version: root.version, kind: 'legacy-fork-applied', bindingDigest: recordHash('binding', root.binding,root.version), planDigest: recordHash('plan', root,root.version), observationCount: root.observationCount, distinctRefCount: root.distinctRefCount })
+export function appliedFor(root:LegacyRootV1):LegacyAppliedV1
+export function appliedFor(root:LegacyRootV2):LegacyAppliedV2
+export function appliedFor(root:LegacyRoot):LegacyApplied
+export function appliedFor(root:LegacyRoot):LegacyApplied {
+ const fields={kind:'legacy-fork-applied' as const,bindingDigest:recordHash('binding',root.binding,root.version),planDigest:recordHash('plan',root,root.version),observationCount:root.observationCount,distinctRefCount:root.distinctRefCount}
+ return root.version===1?canonicalRecord({version:1,...fields}):canonicalRecord({version:2,...fields})
+}

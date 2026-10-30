@@ -299,7 +299,7 @@ export class ContextStore {
       settle: async () => { await original.settle(); await remember() },
     })
   }
-  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, proof: number | {kind:'selected-v2';owners:Map<string,ReturnType<ContextStore['createLegacyOwnerTransfer']>>;plan:ReturnType<typeof import('./legacy/selected-plan-view.ts').captureSelectedPlanView>;application:{onCreated(file:import('./legacy/funding-batch.ts').FundingFile):void;allowExisting(file:import('./legacy/funding-batch.ts').FundingFile):boolean}}, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
+  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, proof: number | {kind:'selected-v2';owners:Map<string,ReturnType<ContextStore['createLegacyOwnerTransfer']>>;plan:ReturnType<typeof import('./legacy/selected-plan-view.ts').captureSelectedPlanView>;application:import('./artifact/io.ts').OriginalPublicationStaging}, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
     const context = Object.freeze({ turn, lease, use, quota, guard }), check = () => this.assertFundingContext(context)
     check(); checkRoot(root)
     if (root.binding.workspaceId !== this.workspaceId || root.binding.targetSessionId !== root.binding.invocation.targetSessionId || !this.legacyReady(use, root)) throw Error('Legacy funding root conflict')

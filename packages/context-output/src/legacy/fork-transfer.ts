@@ -15,7 +15,7 @@ import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-dispos
 import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
 import { createSelectedLegacyTransfer } from './selected-transfer.ts'
 import { prepareLegacyIndex } from './fork-index.ts'
-import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyPage } from './fork-types.ts'
+import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyRowV1, LegacyPage } from './fork-types.ts'
 
 type Scope = { capture?: LegacyForkCapture; invalid: boolean; attempts: Set<Promise<LegacyTransferOutcome>>; count?: number; store?: ContextStore; dispose(): void }
 interface Ports {
@@ -138,7 +138,7 @@ export function createLegacyForkOwner(ports: Ports) {
           check(); const actual = await store.canonicalRef(rowCommitment(row), c.sourceSessionId); check()
           if (!await observedAllowed(context, actual, source.read, check)) throw Error('Legacy source observation unavailable'); check()
         }
-        async function* rows(): AsyncGenerator<LegacyRow> {
+        async function* rows(): AsyncGenerator<LegacyRowV1> {
           // Inherited seed coordinates precede local journal coordinates;
           // within a seed anchor the immediate parent's row order is stable.
           if (source.read.bootstrap) {
@@ -146,14 +146,15 @@ export function createLegacyForkOwner(ports: Ports) {
             for await (const old of verifiedRows(context, parent.directory, parent.root, check)) {
               const position = ordinal++, included = selection.kind === 'selected' ? selection.inherited(old.extent, old.anchor) : { kind: 'omitted' as const }
               if (included.kind === 'omitted') continue
-              if (included.kind !== 'included') throw Error('Inherited legacy anchor unsupported')
-              const row: LegacyRow = { ...rowCommitment(old), extent: included.extent, anchor: included.anchor, original: old.original,
+              if (included.kind !== 'included' || included.anchor.kind === 'seed-result') throw Error('Inherited legacy anchor unsupported')
+              const row: LegacyRowV1 = { ...rowCommitment(old), extent: included.extent, anchor: included.anchor, original: old.original,
                 via: { sessionId: c.sourceSessionId, operationId: parent.root.binding.invocation.operationId, manifestDigest: parent.root.binding.manifestDigest, planDigest: recordHash('plan', parent.root), rowOrdinal: position } }
               await qualify(row); check(); yield row
             }
           }
           for (const local of selection.kind === 'selected' ? selection.local() : []) {
-            check(); const row: LegacyRow = { ...commitment(local.ref), extent: local.extent, anchor: local.anchor, original: { sessionId: c.sourceSessionId, ...local.original } }
+            if (local.anchor.kind === 'seed-result') throw Error('Local legacy anchor unsupported')
+            check(); const row: LegacyRowV1 = { ...commitment(local.ref), extent: local.extent, anchor: local.anchor, original: { sessionId: c.sourceSessionId, ...local.original } }
             await qualify(row); check(); yield row
           }
         }
