@@ -204,3 +204,29 @@ it('uses the retained profile port inside the real cold execution read', async (
     await ref.release()
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+
+it('denies a held real retained profile after release and permits a fresh reference and manual read', async () => {
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'ih-held-retained-profile-'))
+  const backend = createJsonlBackend(root), original = backend.profile.bind(backend), entered = latch(), held = latch()
+  let blocked = false
+  backend.profile = async id => { const value = await original(id); if (blocked) { entered.release(); await held.promise }; return value }
+  const coordinator = createSessionCoordinator(backend, { lock: { enabled: true, lockRoot: root } })
+  const service = { liveAssembly: vi.fn(() => undefined) }, snapshot = vi.spyOn(coordinator, 'snapshot'), ordinary = vi.spyOn(coordinator, 'profile')
+  try {
+    await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
+    const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    const read = createDesktopExecution(coordinator, service).read
+    blocked = true
+    const pending = ref.withRead(profile => read('s', {}, () => ref.assertCurrent(), profile)); void pending.catch(() => {})
+    await entered.promise
+    const releasing = ref.release(); void releasing.catch(() => {})
+    expect(() => ref.assertCurrent()).toThrow()
+    held.release(); await expect(pending).rejects.toThrow(); await releasing
+    expect(service.liveAssembly).not.toHaveBeenCalled(); expect(snapshot).not.toHaveBeenCalled(); expect(ordinary).not.toHaveBeenCalled()
+    blocked = false
+    const fresh = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    expect((await fresh.withRead(profile => read('s', {}, () => fresh.assertCurrent(), profile))).total).toBe(0)
+    await fresh.release()
+    ordinary.mockClear(); expect((await read('s')).total).toBe(0); expect(ordinary).toHaveBeenCalledOnce()
+  } finally { held.release(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})
