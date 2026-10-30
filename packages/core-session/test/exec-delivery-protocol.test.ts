@@ -164,6 +164,45 @@ describe('required Exec delivery protocol', () => {
       expect(validDeliveryEvent({ ...terminal, dependency: { ...terminal.dependency, retention: value } })).toBe(false);
     }
   });
+  it.each(['getter', 'proxy'] as const)('rejects a delivery type %s at capture and the memory writer without running hooks', async kind => {
+    let hooks = 0;
+    const event = kind === 'getter'
+      ? Object.defineProperty({ ...terminal }, 'type', { enumerable: true, get() { hooks++; return 'exec/end'; } })
+      : new Proxy({ ...terminal }, {
+        get(target, key, receiver) { hooks++; return Reflect.get(target, key, receiver); },
+        ownKeys(target) { hooks++; return Reflect.ownKeys(target); },
+        getOwnPropertyDescriptor(target, key) { hooks++; return Reflect.getOwnPropertyDescriptor(target, key); },
+        getPrototypeOf(target) { hooks++; return Reflect.getPrototypeOf(target); },
+      });
+    const rejected = { kind: 'not-issued', code: 'FACT_INVALID_GROUP' };
+    expect(captureFactGroup({ kind: 'delivery', event } as never)).toEqual(rejected);
+    expect(hooks).toBe(0);
+    const session: Session = { formatVersion: 14, events: [] };
+    const action = createNondurableFactOwner(session).beginAction();
+    expect(await action.facts.delivery.record(event as never)).toEqual(rejected);
+    expect(hooks).toBe(0);
+    expect(session.events).toEqual([]);
+    action.finish();
+  });
+  it('preserves ordinary delivery payload legacy conversion at capture and memory append', async () => {
+    let hooks = 0;
+    const job = {
+      jobId: 'legacy-job', kind: 'shell', status: 'completed', outputAvailable: false,
+      get label() { hooks++; return 'legacy label'; },
+      toJSON() { hooks++; return { jobId: this.jobId, kind: this.kind, status: this.status, outputAvailable: this.outputAvailable, label: this.label }; },
+    };
+    const event = { type: 'job/status', version: 1, job };
+    const expected = { type: 'job/status', version: 1, job: { jobId: 'legacy-job', kind: 'shell', status: 'completed', outputAvailable: false, label: 'legacy label' } };
+    const captured = captureFactGroup({ kind: 'delivery', event } as never);
+    expect(captured).toMatchObject({ kind: 'captured', group: { kind: 'delivery', event: expected } });
+    expect(hooks).toBe(2);
+    const session: Session = { formatVersion: 14, events: [] };
+    const action = createNondurableFactOwner(session).beginAction();
+    expect(await action.facts.delivery.record(event as never)).toMatchObject({ kind: 'memory-committed', seqs: [0] });
+    expect(session.events).toEqual([{ ...expected, seq: 0 }]);
+    expect(hooks).toBe(4);
+    action.finish();
+  });
   it('reads result type as own data without executing an accessor', () => {
     let reads = 0;
     const event = Object.defineProperty({ ...terminal }, 'type', { enumerable: true, get() { reads++; return 'exec/end'; } });

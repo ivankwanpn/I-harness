@@ -152,8 +152,13 @@ export function captureFactGroup(draft: FactGroupDraft):
     if (draft.kind === 'delivery-generation' && (Object.hasOwn(draft.event,'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
     if (draft.kind === 'exec-delivery-source' && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2
       || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event) || draft.event.type !== 'agent/delivery-source' || draft.event.kind !== 'exec')) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
-    if (draft.kind === 'delivery' && (draft.event.type === 'exec/end' || draft.event.type === 'agent/delivery-handoff')
-      && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2 || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    if (draft.kind === 'delivery') {
+      if (!draft.event || typeof draft.event !== 'object' || utilTypes.isProxy(draft.event)) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+      const type = Object.getOwnPropertyDescriptor(draft.event, 'type')
+      if (!type || !('value' in type) || typeof type.value !== 'string') return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+      if ((type.value === 'exec/end' || type.value === 'agent/delivery-handoff')
+        && (!isStrictFactData(draft) || !closedDeliveryData(draft) || Reflect.ownKeys(draft).length !== 2 || Object.hasOwn(draft.event, 'seq') || !validDeliveryEvent(draft.event))) return {kind:'not-issued',code:'FACT_INVALID_GROUP'}
+    }
     if (draft.kind === 'exchange-acceptance' && !isStrictFactData(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'runtime-context' && (!isStrictFactData(draft) || Object.keys(draft).length !== 2 || Object.getOwnPropertyNames(draft).length !== 2 || !validRuntimeContextRecord(draft.event) || Object.hasOwn(draft.event, 'seq'))) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
     if (draft.kind === 'context-reduction' && !validContextReductionDraft(draft)) return { kind: 'not-issued', code: 'FACT_INVALID_GROUP' }
