@@ -163,7 +163,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
             if (!coordinator.deleteOwnedSession || !options.sessionDir || !options.workspace || !options.pendingInteractions || !options.drainSession) throw new Error("Permanent deletion is unavailable for this backend/runtime")
             // The store's durable closure already forbids new writers. Resume
             // only its exact manifest, under the coordinator's write lease.
-            fence.retire(sessionId)
+            await fence.retire(sessionId)
             const queue = service.queueState(sessionId)
             if (queue.running || queue.queued || service.tasks(sessionId).some(task => ["queued", "running", "waiting"].includes(task.status)) || (await options.pendingInteractions(sessionId)).length) throw new Error("Session is busy")
             const assembly = service.liveAssembly?.(sessionId)
@@ -190,7 +190,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           })
         }
         const recoverInterrupted = action === "archive" || action === "delete"
-        return fence.exclusive(sessionId, async () => {
+        return fence.exclusive(sessionId, async cleanupOperation => {
           // Recovery writes filesystem artifacts, so hold the durable lease in
           // addition to the local fence. Read-only snapshots hold no lease.
           const borrowed = recoverInterrupted && !(coordinator.hasLiveOwnership?.(sessionId) ?? coordinator.ownerOf(sessionId))
@@ -213,7 +213,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
               await assertIdle(sessionId)
               const manifest = await sessionArtifactManifest(options.sessionDir, options.workspace, sessionId)
               // Keep admission closed even if cleanup partially fails after durable closure.
-              fence.retire(sessionId)
+              await fence.retire(sessionId, cleanupOperation)
               await coordinator.deleteOwnedSession(sessionId, manifest)
               return { sessionId }
             }

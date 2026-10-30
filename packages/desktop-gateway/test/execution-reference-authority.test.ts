@@ -21,7 +21,17 @@ it("shares trusted reference restrictions between filesystem, remembered approva
     state = { ...state, revision: "refs-2", references: [reference] }
     expect(identity()?.revision).not.toBe(before.revision)
     const target = resolve(reference, "forbidden")
-    await expect(assembly.tools.get("write")!.execute({ path: target, text: "forbidden" }, {})).rejects.toThrow(/Readonly reference/)
+    const write = async () => {
+      const finished = Promise.withResolvers<void>()
+      const action = assembly.factOwner.beginAction()
+      const source = action.registerSettlementSource(() => finished.promise)
+      try {
+        const prepared = await assembly.tools.prepare({ name: "write", args: { path: target, text: "forbidden" } }, undefined,
+          { session: assembly.session, sessionId: assembly.sessionId, settlementSource: source })
+        return await assembly.tools.dispatch(prepared)
+      } finally { finished.resolve(); await source.close(); action.finish() }
+    }
+    await expect(write()).rejects.toThrow(/Readonly reference/)
     expect(existsSync(target)).toBe(false)
     const exec = assembly.ctx.services.get<ExecService>("exec/service")
     await expect(exec.run({ argv: [process.execPath, "-e", "process.exit(0)"] })).rejects.toThrow(/denyPaths|reference|requirements/)

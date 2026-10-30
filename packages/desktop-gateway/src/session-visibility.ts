@@ -5,8 +5,12 @@ import type { SessionQuery } from "@i-harness/session-query"
 // exact internal request envelope plus its lineage, never an untitled name.
 const LEGACY_REVIEW_PREFIX = "An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute)."
 
+export function isConversationMetadata(meta: Readonly<SessionMeta>): boolean {
+  return meta.origin !== 'subagent' && meta.origin !== 'approval-review' && !(meta.origin === 'team' && meta.parentSession)
+}
+
 export function createConversationVisibility(_coordinator: SessionCoordinator) {
-  return async (_id: string, meta: SessionMeta): Promise<boolean> => meta.origin !== "subagent" && meta.origin !== "approval-review" && !(meta.origin === "team" && meta.parentSession)
+  return async (_id: string, meta: SessionMeta): Promise<boolean> => isConversationMetadata(meta)
 }
 
 /** Keep legacy internal review children out of the parent-scoped catalog too. */

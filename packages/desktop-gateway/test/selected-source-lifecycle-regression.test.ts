@@ -89,7 +89,7 @@ it('rejects self-close from a passive callback and then drains the original hold
     const flush = vi.spyOn(f.coordinator, 'flush')
     await f.holder.passive(async handoff => {
       expect('source' in handoff).toBe(false)
-      selfClose = f.holder.close().then(() => 'closed', error => error.message as string)
+      selfClose = Promise.resolve().then(() => f.holder.close()).then(() => 'closed', error => error.message as string)
       const result = await Promise.race([selfClose, new Promise<string>(resolve => setImmediate(() => resolve('self-close blocked')))])
       expect(result).toBe('Selected handoff self-close')
     })
