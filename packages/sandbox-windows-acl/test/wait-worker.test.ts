@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { Worker } from 'node:worker_threads'
 import { expect, it } from 'vitest'
 import { createWaitDrainService } from '../src/native-wait-bridge.ts'
-import { createDrainWorkerProtocol } from '../src/native-wait-protocol.mjs'
+import { createDrainWorkerProtocol, type WorkerMessage } from '../src/native-wait-protocol.mjs'
 import type { NativePtr } from '../src/ffi.ts'
 import { createRegisteredWait } from '../src/native-wait.ts'
 
@@ -22,6 +22,106 @@ function fixture() {
   worker.emit('message', { type: 'ready', epoch: 'epoch' })
   return { worker, service, requests, results, calls: () => calls, drop: (value: boolean) => { drop = value } }
 }
+
+function delayedFixture() {
+  const worker = new EventEmitter() as EventEmitter & { postMessage(message: unknown): void }
+  const replies: WorkerMessage[] = []
+  const commands: WorkerMessage[] = []
+  let calls = 0
+  const handle = createDrainWorkerProtocol({ epoch: 'delayed', capacity: 2,
+    drain: () => { calls++; return 0 }, send: reply => { replies.push(reply) }, shutdown: () => {},
+  })
+  worker.postMessage = message => { commands.push(message as WorkerMessage); handle(message) }
+  const service = createWaitDrainService(worker, 'delayed', 2)
+  worker.emit('message', { type: 'ready', epoch: 'delayed' })
+  function deliver(type: string) {
+    const reply = replies.shift()
+    expect(reply?.type).toBe(type)
+    worker.emit('message', reply)
+    if (type === 'shutdown') queueMicrotask(() => worker.emit('exit', 0))
+    return reply!
+  }
+  return { worker, service, replies, commands, deliver, calls: () => calls }
+}
+const turn = () => new Promise<void>(resolve => setImmediate(resolve))
+
+it('accepts both delayed close/rejoin ACKs and a late exact result while unrelated retirement still completes', async () => {
+  const f = delayedFixture(); await f.service.ready
+  const first = f.service.reserve(), unrelated = f.service.reserve()
+  let releases = 0
+  const wait = createRegisteredWait({ register: () => 42n as NativePtr,
+    unregister: p => first.unregister(p), rejoin: () => first.rejoin(),
+    release: () => { first.release(); releases++ },
+  })
+  const closing = wait.close()
+  await turn()
+  const originalResult = f.deliver('result')
+  await turn() // Original close has retained result and sent its first ACK.
+  const joining = wait.close() // Rejoin sends a second ACK; neither reply is dropped.
+  const otherResult = unrelated.unregister(43n as NativePtr)
+  void otherResult.catch(() => {})
+  await turn()
+  expect(f.replies.map(reply => reply.type)).toEqual(['acknowledged', 'acknowledged', 'result'])
+  f.deliver('acknowledged')
+  await Promise.all([closing, joining])
+  expect(releases).toBe(1)
+  await turn() // First acknowledgment's continuation has removed its active request.
+  f.deliver('acknowledged')
+  await turn() // The second reply is a separate event after retirement.
+  f.worker.emit('message', { ...originalResult }) // Exact cached result also arrives after handoff.
+  f.deliver('result')
+  const receipt = await otherResult
+  const handoff = receipt.acknowledge()
+  f.deliver('acknowledged')
+  await handoff; unrelated.release()
+  const newReservation = f.service.reserve(); newReservation.release()
+  const shutdown = f.service.close()
+  await turn(); f.deliver('shutdown'); await shutdown
+  expect(f.calls()).toBe(2)
+})
+
+it.each([
+  { type: 'result', epoch: 'delayed', id: '1', status: 5 },
+  { type: 'result', epoch: 'delayed', id: '1', status: -1 },
+  { type: 'acknowledged', epoch: 'wrong', id: '1' },
+  { type: 'acknowledged', epoch: 'delayed', id: '99' },
+  { type: 'acknowledged', epoch: 'delayed', id: '1', status: 0 },
+])('keeps retired replay validation exact for $type/$epoch/$id/$status', async reply => {
+  const f = delayedFixture(); await f.service.ready
+  const owner = f.service.reserve()
+  const reading = owner.unregister(42n as NativePtr)
+  await turn(); f.deliver('result')
+  const receipt = await reading
+  const handoff = receipt.acknowledge()
+  f.deliver('acknowledged'); await handoff; owner.release()
+  f.worker.emit('message', reply)
+  expect(() => f.service.reserve()).toThrow(/not ready/)
+})
+
+it('retains the replay identity across every already-admitted handoff without blocking new capacity', async () => {
+  const f = delayedFixture(); await f.service.ready
+  const first = f.service.reserve(), second = f.service.reserve()
+  const result1 = first.unregister(42n as NativePtr)
+  await turn(); f.deliver('result')
+  const receipt1 = await result1
+  const result2 = second.unregister(43n as NativePtr)
+  await turn(); f.deliver('result')
+  const receipt2 = await result2
+  const ack1 = receipt1.acknowledge(), ack2 = receipt2.acknowledge()
+  first.rejoin() // Its duplicate will follow both already-admitted ACK replies.
+  f.deliver('acknowledged'); await ack1; first.release()
+  f.deliver('acknowledged'); await ack2; second.release()
+  await turn(); f.deliver('acknowledged')
+  const next = f.service.reserve()
+  const result3 = next.unregister(44n as NativePtr)
+  await turn(); f.deliver('result')
+  const receipt3 = await result3
+  const ack3 = receipt3.acknowledge()
+  f.deliver('acknowledged'); await ack3; next.release()
+  const closing = f.service.close()
+  await turn(); f.deliver('shutdown'); await closing
+  expect(f.calls()).toBe(3)
+})
 
 it('reserves capacity before registration, receives exact status, acknowledges it, then joins shutdown exit', async () => {
   const f = fixture()

@@ -45,6 +45,11 @@ export function createWaitDrainService(worker: DrainWorkerPort, epoch: string, c
     receipt?: WaitDrainReceipt; acked: boolean; fatal?: WaitDrainTransportError;
   }
   const requests = new Map<string, Request>()
+  // Scalar replay history only: no native registration, callback or storage ownership.
+  // Worker messages are FIFO. At most `capacity` already-admitted handoffs can
+  // retire ahead of a delayed replay; replies from newly admitted work cannot
+  // overtake it. Keep that many unique retirements without refreshing duplicates.
+  const retired = new Map<string, number>()
   const queue: Request[] = []
   let nextId = 0n, reservations = 0
   let ready = false, closing = false, alive = true, shutdownIssued = false, shutdownSeen = false
@@ -104,7 +109,15 @@ export function createWaitDrainService(worker: DrainWorkerPort, epoch: string, c
       shutdownSeen = true; shutdown.resolve(); return
     }
     const request = reply.id === undefined ? undefined : requests.get(reply.id)
-    if (!request) { fail('uncorrelated worker reply'); return }
+    if (!request) {
+      const status = reply.id === undefined ? undefined : retired.get(reply.id)
+      if (status !== undefined) {
+        if (reply.type === 'acknowledged' && reply.status === undefined && reply.reason === undefined) return
+        if (reply.type === 'result' && Number.isInteger(reply.status) && reply.status === status && reply.reason === undefined) return
+        fail('invalid retired worker reply'); return
+      }
+      fail('uncorrelated worker reply'); return
+    }
     if (reply.type === 'acknowledged') {
       if (!request.receipt || request.phase !== 'known') { fail('acknowledgment before retained result'); return }
       request.acked = true; request.handoff.resolve(); return
@@ -155,7 +168,11 @@ export function createWaitDrainService(worker: DrainWorkerPort, epoch: string, c
           status: receipt.status,
           async acknowledge() {
             await receipt.acknowledge()
-            requests.delete(request.id)
+            if (requests.get(request.id) === request) {
+              requests.delete(request.id)
+              retired.set(request.id, receipt.status)
+              if (retired.size > capacity) retired.delete(retired.keys().next().value!)
+            }
             if (receipt.status === 0) succeeded = true
             if (active === request) active = undefined
           },
