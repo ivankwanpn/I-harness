@@ -20,8 +20,8 @@ export function resultDisposition(envelope: ResultEnvelope): 'unknown' | 'not-di
 export function managedResultRefs(event: SessionEventView): readonly ManagedArtifactRef[] {
   // Required delivery authority is never a semantic seed slot. Its actual
   // original frame dependency still grants local/cold result-read membership.
-  if (event.type === 'exec/end') {
-    if (!validExecDeliveryEvent(event)) throw new TypeError('Invalid Exec result dependency')
+  if (data(event, 'type') === 'exec/end') {
+    if (!validExecDeliveryEvent(event) || event.type !== 'exec/end') throw new TypeError('Invalid Exec result dependency')
     return 'dependency' in event && event.dependency.retention.kind === 'artifact' ? [event.dependency.retention.ref] : []
   }
   return managedResultSlots(event).map(slot => slot.ref)

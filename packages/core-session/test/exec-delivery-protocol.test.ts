@@ -164,4 +164,10 @@ describe('required Exec delivery protocol', () => {
       expect(validDeliveryEvent({ ...terminal, dependency: { ...terminal.dependency, retention: value } })).toBe(false);
     }
   });
+  it('reads result type as own data without executing an accessor', () => {
+    let reads = 0;
+    const event = Object.defineProperty({ ...terminal }, 'type', { enumerable: true, get() { reads++; return 'exec/end'; } });
+    expect(() => managedResultRefs(event)).toThrow();
+    expect(reads).toBe(0);
+  });
 });
