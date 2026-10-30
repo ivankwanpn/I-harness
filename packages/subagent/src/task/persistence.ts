@@ -22,11 +22,12 @@ export class TaskPersistence {
   #last: OwnedTaskSave | undefined
   // Captures remain ordered even when an earlier write prevents entry.
   #pending: OwnedTaskSave[] = []
+  #bindingAdmitted = false
   #flushing: Promise<void> | undefined
   constructor(readonly coordinator: SessionCoordinator | undefined, readonly stateId: string | undefined, readonly strict: boolean, readonly snapshot: () => TaskProtocolDocument, readonly owned?: OwnedTaskContext) {}
   save(): Promise<void> {
     if (!this.coordinator || !this.stateId) return Promise.resolve()
-    const captured = this.captureSave()
+    const captured = this.#bindingAdmitted ? this.captureOwned(false) : this.captureSave()
     if (captured) return captured.done
     const document = this.strict ? this.snapshot() : undefined
     const next = this.#chain.then(() => {
@@ -46,6 +47,7 @@ export class TaskPersistence {
   }
   captureBindingSave(): OwnedTaskSave {
     if (!this.coordinator || !this.stateId || !this.owned || !isOwnedTaskContext(this.owned)) throw new Error('Original task owner unavailable')
+    this.#bindingAdmitted = true
     return this.captureOwned(true)
   }
   private captureOwned(hold: boolean): OwnedTaskSave {
@@ -81,7 +83,7 @@ export class TaskPersistence {
     taskDocumentStorageContract.validate(snapshot)
     owned.operations.assertParentSession(owned.parent, this.stateId!)
     let operation: Awaited<ReturnType<Operations['begin']>> | undefined, write: ReturnType<Awaited<ReturnType<Operations['begin']>>['stageWrite']> | undefined
-    let entered = false, failed = false, abandoned = false, consumed = false, retireFlight: Promise<void> | undefined
+    let entered = false, failed = false, abandoned = false, consumed = false, consumerRetired = false, retireFlight: Promise<void> | undefined
     let result: TaskWriteOutcome | undefined, closed = false, closeAttempted = false, retryFlight: Promise<void> | undefined, primaryFailure: unknown, beginCleanup: ReturnType<Operations['cleanupFor']>
     let handoffFailure: { cause: unknown } | undefined
     const assertHandoff = () => {
@@ -104,7 +106,8 @@ export class TaskPersistence {
         throw failure
       }
       if (!closed) { if (closeAttempted) await operation.retryClose(); else { closeAttempted = true; await operation.close() }; closed = true; result = write.outcome() ?? result }
-      assertHandoff()
+      if (!abandoned) assertHandoff()
+      else if (handoffFailure) throw handoffFailure.cause
     }
     const run = async () => {
       if (this.#pending[0] !== handle || this.#debt && this.#debt !== handle) throw new Error('Earlier owned task save requires resolution')
@@ -115,7 +118,7 @@ export class TaskPersistence {
         write = operation.stageWrite(observed.witness, snapshot)
         await finish(false)
         assertHandoff()
-        if (!hold) this.#pending.shift()
+        if (!hold) { this.#pending.shift(); consumerRetired = true }
       } catch (error) {
         failed = true; primaryFailure = error; let failure: unknown = error
         if (!operation) beginCleanup = owned.operations.cleanupFor(error)
@@ -127,6 +130,14 @@ export class TaskPersistence {
     if (!hold) gate.resolve()
     const done = this.#chain.then(run); this.#chain = done.then(() => gate.promise, () => {})
     const owner = this
+    // Retry and retirement share the exact head/gate transition. A waiter
+    // recognizes a completed retirement instead of removing the head twice.
+    const retireHead = () => {
+      if (consumerRetired) return
+      if (owner.#pending[0] !== handle || owner.#debt && owner.#debt !== handle) throw new Error('Earlier owned task save requires resolution')
+      if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }
+      owner.#pending.shift(); consumerRetired = true; gate.resolve()
+    }
     const handle: OwnedTaskSave = Object.freeze({ done,
       assertHandoff() { if (this !== handle) throw new TypeError('Invalid task save receiver'); if (abandoned) throw new Error('Task save consumer abandoned'); assertHandoff() },
       // Consumption is explicit. Assertions and flush never advance a held
@@ -142,9 +153,10 @@ export class TaskPersistence {
           await done.catch(() => {})
           if (priorRetry) await priorRetry.catch(() => {})
           try {
+            if (consumerRetired) return
             if (!closed && operation && closeAttempted) { await operation.retryClose(); closed = true; if (write) result = write.outcome() ?? result }
             if (!operation && beginCleanup) await beginCleanup.retry()
-            if (closed && result?.kind === 'committed' && !result.cleanupPending && !handoffFailure && (!owner.#debt || owner.#debt === handle) && owner.#pending[0] === handle) { if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; owner.#pending.shift(); gate.resolve(); return }
+            if (closed && result?.kind === 'committed' && !result.cleanupPending && !handoffFailure && (!owner.#debt || owner.#debt === handle) && owner.#pending[0] === handle) { retireHead(); return }
             if (!owner.#debt) { owner.#debt = handle; owner.#debtCause = failed ? primaryFailure : new Error('Task save consumer unresolved') }
             gate.resolve(); throw new Error('Owned task save requires resolution', { cause: owner.#debtCause })
           } catch (error) { if (!owner.#debt) { owner.#debt = handle; owner.#debtCause = error }; gate.resolve(); throw error }
@@ -153,7 +165,7 @@ export class TaskPersistence {
       },
       retry() {
         if (this !== handle) return Promise.reject(new TypeError('Invalid task save receiver'))
-        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if ((!hold || abandoned) && owner.#pending[0] === handle) owner.#pending.shift() }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
+        if (!retryFlight) { const retirement = abandoned ? retireFlight : undefined; retryFlight = Promise.resolve().then(async () => { await done.catch(() => {}); if (retirement) await retirement.catch(() => {}); if (!entered) { await run(); return }; if (!write) { if (beginCleanup) await beginCleanup.retry(); else if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; if (result?.kind === 'conflict' || result?.kind === 'not-issued') { if (operation && !closed) { await operation.retryClose(); closed = true }; throw primaryFailure }; await finish(true); if (!abandoned) assertHandoff(); if (owner.#debt === handle) { owner.#debt = undefined; owner.#debtCause = undefined }; if (abandoned) retireHead(); else if (!hold && owner.#pending[0] === handle) { owner.#pending.shift(); consumerRetired = true } }); void retryFlight.then(() => { retryFlight = undefined }, () => { retryFlight = undefined }) }
         return retryFlight
       }, outcome() { if (this !== handle) throw new TypeError('Invalid task save receiver'); return result },
     })
