@@ -188,3 +188,15 @@ it('reconciles an uncertain original selected seed before authorizing completion
   expect(await readFile(f.path)).toEqual(f.raw)
  }finally{await f.close()}
 })
+
+it('joins selected birth binding before managed document closes',async()=>{
+ const f=await fixture()
+ try{
+  const {createManagedDocument}=await import('../../session-persistence/src/coordinator/managed-document.ts'),{buildSession}=await import('../../session-persistence/src/format/validation.ts'),{readFactJournal}=await import('@i-harness/core-session')
+  const meta=JSON.parse(f.built.headerBytes),decoded=readFactJournal(f.raw.subarray(Buffer.byteLength(f.built.headerBytes)),meta.journal,meta.formatVersion,meta),session=buildSession(meta,decoded.events)
+  let control:any;const document=createManagedDocument('target',session,decoded.prefix,f.backend,f.ownership,undefined,()=>{},{operationId:'op',selected:true,bind(value){control=value}})
+  const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>();faults.openGate=leave.promise;faults.openEntered=entered.resolve
+  const binding=control.bindSelected().catch((error:unknown)=>error);await entered.promise;let closed=false;const closing=document.close().then(()=>{closed=true});try{await Promise.resolve();expect(closed).toBe(false)}finally{leave.resolve()}
+  expect(await binding).toBeInstanceOf(Error);await closing;expect(closed).toBe(true)
+ }finally{faults.openGate=undefined;faults.openEntered=undefined;await f.close()}
+})
