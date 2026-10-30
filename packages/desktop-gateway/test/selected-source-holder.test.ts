@@ -88,3 +88,14 @@ it('confirms the selected managed artifacts through the original result store',a
   expect((await holder.confirmTarget()).kind).toBe('confirmed');const flush=vi.spyOn(f.coordinator,'flush');const first=await holder.confirmManagedDependencies();expect(first.kind).toBe('confirmed');expect(await holder.confirmManagedDependencies()).toEqual(first);expect(flush).not.toHaveBeenCalled();await (await f.coordinator.openManagedDocument('source')).metadata.enterPlan('revoke');await expect(holder.confirmManagedDependencies()).rejects.toThrow();await holder.close();flush.mockRestore()
  }finally{await f.close()}
 },30000)
+
+it('drains an active selected project confirmation before releasing its original target claim',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-close-flight',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+  expect((await holder.captureFirst()).kind).toBe('captured');expect(f.coordinator.ownerOf('target')).toBe(true)
+  const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),original=f.coordinator.putDocument.bind(f.coordinator),spy=vi.spyOn(f.coordinator,'putDocument').mockImplementation(async(key,value)=>{entered.resolve();await leave.promise;return original(key,value)})
+  const confirmation=holder.confirmTarget().catch(error=>error);await entered.promise
+  let closed=false;const closing=holder.close().then(()=>{closed=true});try{await new Promise(resolve=>setTimeout(resolve,75));expect(closed).toBe(false);expect(f.coordinator.ownerOf('target')).toBe(true)}finally{leave.resolve();await confirmation;await closing;spy.mockRestore()}
+ }finally{await f.close()}
+})

@@ -202,6 +202,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         slot.assertCurrent();assertTargetCurrent();return result
       },
       assertOutsideUse(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close')},
+      async drain(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');if(active)await active.catch(()=>{})},
       revoke(){retired=true;original?.revoke()},
       async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');projectPreparation?.close();retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
     })
