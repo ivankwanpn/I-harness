@@ -2,7 +2,7 @@ import koffi from 'koffi'
 import type { NativePtr } from './ffi.ts'
 import { Win32Error } from './errors.ts'
 import { createRegisteredWait } from './native-wait.ts'
-import { WaitDrainTransportError, type WaitDrainService } from './native-wait-bridge.ts'
+import { WaitDrainTransportError, type WaitDrainReservation, type WaitDrainService } from './native-wait-bridge.ts'
 
 // Anonymous and module-stable: each channel/generation must not redeclare a named prototype.
 const callbackType = koffi.proto('__stdcall', 'void', ['void *', 'uint8'])
@@ -10,11 +10,16 @@ const callbackType = koffi.proto('__stdcall', 'void', ['void *', 'uint8'])
 /** One-shot kernel wait. Partial registration allocations remain owned by close(). */
 export function registerWin32Wait(handle: NativePtr, service: Pick<WaitDrainService, 'reserve'>) {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Win32 wait requires Windows x64')
+  return registerWin32WaitWithReservation(handle, service.reserve())
+}
+
+/** Uses the caller's original pre-admitted reservation. */
+export function registerWin32WaitWithReservation(handle: NativePtr, reservation: WaitDrainReservation) {
+  if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('Win32 wait requires Windows x64')
   const kernel = koffi.load('kernel32.dll')
   const ptr = koffi.pointer('void')
   const register = kernel.func('__stdcall', 'RegisterWaitForSingleObject', 'int', [koffi.pointer(ptr), ptr, koffi.pointer(callbackType), ptr, 'uint32', 'uint32'])
   const lastError = kernel.func('__stdcall', 'GetLastError', 'uint32', [])
-  const reservation = service.reserve() // Admission before any native wait can exist.
   let trampoline: ReturnType<typeof koffi.register> | undefined
   let slot: ReturnType<typeof koffi.alloc> | undefined
   let registrationFailure: unknown
@@ -59,3 +64,5 @@ export function registerWin32Wait(handle: NativePtr, service: Pick<WaitDrainServ
   })
   return { signalled: registrationFailure === undefined ? wait.signalled : Promise.reject(registrationFailure), close: wait.close }
 }
+
+
