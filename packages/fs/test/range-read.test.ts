@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createFsTools } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 it("bounds final JSON file pages, reconstructs UTF8 and refuses changed source digests", async () => {
   const root = await mkdtemp(join(tmpdir(), "range-read-"))
@@ -27,7 +27,7 @@ it("bounds final JSON file pages, reconstructs UTF8 and refuses changed source d
     expect(await tool.execute({ path }, {} as any)).toEqual({ content: "changed" })
     const refused = await tool.execute({ path: "../" + "x".repeat(100000), max_output_bytes: 1024 }, {} as any)
     expect(Buffer.byteLength(JSON.stringify(refused))).toBeLessThanOrEqual(1024)
-    expect(refused).toMatchObject({ code: "FS_NOT_FOUND" })
+    expect(refused).toMatchObject({ code: "FS_NOT_FOUND", reason_truncated: true })
     const legacy = createFsTools({ workspace: root }).find(t => t.name === "read")!
     await writeFile(path, text)
     expect(await legacy.execute({ path }, {} as any)).toEqual({ content: text })

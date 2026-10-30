@@ -54,6 +54,8 @@ export interface DesktopHandlers {
   hooks?: ReturnType<typeof createHookSettings>
   subagents?: ReturnType<typeof createSubagentSettings>
   sessionSubagents?: ReturnType<typeof createDesktopSubagents>
+  instructions?: ReturnType<typeof import('./instructions/views.ts').createInstructionViews>
+  instructionSettings?: ReturnType<typeof import('./instructions/settings.ts').createInstructionSettings>
   agentSettings?: ReturnType<typeof createAgentSettings>
   terminal?: ReturnType<typeof createDesktopTerminal>
   schedules?: ReturnType<typeof createDesktopSchedules>

@@ -173,6 +173,7 @@ export function createWorkspaceRuntimeManager(options: {
           && frame.method !== "desktop/interaction/closed"
           && frame.method !== "desktop/workflow/changed"
           && frame.method !== "desktop/session/subagents/changed"
+          && frame.method !== 'desktop/instructions/changed'
           && frame.method !== "desktop/usage/recording-warning"
           && frame.method !== "desktop/context/diagnostic"
           && frame.method !== "desktop/session/navigation/changed") return

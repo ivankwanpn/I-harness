@@ -236,7 +236,7 @@ it('keeps a failing transferred original instruction pin on its batch source thr
   const fault = new Error('original batch pin failed')
   f.deps.requestContext = { async reconcile() {}, capture: () => evidence, current: value => value === evidence,
     retain() { const ordinal = ++pins; return { async release() { releases++; if (ordinal === 2 && !failed) { failed = true; throw fault } } } },
-    succeeded() {}, promotedHumanRequest() {}, async close() {} }
+    succeeded() { return undefined }, promotedHumanRequest() {}, async close() {} }
   try {
     const error = await f.agent().run('one input').catch(error => error)
     expect(error).toBeInstanceOf(AggregateError); expect(error.errors[0]).toBe(f.originalErrors[0])

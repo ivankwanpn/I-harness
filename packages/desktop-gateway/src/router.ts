@@ -22,6 +22,7 @@ import { createProviderProbes } from "./provider-probes.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 import { usageRequest } from "./usage-wire.ts"
+import { instructionRequest } from './instructions/wire.ts'
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -57,6 +58,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.hooks?.writeConfig) capabilities["desktop-hook-authoring"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.sessionSubagents) capabilities["desktop-subagent-catalog"] = ["1"]
+    if (handlers.instructions) capabilities['desktop-instructions'] = ['1']
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.schedules) capabilities["desktop-schedule"] = ["1"]
@@ -225,6 +227,18 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (['desktop/instructions/state', 'desktop/instructions/refresh', 'desktop/instructions/subscribe', 'desktop/instructions/unsubscribe', 'desktop/instructions/settings', 'desktop/instructions/configure'].includes(message.method) && handlers.instructions) {
+        try {
+          const result = await instructionRequest(handlers.instructions, message.method, message.params, handlers.instructionSettings)
+          if (message.method === 'desktop/instructions/subscribe') {
+            if (!handlers.instructions.acknowledge((result as { subscriptionId: string }).subscriptionId, () => send(makeSuccess(message.id, result)))) throw new Error('Instruction scope changed before acknowledgement')
+          } else if (message.method === 'desktop/instructions/state' || message.method === 'desktop/instructions/refresh') {
+            (result as Awaited<ReturnType<typeof handlers.instructions.snapshotReply>>).write(snapshot => send(makeSuccess(message.id, snapshot)))
+          } else send(makeSuccess(message.id, result))
+        }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/result", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
         const params = asRecord(message.params)
         try {

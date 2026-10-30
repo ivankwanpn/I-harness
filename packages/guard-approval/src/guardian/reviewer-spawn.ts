@@ -9,6 +9,7 @@ export function spawnReviewer(deps: GuardianReviewDeps, role: SubagentRole, mess
   return spawnChild({
     taskName: `review-${randomUUID().slice(0, 8)}`, message, parentPath: 'root', parentRegistry: deps.parentRegistry,
     parentSession: deps.parentSession, parentCtx: deps.parentCtx, signal, sharedGeneration: generation,
+    createInstructionContext: deps.createInstructionContext, retainInitialSetup: deps.retainInitialSetup,
     onSettled: observed,
     role: { ...role, ...(deps.policyText !== undefined ? { systemPrompt: deps.policyText } : {}), tools: [] },
     parentModel: deps.model ?? deps.parentModel,

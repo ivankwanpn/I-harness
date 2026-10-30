@@ -5,10 +5,21 @@ import type { CodeModeObservation } from './types.ts'
 export function observationOutput(out: CodeModeObservation) {
   if (out.policyRefusal) throw Object.assign(new Error(out.error || 'Code Mode policy refusal'), { policyRefusal: true as const })
   const images = out.items.flatMap(item => item.type === 'image' ? [item.image] : [])
+  let instructionReplan = out.instructionReplan
+  let instructionEffects: { omitted: true; applied: number; notApplied: number; effectsUnknown: number } | undefined
+  if (instructionReplan && Buffer.byteLength(JSON.stringify([instructionReplan.applied, instructionReplan.notApplied, instructionReplan.effectsUnknown])) > 32000) {
+    const { applied, notApplied, effectsUnknown, ...detail } = instructionReplan
+    // The original code/cell record retains the full bounded effect lists.
+    // This observation's existing cell ID identifies those details explicitly.
+    instructionEffects = { omitted: true, applied: applied?.length ?? 0, notApplied: notApplied?.length ?? 0, effectsUnknown: effectsUnknown?.length ?? 0 }
+    instructionReplan = detail
+  }
   const value = {
     cellId: out.cellId, cell_id: out.cellId, status: out.status, text: out.text, truncated: out.truncated,
     ...(out.yielded ? { yielded: true as const, yield_reason: out.yieldReason } : {}),
     ...(out.textRetention ? { textRetention: { ...out.textRetention } } : {}),
+    ...(instructionReplan ? { instructionReplan } : {}),
+    ...(instructionEffects ? { instructionEffects } : {}),
     ...(out.error ? { error: out.error } : {}),
     items: out.items.map(item => item.type === 'text' ? { type: 'text', length: item.text.length }
       : item.type === 'image' ? { type: 'image', mediaType: item.image.mediaType }

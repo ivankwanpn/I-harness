@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest"
-import { createFsTools } from "../src/index.ts"
+import { createFsTools } from "./helpers/registry-fs.ts"
 import { writeFile, readFile, access } from "node:fs/promises"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"

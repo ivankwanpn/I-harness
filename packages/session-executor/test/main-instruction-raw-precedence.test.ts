@@ -15,7 +15,7 @@ vi.mock('../src/context/instructions/manager.ts', async original => {
   const api = await original<typeof import('../src/context/instructions/manager.ts')>()
   return { ...api, createMainInstructionManager(options: Parameters<typeof api.createMainInstructionManager>[0]) {
     const manager = api.createMainInstructionManager(options), succeeded = manager.succeeded.bind(manager)
-    manager.succeeded = handoff => { observed.handoffs.push(handoff); succeeded(handoff) }
+    manager.succeeded = handoff => { observed.handoffs.push(handoff); return succeeded(handoff) }
     return manager
   } }
 })

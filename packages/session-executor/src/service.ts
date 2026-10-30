@@ -180,6 +180,9 @@ interface SessionSubmitOptions {
   prepareInput?: (assembly: SessionAssembly, prompt: string) => Promise<string>
 }
 export interface SessionService {
+  instructionState?(sessionId: string, childSessionId?: string): import('./context/instructions/diagnostics.ts').InstructionReport
+  refreshInstructions?(sessionId: string, childSessionId?: string, signal?: AbortSignal): Promise<import('./context/instructions/diagnostics.ts').InstructionReport>
+  onInstructionsChanged?(sessionId: string, childSessionId: string | undefined, listener: () => void): () => void
   onExecutionSurfaceLifecycle?(listener: (event: { sessionId: string; assembly: SessionAssembly; kind: "published" | "retiring" | "removed" }) => void, options?: { includeExisting?: boolean }): () => void
   compact(sessionId: string, instructions?: string, signal?: AbortSignal): Promise<import('@i-harness/compaction').CompactionResult>
   /** Update plugin-owned capabilities without replacing sessions or agents. */
@@ -1391,6 +1394,26 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     writableSessionFor,
     receivedInputFor,
     liveAssembly,
+    instructionState(sessionId, childSessionId) { return liveAssembly(sessionId)?.instructionDiagnostics?.(childSessionId)?.read() ?? { state: 'not-published' } },
+    onInstructionsChanged(sessionId, childSessionId, listener) {
+      let active = true, assembly: SessionAssembly | undefined, owner: ReturnType<NonNullable<SessionAssembly['instructionDiagnostics']>>, offOwner: (() => void) | undefined, offChildren: (() => void) | undefined
+      const emit = () => { if (active) listener() }
+      const bind = () => {
+        const next = liveAssembly(sessionId), nextOwner = next?.instructionDiagnostics?.(childSessionId)
+        if (assembly !== next) { offChildren?.(); offChildren = next?.onSubagentsChanged?.(() => { bind(); emit() }); assembly = next }
+        if (owner !== nextOwner) { offOwner?.(); owner = nextOwner; offOwner = owner?.subscribe(emit) }
+      }
+      const lifecycle = (event: SurfaceLifecycle) => { if (event.sessionId === sessionId) { bind(); emit() } }
+      surfaceListeners.add(lifecycle); bind()
+      return () => { if (!active) return; active = false; surfaceListeners.delete(lifecycle); offOwner?.(); offChildren?.() }
+    },
+    async refreshInstructions(sessionId, childSessionId, signal) {
+      const assembly = liveAssembly(sessionId), owner = assembly?.instructionDiagnostics?.(childSessionId)
+      if (!owner) return { state: 'not-published' }
+      const report = await owner.refresh(signal)
+      if (liveAssembly(sessionId) !== assembly || assembly?.instructionDiagnostics?.(childSessionId) !== owner) return { state: 'revoked' }
+      return report
+    },
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState,
     onExecutionState: listener => {

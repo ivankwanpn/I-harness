@@ -106,6 +106,7 @@ export interface RegisterSubagentOptions extends RoleModelHost {
 }
 
 export interface RegisterSubagentResult {
+  retainInitialSetup(setup: import('./child/instruction-context.ts').InitialChildSetup): () => void
   /** Strict barrier over the existing complete job/table state document. */
   retainResults(): Promise<"durable" | "memory">
   roles: RoleRegistry
@@ -383,6 +384,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
       return "durable"
     },
     roles, jobs, table, agents,
+    retainInitialSetup: (setup: import('./child/instruction-context.ts').InitialChildSetup) => residentOwnerFor(subagentDeps).retainInitial(setup),
     ensureResident: (entry: ChildAgentEntry, controller?: AbortController, executionCurrent?: () => boolean) => ensureResidentAgent(subagentDeps, entry, controller, executionCurrent),
     followupActivation: subagentDeps.residentActivation,
     captureFollowupGeneration: followupDepsWithRebuild(subagentDeps).captureGeneration,

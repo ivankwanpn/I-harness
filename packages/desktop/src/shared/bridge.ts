@@ -70,6 +70,10 @@ export type DesktopRequest =
   | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }
   | { kind: "desktop/session/subagents/result"; workspaceId: string; sessionId: string; childSessionId: string; offset?: number; maxBytes?: number; resultRevision?: string; refId?: string; refRevision?: string }
   | { kind: "desktop/session/subagents/control"; workspaceId: string; sessionId: string; childSessionId: string; action: "followup" | "message" | "interrupt" | "close"; text?: string }
+  | { kind: 'desktop/instructions/state' | 'desktop/instructions/refresh' | 'desktop/instructions/subscribe'; workspaceId: string; sessionId: string; childSessionId?: string }
+  | { kind: 'desktop/instructions/unsubscribe'; workspaceId: string; subscriptionId: string }
+  | { kind: 'desktop/instructions/settings'; workspaceId: string }
+  | { kind: 'desktop/instructions/configure'; workspaceId: string; patch: { enabled?: boolean; maxBytes?: number; globalSources?: string[] } }
   | { kind: "desktop/agent-settings/state"; workspaceId: string }
   | { kind: "desktop/agent-settings/configure"; workspaceId: string; patch: Partial<AgentDefaults> }
   | { kind: "browser/list" | "browser/open" | "browser/hide"; workspaceId: string }
@@ -151,7 +155,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic"
+      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/session/subagents/changed" | "desktop/usage/recording-warning" | "desktop/context/diagnostic" | 'desktop/instructions/changed'
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string; close?: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry["close"] }

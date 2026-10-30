@@ -64,8 +64,8 @@ it.each([3, 257])('%i actual registered directory reads select fresh exact views
     await writeFile(join(f.directories[0]!, 'AGENTS.md'), 'REVISITED_FRESH_SENTINEL')
     const assembly = await f.service.assemblyFor(f.id)
     // Exercise the registered read callback with the exact main Session object.
-    const tool = assembly.tools.get('list_dir')!
-    await tool.execute({ path: f.directories[0] }, { session: assembly.session, callId: 'revisit' })
+    const prepared = await assembly.tools.prepare({ name: 'list_dir', args: { path: f.directories[0] } }, undefined, { session: assembly.session, callId: 'revisit' })
+    await assembly.tools.dispatch(prepared)
     await assembly.agent.followup('unknown continuation retains the observed read wave')
     expect(f.bodies.at(-1)).toContain('REVISITED_FRESH_SENTINEL')
     expect(f.bodies.at(-1)).not.toContain(`DIRECTORY_${count - 1}_SENTINEL`)

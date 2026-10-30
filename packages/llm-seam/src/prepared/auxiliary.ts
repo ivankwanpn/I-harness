@@ -7,6 +7,8 @@ export interface AuxiliaryGenerationAction {
   readonly control: GenerationControl
   bind(prepared: PreparedModelRequest, source?: 'owner' | 'summary'): Promise<void>
   close(disposition: 'completed' | 'failed' | 'stopped'): Promise<void>
+  /** Reconcile the same original close after its first attempt failed. */
+  recoverClose?(): Promise<void>
 }
 export type TitleGenerationFactory = (inputSeq: number, timeoutMs: number) => Promise<AuxiliaryGenerationAction>
 export interface MediaGenerationAction {

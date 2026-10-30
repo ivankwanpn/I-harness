@@ -359,6 +359,7 @@ export interface UnavailableExecutionAuthorityStatus {
 }
 
 export interface SessionAssembly {
+  instructionDiagnostics?(childSessionId?: string): import('./context/instructions/manager.ts').InstructionDiagnostics | undefined
   onExecutionSurfaceChanged?(listener: () => void): () => void
   executionSurfaceState?(): "available" | "unavailable" | "retired"
   settleRuntimeContextPublications(): Promise<void>
@@ -1066,6 +1067,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let instructionEnvironment: InstructionEnvironment | undefined
   let instructionManager: ReturnType<typeof createMainInstructionManager> | undefined
   let childInstructionHost: ReturnType<typeof createChildInstructionHost> | undefined
+  let isolatedInstructionHost: ReturnType<typeof import('./context/instructions/isolated.ts').createIsolatedInstructionHost> | undefined
   let retireInstructionHost: (() => void) | undefined
   let closeInstructionHost: (() => Promise<void>) | undefined
   runtimeContext.registerSection(
@@ -1205,6 +1207,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
   const retireExecutionSurface = () => {
     residentActivation.retire()
+    isolatedInstructionHost?.retire()
     retireInstructionHost?.()
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
@@ -1233,11 +1236,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // The original mount guard must own the asynchronous policy/watch lifetime
     // before any dependent setup can reject. Earlier config getters acquire none.
     instructionEnvironment = opts.instructionEnvironment ?? (opts.instructionSettingsPath !== undefined ? createInstructionEnvironment({ settingsPath: opts.instructionSettingsPath }) : createProjectInstructionEnvironment())
-    instructionManager = createMainInstructionManager({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
+    instructionManager = createMainInstructionManager({ session, environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && opts.executionCallerAvailable?.() !== false, publish: (signal, retain) => runtimeContext.render(signal, retain) })
     childInstructionHost = createChildInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow,
       available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false,
       root: { session, factOwner, manager: instructionManager } })
+    isolatedInstructionHost = (await import('./context/instructions/isolated.ts')).createIsolatedInstructionHost({ environment: instructionEnvironment, cwd: opts.workspace, authority: authorityNow, available: () => !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false })
     retireInstructionHost = childInstructionHost.retire.bind(childInstructionHost)
     closeInstructionHost = childInstructionHost.close.bind(childInstructionHost)
     for (const cfg of opts.mcp ?? []) {
@@ -1437,6 +1441,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        createIsolatedInstructionContext: isolatedInstructionHost.create,
+        createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
         results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
         ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
@@ -1495,6 +1501,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           results: createTaskResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId),
+          createInstructionContext: childInstructionHost.create, retainInitialSetup: subagent.retainInitialSetup,
           reportPolicy: SHIPPING_REPORT_POLICY,
           generationFactoryFor, modelActionTimeoutMs: opts.modelActionTimeoutMs, modelActionMaxAttempts: opts.modelActionMaxAttempts,
           retainResults: subagent.retainResults,
@@ -1660,7 +1667,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     constructionComplete = true
     if (!opts.residentActivation) residentActivation.activate()
     return {
-      reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      reconcileExecutionAuthority: () => { instructionManager?.diagnostics.invalidate(); childInstructionHost?.invalidateDiagnostics(); return executionRuntime.reconcile() },
       settleRuntimeContextPublications: () => runtimeContext.settleOriginals(),
       executionBackendStatus: () => executionRuntime.status(),
       ctx,
@@ -1739,6 +1746,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return {finish}
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      instructionDiagnostics: childSessionId => {
+        if (disposing) return undefined
+        if (!childSessionId) return instructionManager?.diagnostics
+        const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ['running', 'waiting'].includes(row.status))
+        return entry?.factOwner && !entry.closing && !entry.controller.signal.aborted ? childInstructionHost?.diagnosticsFor(entry.session, entry.factOwner) : undefined
+      },
       liveChildSession: childObservation.liveSession,
       liveChildBudget: childSessionId => {
         const entry = [...subagent.table.entries().values()].find(row => row.sessionId === childSessionId && ["running", "waiting"].includes(row.status))
@@ -1886,7 +1899,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Failed child/generation debt still borrows the original publication,
     // document, environment and result-store owners. Never release through it.
     if (!processCleanupFailures.length) {
-      await phase('instruction-host', () => closeInstructionHost?.())
+      await phase('isolated-instructions', () => isolatedInstructionHost?.close())
+      if (cleanupDone.has('isolated-instructions')) await phase('instruction-host', () => closeInstructionHost?.())
       if (cleanupDone.has('instruction-host')) await phase('runtime', () => runtimeContext.close())
       if (cleanupDone.has('runtime')) await phase('instructions', () => instructionManager?.close())
       if (cleanupDone.has('instructions')) await phase('document', () => managedDocument?.close())

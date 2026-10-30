@@ -16,8 +16,10 @@
 | `session-inject` | `{ "text": string, "description": string, "scope": "turn" \| "session" }` | 提交注入輸入；**description + scope 必填**（缺 → JSON 驗證失敗） | 執行器運行中 |
 | `session-cancel` | `{ "inputId": string }` | 取消指定待處理輸入；回 `executor.cancel(inputId)` 結果 | 執行器運行中 |
 | `session-pending` | （無） | 列出待處理輸入：`{ "inputId", "text", "delivery" }[]` | 執行器運行中 |
+| `instruction-status` | `{ "format"?: "json" \| "text" }` | 讀取此 live assembly 最近一次發布的指令來源中繼資料，不呼叫模型 | live session |
+| `instruction-refresh` | `{ "format"?: "json" \| "text" }` | 透過原有來源 owner 刷新並發布 context，不呼叫模型；忙碌時回報目前狀態 | live session |
 
-> 註：這些命令由 CLI 的 `run` 路徑在 assembly 上註冊（`apps/cli/src/run.ts:769-820`，`session-send`…`session-pending` ＋ `session-compact` 共 7 條）；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。**原文的「宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理」自 M65（2026-09-17）起是死引用**：`packages/web-host` 已刪（`git ls-files packages/web-host` = 0）、`CommandBridge` 對 `apps/**`＋`packages/**` 零命中（M80 重量）——今天命令面的宿主只有 CLI `run`。
+> 註：這些命令由 CLI 的 `run` 路徑在 live assembly 上註冊；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。指令來源狀態描述的是已發布的 context，並不表示模型已讀取；冷 session 沒有可重建的來源中繼資料。shell 內路徑不會自動成為指令來源 target。**原文的「宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理」自 M65（2026-09-17）起是死引用**：`packages/web-host` 已刪、`CommandBridge` 對 `apps/**`＋`packages/**` 零命中——今天命令面的宿主只有 CLI `run`。
 
 ## 工具面（B 區，M26-B）
 

@@ -7,6 +7,7 @@ import type { CodeModeItem, CodeModeObservation, CodeModeObserveOptions, CodeMod
 import type { Retirement } from './retirement.js';
 import { FactRecoveryRequiredError } from '@i-harness/core-session';
 import { TEXT_CAP, ITEM_CAP, message, textSlice } from './limits.js';
+import { bindObservationReplan } from './replan-observation.js';
 
 /** Map one host retention disposition onto the bounded model/archive descriptor.
  * Only a verified artifact makes `stored` true; everything else is explicit. */
@@ -65,7 +66,7 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                     cell.retainedOutputItems--;
                     retained = false;
                 }
-                if (!cell.pendingOutputReceipts && !cell.terminalReceiptPending) {
+                if (!cell.pendingOutputReceipts && (!cell.terminalReceiptPending || cell.instructionReplan && !cell.replanTerminalStarted)) {
                     cell.recoveryRequired = false;
                     cell.error = undefined;
                     cell.resumeCompletion?.();
@@ -254,8 +255,10 @@ export function createOutput(options: CodeModeRuntimeOptions, config: RuntimeLim
                 cellId: cell.id, status, items, text, truncated,
                 ...(steered && cell.status === 'running' && !signal?.aborted ? { yielded: true as const, yieldReason: 'user-steer' as const } : {}),
                 ...(textRetention ? { textRetention } : {}),
+                ...(cell.instructionReplan ? { instructionReplan: cell.instructionReplan.data } : {}),
                 ...(error === undefined ? {} : { error }), ...(cell.policyRefusal ? { policyRefusal: true } : {})
             };
+            if (cell.instructionReplan) bindObservationReplan(out, cell.instructionReplan);
             if (out.status !== 'running')
                 state.retire(cell.id);
             else if (!passive && cell.status === 'running' && !cell.finishing)

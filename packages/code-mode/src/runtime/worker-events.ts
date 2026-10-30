@@ -4,6 +4,7 @@ import type { Cell, CellState } from './cell-state.js'
 import type { Retirement } from './retirement.js'
 import type { Output } from './output.js'
 import { diagnostic, json, message } from './limits.js'
+import { isInstructionReplan } from '@i-harness/core-tools'
 
 /** Host-call producers and handlers over each registered cell's actual worker. */
 export function createWorkerEvents(
@@ -11,10 +12,10 @@ export function createWorkerEvents(
   config: RuntimeLimits,
   errorCap: number,
   state: Pick<CellState, 'accept' | 'untrack'>,
-  retirement: Pick<Retirement, 'close' | 'complete'>,
+  retirement: Pick<Retirement, 'close' | 'complete' | 'replan'>,
   outputOwner: Pick<Output, 'output'>,
 ) {
-  const { close, complete } = retirement
+  const { close, complete, replan } = retirement
   const { output } = outputOwner
   function call(cell: Cell, id: string, name: string, encoded: string) {
     if (cell.status !== 'running' || cell.finishing) return
@@ -45,8 +46,10 @@ export function createWorkerEvents(
       if (cell.status !== 'running') return
       if (typeof error === 'object' && error !== null && 'policyRefusal' in error && error.policyRefusal === true) {
         close(cell,'terminated',message(error),true)
-      } else if (!controller.signal.aborted) reject(error)
-    }).finally(() => { cell.calls.delete(id); state.untrack(producer,cell) })
+      } else if (isInstructionReplan(error)) { replan(cell, error) }
+      else if (!cell.instructionReplan && !controller.signal.aborted) reject(error)
+    }).finally(() => { cell.calls.delete(id); cell.invocations.delete(producer); state.untrack(producer,cell) })
+    cell.invocations.add(producer)
     state.accept(producer,cell)
   }
   function receive(cell: Cell, data: {type:string; [key:string]: unknown}) {

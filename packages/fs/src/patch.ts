@@ -5,6 +5,7 @@ import { writeFileAtomic } from "./atomic.ts"
 import { assertSnapshotFresh } from "./version.ts"
 import { assertTextData, normalizeLineEndings, detectLineEndings, restoreLineEndings } from "./text.ts"
 import { FsToolError } from "./error.ts"
+import { isInstructionReplan, type InstructionReplanError, type NativeBoundary } from '@i-harness/core-tools'
 
 export interface PatchChunk {
   context?: string
@@ -181,11 +182,14 @@ export async function applyPatch(
   /** M16: write confinement, checked per hunk INSIDE the try so a refused hunk is
    *  reported alongside the others instead of aborting the whole patch. */
   guard?: (absPath: string) => void,
-): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[] }> {
+  before?: (boundary: NativeBoundary) => void,
+): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[]; replan?: { error: InstructionReplanError; entered: boolean; remaining: string[] } }> {
   const applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[] = []
   const errors: { path: string; message: string }[] = []
-  for (const hunk of hunks) {
+  for (const [index, hunk] of hunks.entries()) {
     const target = resolve(hunk.path)
+    let entered = false
+    const boundary = (value: NativeBoundary) => { guard?.(target); before?.(value); entered = true }
     try {
       guard?.(target)
       if (hunk.kind === "add") {
@@ -201,7 +205,7 @@ export async function applyPatch(
           if (captured.isNewFile) isNewFile = true
         }
         guard?.(target)
-        await writeFileAtomic(target, hunk.contents ?? "")
+        await writeFileAtomic(target, hunk.contents ?? "", undefined, boundary)
         applied.push({ path: hunk.path, action: "added", ...(isNewFile !== undefined ? { isNewFile } : {}) })
       } else if (hunk.kind === "delete") {
         // M42 rewind: the pre-image of a deleted file is the file itself —
@@ -218,6 +222,7 @@ export async function applyPatch(
           }
         }
         guard?.(target)
+        before?.({ target, operation: 'unlink' }); entered = true
         await unlink(target)
         applied.push({ path: hunk.path, action: "deleted", ...(preImageRef !== undefined ? { preImageRef } : {}) })
       } else {
@@ -247,7 +252,7 @@ export async function applyPatch(
           if (r.blobId !== null) preImageRef = r.blobId
         }
         guard?.(target)
-        await writeFileAtomic(target, restoreLineEndings(result.text, style))
+        await writeFileAtomic(target, restoreLineEndings(result.text, style), undefined, boundary)
         // M49: structured change — the pre-image text and the post-edit text
         // are both known here, so the change can always be built (bounded).
         applied.push({
@@ -260,6 +265,7 @@ export async function applyPatch(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       errors.push({ path: hunk.path, message })
+      if (isInstructionReplan(err)) return { applied, errors, replan: { error: err, entered, remaining: hunks.slice(entered ? index + 1 : index).map(item => item.path) } }
       break // 失敗即停
     }
   }

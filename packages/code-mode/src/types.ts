@@ -16,7 +16,7 @@ export interface CodeModeConfig {
   defaultOutputTokens?: number
 }
 export interface CodeModeToolDefinition { name: string; description: string; inputSchema: unknown; outputSchema?: unknown }
-export type CodeModeOrigin = Pick<ToolExec, "sessionId" | "callId" | "callEventSeq" | "abortSignal"> & { generationLineage?: import('@i-harness/core-tools').CodeGenerationLineage }
+export type CodeModeOrigin = Pick<ToolExec, "sessionId" | "callId" | "callEventSeq" | "abortSignal"> & { generationLineage?: import('@i-harness/core-tools').CodeGenerationLineage; instructionOrigin?: import('@i-harness/core-tools').InstructionCellOrigin; bindInstructionCell?: (cellId: string) => import('@i-harness/core-tools').InstructionCellOrigin | undefined }
 export interface CodeModeInvocation { cellId: string; invocationId: string; name: string; args: unknown; origin: CodeModeOrigin; signal: AbortSignal }
 export type CodeModeItem = { type: "text"; text: string } | { type: "image"; image: ImageInput } | { type: "audio"; audioUrl: string }
 export type CodeModeStatus = "running" | "completed" | "failed" | "terminated"
@@ -39,18 +39,19 @@ export type CodeModeTextRetentionResult =
   | { kind: "ready"; envelope: ResultEnvelope }
   | { kind: "unavailable"; reason: Exclude<CodeModeTextUnavailable, "storage-unknown"> }
   | { kind: "recovery-required" }
-export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; yielded?: true; yieldReason?: "user-steer" }
+export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; instructionReplan?: import('@i-harness/core-tools').InstructionReplanData; yielded?: true; yieldReason?: "user-steer" }
 export interface CodeModeObserveOptions {
   userSteer?: UserSteerSource
   retained?: { observed(): void; progress(): void; unavailable(): void; ready(output: CodeModeObservation): void }
 }
 export type CodeModeRuntimeEvent =
-  | { type: "started"; cellId: string; source: string; origin: CodeModeOrigin }
+  | { type: "started"; cellId: string; source: string; origin: CodeModeOrigin; instructionInstalled?(): void; instructionAdmissionFailed?(): Promise<void> }
   | { type: "output"; cellId: string; item: CodeModeItem; origin: CodeModeOrigin; committed?(retained?: CodeModeTextRetentionResult): void; retainOutcome?(): void }
-  | { type: "closed"; cellId: string; status: Exclude<CodeModeStatus, "running">; error?: string; origin: CodeModeOrigin; policyRefusal?: true; committed?(): void; retainOutcome?(): void }
+  | { type: "closed"; cellId: string; status: Exclude<CodeModeStatus, "running">; error?: string; origin: CodeModeOrigin; policyRefusal?: true; instructionReplan?: import('@i-harness/core-tools').InstructionReplanData; committed?(): void; retainOutcome?(): void }
 export interface CodeModeRuntimeOptions {
   tools(): CodeModeToolDefinition[]
   invoke(call: CodeModeInvocation): Promise<unknown>
+  drainInstructionCell?(cellId: string): Promise<void>
   onEvent?(event: CodeModeRuntimeEvent): void | Promise<void>
   /** Current committed JSON data, replayed again at admission/commit after rewind. */
   restoreStore?(origin: CodeModeOrigin): readonly (readonly [string, CodeModeJsonValue])[]
@@ -78,6 +79,7 @@ export interface CodeModeRuntime {
   terminate(cellId: string, reason?: string): Promise<void>
   cancel(reason?: string): Promise<void>
   dispose(): Promise<void>
+  replan(cellId: string, detail: import('@i-harness/core-tools').InstructionReplanData): void
   /** Trusted owner drain for an already captured observation; no guest work. */
   drainRetainedObservations?(): Promise<void>
 }

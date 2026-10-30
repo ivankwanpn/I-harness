@@ -38,7 +38,7 @@ vi.mock('../src/context/instructions/manager.ts', async original => {
   const api = await original<typeof import('../src/context/instructions/manager.ts')>()
   return { ...api, createMainInstructionManager(...args: Parameters<typeof api.createMainInstructionManager>) {
     const manager = api.createMainInstructionManager(...args), entry = { attempts: 0, closed: false }; seams.managers.push(entry)
-    return { ...manager, succeeded(...handoff: Parameters<typeof manager.succeeded>) { seams.beforeSucceeded?.(); manager.succeeded(...handoff); seams.succeeded++ },
+    return { ...manager, succeeded(...handoff: Parameters<typeof manager.succeeded>) { seams.beforeSucceeded?.(); const batch = manager.succeeded(...handoff); seams.succeeded++; return batch },
       async close() { entry.attempts++; await manager.close(); entry.closed = true } }
   } }
 })

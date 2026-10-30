@@ -10,6 +10,8 @@ export interface SessionBatchCommand { action: "archive" | "restore" | "delete" 
 export interface SessionBatchResult { results: ({ sessionId: string; ok: true; projectId?: string; executionWorkspace?: string } | { sessionId: string; ok: false; error: string })[] }
 export interface SessionNavigation { pinned: boolean; unread: boolean; projectId?: string }
 export interface SessionManagementOptions {
+  /** Original metadata owner calls this after committed visibility withdrawal. */
+  onVisibilityWithdrawn?(sessionId: string): void
   projectFor?(sessionId: string): Promise<string | undefined>
   onFork?(sourceSessionId: string, childSessionId: string): Promise<void>
   workspace?: string
@@ -208,6 +210,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
               return child
             }
             await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: action === "archive" })
+            if (action === 'archive') options.onVisibilityWithdrawn?.(sessionId)
             return { sessionId }
           } finally { if (borrowed) await coordinator.releaseOwnership(sessionId) }
         }, () => assertIdle(sessionId, !recoverInterrupted))

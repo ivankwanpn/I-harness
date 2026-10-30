@@ -4,7 +4,7 @@ import type { ToolCall } from '../types.ts'
 
 /** Prove the subset on which the stack-safe data copier has structuredClone
  * semantics. Classification never invokes a getter or inspects a Proxy. */
-function ordinaryJson(value: unknown): boolean {
+export function ordinaryJson(value: unknown): boolean {
   type Work = { value: unknown } | { leave: object }
   const pending: Work[] = [{ value }]
   const ancestors = new Set<object>()

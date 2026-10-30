@@ -26,7 +26,8 @@ export function createObservedInstructionService(options: {
 }): InstructionService {
   const input = record(options), scope = scopeData(input.scope)
   const createPort = method<InstructionObservationOwner['port']>(input.observation, 'port')
-  return createInstructionService({ scope, observation: {
+  const beginPending = method<InstructionObservationOwner['beginPending']>(input.observation, 'beginPending')
+  return createInstructionService({ scope, beginPending, observation: {
     subscribe(listener) {
       // IA owns this subscription's close. Unprepared/disabled/zero-budget
       // views never subscribe, so they must not allocate owner bookkeeping.

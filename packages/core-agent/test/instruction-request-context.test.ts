@@ -45,8 +45,15 @@ it.each(['success', 'notification-fault', 'flush-fault', 'stop', 'unknown', 'unk
       expect(handoff.candidate.instructions).toBe(token)
       expect(handoff.outcome.kind).toBe('committed')
       expect(document.view.events[handoff.acceptedSeq]).toMatchObject({ type: 'model/exchange-accepted' })
+      expect(Object.isFrozen(handoff.calls)).toBe(true)
+      for (const call of handoff.calls) {
+        const original = document.view.events[call.eventSeq!]
+        expect(original).toMatchObject({ type: 'tool/call', callId: call.callId, name: call.call.name, args: call.call.args })
+        expect(Object.isFrozen(call.call.args)).toBe(true)
+      }
       handoffs.push(handoff)
       if (mode === 'notification-fault') throw new Error('notification fault')
+      return undefined
     }, promotedHumanRequest() { promoted++ }, async close() {},
   }
   tools.register({ name: 'probe', description: 'real source ownership control', inputSchema: { type: 'object' }, async execute() { effects++; expect(held).toBeGreaterThan(0); return 'result' } })
@@ -98,7 +105,7 @@ it.each(['confirm-only', 'second-issue-without-confirmation'] as const)('real pr
     })())
   } }
   const requestContext: SessionRequestContext = { async reconcile() {}, capture: () => token, current: value => value === token,
-    retain() { held++; let released = false; return { async release() { if (!released) { released = true; held-- } } } }, succeeded() { notifications++ }, promotedHumanRequest() {}, async close() {} }
+    retain() { held++; let released = false; return { async release() { if (!released) { released = true; held-- } } } }, succeeded() { notifications++; return undefined }, promotedHumanRequest() {}, async close() {} }
   const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: 's', requestContext })
   expect(await agent.run('local unqualified fixture')).toMatchObject({ finalText: 'local completion' })
   expect([sends, notifications, held]).toEqual([0, 0, 0])

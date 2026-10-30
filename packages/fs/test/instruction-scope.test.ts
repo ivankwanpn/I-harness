@@ -3,7 +3,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSession } from '../../core-session/src/index.ts'
-import { createFsTools } from '../src/index.ts'
+import { createFsTools } from "./helpers/registry-fs.ts"
 
 it.each(['queued', 'reference-only', 'unavailable'] as const)('successful read keeps %s metadata inside the real JSON page budget', async status => {
   const root = await mkdtemp(join(tmpdir(), 'ih-read-scope-')), target = join(root, 'data.txt')

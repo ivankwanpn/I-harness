@@ -22,6 +22,9 @@ export const BUNDLED_GUARDIAN_POLICY =
   "Approve only clearly safe, in-scope, low-risk actions. When uncertain, deny."
 
 export interface GuardianReviewDeps {
+  createIsolatedInstructionContext?: import('./instruction-context.ts').IsolatedInstructionFactory
+  createInstructionContext?: SpawnOptions['createInstructionContext']
+  retainInitialSetup?: SpawnOptions['retainInitialSetup']
   isolated?: GuardianIsolatedConfig
   subagents: {
     roles: RoleRegistry

@@ -17,6 +17,8 @@ export async function assembleChild(
   inheritedBindingForStep?: SpawnOptions["inheritedBindingForStep"],
   suppliedController?: AbortController,
   sharedGeneration?: object,
+  instruction?: import('./instruction-context.ts').ChildInstructionContext,
+  retainRuntime?: (mount: import('@i-harness/code-mode').CodeModeMount) => void,
 ) {
   // child registry: register the role's allowed tools (resolved from the parent).
   // A declared tool the host does not mount is reported, never dropped silently.
@@ -25,8 +27,9 @@ export async function assembleChild(
   const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, factOwner, sessionId, config: opts.codeMode,
   })
-  try { await codeModeMount?.ready?.() }
-  catch (error) { try { await codeModeMount?.cancel('Child preparation failed') } finally { await codeModeMount?.dispose() }; throw error }
+  // The initial setup owns original cleanup before ready can await or fail.
+  if (codeModeMount) retainRuntime?.(codeModeMount)
+  await codeModeMount?.ready?.()
   const modelToolSchemas = () => codeModeMount?.schemas() ?? childReg.schemas()
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
@@ -57,6 +60,7 @@ export async function assembleChild(
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     factOwner,
+    ...(instruction ? { requestContext: instruction.requestContext } : {}),
     tools: childReg,
     modelToolSchemas,
     ...(codeModeMount ? { modelOverheadTokens } : {}),

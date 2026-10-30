@@ -21,6 +21,10 @@ export interface Cell {
   removeOwner?: () => void
   calls: Map<string, AbortController>
   producers: Set<Promise<void>>
+  invocations: Set<Promise<void>>
+  instructionReplan?: import('@i-harness/core-tools').InstructionReplanError
+  replanDrain?: Promise<void>
+  replanTerminalStarted?: boolean
   stop?: Promise<number>
   knownTools: Set<string>
   finishing: boolean

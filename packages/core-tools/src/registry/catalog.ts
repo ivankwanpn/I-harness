@@ -1,6 +1,17 @@
 import { assertSupportedJsonSchema } from "../json-schema.ts"
 import { ToolNotFoundError, type Tool, type ToolSchema, type SearchableTool, type ToolCall } from "../types.ts"
 
+function dataMethod(owner: object, name: string): Function | undefined {
+  for (let current: object | null = owner; current; current = Object.getPrototypeOf(current)) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, name)
+    if (descriptor) {
+      if (!('value' in descriptor) || (descriptor.value !== undefined && typeof descriptor.value !== 'function')) throw new TypeError(`Invalid ${name} method`)
+      return descriptor.value
+    }
+  }
+  return undefined
+}
+
 // Sole owner of registration generations, tools, promotions and the search hook.
 export function createCatalog() {
   const bindingGenerations = new Map<string, number>()
@@ -118,11 +129,16 @@ export function createCatalog() {
     const tool = tools.get(call.name)
     if (!tool) throw new ToolNotFoundError(call.name)
     const bindingGeneration = bindingGenerations.get(call.name)!
-    const executeBinding = tool.execute
-    const bindingValidation = () => tools.get(call.name) === tool
-      && bindingGenerations.get(call.name) === bindingGeneration && tool.execute === executeBinding
+    const executeBinding = dataMethod(tool, 'execute')
+    if (!executeBinding) throw new TypeError('Invalid execute method')
+    const planBinding = dataMethod(tool, 'captureNativePlan') as Tool['captureNativePlan']
+    const bindingValidation = () => {
+      try { return tools.get(call.name) === tool && bindingGenerations.get(call.name) === bindingGeneration
+        && dataMethod(tool, 'execute') === executeBinding && dataMethod(tool, 'captureNativePlan') === planBinding }
+      catch { return false }
+    }
 
-    return { tool, bindingGeneration, bindingValidation }
+    return { tool, bindingGeneration, bindingValidation, planBinding, executeBinding: executeBinding as Tool['execute'] }
   }
 
   return { register, get, unregister, schemas, genToolCatalog, verifyToolCatalog, installSearch, search, promote, deferredSearchIndex, deferredToolCount, captureBinding }

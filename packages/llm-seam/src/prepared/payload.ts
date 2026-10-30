@@ -9,6 +9,7 @@ import { finalValidationError } from './rejection.ts'
 import { normalizePreparedTextOutput, readPreparedTextOutput, type PreparedTextOutput } from './text-output.ts'
 import { NO_GENERATION_RETRY } from './generation.ts'
 import { assertOwnedPreparedTerminal, isOwnedPreparedTerminal, preparedExecutionSource } from './owned-terminal.ts'
+import { associateOwnedConfirmation } from './stream-lifetime.ts'
 
 type OwnedExecutionConfirmation = Readonly<Pick<ExecutionConfirmation, 'version' | 'sendId' | 'semanticId' | 'payloadId' | 'payloadKind'>>
 const ownedConfirmations = new WeakMap<ExecutionConfirmation, { source: PreparedModelRequest; facts: OwnedExecutionConfirmation }>()
@@ -85,7 +86,7 @@ function preparePayload<T>(options: PreparedPayloadOptions<T>, owned: boolean): 
         actual.signal?.throwIfAborted()
         let confirmation: ExecutionConfirmation | undefined, issued = false, failed = false
         const execution = preparedExecution(measurement, owned ? { ...actual,
-          confirmExecution(value) { confirmation = value; actual.confirmExecution?.(value) },
+          confirmExecution(value) { confirmation = value; associateOwnedConfirmation(value); actual.confirmExecution?.(value) },
           onTransportIssue() { issued = true; actual.onTransportIssue?.() },
         } : actual, validation)
         try {
