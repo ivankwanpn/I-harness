@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./model-origin": "./src/tool-batch/model-origin.ts"
   },
   "scripts": {
     "test": "vitest run",

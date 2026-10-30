@@ -9,6 +9,7 @@ import { trackSettlementSource } from './settlement-source.ts'
 import { savingFailure } from './saving-failure.ts'
 import { borrowApprovalGeneration, assertBorrowedApprovalGeneration } from './tool-generation.ts'
 import { createExecutionDependencies } from './dependencies.ts'
+import { consumeAgentModelOrigin } from '../tool-batch/model-origin.ts'
 import { createLiveInvocation } from '../tool-batch/live-continuation.ts'
 
 export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): Agent {
@@ -16,6 +17,7 @@ export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): 
   const factOwner = deps.factOwner ?? (isNondurableSession(deps.session) ? createNondurableFactOwner(deps.session) : undefined)
   if (!factOwner || factOwner.view !== deps.session) throw Object.assign(new Error('Managed Agent requires matching owned facts'), { code: 'FACT_OWNER_UNSUPPORTED' })
   if (!isNondurableSession(deps.session) && !isManagedFactOwner(deps.session, factOwner)) throw Object.assign(new Error('Managed Agent requires actual document ownership'), { code: 'FACT_OWNER_UNSUPPORTED' })
+  const modelOrigin = host.modelCallOrigin ? consumeAgentModelOrigin(host.modelCallOrigin, deps.session, factOwner, deps.tools) : undefined
   // LC09: capture this read-only capability from the already validated real
   // owner. A host readiness callback cannot substitute for its recovery fence.
   const assertReady = (factOwner as typeof factOwner & { assertReady?: () => void }).assertReady
@@ -102,7 +104,7 @@ export function createAgent(ctx: PluginContext, host: AgentDeps & AgentConfig): 
         source.close = async () => { await close(); sourceDrains.delete(source) }
         sourceDrains.add(source)
         return source
-      })
+      }, modelOrigin)
       running = operation(action.signal)
       value = await running
     } catch (error) { failure = error; failed = true }
