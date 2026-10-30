@@ -35,7 +35,9 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
     collectSelectedConversationOrigins(context, originPlan)
     const ledger = createResultResourceLedger(context), classifications: ResultClassification[] = [], inheritedRows = new Set<SelectedResultRow>()
     type Manifest = Extract<typeof context.source.view.events[number], { type: 'conversation/seed-manifest' }>
-    const imported = new Map<object, Manifest>()
+    const imported = new Map<object, Manifest>(), inheritedOrdinals = new Map<object,number>()
+    const pendingLegacy = new Map<number, SelectedResultRow>()
+    const seenLegacy = new Set<number>()
     let rows: SelectedResultRow[] = []
     let draftBytes = 0
     const record = (classification: ResultClassification, inheritedRow = false, domain?: Manifest) => {
@@ -57,7 +59,7 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       if (snapshot.kind === 'included') {
         const row = immutable({ ...snapshot.row, ordinal: rows.length }) as SelectedResultRow
         rows.push(row); if (inheritedRow || row.original.kind === 'seed-use') inheritedRows.add(row)
-        if (domain) { imported.set(row, domain); imported.set(snapshot.row, domain) }
+        if (domain) { imported.set(row, domain); imported.set(snapshot.row, domain);if(row.basis.kind==='inherited')inheritedOrdinals.set(row,row.basis.row) }
       }
     }
     const manifest = context.source.view.events[0]
@@ -76,6 +78,7 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
           if (overlap === 'inside') omitted = true
         }
         if (omitted) { record({ kind: 'excluded', reason: 'omitted' }); continue }
+        if(row.protocol==='legacy'){pendingLegacy.set(row.ordinal,row);continue}
         const refusal = record({ kind: 'included', row: { ...row, extent: context.selected.rebase(row.extent),
           basis: { kind: 'inherited', parentSeedDigest: manifest.digest, parentResultsDigest: manifest.results.digest, row: row.ordinal } } }, true, manifest)
         if (refusal) return refusal
@@ -88,10 +91,25 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
     }
     assertCurrent()
     for await (const value of iterateHeldInheritedResultMetadata(inherited, assertCurrent)) {
-      const bound = ledger.extentGuard(value.extent) ?? ledger.inheritedCutGuard(value.extent)
-      if (bound) { const refusal = record(bound); if (refusal) return refusal; continue }
       const sourceManifest = context.source.view.events[0]
       if (sourceManifest?.type !== 'conversation/seed-manifest') return { kind: 'refused', reason: 'unsupported-history' }
+      if(value.anchor.kind==='seed-result') {
+        if(sourceManifest.version!==3)return {kind:'refused',reason:'unsupported-history'}
+        let seq:number;try{seq=seedLayout(sourceManifest).resultPageSeq(value.anchor.pageOrdinal)}catch{return {kind:'refused',reason:'unsupported-history'}}
+        const event=context.source.view.events[seq],ordinal=value.anchor.rowOrdinal
+        if(!event||event.type!=='conversation/seed-results'||event.seq!==seq||event.ordinal!==value.anchor.pageOrdinal||event.manifestSeq!==0||seenLegacy.has(ordinal))return {kind:'refused',reason:'unsupported-history'}
+        const row=event.page.rows[ordinal-event.page.firstRow]
+        if(!row||row.ordinal!==ordinal||row.protocol!=='legacy'||canonicalJsonData(row.ref)!==canonicalJsonData(value.ref)||canonicalJsonData(row.original)!==canonicalJsonData(value.original)||canonicalJsonData(row.extent)!==canonicalJsonData(value.extent))return {kind:'refused',reason:'unsupported-history'}
+        seenLegacy.add(ordinal)
+        const selected=pendingLegacy.get(ordinal);if(!selected)continue
+        pendingLegacy.delete(ordinal)
+        const refusal=record({kind:'included',row:{...selected,extent:context.selected.rebase(selected.extent),basis:{kind:'inherited',parentSeedDigest:sourceManifest.digest,parentResultsDigest:sourceManifest.results.digest,row:ordinal}}},true,sourceManifest)
+        if(refusal)return refusal
+        continue
+      }
+      if(sourceManifest.version===3)return {kind:'refused',reason:'unsupported-history'}
+      const bound = ledger.extentGuard(value.extent) ?? ledger.inheritedCutGuard(value.extent)
+      if (bound) { const refusal = record(bound); if (refusal) return refusal; continue }
       const anchorIndex = value.anchor.kind === 'manifest' ? 0 : seedLayout(sourceManifest).groupSeq(value.anchor.ordinal)
       const anchor = context.source.facts[anchorIndex]
       if (!anchor || (value.anchor.kind === 'manifest' ? anchor.type !== 'conversation/seed-manifest' : anchor.type !== 'conversation/seed-group')) return { kind: 'refused', reason: 'unsupported-history' }
@@ -109,6 +127,7 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       const refusal = record({ kind: 'included', row: { protocol: 'legacy', ref: value.ref, original: value.original, extent: context.selected.rebase(value.extent), basis: { kind: 'selected-observation', unit: { kind: 'exchange', at, closedAt: at } }, branchEvidence: [at] } }, true)
       if (refusal) return refusal
     }
+    if(pendingLegacy.size)return {kind:'refused',reason:'unsupported-history'}
     assertCurrent()
     // Import historical address slots from their actual source manifest. Local
     // zero is never passed here and remains the new held-source observation.
@@ -123,7 +142,7 @@ export async function projectSelectedResults(context: CompletedPassiveContext, i
       const draft = drafts.get(value)!
       return immutable(imported.has(value) ? mapResultOrigins(draft, originPlan.remap) : draft)
     }
-    rows = [...rows.filter(row => inheritedRows.has(row)), ...rows.filter(row => !inheritedRows.has(row))].map((row, ordinal) => immutable({ ...normalized(row), ordinal }) as SelectedResultRow)
+    rows = [...rows.filter(row => inheritedRows.has(row)).sort((a,b)=>(inheritedOrdinals.get(a)??Number.MAX_SAFE_INTEGER)-(inheritedOrdinals.get(b)??Number.MAX_SAFE_INTEGER)), ...rows.filter(row => !inheritedRows.has(row))].map((row, ordinal) => immutable({ ...normalized(row), ordinal }) as SelectedResultRow)
     for (const [index, classification] of classifications.entries()) if (classification.kind === 'included') classifications[index] = immutable({ kind: 'included', row: normalized(classification.row) })
     if (classifications.reduce((sum, value) => sum + Buffer.byteLength(canonicalJsonData(value)), 0) > SELECTED_RESULT_METADATA_LIMITS.bytes) return { kind: 'refused', reason: 'metadata-limit' }
     const pages: SelectedResultPageV1[] = []

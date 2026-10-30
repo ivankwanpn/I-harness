@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { streamJsonData, captureBootstrapPreparationFacts, canonicalJsonData } from '@i-harness/core-session'
+import { streamJsonData, captureBootstrapPreparationFacts, canonicalJsonData, validateResultsSummary } from '@i-harness/core-session'
 import type { ContextResultRef } from '../types.ts'
 import { identity } from '../config.ts'
 import { types } from 'node:util'
@@ -37,7 +37,7 @@ export function streamHash(domain: string, value: unknown): { digest: string; by
   for (const chunk of streamJsonData(value, { lexical: true, dataOnly: true })) { h.update(chunk); bytes += Buffer.byteLength(chunk); if (!Number.isSafeInteger(bytes)) fail() }
   return { digest: h.digest('hex'), bytes }
 }
-export const recordHash = (kind: 'binding' | 'page' | 'plan' | 'applied' | 'disposition', value: unknown) => streamHash(`ih.legacy-fork.${kind}.v1`, value).digest
+export const recordHash = (kind: 'binding' | 'page' | 'plan' | 'applied' | 'disposition', value: unknown,version:1|2=1) => streamHash(`ih.legacy-fork.${kind}.v${version}`, value).digest
 /** Immutable publication uses lexical bytes independent of host property order.
  * This wrapper applies only to bounded records, never full ref descriptors. */
 export function canonicalRecord<T>(value: T): T {
@@ -60,15 +60,17 @@ export const same = (a: unknown, b: unknown) => streamHash('ih.legacy-fork.compa
 export function checkCommitment(c: LegacyCommitment): void {
   if (!/^ctx_[a-f0-9]{64}$/.test(c.refId) || !hash(c.revision) || !hash(c.metadataDigest) || !count(c.metadataEncodedBytes) || !legacyExpiry(c.expiresAt)) fail()
 }
-export function checkAnchor(a: LegacyAnchor, total: number, unframed: boolean, extent: LegacyRow['extent'], groupCount?: number): void {
+export function checkAnchor(a: LegacyAnchor, total: number, unframed: boolean, extent: LegacyRow['extent'], groupCount?: number,version:1|2=1,results?:import('@i-harness/core-session').ResultsSummaryV1): void {
   fields(extent, ['kind'], extent.kind === 'framed' ? ['first', 'last'] : [])
   if (extent.kind === 'framed') { if (!count(extent.first) || !count(extent.last) || extent.first < 1 || extent.last < extent.first || extent.last > total) fail() }
   else if (extent.kind !== 'unframed' || !unframed) fail()
+  if(version===2){fields(a,['kind','manifestSeq','pageOrdinal','rowOrdinal']);if(a.kind!=='seed-result'||a.manifestSeq!==0||!count(a.pageOrdinal)||!count(a.rowOrdinal)||!results||a.pageOrdinal>=results.pages||a.rowOrdinal>=results.rows)fail();return}
   fields(a, ['kind'], a.kind === 'manifest' ? ['seq'] : ['manifestSeq', 'ordinal'])
   if (a.kind === 'manifest' ? a.seq !== 0 || extent.kind !== 'unframed' : a.kind !== 'seed-group' || a.manifestSeq !== 0 || !count(a.ordinal) || groupCount !== undefined && a.ordinal >= groupCount) fail()
 }
-export function checkBinding(b: LegacyBinding): LegacyBinding {
-  data(b); fields(b, ['workspaceId', 'invocation', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId', 'semanticSeedDigest', 'sourceObservationDigest', 'selection', 'targetSourceDigest', 'turnDomainDigest', 'totalTurns', 'unframedPrefix'])
+export function checkBinding(b: LegacyBinding,version:1|2=1): LegacyBinding {
+  data(b); fields(b, ['workspaceId', 'invocation', 'manifestDigest', 'sourceSessionId', 'targetSessionId', 'targetDocumentId', 'semanticSeedDigest', 'sourceObservationDigest', 'selection', 'targetSourceDigest', 'turnDomainDigest', 'totalTurns', 'unframedPrefix',...(version===2?['selectedResults']:[])])
+  if(version===2)validateResultsSummary(b.selectedResults)
   for (const id of [b.workspaceId, b.sourceSessionId, b.targetSessionId, b.targetDocumentId]) identity(id, 'legacy binding')
   if (![b.manifestDigest, b.semanticSeedDigest, b.sourceObservationDigest, b.targetSourceDigest, b.turnDomainDigest].every(hash) || !count(b.totalTurns) || typeof b.unframedPrefix !== 'boolean' || b.targetDocumentId !== b.targetSessionId || b.targetSessionId !== b.invocation.targetSessionId) fail()
   captureBootstrapPreparationFacts({ version: 1, invocation: b.invocation, manifestDigest: b.manifestDigest, seedDigest: b.semanticSeedDigest, sourceObservation: { kind: 'none' }, groupCount: 0 })
@@ -78,14 +80,14 @@ export function checkBinding(b: LegacyBinding): LegacyBinding {
 export function checkPageRef(p: LegacyPageRef): void {
   fields(p, ['digest', 'firstRow', 'rows', 'level']); if (!hash(p.digest) || !count(p.firstRow) || !count(p.rows) || !p.rows || !count(p.level) || !Number.isSafeInteger(p.firstRow + p.rows)) fail()
 }
-export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: number): LegacyPage {
+export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: number,version:1|2=1): LegacyPage {
   data(value); const p = value as LegacyPage
   fields(p, ['version', 'kind', 'bindingDigest', ...(p.kind === 'legacy-fork-leaf' ? ['firstRow', 'rows'] : ['level', 'children'])])
-  if (p.version !== 1 || p.bindingDigest !== recordHash('binding', binding) || Buffer.byteLength(JSON.stringify(p)) > 65536) fail()
+  if (p.version !== version || p.bindingDigest !== recordHash('binding', binding,version) || Buffer.byteLength(JSON.stringify(p)) > 65536) fail()
   if (p.kind === 'legacy-fork-leaf') {
     if (!count(p.firstRow) || !Array.isArray(p.rows) || p.rows.length < 1 || p.rows.length > 100) fail()
     for (const r of p.rows) {
-      fields(r, ['refId', 'revision', 'metadataDigest', 'metadataEncodedBytes', 'expiresAt', 'extent', 'anchor', 'original'], ['via']); checkCommitment(r as LegacyRow); checkAnchor(r.anchor, binding.totalTurns, binding.unframedPrefix, r.extent, groupCount)
+      fields(r, ['refId', 'revision', 'metadataDigest', 'metadataEncodedBytes', 'expiresAt', 'extent', 'anchor', 'original'], ['via']); checkCommitment(r as LegacyRow); checkAnchor(r.anchor, binding.totalTurns, binding.unframedPrefix, r.extent, groupCount,version,binding.selectedResults)
       fields(r.original, ['sessionId', 'seq', 'part']); identity(r.original.sessionId, 'legacy original'); if (!count(r.original.seq) || r.original.part !== 'context/result-ref.ref') fail()
       if (r.via !== undefined) { fields(r.via, ['sessionId', 'operationId', 'manifestDigest', 'planDigest', 'rowOrdinal']); identity(r.via.sessionId, 'legacy via'); identity(r.via.operationId, 'legacy operation'); if (!hash(r.via.manifestDigest) || !hash(r.via.planDigest) || !count(r.via.rowOrdinal)) fail() }
     }
@@ -98,10 +100,10 @@ export function checkPage(value: unknown, binding: LegacyBinding, groupCount?: n
 }
 export function checkRoot(value: unknown): LegacyRoot {
   data(value); fields(value, ['version', 'kind', 'binding', 'observationCount', 'distinctRefCount', 'pages'])
-  const r = value as LegacyRoot; checkBinding(r.binding)
-  if (r.version !== 1 || r.kind !== 'legacy-fork-plan' || !count(r.observationCount) || !count(r.distinctRefCount) || r.distinctRefCount > r.observationCount || Buffer.byteLength(JSON.stringify(r)) > 65536) fail()
+  const r = value as LegacyRoot;if(r.version!==1&&r.version!==2)fail();checkBinding(r.binding,r.version)
+  if ( r.kind !== 'legacy-fork-plan' || !count(r.observationCount) || !count(r.distinctRefCount) || r.distinctRefCount > r.observationCount || Buffer.byteLength(JSON.stringify(r)) > 65536) fail()
   if (r.pages === null) { if (r.observationCount !== 0 || r.distinctRefCount !== 0) fail() }
   else { checkPageRef(r.pages); if (r.pages.firstRow !== 0 || r.pages.rows !== r.observationCount) fail() }
   return r
 }
-export const appliedFor = (root: LegacyRoot): LegacyApplied => canonicalRecord({ version: 1, kind: 'legacy-fork-applied', bindingDigest: recordHash('binding', root.binding), planDigest: recordHash('plan', root), observationCount: root.observationCount, distinctRefCount: root.distinctRefCount })
+export const appliedFor = (root: LegacyRoot): LegacyApplied => canonicalRecord({ version: root.version, kind: 'legacy-fork-applied', bindingDigest: recordHash('binding', root.binding,root.version), planDigest: recordHash('plan', root,root.version), observationCount: root.observationCount, distinctRefCount: root.distinctRefCount })

@@ -2,7 +2,7 @@ import {join} from 'node:path'
 import {AsyncLocalStorage} from 'node:async_hooks'
 import {types} from 'node:util'
 import {contextWorkspaceIdentity,contextOutputServiceRoot,contextSourceIdentity,contextPathKey as pathKey,type ContextOutputConfig,type ContextResultRef,type ContextAccess,type SeedDependencyTransferScope,type LegacyReadObservationRunner} from '@i-harness/context-output'
-import {isStrictFactData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
+import {isStrictFactData,freezeJsonData,EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sameManagedArtifactRef,semanticSeedResultRefs,managedResultRefs,rewindCuts,type ManagedArtifactRef,type BootstrapDependencyRequest,type BootstrapDependencyOutcome} from '@i-harness/core-session'
 import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator,BootstrapDependencyPort,BootstrapTargetPreparationPort,ExistingSessionBindingObservation} from '@i-harness/session-persistence'
 import {createResultObservationScope,createLegacyReadObservationRunner,type ResultObservationCapture,type SessionProjectContext,type ResultReadScopeResolver} from '@i-harness/session-executor'
@@ -172,7 +172,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const stable=holderSource??(holderSource=held)
       return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{captureSlot=undefined;entry.active=false}}))
     }
-    let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined,managedScope:SeedDependencyTransferScope|undefined
+    let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined,managedScope:SeedDependencyTransferScope|undefined,legacyTransfer:ReturnType<typeof bridge.acquireSelectedLegacyTransfer>|undefined
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
     const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
     const holder=Object.freeze({
@@ -201,10 +201,26 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         const result=await contextOutput.confirmSeedDependencies(managedScope,request,()=>{try{assertSourceCurrent();return true}catch{return false}})
         slot.assertCurrent();assertTargetCurrent();return result
       },
+      async confirmLegacyDependencies(){
+        const slot=captureSlot;if(!slot||!projectPreparation)throw Error('Selected target preparation unavailable');slot.assertCurrent()
+        const inspection=inspectSelectedTarget(options.coordinator as SessionCoordinator,target)
+        projectPreparation.assertTargetCurrent()
+        const assertSourceCurrent=()=>{if(!captureSlot||captureSlot.source!==slot.source)throw Error('Original selected source unavailable');captureSlot.assertCurrent()}
+        const assertTargetCurrent=()=>{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation!.assertTargetCurrent()}
+        if(!legacyTransfer){
+          const targetView=freezeJsonData({formatVersion:13,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
+          legacyTransfer=bridge.acquireSelectedLegacyTransfer(options.coordinator as SessionCoordinator,target,{invocation:operation.invocation,sourceSessionId:operation.prepared.core.sourceSessionId,facts:inspection.facts,targetView,
+            target:{available:()=>{try{assertTargetCurrent();return true}catch{return false}},assertCurrent:assertTargetCurrent,sourceId:()=>{assertTargetCurrent();return contextSourceIdentity(workspaceKey,canonical,projectPreparation!.targetScope().scope)}},
+            source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.view!==slot.source.view)throw Error('Original result observation unavailable');return legacyObservationFor(observation)}}})
+        }
+        const result=await legacyTransfer.confirm();slot.assertCurrent();assertTargetCurrent();return result
+      },
+      async reconcileLegacyDependencies(){if(!legacyTransfer)return undefined;if(!projectPreparation)throw Error('Selected target preparation unavailable');available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation.assertTargetCurrent();return legacyTransfer.reconcile()},
+      assertTargetCurrent(){if(!projectPreparation||!legacyTransfer)throw Error('Selected target preparation unavailable');available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation.assertTargetCurrent();legacyTransfer.assertCurrent()},
       assertOutsideUse(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close')},
       async drain(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');if(active)await active.catch(()=>{})},
       revoke(){retired=true;original?.revoke()},
-      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');projectPreparation?.close();retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
+      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(legacyTransfer)await legacyTransfer.close();projectPreparation?.close();if(original)await original.close()},
     })
     return holder
   }

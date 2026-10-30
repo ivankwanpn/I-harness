@@ -6,13 +6,13 @@ import type { LegacyBinding, LegacyRow, LegacyPage, LegacyPageRef, LegacyRoot } 
 
 export const pageName = (ref: Pick<LegacyPageRef, 'level' | 'firstRow'>) => `${ref.level}-${ref.firstRow}.json`
 /** Only one leaf and a fanout-bounded frontier per level are resident. */
-export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<LegacyRow>, publish: (name: string, page: LegacyPage) => Promise<void>): Promise<{ pages: LegacyPageRef | null; observationCount: number }> {
-  const bindingDigest = recordHash('binding', binding), frontier: LegacyPageRef[][] = []
+export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<LegacyRow>, publish: (name: string, page: LegacyPage) => Promise<void>, version:1|2=1): Promise<{ pages: LegacyPageRef | null; observationCount: number }> {
+  const bindingDigest = recordHash('binding', binding,version), frontier: LegacyPageRef[][] = []
   let leaf: LegacyRow[] = [], observationCount = 0, firstRow = 0
   async function directory(level: number, children: LegacyPageRef[]): Promise<LegacyPageRef> {
-    const page: LegacyPage = { version: 1, kind: 'legacy-fork-directory', bindingDigest, level, children }
-    checkPage(page, binding)
-    const ref = { digest: recordHash('page', page), firstRow: children[0]!.firstRow, rows: children.reduce((n, child) => n + child.rows, 0), level }
+    const page: LegacyPage = { version, kind: 'legacy-fork-directory', bindingDigest, level, children }
+    checkPage(page, binding,undefined,version)
+    const ref = { digest: recordHash('page', page,version), firstRow: children[0]!.firstRow, rows: children.reduce((n, child) => n + child.rows, 0), level }
     await publish(pageName(ref), page); return ref
   }
   async function push(ref: LegacyPageRef): Promise<void> {
@@ -21,14 +21,14 @@ export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<Leg
   }
   async function flush(): Promise<void> {
     if (!leaf.length) return
-    const page: LegacyPage = { version: 1, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: leaf }
-    checkPage(page, binding)
+    const page: LegacyPage = { version, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: leaf }
+    checkPage(page, binding,undefined,version)
     await publish(pageName({ level: 0, firstRow }), page)
-    await push({ digest: recordHash('page', page), firstRow, rows: leaf.length, level: 0 })
+    await push({ digest: recordHash('page', page,version), firstRow, rows: leaf.length, level: 0 })
     firstRow += leaf.length; leaf = []
   }
   for await (const row of rows) {
-    const tentative = { version: 1, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: [...leaf, row] }
+    const tentative = { version, kind: 'legacy-fork-leaf', bindingDigest, firstRow, rows: [...leaf, row] }
     if (leaf.length && (leaf.length === 100 || Buffer.byteLength(JSON.stringify(tentative)) > 65536)) await flush()
     leaf.push(row); observationCount++; if (!Number.isSafeInteger(observationCount)) fail()
   }
@@ -43,13 +43,14 @@ export async function buildPages(binding: LegacyBinding, rows: AsyncIterable<Leg
 }
 /** Validate the entire addressed graph, ranges and on-disk EOF on every walk. */
 export async function* walkPages(directory: string, root: LegacyRoot, guard: () => void, groupCount?: number, retire?: RetireFile, visit?: (ref: LegacyPageRef, page: LegacyPage) => Promise<void>): AsyncGenerator<LegacyRow> {
+  const version=root.version
   let count = 0, files = 0
   const pagesDirectory = resolve(directory, 'pages')
   async function* walk(ref: LegacyPageRef): AsyncGenerator<LegacyRow> {
     guard(); const path = resolve(pagesDirectory, pageName(ref)); await ownedPath(directory, path); guard()
-    const page = checkPage(await boundedJson(path, 65536, retire), root.binding, groupCount); guard(); files++
+    const page = checkPage(await boundedJson(path, 65536, retire), root.binding, groupCount,version); guard(); files++
     if ((await confirmAtomicJson(directory, path, page, retire)).kind !== 'confirmed') throw Error('Legacy original page unconfirmed'); guard()
-    if (recordHash('page', page) !== ref.digest || ref.firstRow !== count) fail()
+    if (recordHash('page', page,version) !== ref.digest || ref.firstRow !== count) fail()
     if (page.kind === 'legacy-fork-leaf') {
       if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) fail()
       await visit?.(ref, page); guard()
@@ -73,12 +74,13 @@ export async function* walkPages(directory: string, root: LegacyRoot, guard: () 
  * directory/leaf hash prove the selected row without reconstructing a plan. */
 export async function rowProof(directory: string, root: LegacyRoot, ordinal: number, guard: () => void, retire?: RetireFile): Promise<LegacyRow> {
   if (!Number.isSafeInteger(ordinal) || ordinal < 0 || ordinal >= root.observationCount || !root.pages) fail()
+  const version=root.version
   let ref = root.pages
   while (true) {
     guard(); const path = resolve(directory, 'pages', pageName(ref)); await ownedPath(directory, path); guard()
-    const page = checkPage(await boundedJson(path, 65536, retire), root.binding); guard()
+    const page = checkPage(await boundedJson(path, 65536, retire), root.binding,undefined,version); guard()
     if ((await confirmAtomicJson(directory, path, page, retire)).kind !== 'confirmed') throw Error('Legacy original page unconfirmed'); guard()
-    if (recordHash('page', page) !== ref.digest || ordinal < ref.firstRow || ordinal >= ref.firstRow + ref.rows) fail()
+    if (recordHash('page', page,version) !== ref.digest || ordinal < ref.firstRow || ordinal >= ref.firstRow + ref.rows) fail()
     if (page.kind === 'legacy-fork-leaf') {
       if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) fail()
       return page.rows[ordinal - page.firstRow]!

@@ -13,12 +13,14 @@ import { appliedFor, canonicalRecord, checkBinding, checkRoot, commitment, count
 import { buildPages, walkPages } from './fork-pages.ts'
 import { expiryBase, expiredTuple, readSlots, revokedTuple } from './fork-disposition.ts'
 import { captureObservation, loadPlan, observedAllowed, prepareObservedIndex, rowCommitment, transferDirectory, verifiedRows } from './observed-read.ts'
+import { createSelectedLegacyTransfer } from './selected-transfer.ts'
 import { prepareLegacyIndex } from './fork-index.ts'
 import type { LegacyForkCapture, LegacyForkTransferScope, LegacyPreparationRequest, LegacyTransferOutcome, LegacyFacts, LegacyRow, LegacyPage } from './fork-types.ts'
 
 type Scope = { capture?: LegacyForkCapture; invalid: boolean; attempts: Set<Promise<LegacyTransferOutcome>>; count?: number; store?: ContextStore; dispose(): void }
 interface Ports {
   strict: boolean; workspaceId: string; quota(): number;
+  runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;
   mutate<T>(context: IndexedLegacyContext, work: (turn: WorkspaceMutationTurn) => Promise<T>): Promise<T>;
   run<T>(signal: AbortSignal | undefined, work: (signal: AbortSignal, context: IndexedLegacyContext) => Promise<T>): Promise<T>;
 }
@@ -27,6 +29,7 @@ const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, 'ab
 const addSignalListener = EventTarget.prototype.addEventListener, removeSignalListener = EventTarget.prototype.removeEventListener
 const aborted = (signal?: AbortSignal): boolean => signal === undefined ? false : Reflect.apply(signalAborted, signal, [])
 export function createLegacyForkOwner(ports: Ports) {
+  const selected=createSelectedLegacyTransfer(ports)
   const scopes = new Map<LegacyForkTransferScope, Scope>(), retired = new WeakSet<LegacyForkTransferScope>(); let closed = false
   function register(input: LegacyForkCapture): LegacyForkTransferScope {
     if (closed || !ports.strict) throw Error('Legacy fork requires strict observed recipient mode')
@@ -201,9 +204,9 @@ export function createLegacyForkOwner(ports: Ports) {
     scopes.delete(token); retired.add(token)
   }
   return {
-    register, confirm: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, current: () => boolean, facts: LegacyFacts) => start(scope, request, facts, current, false),
+    selected,register, confirm: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, current: () => boolean, facts: LegacyFacts) => start(scope, request, facts, current, false),
     reconcile: (scope: LegacyForkTransferScope, request: LegacyPreparationRequest, facts: LegacyFacts) => start(scope, request, facts, () => true, true), closeScope,
-    retire(sessionId?: string) { for (const scope of scopes.values()) if (sessionId === undefined || scope.capture?.sourceSessionId === sessionId || scope.capture?.invocation.targetSessionId === sessionId) scope.invalid = true },
-    async close() { closed = true; const settled = await Promise.allSettled([...scopes.keys()].map(closeScope)); failuresTogether(settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []), 'Original legacy scopes failed to close') },
+    retire(sessionId?: string) { selected.retire(sessionId);for (const scope of scopes.values()) if (sessionId === undefined || scope.capture?.sourceSessionId === sessionId || scope.capture?.invocation.targetSessionId === sessionId) scope.invalid = true },
+    async close() { closed = true; const settled = await Promise.allSettled([selected.close(),...[...scopes.keys()].map(closeScope)]); failuresTogether(settled.flatMap(outcome => outcome.status === 'rejected' ? [outcome.reason] : []), 'Original legacy scopes failed to close') },
   }
 }

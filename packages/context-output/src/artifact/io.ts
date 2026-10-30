@@ -132,7 +132,7 @@ export async function confirmAtomicJson(root: string, path: string, value: unkno
 /** Run under the existing artifact mutation lease. Never replaces a known
  * conflicting final or pending file. Each create/write/link/unlink checks current
  * after the immediately preceding await; partial issuance remains unknown. */
-export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean, retire?: RetireFile): Promise<ImmutableMetadataOutcome> {
+export async function continueAtomicJson(root: string, path: string, value: unknown, current: () => boolean, retire?: RetireFile, issuance?:{onCreated(handle:FileHandle):Promise<void>;allowExisting(handle:FileHandle):Promise<boolean>;resumeOnly?:boolean}): Promise<ImmutableMetadataOutcome> {
   try {
     const bytes = immutableBytes(value), temporary = pendingPath(path, bytes), state = await inspectImmutable(root, path, bytes, retire)
     if (state.final) {
@@ -141,14 +141,18 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
       return confirmed(diagnostics)
     }
     if (!current()) return { kind: state.pending ? 'unknown' : 'not-issued' }
-    let handle: FileHandle
-    try { handle = await open(temporary, 'wx+') }
+    let handle: FileHandle,created=false
+    if(issuance?.resumeOnly){
+      if(!state.pending)return {kind:'not-issued'}
+      await ownedPath(root,temporary);handle=await open(temporary,'r+')
+    }else try { handle = await open(temporary, 'wx+');created=true }
     catch (cause) {
       if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
       await ownedPath(root, temporary)
       handle = await open(temporary, 'r+')
     }
     try {
+      if(issuance){if(created)await issuance.onCreated(handle);else if(!await issuance.allowExisting(handle))return {kind:'unknown'}}
       const info = await handle.stat()
       if (!info.isFile() || info.size > bytes.length || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata transaction conflict')
       await writeAll(handle, bytes.subarray(info.size), info.size, current)

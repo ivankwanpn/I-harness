@@ -37,3 +37,22 @@ it('rejects an explicitly null immediate via', () => {
     original: { sessionId: 'source', seq: 1, part: 'context/result-ref.ref' }, extent: { kind: 'framed', first: 1, last: 1 }, anchor: { kind: 'seed-group', manifestSeq: 0, ordinal: 0 }, via: null }
   expect(() => checkPage({ version: 1, kind: 'legacy-fork-leaf', bindingDigest: recordHash('binding', binding), firstRow: 0, rows: [row] }, binding)).toThrow()
 })
+it('keeps V2 selected result anchors in a distinct versioned graph',()=>{
+ const selectedResults={version:1 as const,rows:2,pages:1,digest:'1'.repeat(64)},v2={...binding,selectedResults},row={refId:'ctx_'+'a'.repeat(64),revision:'b'.repeat(64),metadataDigest:'c'.repeat(64),metadataEncodedBytes:1,expiresAt:2_000_000_000_000,original:{sessionId:'source',seq:1,part:'context/result-ref.ref'},extent:{kind:'framed',first:1,last:1},anchor:{kind:'seed-result',manifestSeq:0,pageOrdinal:0,rowOrdinal:1}}
+ const page={version:2,kind:'legacy-fork-leaf',bindingDigest:recordHash('binding',v2,2),firstRow:0,rows:[row]}
+ expect(checkPage(page,v2,undefined,2)).toEqual(page)
+ expect(recordHash('binding',v2,2)).not.toBe(recordHash('binding',v2))
+ expect(checkRoot({version:2,kind:'legacy-fork-plan',binding:v2,observationCount:0,distinctRefCount:0,pages:null}).version).toBe(2)
+ expect(()=>checkPage({...page,version:1},v2,undefined,2)).toThrow()
+ expect(()=>checkPage({...page,rows:[{...row,anchor:{kind:'seed-group',manifestSeq:0,ordinal:0}}]},v2,undefined,2)).toThrow()
+ expect(()=>checkPage({...page,rows:[{...row,anchor:{...row.anchor,rowOrdinal:2}}]},v2,undefined,2)).toThrow()
+ expect(()=>checkRoot({version:1,kind:'legacy-fork-plan',binding:v2,observationCount:0,distinctRefCount:0,pages:null})).toThrow()
+})
+it('writes and proves V2 pages without changing the V1 hash family',async()=>{
+ const directory=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-v2-page-'));await mkdir(join(directory,'pages'))
+ const v2={...binding,selectedResults:{version:1 as const,rows:2,pages:1,digest:'1'.repeat(64)}},row={refId:'ctx_'+'a'.repeat(64),revision:'b'.repeat(64),metadataDigest:'c'.repeat(64),metadataEncodedBytes:1,expiresAt:2_000_000_000_000,original:{sessionId:'source',seq:1,part:'context/result-ref.ref' as const},extent:{kind:'framed' as const,first:1,last:1},anchor:{kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:0,rowOrdinal:1}}
+ async function* rows(){yield row}
+ const graph=await buildPages(v2,rows(),async(name,page)=>writeFile(join(directory,'pages',name),JSON.stringify(page)),2),root=checkRoot({version:2,kind:'legacy-fork-plan',binding:v2,...graph,distinctRefCount:1})
+ expect(await rowProof(directory,root,0,()=>{})).toEqual(row)
+ const result=[];for await(const item of walkPages(directory,root,()=>{}))result.push(item);expect(result).toEqual([row])
+})

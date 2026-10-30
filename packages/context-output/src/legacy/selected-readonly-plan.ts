@@ -10,11 +10,13 @@ import { transferDirectory, rowCommitment } from './observed-read.ts'
 import type { ContextStore } from '../store.ts'
 import type { LegacyReadObservation, LegacyRoot, LegacyRow, LegacyPageRef } from './fork-types.ts'
 import { legacyResultMetadata } from '../../../core-session/src/conversation/history/result-metadata.ts'
+import { captureSelectedPlanView } from './selected-plan-view.ts'
 import { SELECTED_RESULT_METADATA_LIMITS } from '../../../core-session/src/conversation/selected-results.ts'
 
 export interface OriginalSelectedPlan {
   readonly directory: string; readonly root: LegacyRoot; readonly planDigest: string
   readonly bindingBytes: Buffer; readonly planBytes: Buffer; readonly appliedBytes: Buffer
+  readonly selected?:ReturnType<typeof captureSelectedPlanView>
 }
 
 /** Selected-only bounded reads; every original descriptor belongs to the same
@@ -77,8 +79,10 @@ export async function readSelectedPlan(store: ContextStore, observation: LegacyR
   if (!observation.bootstrap) throw Error('Original bootstrap required')
   const directory = transferDirectory(store, observation.bootstrap.invocation), path = resolve(directory, 'plan.json')
   const root = freezeJsonData(checkRoot(JSON.parse((await bytes(store, store.directory, path, 65536, guard)).toString('utf8')))) as LegacyRoot
+  if(root.version===2&&!observation.selectedView||root.version===1&&observation.selectedView)throw Error('Legacy plan and seed version conflict')
   if (root.pages && root.pages.level > 53 || root.observationCount > SELECTED_RESULT_METADATA_LIMITS.rows) throw Error('Original graph exceeds limit')
-  const plan = Object.freeze({ directory, root, planDigest: recordHash('plan', root), bindingBytes: Buffer.from(JSON.stringify(canonicalRecord({ version: 1, kind: 'legacy-fork-binding', binding: root.binding }))), planBytes: Buffer.from(JSON.stringify(root)), appliedBytes: Buffer.from(JSON.stringify(appliedFor(root))) })
+  const selected=root.version===2?captureSelectedPlanView(observation.selectedView!,root,{sessionId:observation.bootstrap!.invocation.targetSessionId,createdAt:observation.bootstrap!.invocation.createdAt}):undefined
+  const plan = Object.freeze({ directory, root,...(selected?{selected}:{}), planDigest: recordHash('plan', root,root.version), bindingBytes: Buffer.from(JSON.stringify(canonicalRecord({ version: root.version, kind: 'legacy-fork-binding', binding: root.binding }))), planBytes: Buffer.from(JSON.stringify(root)), appliedBytes: Buffer.from(JSON.stringify(appliedFor(root))) })
   await assertSelectedPlan(store, plan, observation, guard); return plan
 }
 /** One complete streaming pass: bounded inventories, one decoded page per ref,
@@ -92,9 +96,9 @@ export async function* walkSelectedPages(store: ContextStore, plan: OriginalSele
   async function* walk(ref: LegacyPageRef): AsyncGenerator<LegacyRow> {
     guard(); const name = pageName(ref), path = resolve(folder, name)
     if (!remaining.delete(name)) throw Error('Original page inventory conflict')
-    const raw = await bytes(store, directory, path, 65536, guard), page = checkPage(JSON.parse(raw.toString('utf8')), root.binding); guard()
+    const raw = await bytes(store, directory, path, 65536, guard), page = checkPage(JSON.parse(raw.toString('utf8')), root.binding,undefined,root.version); guard()
     const expected = Buffer.from(JSON.stringify(page))
-    if (!raw.equals(expected) || recordHash('page', page) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
+    if (!raw.equals(expected) || recordHash('page', page,root.version) !== ref.digest || ref.firstRow !== count) throw Error('Original page conflict')
     await noPending(path, expected, guard)
     if (page.kind === 'legacy-fork-leaf') {
       if (ref.level !== 0 || page.firstRow !== ref.firstRow || page.rows.length !== ref.rows) throw Error('Original leaf conflict')
@@ -114,12 +118,14 @@ export async function* walkSelectedPages(store: ContextStore, plan: OriginalSele
   if (final.size !== names.size || [...names].some(name => !final.has(name))) throw Error('Original page inventory conflict')
   await controlInventory(store, plan, guard)
 }
-export async function selectedRow(store: ContextStore, root: LegacyRoot, row: LegacyRow, sourceId: string, guard: () => void) {
+export async function selectedRow(store: ContextStore, plan:OriginalSelectedPlan, row: LegacyRow, observation:LegacyReadObservation, guard: () => void,requireVisible=true) {
+  const root=plan.root;plan.selected?.row(row);const visible=()=>root.version!==2||plan.selected!.visible(row)
+  if(requireVisible&&!visible())return undefined
   guard(); const c = rowCommitment(row), live = async () => { const state = await readSlots(store.directory, expiryBase(store.directory, c), expiredTuple(store.workspaceId, c), store.retireLegacyFile); guard(); if (state !== 'live' || c.expiresAt <= Date.now()) throw Error('Original reference expired') }
   await live()
   const ref = legacyResultMetadata(await store.canonicalRef(c, root.binding.targetSessionId, true)); guard()
-  if (ref.source && ref.source.sourceId !== sourceId) throw Error('Original source policy changed')
-  await live(); guard()
+  if (ref.source && ref.source.sourceId !== observation.sourceId) throw Error('Original source policy changed')
+  await live(); guard();if(requireVisible&&!visible())return undefined
   return { ref, original: { kind: 'local' as const, sessionId: row.original.sessionId, seq: row.original.seq, event: 'context/result-ref' as const, slot: 'ref' as const }, extent: row.extent, anchor: row.anchor }
 }
 export async function qualifySelectedGraph(store: ContextStore, plan: OriginalSelectedPlan, observation: LegacyReadObservation, guard: () => void) {
@@ -128,8 +134,9 @@ export async function qualifySelectedGraph(store: ContextStore, plan: OriginalSe
     const commitment = JSON.stringify(rowCommitment(row)), prior = distinct.get(row.refId)
     if (prior !== undefined && prior !== commitment) throw Error('Inconsistent original reference commitment')
     distinct.set(row.refId, commitment); rows++; metadataBytes += row.metadataEncodedBytes
-    minimumExpiry = Math.min(minimumExpiry ?? Infinity, row.expiresAt)
-    await selectedRow(store, plan.root, row, observation.sourceId, guard)
+    plan.selected?.row(row)
+    const visible=plan.root.version!==2||plan.selected!.visible(row)
+    if(visible){minimumExpiry = Math.min(minimumExpiry ?? Infinity, row.expiresAt);await selectedRow(store, plan, row, observation, guard,false)}
   }
   if (distinct.size !== plan.root.distinctRefCount) throw Error('Original distinct reference count conflict')
   guard(); return { rows, distinctRefs: distinct.size, metadataBytes, minimumExpiry }

@@ -21,7 +21,7 @@ import { createConversationResultReader } from '../../src/result-reader.ts'
 export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string) {
   const root = existingRoot ?? await mkdtemp(join(tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
   await mkdir(workspace, { recursive: true })
-  const coordinator = createSessionCoordinator(createJsonlBackend(sessions), { lock: { enabled: true } }), fence = createSessionManagementFence()
+  const backend=createJsonlBackend(sessions),coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), fence = createSessionManagementFence()
   if (!existingRoot) { await coordinator.create({ sessionId: 'source' }); await coordinator.create({ sessionId: 'other' }) }
   const projects = createProjectScopeBroker(coordinator, workspace)
   const project = { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace }
@@ -51,7 +51,7 @@ export async function createGatewayForkFixture(options: Pick<SessionServiceOptio
     return frame.result
   }
   await call('initialize')
-  return { root, workspace, sessions, coordinator, projects, project, runtime, service, management, host, controller, base, router, call,
+  return { root, workspace, sessions, backend, coordinator, projects, project, runtime, service, management, host, controller, base, router, call,
     async prepare(sourceSessionId: string, targetSessionId: string, operationId: string) {
       const prepared = await call('session/fork/prepare', { version: 1, sourceSessionId }) as import('@i-harness/session-persistence').ForkPrepareResult
       if (prepared.kind !== 'prepared') throw new Error('Actual Gateway preparation refused: ' + JSON.stringify(prepared))

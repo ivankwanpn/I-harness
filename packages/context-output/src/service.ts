@@ -20,6 +20,8 @@ type SelectedMetadataOwner=Awaited<ReturnType<typeof createSelectedMetadata>>
 type SelectedCleanup={retry():Promise<void>}
 type SelectedAcquisitionDebt={failure:unknown;store:ContextStore;settled:boolean;cleanup:SelectedCleanup}
 type SelectedMetadataRecord=SelectedMetadataOwner & {cleanupForError(error:unknown):SelectedCleanup|undefined}
+const selectedLegacyOwners=new WeakMap<ContextOutputService,ReturnType<typeof createLegacyForkOwner>['selected']>()
+export function selectedLegacyTransferFor(service:ContextOutputService){const owner=selectedLegacyOwners.get(service);if(!owner)throw Error('Original context service required');return owner}
 const selectedMetadataOwners=new WeakMap<ContextOutputService,{acquire(observation:LegacyReadObservation):Promise<SelectedMetadataOwner>;cleanupForError(error:unknown):SelectedCleanup|undefined}>()
 /** Private core-service association; wrappers must forward this original closure. */
 export function acquireSelectedMetadata(service:ContextOutputService,observation:LegacyReadObservation) {
@@ -84,13 +86,13 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const jobs = new Map<AbortController, Promise<unknown>>()
   const selectedReaders=new Set<SelectedMetadataRecord>()
   const selectedReaderIds=new WeakMap<SelectedMetadataOwner,string>()
-  const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke()}
+  const revokeSelectedAuthorities=(sessions?:readonly string[])=>{for(const reader of selectedReaders)if(!sessions||sessions.includes(selectedReaderIds.get(reader)!))reader.revoke();if(!sessions)legacy.selected.retire();else for(const session of sessions)legacy.selected.retire(session)}
   const selectedAcquisitionDebts=new Set<SelectedAcquisitionDebt>()
   let closedSelectedStore:ContextStore|undefined
   const acknowledgeSelectedAcquisitions=(original:ContextStore)=>{for(const debt of selectedAcquisitionDebts)if(debt.store===original){debt.settled=true;selectedAcquisitionDebts.delete(debt)}}
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
-    mutate: mutateIndex })
+    mutate: mutateIndex,runPassive:(original,work)=>run(undefined,owned=>gate.shared(owned,async lease=>{gate.assertLease(lease);if(!store||store!==original)throw Error('Original legacy store unavailable');return work(owned,store)}),false,true) })
   unsubscribeDeletions = options.documentDeletions?.(releaseDocuments)
 
   function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
@@ -446,6 +448,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
+  selectedLegacyOwners.set(service,legacy.selected)
   selectedMetadataOwners.set(service,{cleanupForError(error){for(const debt of selectedAcquisitionDebts)if(debt.failure===error)return debt.cleanup;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
     assertOpen()
     const sessionField=Object.getOwnPropertyDescriptor(observation,'sessionId');if(!sessionField||!('value' in sessionField)||typeof sessionField.value!=='string')throw Error('Invalid metadata source')

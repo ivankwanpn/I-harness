@@ -397,3 +397,68 @@ it('refuses V3 parents through the old all exporter before inspecting history wh
   expect(exportConversationSeed(view, { kind: 'session', sessionId: 'source' }, { kind: 'all' })).toEqual({ kind: 'refused', reason: 'source-unsupported' })
   expect(reads).toBe(0)
 })
+
+it('resolves V3 result page ordinals to their exact physical seed coordinates',async()=>{
+ const {seedLayout}=await import('../src/conversation/seed-layout.ts')
+ const header=codecWire(codecSeed('public-completed',[codecPage([codecRow()])])).header.semanticSeed
+ const layout=seedLayout({...header,groupCount:1,seedLength:3});expect(layout.resultPageSeq(0)).toBe(1);expect(layout.groupSeq(0)).toBe(2)
+ for(const ordinal of [-1,1,Number.MAX_SAFE_INTEGER,0.5])expect(()=>layout.resultPageSeq(ordinal)).toThrow()
+})
+
+it('resolves only a surviving V3 seed-result anchor and exact global row',async()=>{
+ const {createLegacyReadVisibility}=await import('../src/conversation/seed-retention.ts')
+ const row=codecRow();row.protocol='legacy';delete row.use;row.original={kind:'local',sessionId:'source',seq:4,event:'context/result-ref',slot:'ref'}
+ row.ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999}
+ const wire=codecWire(codecSeed('public-completed',[codecPage([row])])),visible=createLegacyReadVisibility(wire)
+ if(visible.kind!=='visible')throw Error('Original seed is not visible')
+ const anchor={kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:0,rowOrdinal:0}
+ expect(visible.resultRow(anchor,row.extent)).toEqual(row)
+ expect(visible.resultRow({...anchor,rowOrdinal:1},row.extent)).toBeUndefined()
+ expect(visible.resultRow({...anchor,pageOrdinal:1},row.extent)).toBeUndefined()
+ expect(visible.resultRow(anchor,{kind:'framed',first:2,last:2})).toBeUndefined()
+ const shadow=createLegacyReadVisibility({...wire,events:[...wire.events,{type:'compaction/reset',seq:wire.events.length,removedSeqs:[1]}]})
+ if(shadow.kind!=='visible')throw Error('Original shadowed seed invalid');expect(shadow.resultRow(anchor,row.extent)).toBeUndefined()
+})
+
+it('admits only closed V3 seed-result metadata anchors',async()=>{
+ const {inheritedResultMetadata}=await import('../src/conversation/history/result-inherited.ts')
+ const ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999},original={kind:'local',sessionId:'source',seq:4,event:'context/result-ref',slot:'ref'},extent={kind:'framed',first:1,last:1},anchor={kind:'seed-result',manifestSeq:0,pageOrdinal:0,rowOrdinal:0},input={ref,original,extent,anchor}
+ expect(inheritedResultMetadata(input)).toEqual(input)
+ for(const invalid of [{...anchor,pageOrdinal:-1},{...anchor,rowOrdinal:0.5},{...anchor,manifestSeq:1},{...anchor,extra:true}])expect(()=>inheritedResultMetadata({...input,anchor:invalid})).toThrow()
+})
+
+it('qualifies each inherited V3 legacy row once through its original metadata anchor',async()=>{
+ const row=codecRow();row.protocol='legacy';delete row.use;row.original={kind:'local',sessionId:'source',seq:4,event:'context/result-ref',slot:'ref'}
+ row.ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999}
+ const source=heldSource(codecWire(codecSeed('public-completed',[codecPage([row])])),'A'),anchor={kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:0,rowOrdinal:0},metadata={ref:row.ref,original:row.original,extent:row.extent,anchor}
+ const reader={assertCurrent:source.owner.assertCurrent,async *legacy(){yield metadata}},result=await projectSelectedResults(source.context(),reader)
+ expect(result.kind).toBe('selected');if(result.kind!=='selected')throw Error(result.reason)
+ const pages=[];for await(const page of result.results.pages())pages.push(page);expect(pages.flatMap(page=>page.rows)).toHaveLength(1);expect(pages[0]!.rows[0]).toMatchObject({protocol:'legacy',original:row.original,basis:{kind:'inherited',row:0}})
+ const missing=await projectSelectedResults(source.context(),source.inherited);expect(missing.kind).toBe('refused')
+ const duplicate=await projectSelectedResults(source.context(),{...reader,async *legacy(){yield metadata;yield metadata}});expect(duplicate.kind).toBe('refused')
+})
+
+it('preserves original mixed V3 row order after legacy metadata qualification',async()=>{
+ const legacy=codecRow(0);legacy.protocol='legacy';delete legacy.use;legacy.original={kind:'local',sessionId:'source',seq:4,event:'context/result-ref',slot:'ref'}
+ legacy.ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999}
+ const managed=codecRow(1),source=heldSource(codecWire(codecSeed('public-completed',[codecPage([legacy,managed])])),'A'),metadata={ref:legacy.ref,original:legacy.original,extent:legacy.extent,anchor:{kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:0,rowOrdinal:0}}
+ const result=await projectSelectedResults(source.context(),{assertCurrent:source.owner.assertCurrent,async *legacy(){yield metadata}});expect(result.kind).toBe('selected');if(result.kind!=='selected')throw Error(result.reason)
+ const rows=[];for await(const page of result.results.pages())rows.push(...page.rows);expect(rows.map(row=>row.protocol)).toEqual(['legacy','managed'])
+})
+
+it('preserves duplicate-reference V3 observations by exact row anchor and rejects copied anchors',async()=>{
+ const ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999}
+ const rows=[0,1].map(ordinal=>{const row=codecRow(ordinal);row.protocol='legacy';delete row.use;row.ref=ref;row.original={kind:'local',sessionId:'source',seq:4+ordinal,event:'context/result-ref',slot:'ref'};return row})
+ const source=heldSource(codecWire(codecSeed('public-completed',[codecPage(rows)])),'A'),metadata=rows.map((row,ordinal)=>({ref,original:row.original,extent:row.extent,anchor:{kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:0,rowOrdinal:ordinal}}))
+ const result=await projectSelectedResults(source.context(),{assertCurrent:source.owner.assertCurrent,async *legacy(){yield* metadata}});expect(result.kind).toBe('selected');if(result.kind!=='selected')throw Error(result.reason)
+ const selected=[];for await(const page of result.results.pages())selected.push(...page.rows);expect(selected.map(row=>row.original.seq)).toEqual([4,5])
+ const copied=await projectSelectedResults(source.context(),{assertCurrent:source.owner.assertCurrent,async *legacy(){yield metadata[0]!;yield {...metadata[1]!,anchor:metadata[0]!.anchor}}});expect(copied.kind).toBe('refused')
+})
+
+it('resolves V3 page ordinals separately from global row ordinals',async()=>{
+ const {createLegacyReadVisibility}=await import('../src/conversation/seed-retention.ts')
+ const ref={id:'ctx_'+'c'.repeat(64),workspaceId:'w',sessionId:'source',callId:'c',label:'selected',revision:'c'.repeat(64),bytes:12,originalBytes:12,complete:true,expiresAt:9999999999999}
+ const rows=[0,1].map(ordinal=>{const row=codecRow(ordinal,ordinal+1);row.protocol='legacy';delete row.use;row.ref=ref;row.original={kind:'local',sessionId:'source',seq:4+ordinal,event:'context/result-ref',slot:'ref'};return row})
+ const wire=codecWire(codecSeed('public-completed',[codecPage([rows[0]]),codecPage([rows[1]],1)])),visible=createLegacyReadVisibility(wire);if(visible.kind!=='visible')throw Error('Source unavailable')
+ const second={kind:'seed-result' as const,manifestSeq:0 as const,pageOrdinal:1,rowOrdinal:1};expect(visible.resultRow(second,rows[1].extent)).toEqual(rows[1]);expect(visible.resultRow({...second,pageOrdinal:0},rows[1].extent)).toBeUndefined()
+})

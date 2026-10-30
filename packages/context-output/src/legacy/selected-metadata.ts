@@ -43,14 +43,15 @@ export async function createSelectedMetadata(input: LegacyReadObservation, withR
             const value = await withRead(async store => {
               current(); if (store !== originalStore) throw Error('Original metadata store changed')
               await assertSelectedPlan(store, plan!, observation, current)
-              const row = await iterator!.next(); current()
+              let row = await iterator!.next(); current()
               if (row.done) {
                 await assertSelectedPlan(store, plan!, observation, current)
                 await qualifySelectedGraph(store, plan!, observation, current)
                 await assertSelectedPlan(store, plan!, observation, current); current()
                 return { done: true as const, value: undefined }
               }
-              const metadata = await selectedRow(store, plan!.root, row.value, observation.sourceId, current)
+              let metadata = await selectedRow(store, plan!, row.value, observation, current)
+              while(!metadata){row=await iterator!.next();current();if(row.done){await assertSelectedPlan(store,plan!,observation,current);await qualifySelectedGraph(store,plan!,observation,current);await assertSelectedPlan(store,plan!,observation,current);current();return {done:true as const,value:undefined}}metadata=await selectedRow(store,plan!,row.value,observation,current)}
               await assertSelectedGrant(store, plan!, current); current()
               return { done: false as const, value: freezeJsonData(metadata) }
             })

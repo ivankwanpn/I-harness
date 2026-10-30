@@ -10,8 +10,10 @@ import { historyTurns, turnIntervals } from './history/turns.ts'
 import { createSemanticSourceConversationIndex } from './validation.ts'
 import { CURRENT_FORMAT_VERSION } from '../events/types.ts'
 import { seedLayout } from './seed-layout.ts'
+import { inheritedResultMembership } from './history/result-membership.ts'
+import { canonicalJsonData } from '../serialization/json-data.ts'
 
-type Anchor = { kind: 'manifest'; seq: 0 } | { kind: 'seed-group'; manifestSeq: 0; ordinal: number }
+type Anchor = { kind: 'manifest'; seq: 0 } | { kind: 'seed-group'; manifestSeq: 0; ordinal: number } | {kind:'seed-result';manifestSeq:0;pageOrdinal:number;rowOrdinal:number}
 type Ref = Extract<SessionEvent, { type: 'context/result-ref' }>['ref']
 type Candidate = { ref: Ref; original: { seq: number; part: 'context/result-ref.ref' }; extent: TurnExtent; anchor: Anchor }
 type Refused = { kind: 'refused'; reason: SeedRefusal | 'legacy-anchor-unsupported' }
@@ -29,7 +31,7 @@ function legacyStructure(view: SessionView) {
 
 export type LegacyVisibilityAnchor = Anchor
 export type LegacyVisibleRef = { ref: Ref; original: { seq: number; part: 'context/result-ref.ref' } }
-export type LegacyReadVisibility = Refused | { kind: 'visible'; local(): Iterable<LegacyVisibleRef>; anchorVisible(anchor: LegacyVisibilityAnchor, extent: TurnExtent): boolean }
+export type LegacyReadVisibility = Refused | { kind: 'visible'; local(): Iterable<LegacyVisibleRef>; anchorVisible(anchor: LegacyVisibilityAnchor, extent: TurnExtent): boolean; resultRow(anchor: Extract<LegacyVisibilityAnchor,{kind:'seed-result'}>, extent:TurnExtent): Extract<import('./selected-results-types.ts').SelectedResultRow,{protocol:'legacy'}>|undefined }
 
 /** Current-coordinate read visibility; B1 remains the projection/consumption owner. */
 export function createLegacyReadVisibility(view: SessionView): LegacyReadVisibility {
@@ -45,7 +47,18 @@ export function createLegacyReadVisibility(view: SessionView): LegacyReadVisibil
         if (event.type === 'context/result-ref' && visibility.content(facts[index]!)) yield { ref: event.ref as Ref, original: { seq: event.seq!, part: 'context/result-ref.ref' } }
       }
     }
+    let results:Map<number,{row:import('./selected-results-types.ts').SelectedResultRow;page:number}>|undefined
     return { kind: 'visible', local,
+      resultRow(anchor,extent) {
+        const manifest=view.events[0];if(manifest?.type!=='conversation/seed-manifest'||manifest.version!==3||anchor.manifestSeq!==0)return
+        if(!Number.isSafeInteger(anchor.pageOrdinal)||anchor.pageOrdinal<0||!Number.isSafeInteger(anchor.rowOrdinal)||anchor.rowOrdinal<0)return
+        let seq:number;try{seq=seedLayout(manifest).resultPageSeq(anchor.pageOrdinal)}catch{return}
+        const event=view.events[seq];if(!event||event.type!=='conversation/seed-results'||event.seq!==seq||event.ordinal!==anchor.pageOrdinal||event.manifestSeq!==0)return
+        const row=event.page.rows[anchor.rowOrdinal-event.page.firstRow]
+        if(!row||row.ordinal!==anchor.rowOrdinal||row.protocol!=='legacy'||canonicalJsonData(row.extent)!==canonicalJsonData(extent))return
+        if(!results){const captured=new Map<number,{row:import('./selected-results-types.ts').SelectedResultRow;page:number}>();for(const member of inheritedResultMembership(facts)){if(captured.has(member.row.ordinal))throw TypeError('Duplicate selected result ordinal');captured.set(member.row.ordinal,{row:member.row,page:member.page.index})}results=captured}
+        const member=results.get(row.ordinal);if(member&&member.page===seq&&canonicalJsonData(member.row)===canonicalJsonData(row))return row
+      },
       anchorVisible(anchor, extent) {
         if (extent.kind === 'framed' && (!Number.isSafeInteger(extent.first) || !Number.isSafeInteger(extent.last) || extent.first < 1 || extent.last < extent.first || extent.last > turns.total)) return false
         if (extent.kind !== 'framed' && extent.kind !== 'unframed') return false
@@ -111,6 +124,7 @@ export function createLegacyRetentionSelection(view: SessionView, selection: Ext
         if (groups.length !== 1) return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
         return { kind: 'included' as const, extent: selected.rebase(extent), anchor: { kind: 'seed-group' as const, manifestSeq: 0 as const, ordinal: groups[0]! } }
       }
+      if(anchor.kind==='seed-result')return { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
       const rebased = anchorFor(extent)
       return rebased ? { kind: 'included' as const, extent: selected.rebase(extent), anchor: rebased } : { kind: 'refused' as const, reason: 'legacy-anchor-unsupported' as const }
     } }

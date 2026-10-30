@@ -200,9 +200,9 @@ export class ContextStore {
       sql.run('INSERT INTO legacy_plans(binding,ready) VALUES (?,0)', [binding])
     }, binding)
   }
-  async stageLegacyPage(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, binding: string, name: string, page: LegacyPage, quota: number): Promise<void> {
+  async stageLegacyPage(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, binding: string, name: string, page: LegacyPage, quota: number,version:1|2=1): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
-    const pageDigest = recordHash('page', page), prior = use.get('SELECT digest FROM legacy_pages WHERE binding=? AND name=?', [binding, name])
+    const pageDigest = recordHash('page', page,version), prior = use.get('SELECT digest FROM legacy_pages WHERE binding=? AND name=?', [binding, name])
     if (prior) { if (prior.digest !== pageDigest) throw Error('Conflicting derived legacy page'); return }
     const tuples = page.kind === 'legacy-fork-leaf' ? page.rows.map(row => ({ row, tuple: JSON.stringify({ refId: row.refId, revision: row.revision, metadataDigest: row.metadataDigest, metadataEncodedBytes: row.metadataEncodedBytes, expiresAt: row.expiresAt }) })) : []
     await this.index.mutate(turn, lease, use, quota, sql => {
@@ -221,14 +221,14 @@ export class ContextStore {
   }
   legacyFirst(use: IndexUse,binding: string, refId: string): number { return Number(use.get('SELECT MIN(ordinal) AS ordinal FROM legacy_rows WHERE binding=? AND ref_id=?', [binding, refId])!.ordinal) }
   legacyReady(use: IndexUse,root: LegacyRoot): boolean {
-    const binding = recordHash('binding', root.binding), header = use.get('SELECT * FROM legacy_plans WHERE binding=?', [binding]), counts = this.legacyCounts(use, binding)
-    return header?.ready === 1 && header.plan === recordHash('plan', root) && counts.observations === root.observationCount && counts.refs === root.distinctRefCount
+    const binding = recordHash('binding', root.binding,root.version), header = use.get('SELECT * FROM legacy_plans WHERE binding=?', [binding]), counts = this.legacyCounts(use, binding)
+    return header?.ready === 1 && header.plan === recordHash('plan', root,root.version) && counts.observations === root.observationCount && counts.refs === root.distinctRefCount
   }
   async confirmLegacyIndex(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, root: LegacyRoot, quota: number): Promise<void> {
     this.assertTurn(turn); this.assertLease(lease, 'exclusive'); use.assertCurrent()
-    const binding = recordHash('binding', root.binding), counts = this.legacyCounts(use, binding)
+    const binding = recordHash('binding', root.binding,root.version), counts = this.legacyCounts(use, binding)
     if (counts.observations !== root.observationCount || counts.refs !== root.distinctRefCount) throw Error('Legacy derived EOF/count mismatch')
-    await this.index.mutate(turn, lease, use, quota, sql => { sql.run('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)', [binding, recordHash('plan', root), counts.observations, counts.refs]) }, binding)
+    await this.index.mutate(turn, lease, use, quota, sql => { sql.run('INSERT OR REPLACE INTO legacy_plans VALUES (?,?,?,?,1)', [binding, recordHash('plan', root,root.version), counts.observations, counts.refs]) }, binding)
     this.index.confirmHints(use, binding)
   }
   legacyHint(use: IndexUse,binding: string, ordinal: number): LegacyRow | undefined {
@@ -291,18 +291,20 @@ export class ContextStore {
     const next = new Set(actual.owners); next.add(target)
     await this.ledger.fund(path, next, quota, guard, operation); guard()
   }
-  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, groupCount: number, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
+  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, proof: number | {kind:'selected-v2';plan:ReturnType<typeof import('./legacy/selected-plan-view.ts').captureSelectedPlanView>;application:{onCreated(file:import('./legacy/funding-batch.ts').FundingFile):void;allowExisting(file:import('./legacy/funding-batch.ts').FundingFile):boolean}}, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
     const context = Object.freeze({ turn, lease, use, quota, guard }), check = () => this.assertFundingContext(context)
     check(); checkRoot(root)
     if (root.binding.workspaceId !== this.workspaceId || root.binding.targetSessionId !== root.binding.invocation.targetSessionId || !this.legacyReady(use, root)) throw Error('Legacy funding root conflict')
-    sum(0, groupCount)
-    const directory = transferDirectory(this, root.binding.invocation), binding = recordHash('binding', root.binding), base = resolve(directory, 'revoke'), bytes = Buffer.from(JSON.stringify(appliedFor(root))), application = resolve(directory, 'applied.json')
+    if(root.version===1&&typeof proof!=='number'||root.version===2&&(typeof proof!=='object'||proof.kind!=='selected-v2'))throw Error('Legacy funding proof mismatch')
+    if(typeof proof!=='number')proof.plan.assertRoot(root)
+    const groupCount=typeof proof==='number'?sum(0,proof):undefined
+    const directory = transferDirectory(this, root.binding.invocation), binding = recordHash('binding', root.binding,root.version), base = resolve(directory, 'revoke'), bytes = Buffer.from(JSON.stringify(appliedFor(root))), application = resolve(directory, 'applied.json')
     const pass = async (scope?: FundingBatchScope) => {
       const summary = fundingPass()
       summary.add(scope ? await fundSlotsInBatch(this.fundingBatch, scope, this.directory, base, revokedTuple(root), check, this.retireLegacyFile) : await describeSlotFunding(this.directory, base, revokedTuple(root), check, this.retireLegacyFile)); check()
       let ordinal = 0, firstOrdinal = -1
       for await (const row of walkPages(directory, root, check, groupCount, this.retireLegacyFile)) {
-        check(); const position = ordinal; ordinal = sum(ordinal, 1)
+        check();if(typeof proof!=='number')proof.plan.row(row);const position = ordinal; ordinal = sum(ordinal, 1)
         if (!same(this.legacyHint(use, binding, position), row)) throw Error('Legacy derived row conflict')
         const first = this.legacyFirst(use, binding, row.refId)
         if (!Number.isSafeInteger(first) || first < 0 || first > position) throw Error('Legacy derived ordinal conflict')
@@ -327,7 +329,7 @@ export class ContextStore {
       }
       check(); const counts = this.legacyCounts(use, binding)
       if (ordinal !== root.observationCount || counts.observations !== ordinal || counts.refs !== root.distinctRefCount) throw Error('Legacy funding EOF/count conflict')
-      summary.add(scope ? await fundApplicationInBatch(this.fundingBatch, scope, this.directory, application, bytes, check, this.retireLegacyFile) : await describeApplicationFunding(this.directory, application, bytes, check, this.retireLegacyFile)); check()
+      summary.add(scope ? await fundApplicationInBatch(this.fundingBatch, scope, this.directory, application, bytes, check, this.retireLegacyFile,typeof proof==='number'?undefined:proof.application) : await describeApplicationFunding(this.directory, application, bytes, check, this.retireLegacyFile)); check()
       const result = summary.finish()
       if (result.distinctRefs !== root.distinctRefCount) throw Error('Legacy funding distinct count conflict')
       return result

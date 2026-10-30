@@ -13,5 +13,6 @@ export function seedLayout(value: SeedHeader | import('../managed/types.ts').Dee
       || !Number.isSafeInteger(seedLength + 1 + (hasInitial ? 1 : 0))) seedInvalid()
   }
   return { resultPageCount: pages, groupCount: groups, seedLength,
+    resultPageSeq(ordinal: number) { if (!seedCount(ordinal) || ordinal >= pages) seedInvalid(); return 1 + ordinal },
     groupSeq(ordinal: number) { if (!seedCount(ordinal) || ordinal >= groups) seedInvalid(); return 1 + pages + ordinal } }
 }

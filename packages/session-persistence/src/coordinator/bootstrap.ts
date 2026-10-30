@@ -9,7 +9,7 @@ import { SessionBindingObservationError } from './types.ts'
 import { captureBootstrapCaptureRequest } from './bootstrap-capture.ts'
 import type { BootstrapCaptureRequest, BootstrapCaptureInspection } from './bootstrap-types.ts'
 import type { HeldFactOwner, IssuingFactOwner } from './fact-types.ts'
-import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, FactRecoveryRequiredError, encodeFactBatch, decodeFactBatch, legacyPrefixDigest, EMPTY_SEMANTIC_DEPENDENCY_DIGEST, validateSemanticBootstrapHistory, type FactOutcome, type Session, type JournalPrefix, type SessionEvent, type BootstrapInvocation, type BootstrapPhase, type BootstrapResumeToken } from '@i-harness/core-session'
 import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
 import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest, HeaderOutcome } from './bootstrap-types.ts'
@@ -19,7 +19,7 @@ import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts'
 import { compileSemanticSeed } from '../semantic-seed.ts'
-import { isStrictFactData } from '@i-harness/core-session'
+import { isStrictFactData,canonicalJsonData } from '@i-harness/core-session'
 import { ownBackendOutcome } from './fact-outcome.ts'
 import { captureBootstrapTargetPreparationOutcome, captureBootstrapTargetPreparationPort, captureBootstrapTargetPreparationRequest } from './bootstrap-preparation.ts'
 import { preparationFacts } from './bootstrap-preparation-facts.ts'
@@ -30,7 +30,7 @@ import { selectedResultsPreparationFacts } from './selected-results-preparation.
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -98,7 +98,7 @@ function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
     if(compiled.dependencyDigest!==stage.seed.dependencyDigest)throw new Error('Bootstrap dependency binding conflict')
   } else if(stage.seed.sourceObservation.kind!=='none')throw new Error('Bootstrap empty source binding conflict')
 }
-export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>) {
+export function createBootstrapOwner(backend:PersistenceBackend,ownership:Ownership,documents:Map<string,ManagedEntry>,attach:(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix)=>ReturnType<typeof createManagedDocument>,mutations:Mutations,processLatches?:ReturnType<typeof createProcessReadLatches>,activateSelected?:(id:string,entry:ManagedEntry)=>void) {
   const supported=()=>ownership.lockEnabled&&!!backend.prepareBootstrapHeader&&!!backend.reconcileBootstrapHeader&&!!backend.readBootstrapState&&!!backend.confirmBootstrapFrames&&!!backend.appendOwnedBatch&&!!backend.reconcileOwnedBatch
   const captureSupported=()=>supported()&&(process.platform==='win32'||process.platform==='linux')&&!!backend.checkBootstrapCaptureRoot&&!!backend.readBootstrapCapture&&!!backend.prepareBootstrapCapture&&!!backend.settleBootstrapCaptureIO
   const childSupported=()=>captureSupported()&&!!backend.bootstrapRoutes&&['readState','readCapture','reserveCapture','resolveBirth'].every(key=>typeof (backend.bootstrapRoutes as any)[key]==='function')
@@ -601,18 +601,72 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).finally(()=>{if(owned.flight===flight)owned.flight=undefined})
     owned.flight=flight;return flight
   }
+  function publishSelected(input:SelectedResultsRoute,identity:object,guard:()=>void,target:()=>void,closure:string) {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    if(!entry||!selected||selected.identity!==identity||!io||io.released||!selected.lane||!sameBootstrapData(route,selected.route)||!selected.headerIssued||selected.header?.kind!=='committed'||!/^[a-f0-9]{64}$/.test(closure))return Promise.resolve({kind:'blocked' as const})
+    if(entry.flight)return Promise.resolve({kind:'blocked' as const})
+    const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')return Promise.resolve({kind:'blocked' as const})
+    const journal=(backend as PersistenceBackend & {selectedJournal?:{
+      prepareCapturedCompletion(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,frame:BootstrapFrame):void;
+      appendOwnedBatch(id:string,owner:IssuingFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>;
+      reconcileOwnedBatch(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>;
+      confirmFrames(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,frames:readonly BootstrapFrame[]):Promise<{kind:'committed';receipts:import('@i-harness/core-session').FactReceipt[]}|{kind:'unknown'|'conflict'}>;
+      readJournalPrefix(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>):Promise<JournalPrefix>;
+    }}).selectedJournal
+    if(!journal)return Promise.resolve({kind:'blocked' as const})
+    const check=()=>{if(captureClosed||entry.revoked)throw Error('Selected target revoked');guard();target();io.held.assertHeld()}
+    const flight=Promise.resolve().then(async()=>{
+      check();await settleCapture(entry);check();if(entry.ready&&entry.document&&selected.resultReceipt)return {kind:'ready' as const,document:entry.document,receipt:selected.resultReceipt}
+      const initial=emptyPrefix(),seedBatch=encodeFactBatch('bootstrap:'+route.request.invocation.operationId+':seed',initial.prefixDigest,state.seed.records),seedPrefix={eventCount:seedBatch.key.count,bodyBytes:seedBatch.bytes.length,prefixDigest:decodeFactBatch(seedBatch.bytes).prefixDigest}
+      const complete:SessionEvent={type:'session/bootstrap',version:1,seq:state.seed.records.length,operationId:route.request.invocation.operationId,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest,dependencyClosureDigest:closure,seedLength:state.seed.records.length}
+      const completion=encodeFactBatch('bootstrap:'+route.request.invocation.operationId+':complete',seedPrefix.prefixDigest,[complete]),frames:BootstrapFrame[]=[{prefix:initial,batch:seedBatch},{prefix:seedPrefix,batch:completion}]
+      if(selected.closure!==undefined&&selected.closure!==closure)throw Error('Selected dependency closure changed')
+      if(selected.frames&&selected.frames.some((frame,index)=>!sameBootstrapData(frame.prefix,frames[index]!.prefix)||!Buffer.from(frame.batch.bytes).equals(Buffer.from(frames[index]!.batch.bytes))))throw Error('Selected frame changed')
+      selected.closure??=closure;selected.frames??=frames;selected.receipts??=[]
+      journal.prepareCapturedCompletion(id,io.held,selected.lane!,selected.frames[1]!);check()
+      for(let index=selected.receipts.length;index<2;index++){
+        const frame=selected.frames[index]!;let issued=false
+        if(selected.pending!==undefined){
+          if(selected.pending!==index)return {kind:'blocked' as const}
+          io.settled=false;const recovered=await ownership.withSessionOperation(id,()=>journal.reconcileOwnedBatch(id,io.held,selected.lane!,frame.prefix,frame.batch));await settleCapture(entry);check()
+          const checked=ownBackendOutcome(recovered,frame.batch.key,io.held.owner,true)
+          if(checked.kind==='committed'){selected.receipts.push(checked.receipt);selected.pending=undefined;continue}
+          if(checked.kind!=='absent')return {kind:'blocked' as const};selected.pending=undefined
+        }
+        io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selected.issued=true;issued=true;selected.pending=index;io.settled=false}
+        let raw:import('./fact-types.ts').BackendFactOutcome
+        try{io.settled=false;raw=await ownership.withSessionOperation(id,()=>journal.appendOwnedBatch(id,io.issuer,selected.lane!,frame.prefix,frame.batch))}finally{io.activeIssue=undefined}
+        await settleCapture(entry);const result=ownBackendOutcome(raw,frame.batch.key,io.held.owner,issued)
+        if(result.kind!=='committed'){if(issued)selected.pending=index;return {kind:'blocked' as const}}
+        selected.receipts.push(result.receipt);selected.pending=undefined;check()
+      }
+      io.settled=false;const confirmed=await ownership.withSessionOperation(id,()=>journal.confirmFrames(id,io.held,selected.lane!,selected.frames!));await settleCapture(entry);check()
+      if(confirmed.kind!=='committed'||confirmed.receipts.length!==2)return {kind:'blocked' as const}
+      for(let i=0;i<2;i++){const verified=ownBackendOutcome({kind:'committed',receipt:confirmed.receipts[i]},selected.frames[i]!.batch.key,io.held.owner,true);if(verified.kind!=='committed'||!sameBootstrapData(verified.receipt,selected.receipts[i]))return {kind:'blocked' as const}}
+      io.settled=false;const prefix=await ownership.withSessionOperation(id,()=>journal.readJournalPrefix(id,io.held,selected.lane!));await settleCapture(entry);check()
+      const expected={eventCount:seedPrefix.eventCount+completion.key.count,bodyBytes:seedPrefix.bodyBytes+completion.bytes.length,prefixDigest:decodeFactBatch(completion.bytes).prefixDigest}
+      if(!sameBootstrapData(prefix,expected))return {kind:'blocked' as const}
+      const doc=entry.document??attach(id,entry,buildSession(JSON.parse(state.headerBytes),[...(JSON.parse(canonicalJsonData(state.seed.records)) as SessionEvent[]),complete]),prefix)
+      if(!entry.control?.bindSelected)return {kind:'blocked' as const}
+      await entry.control.bindSelected();check();const facts=selectedResultsPreparationFacts(state.stage,state.seed.records)
+      selected.resultReceipt=Object.freeze({version:2,invocation:route.request.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:closure,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      io.claim.retainLive();entry.control.ready();entry.ready=true;activateSelected?.(id,entry);selected.processToken?.end('settled');selected.processToken=undefined
+      return {kind:'ready' as const,document:doc,receipt:selected.resultReceipt}
+    }).catch(()=>({kind:'blocked' as const})).finally(async()=>{io.activeIssue=undefined;try{await settleCapture(entry)}finally{if(entry.flight===flight)entry.flight=undefined}})
+    entry.flight=flight;return flight
+  }
   function inspectSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
     if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
     const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')throw Error('Original selected capture unavailable')
-    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records),seed:state.seed})
+    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records),seed:state.seed,stage:state.stage})
   }
   async function releaseSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)
     if(!entry||!entry.selected||entry.selected.identity!==identity)return
     if(!sameBootstrapData(entry.selected.route,route))throw Error('Selected target conflict')
     entry.captureIO&&(entry.captureIO.activeIssue=undefined)
-    await entry.flight?.catch(()=>{});await releaseCapture(entry)
+    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}await releaseCapture(entry)
     entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
     if(!entry.selected.issued&&!entry.document&&documents.get(route.request.invocation.targetSessionId)===entry)documents.delete(route.request.invocation.targetSessionId)
   }
@@ -623,11 +677,21 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(entry.flight)return Promise.resolve({kind:'unknown'})
     const captured=selected.attempt?.inspect();if(!captured||captured.kind!=='captured'||!selected.headerIssued)return Promise.resolve({kind:'unknown'})
     const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(captured.stageBytes),headerBytes:Buffer.from(captured.headerBytes)}
-    const flight=Promise.resolve().then(async()=>{await settleCapture(entry);io.held.assertHeld();io.settled=false;try{const outcome=await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation));selected.header=outcome;return outcome}finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
+    const flight=Promise.resolve().then(async()=>{await settleCapture(entry);io.held.assertHeld();io.settled=false;try{
+      if(selected.pending!==undefined&&selected.frames&&selected.lane){
+        const journal=(backend as PersistenceBackend & {selectedJournal?:{reconcileOwnedBatch(id:string,owner:HeldFactOwner,lane:Readonly<{kind:'selected-lane'}>,prefix:JournalPrefix,batch:BootstrapFrame['batch']):Promise<import('./fact-types.ts').BackendFactOutcome>}}).selectedJournal
+        if(!journal)return {kind:'unknown' as const};const index=selected.pending,frame=selected.frames[index]!
+        const outcome=await ownership.withSessionOperation(id,()=>journal.reconcileOwnedBatch(id,io.held,selected.lane!,frame.prefix,frame.batch)),checked=ownBackendOutcome(outcome,frame.batch.key,io.held.owner,true)
+        if(checked.kind==='committed'){selected.receipts??=[];if(selected.receipts.length!==index)return {kind:'unknown' as const};selected.receipts.push(checked.receipt);selected.pending=undefined;return selected.header??{kind:'unknown' as const}}
+        if(checked.kind==='absent'){selected.pending=undefined;return {kind:'absent' as const}}
+        return {kind:checked.kind==='conflict'?'conflict' as const:'unknown' as const}
+      }
+      const outcome=await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation));selected.header=outcome;return outcome
+    }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }
   return {
-    prepareSelectedCapture,captureSelected,inspectSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,inspectSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

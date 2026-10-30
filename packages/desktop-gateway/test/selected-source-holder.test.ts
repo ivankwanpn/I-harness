@@ -99,3 +99,49 @@ it('drains an active selected project confirmation before releasing its original
   let closed=false;const closing=holder.close().then(()=>{closed=true});try{await new Promise(resolve=>setTimeout(resolve,75));expect(closed).toBe(false);expect(f.coordinator.ownerOf('target')).toBe(true)}finally{leave.resolve();await confirmation;await closing;spy.mockRestore()}
  }finally{await f.close()}
 })
+
+it('confirms exact selected legacy rows through the original store without a synthetic group',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.runtime.contextOutput.configure({enabled:true});const source=await f.runtime.sourceFor('source'),ref=await f.runtime.contextOutput.capture({sessionId:'source',callId:'legacy',label:'selected',text:'legacy body',complete:true,source});if(!ref)throw Error('Legacy capture unavailable')
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'step/start'},{type:'tool/call',callId:'legacy',name:'read',args:{}},{type:'assistant/message',text:''},{type:'tool/result',callId:'legacy',name:'read',output:'done'},{type:'step/end'},{type:'context/result-ref',ref},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-legacy-v2',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+  expect((await holder.captureFirst()).kind).toBe('captured');expect((await holder.confirmTarget()).kind).toBe('confirmed');expect((await holder.confirmLegacyDependencies()).kind).toBe('confirmed')
+  await (await f.coordinator.openManagedDocument('source')).metadata.enterPlan('revoke');const flush=vi.spyOn(f.coordinator,'flush');expect((await holder.reconcilePassive()).kind).toBe('committed');expect(flush).not.toHaveBeenCalled();flush.mockRestore();await holder.close()
+ }finally{await f.close()}
+},60000)
+
+it('publishes and adopts the selected target only after both original dependency confirmations',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-publish',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+  expect((await holder.captureFirst()).kind).toBe('captured');const result=await holder.publishWarm();expect(result.kind).toBe('ready')
+  const document=await f.coordinator.openManagedDocument('target');document.assertReady();expect((await document.metadata.admit({type:'plan/mode',mode:'on'})).kind).toBe('committed')
+  await holder.close();document.assertReady()
+ }finally{await f.close()}
+},60000)
+
+it('transfers a real selected legacy result through A to B to C exactly once',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.runtime.contextOutput.configure({enabled:true});const source=await f.runtime.sourceFor('source'),ref=await f.runtime.contextOutput.capture({sessionId:'source',callId:'legacy',label:'selected',text:'nested legacy',complete:true,source});if(!ref)throw Error('Legacy capture unavailable')
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'step/start'},{type:'tool/call',callId:'legacy',name:'read',args:{}},{type:'assistant/message',text:''},{type:'tool/result',callId:'legacy',name:'read',output:'done'},{type:'step/end'},{type:'context/result-ref',ref},{type:'turn/end'}])
+  function operation(sourceSessionId:string,targetSessionId:string,operationId:string){const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId,selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'});return readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId,targetSessionId,createdAt:'2026-10-28T00:00:00.000Z',requestDigest}})}
+  const first=f.runtime.createSelectedSourceHolder(operation('source','target','selected-ab'));expect((await first.captureFirst()).kind).toBe('captured');const firstReady=await first.publishWarm();expect(firstReady.kind).toBe('ready');const flush=vi.spyOn(f.coordinator,'flush');const warm=await first.publishWarm();expect(warm.kind).toBe('ready');if(firstReady.kind==='ready'&&warm.kind==='ready')expect(warm.receipt).toEqual(firstReady.receipt);expect(flush).not.toHaveBeenCalled();flush.mockRestore();await first.close()
+  const second=f.runtime.createSelectedSourceHolder(operation('target','next','selected-bc')),captured=await second.captureFirst();expect(captured.kind).toBe('captured');if(captured.kind!=='captured')throw Error('Nested capture unavailable')
+  const rows=captured.seed.records.filter(record=>record.type==='conversation/seed-results').flatMap(record=>record.type==='conversation/seed-results'?record.page.rows:[]);expect(rows.filter(row=>row.protocol==='legacy')).toHaveLength(1)
+  expect((await second.publishWarm()).kind).toBe('ready');await second.close()
+  await f.runtime.contextOutput.clear('source');await f.runtime.contextOutput.clear('target')
+  await f.runtime.withLegacyReadObservation({sessionId:'next'},async observation=>{const result=await f.runtime.contextOutput.readLegacyObserved({sessionId:'next'},{refId:ref.id},observation);expect(result.text).toBe('nested legacy')})
+ }finally{await f.close()}
+},120000)
+
+it.each(['expiry','clear'] as const)('fences selected seed issuance after original legacy %s',async(mode)=>{
+ const f=await createGatewayForkFixture();try{
+  await f.runtime.contextOutput.configure({enabled:true});const source=await f.runtime.sourceFor('source'),ref=await f.runtime.contextOutput.capture({sessionId:'source',callId:'legacy',label:'selected',text:'expiring legacy',complete:true,source});if(!ref)throw Error('Legacy capture unavailable')
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'step/start'},{type:'tool/call',callId:'legacy',name:'read',args:{}},{type:'assistant/message',text:''},{type:'tool/result',callId:'legacy',name:'read',output:'done'},{type:'step/end'},{type:'context/result-ref',ref},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-expiry',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation),captured=await holder.captureFirst();if(captured.kind!=='captured')throw Error('Selected capture unavailable')
+  const entered=Promise.withResolvers<void>(),leave=Promise.withResolvers<void>(),append=f.backend.selectedJournal.appendOwnedBatch.bind(f.backend.selectedJournal),spy=vi.spyOn(f.backend.selectedJournal,'appendOwnedBatch').mockImplementation(async(...args)=>{entered.resolve();await leave.promise;return append(...args)})
+  const publishing=holder.publishWarm();await entered.promise;const now=mode==='expiry'?vi.spyOn(Date,'now').mockReturnValue(ref.expiresAt+1):undefined
+  try{if(mode==='clear')await f.runtime.contextOutput.clear('source');leave.resolve();const outcome=await publishing.catch(error=>error);expect(outcome instanceof Error||outcome.kind==='blocked').toBe(true)}finally{now?.mockRestore();leave.resolve();spy.mockRestore()}
+  const {readFile}=await import('node:fs/promises');expect((await readFile(join(f.sessions,'target.jsonl'))).toString()).toBe(captured.headerBytes);await holder.close()
+ }finally{await f.close()}
+},60000)

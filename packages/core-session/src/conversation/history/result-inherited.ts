@@ -15,9 +15,11 @@ export function inheritedResultMetadata(raw: unknown): InheritedResult {
   closed(extent, data(extent, 'kind') === 'framed' ? ['kind', 'first', 'last'] : ['kind'])
   const selected = scalars(extent, ['kind', 'first', 'last'])
   if (selected.kind !== 'unframed' && (selected.kind !== 'framed' || !Number.isSafeInteger(selected.first) || !Number.isSafeInteger(selected.last) || (selected.first as number) < 1 || (selected.last as number) < (selected.first as number))) throw new TypeError('Invalid inherited extent')
-  closed(anchor, data(anchor, 'kind') === 'manifest' ? ['kind', 'seq'] : ['kind', 'manifestSeq', 'ordinal'])
-  const basis = scalars(anchor, ['kind', 'seq', 'manifestSeq', 'ordinal'])
-  if (basis.kind === 'manifest' ? basis.seq !== 0 : basis.kind !== 'seed-group' || basis.manifestSeq !== 0 || !Number.isSafeInteger(basis.ordinal) || (basis.ordinal as number) < 0) throw new TypeError('Invalid inherited anchor')
+  const kind=data(anchor,'kind')
+  closed(anchor, kind === 'manifest' ? ['kind', 'seq'] : kind === 'seed-result' ? ['kind','manifestSeq','pageOrdinal','rowOrdinal'] : ['kind', 'manifestSeq', 'ordinal'])
+  const basis = scalars(anchor, ['kind', 'seq', 'manifestSeq', 'ordinal','pageOrdinal','rowOrdinal'])
+  const count=(value:unknown)=>Number.isSafeInteger(value)&&(value as number)>=0
+  if (basis.kind === 'manifest' ? basis.seq !== 0 : basis.kind === 'seed-group' ? basis.manifestSeq!==0||!count(basis.ordinal) : basis.kind !== 'seed-result'||basis.manifestSeq!==0||!count(basis.pageOrdinal)||!count(basis.rowOrdinal)) throw new TypeError('Invalid inherited anchor')
   return { ref: legacyResultMetadata(data(raw, 'ref')), original: address, extent: selected, anchor: basis } as InheritedResult
 }
 /** Preserve the original reader's release path on refusal as well as EOF. */

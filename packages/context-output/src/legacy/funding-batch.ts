@@ -219,14 +219,16 @@ function applicationDescription(final: string, bytes: Buffer, file: FundingFile)
   return fundingDescription(final, 'application', [final, pending, digest(bytes), String(bytes.length), ...fileFields(file)], [{ key: 'pending', peakGrowth: growth }])
 }
 export async function describeApplicationFunding(directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingDescription> { return applicationDescription(final, bytes, await inspectApplication(directory, final, bytes, guard, retire)) }
-export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile): Promise<FundingDescription> {
+export async function fundApplicationInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, directory: string, final: string, bytes: Buffer, guard: () => void, retire?: RetireFile, issuance?:{onCreated(file:FundingFile):void;allowExisting(file:FundingFile):boolean}): Promise<FundingDescription> {
   const prior = await inspectApplication(directory, final, bytes, guard, retire), description = applicationDescription(final, bytes, prior), allocation = owner.enter(scope, description), pending = applicationPending(final, bytes)
   owner.assertAllocation(allocation, final); guard()
+  if(prior.kind==='file'&&issuance&&!issuance.allowExisting(prior))throw Error('Foreign application staging')
   if (prior.kind === 'absent') owner.issued(allocation, 'pending', bytes.length)
   const handle = await open(pending, prior.kind === 'absent' ? 'wx+' : 'r+')
   await withFundingFile(handle, retire, async () => {
     guard(); const initial = await handle.stat({ bigint: true }); guard()
     const file = prior.kind === 'file' ? prior : nativeFundingFile(initial, '')
+    if(prior.kind==='absent')issuance?.onCreated(file)
     const size = prior.kind === 'file' ? prior.size : 0
     await assertFundingFile(directory, pending, handle, file, size, guard)
     if (!(await readExact(handle, size, 0)).equals(bytes.subarray(0, size))) throw Error('Original application staging conflict')
