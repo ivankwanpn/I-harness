@@ -24,3 +24,21 @@ it('retains release refusal and distinguishes failed renewal from old debt', () 
   credit.fence(); expect(releases).toBe(2)
   expect(() => credit.reserve()).toThrow()
 })
+it('keeps failed unused replacement reachable for fence retry and final release is exactly once',()=>{
+  let releases=0,refuse=true
+  const replacement:WaitDrainReservation={unregister(){throw Error('unused')},rejoin(){},release(){releases++;if(refuse)throw null}}
+  const initial:WaitDrainReservation={unregister(){throw Error('unused')},rejoin(){},release(){}}
+  const credit=createChannelWaitCredit({reserve(){return replacement}},initial)
+  const generation=credit.reserve();generation.release()
+  let threw=false;try{credit.fence()}catch(error){threw=true;expect(error).toBeNull()};expect(threw).toBe(true)
+  expect(()=>credit.reserve()).toThrow();refuse=false;credit.fence();credit.fence();generation.release();expect(releases).toBe(2)
+})
+it('delegates with exact original receivers and renews synchronously before competing microtask admission',async()=>{
+  const events:string[]=[];let available=false,id=0
+  const make=():WaitDrainReservation=>{const number=++id;const original:WaitDrainReservation={unregister(){expect(this).toBe(original);throw Error('unused')},rejoin(){expect(this).toBe(original)},release(){expect(this).toBe(original);events.push('release'+number);available=true;if(number===1)queueMicrotask(()=>{try{client.reserve();events.push('stolen')}catch{events.push('competitor-refused')}})}};return original}
+  const client={reserve(){expect(this).toBe(client);if(!available)throw Error('full');events.push('reserve');available=false;return make()}}
+  const credit=createChannelWaitCredit(client,make()),generation=credit.reserve()
+  generation.rejoin();generation.release();expect(events).toEqual(['release1','reserve'])
+  await Promise.resolve();expect(events).toEqual(['release1','reserve','competitor-refused'])
+  credit.fence();credit.fence();expect(events.at(-1)).toBe('release2')
+})
