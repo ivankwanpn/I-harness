@@ -8,6 +8,7 @@ export class TaskRecords {
   readonly #byChild = new Map<string, TaskRecord>()
   #taskCounter = 0
   #anonCounter = 0
+  #checkedCounter = false
 
   get(taskId: string): TaskRecord | undefined { return this.#records.get(taskId) }
   has(taskId: string): boolean { return this.#records.has(taskId) }
@@ -31,6 +32,7 @@ export class TaskRecords {
       if (existing.prompt === input.prompt && existing.agent === input.agent && existing.agentPath === input.agentPath && existing.delivery === input.delivery) return { record: existing, inserted: false }
       throw new TaskIdentityConflictError(input.identity)
     }
+    if (this.#checkedCounter && this.#taskCounter >= Number.MAX_SAFE_INTEGER) throw new Error('Task counter exhausted')
     this.#taskCounter += 1
     const record: TaskRecord = {
       id: `task-${this.#taskCounter}`,
@@ -72,25 +74,25 @@ export class TaskRecords {
     return n
   }
 
-  seedRestoredCounter(tasks: readonly TaskRecord[]): void {
+  seedRestoredCounter(tasks: readonly TaskRecord[], strict = false): void {
+    if (strict) this.#checkedCounter = true
     for (const task of tasks) {
       const match = /^task-(\d+)$/.exec(task.id)
-      if (match) this.#taskCounter = Math.max(this.#taskCounter, Number(match[1]))
+      if (match) { const value = Number(match[1]); if (strict && (!Number.isSafeInteger(value) || value >= Number.MAX_SAFE_INTEGER)) throw new Error('Unsafe restored task counter'); this.#taskCounter = Math.max(this.#taskCounter, value) }
     }
   }
   checkRestoredId(taskId: string): void {
     if (this.#records.has(taskId)) throw new Error(`duplicate task id on restore: ${taskId}`)
   }
   insertRestored(task: TaskRecord): void { this.#records.set(task.id, task) }
-  indexRestored(task: TaskRecord, restoredAnon: number): void {
-    this.#byIdentity.set(
-      task.callEventSeq !== undefined
+  indexRestored(task: TaskRecord, restoredAnon: number, strict = false): void {
+    const key = task.callEventSeq !== undefined
         ? `${task.parentSessionId}:${task.callEventSeq}`
         : task.toolCallId !== undefined
           ? `${task.parentSessionId}:call:${task.toolCallId}`
-          : `restored-anon:${restoredAnon}`,
-      task,
-    )
+          : `restored-anon:${restoredAnon}`
+    if (strict && (this.#byIdentity.has(key) || !!task.childSessionId && this.#byChild.has(task.childSessionId))) throw new Error('Duplicate restored task index')
+    this.#byIdentity.set(key, task)
     if (task.childSessionId) this.#byChild.set(task.childSessionId, task)
   }
 }
