@@ -168,3 +168,10 @@ it('uses the actual selected source and original binding admission for a capture
     expect(result.kind).toBe('ready'); expect(captures).toBe(1); expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
+it('refuses a completed physical14 bootstrap with missing task storage',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'bootstrap-missing14-')),source=join(import.meta.dirname,'fixtures/bootstrap13-public')
+ for(const name of await readdir(source))await copyFile(join(source,name),join(root,name))
+ const first=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract);await first.loadOwned('target');await first.close()
+ const {unlink}=await import('node:fs/promises');await unlink(join(root,'task-target.doc.jsonl'));const before=await readFile(join(root,'target.jsonl')),request=public13Request(),guards={assertCurrent(){},dependencies:{async confirm(){throw Error('unused')},async reconcile(){throw Error('unused')}}},coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{expect(['blocked','refused']).toContain((await coordinator.resumeSemanticTarget(request.invocation,guards)).kind);expect(await readFile(join(root,'target.jsonl'))).toEqual(before);await expect(readFile(join(root,'task-target.doc.jsonl'))).rejects.toMatchObject({code:'ENOENT'})}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+})
