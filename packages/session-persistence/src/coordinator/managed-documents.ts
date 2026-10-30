@@ -23,7 +23,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
   function attach(id:string,entry:ManagedEntry,session:Session,prefix:JournalPrefix) {
     if(entry.document)return entry.document
     const document=createManagedDocument(id,session,prefix,backend,ownership,options,report,
-      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : undefined, processLatches)
+      entry.bootstrap ? {operationId:entry.bootstrap.invocation.operationId,bind(control){entry.control=control}} : entry.selected ? {operationId:entry.selected.route.request.invocation.operationId,selected:true,bind(control){entry.control=control}} : undefined, processLatches)
     entry.document=document
     documentEntries.set(document,{id,entry})
     const revoke=document.revokeNewWork
@@ -36,7 +36,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       finally {token?.end(outcome)}
     }
     if(entry.revoked)document.revokeNewWork()
-    if(!entry.bootstrap)resolved.set(id,document)
+    if(!entry.bootstrap&&!entry.selected)resolved.set(id,document)
     return document
   }
   function assertEntry(entry:ManagedEntry|undefined) {
@@ -81,7 +81,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       const { id, entry } = association
       const readiness = captureManagedParentReadiness(document, ownership)
       const check = () => {
-        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || (entry.bootstrap && !entry.ready)) throw new FactRecoveryRequiredError()
+        if (documents.get(id) !== entry || entry.document !== document || entry.revoked || ((entry.bootstrap||entry.selected) && !entry.ready)) throw new FactRecoveryRequiredError()
         readiness.assertCurrent()
       }
       check()

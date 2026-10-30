@@ -159,3 +159,18 @@ it('issues only the two retained captured frames before a completed birth exists
   expect(await readFile(f.path)).toEqual(f.raw)
  }finally{await f.close()}
 })
+
+it('adopts a checked selected birth under the actual managed document owner and appends its suffix',async()=>{
+ const f=await fixture()
+ try{
+  const {createManagedDocument}=await import('../../session-persistence/src/coordinator/managed-document.ts'),{buildSession}=await import('../../session-persistence/src/format/validation.ts'),{readFactJournal}=await import('@i-harness/core-session')
+  const meta=JSON.parse(f.built.headerBytes),decoded=readFactJournal(f.raw.subarray(Buffer.byteLength(f.built.headerBytes)),meta.journal,meta.formatVersion,meta),session=buildSession(meta,decoded.events)
+  let control:any;const document=createManagedDocument('target',session,decoded.prefix,f.backend,f.ownership,undefined,()=>{},{operationId:'op',selected:true,bind(value){control=value}})
+  expect(()=>control.ready()).toThrow()
+  faults.close=true;const first=control.bindSelected(),joined=control.bindSelected();expect(joined).toBe(first);await expect(first).rejects.toThrow();expect(faults.leaked!.fd).toBe(-1)
+  await control.bindSelected();control.ready()
+  expect((await document.metadata.admit({type:'plan/mode',mode:'on'})).kind).toBe('committed')
+  expect((await readFile(f.path)).subarray(0,f.raw.length)).toEqual(f.raw)
+  await document.close()
+ }finally{await f.close()}
+})
