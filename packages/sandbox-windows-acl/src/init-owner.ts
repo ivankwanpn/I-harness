@@ -16,6 +16,16 @@ export class NativeInitOwner {
     const revision = this.retirementRevision
     return () => { if (revision !== this.retirementRevision) throw new Error('Native resource owner is retiring') }
   }
+  /** Finite borrow of this exact original heap entry, never a reused address. */
+  captureHeapCurrent(value: NativePtr) {
+    const matches = this.entries.filter(entry => entry.domain === 'heap' && entry.value === value)
+    if (matches.length !== 1) throw new Error('original heap allocation is absent or ambiguous after address reuse')
+    const entry = matches[0]!
+    const current = this.captureCurrent()
+    const assert = () => { current(); if (!entry || entry.done || entry.unknown) throw new Error('original heap resource is not live') }
+    assert()
+    return assert
+  }
   /** Register before BOOL initialization; VOID deletion is acknowledged only on return. */
   voidControl(initializeName: string, initialize: () => number, releaseName: string, release: () => void) {
     let state: 'unknown' | 'ready' | 'failed' = 'unknown'
@@ -85,6 +95,7 @@ export class NativeInitOwner {
   output(slot: NativePtr, kind: 'handle' | 'local', name: string, issue: () => number, statusReturn?: boolean, nullable?: false): NativePtr
   output(slot: NativePtr, kind: 'handle' | 'local', name: string, issue: () => number, statusReturn: boolean, nullable: true): NativePtr | null
   output(slot: NativePtr, kind: 'handle' | 'local', name: string, issue: () => number, statusReturn = false, nullable = false) {
+    const current = this.captureCurrent()
     let state: 'unknown' | 'success' | 'failed' = 'unknown'
     let decoded = false, pointer: NativePtr | null = null
     const entry = this.own(() => {
@@ -100,10 +111,15 @@ export class NativeInitOwner {
     }
     const result = issue()
     if (statusReturn ? result !== 0 : result === 0) {
+      state = 'failed'
       const code = statusReturn ? result : this.api.getLastError()
-      state = 'failed'; throwWin32(this.api, name, code)
+      throwWin32(this.api, name, code)
     }
     state = 'success'
+    // Reentrant retirement can already have retired this entry and its slot.
+    // Cleanup still recovers through value() on the original owner; only this
+    // initial post-issue native read requires the original finite-use session.
+    current()
     return value()
   }
   release(value: NativePtr, domain: Entry['domain']) {

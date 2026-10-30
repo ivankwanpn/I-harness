@@ -532,4 +532,3 @@ export function throwLastError(api: Win32Bindings, name: string, detail?: string
 export function throwWin32(api: Win32Bindings, name: string, win32Code: number, detail?: string): never {
   throw new Win32Error(name, win32Code, detail ?? errorText(api, win32Code))
 }
-
