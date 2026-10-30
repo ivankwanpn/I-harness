@@ -28,6 +28,7 @@ function consistency(parent: string, events: readonly SessionEventView[], seedLe
   if (value === undefined) return { kind: knownIds.length ? 'recovery-required' as const : 'consistent' as const, knownIds }
   validateTaskDocument(value as TaskProtocolDocument)
   const document = value as TaskProtocolDocument
+  if (document.formatVersion === 3 && document.notifications.some(n => n.parentSessionId && n.parentSessionId !== parent)) return { kind: 'recovery-required' as const, knownIds }
   const counts = new Map<string, number>()
   for (const task of document.tasks) {
     if (typeof task.id !== 'string' || !task.id || typeof task.parentSessionId !== 'string' || task.parentSessionId && task.parentSessionId !== parent) return { kind: 'recovery-required' as const, knownIds }

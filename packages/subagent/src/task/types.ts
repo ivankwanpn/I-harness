@@ -13,6 +13,7 @@ export type TaskSavedObservation = { status: 'accepted' | 'running'; outcome?: n
 export interface TaskRecord {
   id: string
   parentSessionId: string
+  childBirth?: TaskChildBirthBinding
   toolCallId?: string
   callEventSeq?: number
   childSessionId?: string
@@ -56,7 +57,8 @@ export interface TaskNotificationRecord {
   timeWoken?: number
   error?: string
 }
-export interface TaskProtocolDocument { formatVersion: 1 | 2; tasks: TaskRecord[]; notifications: TaskNotificationRecord[] }
+export type TaskChildBirthBinding = Readonly<{ version: 1; kind: 'task-child-birth'; request: import('@i-harness/session-persistence').ChildBootstrapCaptureRequest }>
+export interface TaskProtocolDocument { formatVersion: 1 | 2 | 3; tasks: TaskRecord[]; notifications: TaskNotificationRecord[] }
 
 export class TaskIdentityConflictError extends Error {
   constructor(readonly identity: TaskIdentity) {
