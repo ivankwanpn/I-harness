@@ -2,7 +2,7 @@
 // listing (a live store with blank rows, a corrupt file, a missing dir), the
 // transcript renderer (context snapshots stay out of it), and the argument
 // parsing (`--session-dir` / `--last` / `--json`).
-import { appendFileSync, readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, readFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, describe, expect, it, vi } from "vitest"
@@ -325,4 +325,9 @@ it("bounds the full retained disposition and one-line value to the original 200 
   const text = renderTranscript(session, 20)
   expect(text).toBe("  → " + ("[unknown · unknown · inline] " + value.replace(/\s+/g," ").trim()).slice(0,200))
   expect(text).toHaveLength(204)
+})
+it('lists and shows an original13 session without initializing or upgrading it',async()=>{
+ const root=storeRoot(),path=join(root,'p.jsonl'),source=join(import.meta.dirname,'../../../packages/session-persistence-jsonl/test/fixtures/original13-empty.jsonl');copyFileSync(source,path)
+ const before=readFileSync(path),log=vi.spyOn(console,'log').mockImplementation(()=>{})
+ try{expect(await runSessionsCommand(['sessions','list','--session-dir',root])).toBe(0);expect(await runSessionsCommand(['sessions','show','p','--session-dir',root])).toBe(0);expect(readFileSync(path)).toEqual(before);expect(existsSync(join(root,'task-p.doc.jsonl'))).toBe(false)}finally{log.mockRestore()}
 })

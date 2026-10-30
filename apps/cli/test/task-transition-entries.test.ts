@@ -58,3 +58,10 @@ it.skipIf(!process.env.IH_TASK_D_PREDECESSOR_FIXTURES).each(['sdk','acp'] as con
   expect(JSON.parse(await readFile(join(sessions,'task-ordinary13.doc.jsonl'),'utf8')).formatVersion).toBe(2)
  }finally{if(child.exitCode===null){child.kill();await exited};await rm(root,{recursive:true,force:true})}
 },30000)
+it.skipIf(!process.env.IH_TASK_D_PREDECESSOR_FIXTURES)('actual run resumes an original13 parent through the durable transition',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'cli-run-resume-')),workspace=join(root,'workspace'),profile=join(root,'config'),sessions=join(root,'sessions');await mkdir(workspace);await mkdir(profile);await mkdir(sessions)
+ const {copyFile}=await import('node:fs/promises');await copyFile(join(process.env.IH_TASK_D_PREDECESSOR_FIXTURES!,'ordinary13.jsonl'),join(sessions,'ordinary13.jsonl'))
+ const child=spawn(process.execPath,['--import',loader,entry,'run','fixture','--session-dir',sessions,'--resume','ordinary13'],{cwd:workspace,env:{...process.env,IH_CONFIG_DIR:profile},stdio:'pipe',windowsHide:true})
+ let diagnostic='';child.stderr.on('data',chunk=>diagnostic+=chunk);child.stdout.resume();const exited=new Promise<number|null>((resolve,reject)=>{child.once('error',reject);child.once('exit',resolve)})
+ try{child.stdin.end();await exited;expect(JSON.parse((await readFile(join(sessions,'ordinary13.jsonl'),'utf8')).split('\n')[0]!).formatVersion,diagnostic).toBe(14);expect(JSON.parse(await readFile(join(sessions,'task-ordinary13.doc.jsonl'),'utf8')).formatVersion).toBe(2)}finally{if(child.exitCode===null){child.kill();await exited};await rm(root,{recursive:true,force:true})}
+},30000)
