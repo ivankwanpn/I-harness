@@ -92,7 +92,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
   const acknowledgeSelectedAcquisitions=(original:ContextStore)=>{for(const debt of selectedAcquisitionDebts)if(debt.store===original){debt.settled=true;selectedAcquisitionDebts.delete(debt)}}
   const legacy = createLegacyForkOwner({ strict: options.requireObservedLegacyRecipients === true, workspaceId,
     quota: () => config.maxDiskBytes, run: (signal, work) => run(signal, owned => withLegacyIndexWrite(owned, context => work(owned, context)), false, true),
-    mutate: mutateIndex,runPassive:(original,work)=>run(undefined,owned=>gate.shared(owned,async lease=>{gate.assertLease(lease);if(!store||store!==original)throw Error('Original legacy store unavailable');return work(owned,store)}),false,true) })
+    mutate: mutateIndex,runPassive:(original,work)=>run(undefined,owned=>gate.exclusive(owned,async lease=>{gate.assertLease(lease);if(!store||store!==original)throw Error('Original legacy store unavailable');return serial(()=>owner.mutate(async turn=>{turn.assertCurrent();return work(owned,store!)}))}),false,true) })
   unsubscribeDeletions = options.documentDeletions?.(releaseDocuments)
 
   function assertOpen(): void { if (closed || closing) throw new Error('Context output is closed') }
@@ -325,7 +325,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     registerLegacyForkTransfer(capture) { assertOpen(); return legacy.register(capture) },
     confirmLegacyForkTransfer: legacy.confirm, reconcileLegacyForkTransfer: legacy.reconcile, closeLegacyForkTransfer: legacy.closeScope,
     readLegacyObserved: readObserved, searchLegacyObserved: searchObserved,
-    registerSeedDependencyTransfer(access) { assertOpen(); return artifacts.registerSeedDependencyTransfer(access) },
+    registerSeedDependencyTransfer(access, originalPublication) { assertOpen(); return artifacts.registerSeedDependencyTransfer(access, originalPublication) },
     async confirmSeedDependencies(scope, request, current) {
       if (closed || closing) return { kind: 'blocked', reason: 'unavailable' }
       return artifacts.confirmSeedDependencies(scope, request, current)

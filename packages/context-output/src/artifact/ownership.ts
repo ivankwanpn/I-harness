@@ -191,6 +191,7 @@ export function createArtifactOwnership(options: ContextOutputOptions, quota: ()
       await mutations.join()
       closed = true
       const failures: unknown[] = []
+      try { await transfers.closeTransfers() } catch (failure) { failures.push(failure) }
       for (const writer of [...writers]) {
         try { await writer.suspend(); writers.delete(writer) } catch (failure) { failures.push(failure) }
       }

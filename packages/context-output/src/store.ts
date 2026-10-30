@@ -291,7 +291,15 @@ export class ContextStore {
     const next = new Set(actual.owners); next.add(target)
     await this.ledger.fund(path, next, quota, guard, operation); guard()
   }
-  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, proof: number | {kind:'selected-v2';plan:ReturnType<typeof import('./legacy/selected-plan-view.ts').captureSelectedPlanView>;application:{onCreated(file:import('./legacy/funding-batch.ts').FundingFile):void;allowExisting(file:import('./legacy/funding-batch.ts').FundingFile):boolean}}, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
+  createLegacyOwnerTransfer(id: string, target: string, operation: string) {
+    const path = this.path('owners', id), original = this.ledger.createTransfer(path, target, operation)
+    const remember = async () => { this.owners.set(id, (await readLedger(path, this.retireLegacyFile)).owners) }
+    return Object.freeze({ prepare: original.prepare, describeFunding: original.describeFunding, fundInBatch: original.fundInBatch,
+      issue: async (guard: () => void) => { await original.issue(guard); guard(); await remember(); guard() },
+      settle: async () => { await original.settle(); await remember() },
+    })
+  }
+  async fundLegacyBatch(turn: WorkspaceMutationTurn, lease: LegacyUseLease, use: IndexUse, quota: number, root: LegacyRoot, proof: number | {kind:'selected-v2';owners:Map<string,ReturnType<ContextStore['createLegacyOwnerTransfer']>>;plan:ReturnType<typeof import('./legacy/selected-plan-view.ts').captureSelectedPlanView>;application:{onCreated(file:import('./legacy/funding-batch.ts').FundingFile):void;allowExisting(file:import('./legacy/funding-batch.ts').FundingFile):boolean}}, guard: () => void, qualify: (row: LegacyRow) => Promise<void>): Promise<void> {
     const context = Object.freeze({ turn, lease, use, quota, guard }), check = () => this.assertFundingContext(context)
     check(); checkRoot(root)
     if (root.binding.workspaceId !== this.workspaceId || root.binding.targetSessionId !== root.binding.invocation.targetSessionId || !this.legacyReady(use, root)) throw Error('Legacy funding root conflict')
@@ -316,14 +324,19 @@ export class ContextStore {
         if (scope) { await qualify(row); check(); await this.verifyBody(tuple, check); check() }
         const path = this.path('owners', row.refId), actual = await readLedger(path, this.retireLegacyFile); check()
         if (!actual.owners.size) throw Error('Empty owner ledger is authoritative')
-        const next = new Set(actual.owners); next.add(root.binding.targetSessionId)
+        let next = new Set(actual.owners); next.add(root.binding.targetSessionId)
+        if (typeof proof !== 'number') {
+          let original = proof.owners.get(row.refId)
+          if (!original) { original = this.createLegacyOwnerTransfer(row.refId, root.binding.targetSessionId, root.binding.invocation.operationId); proof.owners.set(row.refId, original) }
+          next = await original.prepare(check); check()
+        }
         if (!scope) {
-          const ledger = await this.ledger.prepareTransferFunding(path, next, root.binding.invocation.operationId, check); check()
+          const ledger = await (typeof proof === 'number' ? this.ledger.prepareTransferFunding(path, next, root.binding.invocation.operationId, check) : proof.owners.get(row.refId)!.describeFunding(check)); check()
           summary.add(await describeSlotFunding(this.directory, expiryBase(this.directory, tuple), expiredTuple(this.workspaceId, tuple), check, this.retireLegacyFile)); check()
           summary.add(ledger)
         } else {
           summary.add(await fundSlotsInBatch(this.fundingBatch, scope, this.directory, expiryBase(this.directory, tuple), expiredTuple(this.workspaceId, tuple), check, this.retireLegacyFile)); check()
-          summary.add(await this.ledger.fundInBatch(this.fundingBatch, scope, path, next, root.binding.invocation.operationId, check)); check()
+          summary.add(await (typeof proof === 'number' ? this.ledger.fundInBatch(this.fundingBatch, scope, path, next, root.binding.invocation.operationId, check) : proof.owners.get(row.refId)!.fundInBatch(this.fundingBatch, scope, check))); check()
         }
         summary.ref()
       }

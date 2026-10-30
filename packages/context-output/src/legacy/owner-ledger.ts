@@ -138,6 +138,57 @@ async function writeIntent(path: string, value: Intent | typeof idle, current: (
 }
 export class OwnerLedger {
   constructor(private readonly root: string, private readonly retire?: RetireFile) {}
+  /** Allocated by the original store before any funding or publication. */
+  createTransfer(path: string, target: string, operation: string) {
+    let prior: ReturnType<typeof ledgerIdentity> | undefined, next: Set<string> | undefined
+    let original: string | undefined, replacement: string | undefined, published = false
+    let funding: { description: FundingDescription; acknowledged: boolean } | undefined
+    const prepare = async (current: () => void) => {
+      const actual = await this.read(path); current()
+      const native = prior ? physicalIdentity(await nativeInfo(path)) : await independent(path); current()
+      if (!prior) {
+        if (!actual.owners.size || actual.owners.has(target)) throw Error('Foreign equal selected owner grant')
+        prior = actual.identity; original = native; next = new Set([...actual.owners, target])
+      } else if (!same(actual.identity, prior) || native !== original) {
+        throw Error('Original selected owner prior changed')
+      }
+      return new Set(next!)
+    }
+    const settle = async () => {
+      if (!prior || !next || !replacement) throw Error('Original selected owner not issued')
+      const actual = await this.read(path)
+      if (!same(actual.identity, ledgerIdentity(next)) || await independent(path) !== replacement) throw Error('Original selected owner publication unavailable')
+      const intent = await readIntent(names(path).journal, this.retire)
+      if (intent && (intent.operation !== operation || !same(intent.prior, prior) || !same(intent.next, ledgerIdentity(next)))) throw Error('Foreign selected owner intent')
+      await this.recover(path, { operation, prior, next: ledgerIdentity(next) })
+      if (await independent(path) !== replacement) throw Error('Original selected owner identity changed')
+      published = true
+    }
+    return Object.freeze({
+      prepare,
+      describeFunding: async (current: () => void) => this.prepareTransferFunding(path, await prepare(current), operation, current),
+      fund: async (quota: number, current: () => void) => {
+        const desired = await prepare(current)
+        funding = { description: await this.prepareTransferFunding(path, desired, operation, current), acknowledged: false }
+        await this.fund(path, desired, quota, current, operation)
+        funding.acknowledged = true
+      },
+      fundInBatch: async (owner: LegacyFundingBatchOwner, scope: FundingBatchScope, current: () => void) => {
+        const desired = await prepare(current)
+        const result = await this.fundInBatch(owner, scope, path, desired, operation, current, description => { funding = { description, acknowledged: false } })
+        funding!.acknowledged = true
+        return result
+      },
+      issue: async (current: () => void) => {
+        if (published || replacement && same((await this.read(path)).identity, ledgerIdentity(next!))) { await settle(); current(); return }
+        const desired = await prepare(current)
+        if (!funding?.acknowledged) throw Error('Original selected owner funding not acknowledged')
+        await this.replace(path, desired, operation, current, async scratch => { replacement = scratch })
+        await settle(); current()
+      },
+      settle,
+    })
+  }
   private read(path: string) { return readLedger(path, this.retire) }
   async tracked(path: string) { const p = names(path); return await exists(p.rewrite) || await exists(p.journal) || await exists(p.previous) }
   /** Prospective capture description only; never recovers or funds a prefix. */
@@ -224,8 +275,9 @@ export class OwnerLedger {
     const description = fundingDescription(path, phase, [operation, frame(prior.identity.digest, String(prior.identity.count), String(prior.identity.bytes)), frame(desired.digest, String(desired.count), String(desired.bytes)), String(capacity), pending ? frame(pending.operation, pending.prior.digest, String(pending.prior.count), String(pending.prior.bytes), pending.next.digest, String(pending.next.count), String(pending.next.bytes), String(pending.capacity)) : 'idle', ...fileFields(files.canonical), ...fileFields(files.rewrite), ...fileFields(files.journal), ...fileFields(predecessor)], primitives)
     return { description, files, prior, intent: { version: 1, kind: 'legacy-owner-rewrite', refId: basename(path, '.json'), operation, prior: prior.identity, next: desired, capacity } as Intent, journalBytes }
   }
-  async fundInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<FundingDescription> {
+  async fundInBatch(owner: LegacyFundingBatchOwner, scope: FundingBatchScope, path: string, next: ReadonlySet<string>, operation: string, current: () => void, retained?: (description: FundingDescription) => void): Promise<FundingDescription> {
     const state = await this.transferFunding(path, next, operation, current), allocation = owner.enter(scope, state.description)
+    retained?.(state.description)
     if (state.description.phase !== 'pending-prior') await this.fundNative(path, state.prior, state.intent, state.journalBytes, current, { ...state, owner, allocation })
     owner.finish(allocation); return state.description
   }
@@ -334,8 +386,9 @@ export class OwnerLedger {
     })
   }
   /** Recover only committed storage effects, never an absent next owner set. */
-  async recover(path: string): Promise<void> {
+  async recover(path: string, expected?: Pick<Intent, 'operation' | 'prior' | 'next'>): Promise<void> {
     const { journal, rewrite, previous } = names(path), intent = await readIntent(journal, this.retire); if (!intent) return
+    if (expected && (intent.operation !== expected.operation || !same(intent.prior, expected.prior) || !same(intent.next, expected.next))) throw Error('Foreign original owner recovery')
     const actual = await this.read(path)
     if (!same(actual.identity, intent.next)) throw Error('Original owner rewrite is incomplete')
     await independent(path)
@@ -356,7 +409,7 @@ export class OwnerLedger {
     if ((await lstat(rewrite)).size > intent.next.bytes) await reclaim(rewrite, intent.next.bytes, false, () => {}, this.retire)
     await writeIntent(journal, idle, () => {}, this.retire)
   }
-  async replace(path: string, next: ReadonlySet<string>, operation: string, current: () => void): Promise<void> {
+  async replace(path: string, next: ReadonlySet<string>, operation: string, current: () => void, beforePublication?: (identity: string) => Promise<void>): Promise<void> {
     await ownedPath(this.root, path); current()
     const { journal, rewrite, previous } = names(path)
     const actual = await this.read(path); current()
@@ -387,7 +440,7 @@ export class OwnerLedger {
       await h.sync(); current()
     } finally { await retireFile(h, this.retire) }
     if (!same((await this.read(rewrite)).identity, desired)) throw Error('Owner rewrite readback failed')
-    current(); await rename(rewrite, path); current()
+    current(); await beforePublication?.(scratch); current(); await rename(rewrite, path); current()
     if (!same((await this.read(path)).identity, desired) || await identities(path, previous)) throw Error('Owner replacement unknown')
     await independent(path); await independent(previous); current()
     await rename(previous, rewrite); current()

@@ -17,7 +17,7 @@ import type { SelectedLegacyCapture, LegacyForkTransferScope, LegacyRow, LegacyT
 import type { ContextStore } from '../store.ts'
 
 type Ports={strict:boolean;workspaceId:string;quota():number;runPassive<T>(store:ContextStore,work:(signal:AbortSignal,store:ContextStore)=>Promise<T>):Promise<T>;mutate<T>(context:IndexedLegacyContext,work:(turn:WorkspaceMutationTurn)=>Promise<T>):Promise<T>;run<T>(signal:AbortSignal|undefined,work:(signal:AbortSignal,context:IndexedLegacyContext)=>Promise<T>):Promise<T>}
-type Scope={capture:SelectedLegacyCapture;invalid:boolean;sourceRevoked:boolean;complete:boolean;fundingConfirmed:boolean;ownerConfirmed:Set<string>;records:Map<string,unknown>;minimumExpiry?:number;issuedNames:Set<string>;issuedFiles:Map<string,{dev:string;ino:string}>;attempts:Set<Promise<LegacyTransferOutcome>>;store?:ContextStore}
+type Scope={capture:SelectedLegacyCapture;invalid:boolean;sourceRevoked:boolean;complete:boolean;fundingConfirmed:boolean;owners:Map<string,ReturnType<ContextStore['createLegacyOwnerTransfer']>>;records:Map<string,unknown>;minimumExpiry?:number;issuedNames:Set<string>;issuedFiles:Map<string,{dev:string;ino:string}>;attempts:Set<Promise<LegacyTransferOutcome>>;store?:ContextStore}
 const blocked=(reason:'unknown'|'unavailable'|'conflict'|'policy'):LegacyTransferOutcome=>({kind:'blocked',reason})
 /** The original legacy owner owns this V2 branch and its existing store/ledger. */
 export function createSelectedLegacyTransfer(ports:Ports) {
@@ -28,7 +28,7 @@ export function createSelectedLegacyTransfer(ports:Ports) {
   if(!header||header.version!==3||!same(facts.invocation,capture.invocation)||header.seedDigest!==facts.seedDigest||header.manifestDigest!==facts.manifestDigest||!same(header.results,facts.semantic.results))throw Error('Selected legacy capture conflict')
   const seed=semanticSeedFromRecords(header,capture.targetView.events);if(seed.version!==3)throw Error('Selected seed unavailable')
   let minimumExpiry:number|undefined;for(const page of seed.results.pages)for(const row of page.rows)if(row.protocol==='legacy')minimumExpiry=Math.min(minimumExpiry??Infinity,row.ref.expiresAt)
-  const token=Object.freeze({}) as LegacyForkTransferScope;scopes.set(token,{capture,invalid:false,sourceRevoked:false,complete:false,fundingConfirmed:false,ownerConfirmed:new Set(),records:new Map(),minimumExpiry,issuedNames:new Set(),issuedFiles:new Map(),attempts:new Set()});return token
+  const token=Object.freeze({}) as LegacyForkTransferScope;scopes.set(token,{capture,invalid:false,sourceRevoked:false,complete:false,fundingConfirmed:false,owners:new Map(),records:new Map(),minimumExpiry,issuedNames:new Set(),issuedFiles:new Map(),attempts:new Set()});return token
  }
  function invoke(token:LegacyForkTransferScope,passive:boolean):Promise<LegacyTransferOutcome> {
   const candidate=scopes.get(token);if(!candidate||candidate.invalid||closed)return Promise.resolve(blocked('unavailable'))
@@ -61,7 +61,8 @@ export function createSelectedLegacyTransfer(ports:Ports) {
      if(await readSlots(store.directory,resolve(directory,'revoke'),revokedTuple(root),store.retireLegacyFile)!=='live')return blocked('unknown')
      for await(const row of walkPages(directory,root,check,undefined,store.retireLegacyFile,async(ref)=>{const name='pages/'+ref.level+'-'+ref.firstRow+'.json';if(!await sameOriginal(name,resolve(directory,name)))throw Error('Foreign selected page')})){
       plan.row(row);check();const tuple=rowCommitment(row)
-      if(!scope.ownerConfirmed.has(row.refId)||await readSlots(store.directory,expiryBase(store.directory,tuple),expiredTuple(store.workspaceId,tuple),store.retireLegacyFile)!=='live')throw Error('Selected legacy grant unavailable')
+      const owner=scope.owners.get(row.refId);if(!owner)throw Error('Original selected owner unavailable');await owner.settle();check()
+      if(await readSlots(store.directory,expiryBase(store.directory,tuple),expiredTuple(store.workspaceId,tuple),store.retireLegacyFile)!=='live')throw Error('Selected legacy grant unavailable')
       await store.canonicalRef(tuple,root.binding.targetSessionId);check()
      }
      if(!await resume('applied.json'))return blocked('unknown')
@@ -132,10 +133,10 @@ export function createSelectedLegacyTransfer(ports:Ports) {
     const graph=await buildPages(binding,rows(),(name,page)=>publish('pages/'+name,page),2),counts=store.legacyCounts(index,bindingDigest),root=checkRoot({version:2,kind:'legacy-fork-plan',binding,...graph,distinctRefCount:counts.refs})
     if(counts.observations!==graph.observationCount)throw Error('Selected legacy derived EOF mismatch')
     await publish('plan.json',root);check();const plan=captureSelectedPlanView(c.targetView,root,{sessionId:c.invocation.targetSessionId,createdAt:c.invocation.createdAt})
-    await ports.mutate(context,async turn=>{check();await store.confirmLegacyIndex(turn,lease,index,root,ports.quota());check();await store.fundLegacyBatch(turn,lease,index,ports.quota(),root,{kind:'selected-v2',plan,application:{onCreated(file){if(file.kind!=='file'||file.ino==='0')throw Error('Original application identity unavailable');issued=true;scope.issuedNames.add('applied.json');scope.issuedFiles.set('applied.json',{dev:file.dev,ino:file.ino});scope.records.set('applied.json',canonicalRecord(appliedFor(root)))},allowExisting(file){const original=scope.issuedFiles.get('applied.json');return file.kind==='file'&&!!original&&file.dev===original.dev&&file.ino===original.ino}}},check,qualify);scope.fundingConfirmed=true;check()});check()
+    await ports.mutate(context,async turn=>{check();await store.confirmLegacyIndex(turn,lease,index,root,ports.quota());check();if(!scope.fundingConfirmed)await store.fundLegacyBatch(turn,lease,index,ports.quota(),root,{kind:'selected-v2',owners:scope.owners,plan,application:{onCreated(file){if(file.kind!=='file'||file.ino==='0')throw Error('Original application identity unavailable');issued=true;scope.issuedNames.add('applied.json');scope.issuedFiles.set('applied.json',{dev:file.dev,ino:file.ino});scope.records.set('applied.json',canonicalRecord(appliedFor(root)))},allowExisting(file){const original=scope.issuedFiles.get('applied.json');return file.kind==='file'&&!!original&&file.dev===original.dev&&file.ino===original.ino}}},check,qualify);scope.fundingConfirmed=true;check()});check()
     let ordinal=0;for await(const row of walkPages(directory,root,check,undefined,store.retireLegacyFile)){
      const position=ordinal++;plan.row(row);if(store.legacyFirst(index,bindingDigest,row.refId)!==position)continue
-     await qualify(row);await ports.mutate(context,async turn=>{check();await qualify(row);const tuple=rowCommitment(row);if(await readSlots(store.directory,resolve(directory,'revoke'),revokedTuple(root),store.retireLegacyFile)!=='live'||await readSlots(store.directory,expiryBase(store.directory,tuple),expiredTuple(store.workspaceId,tuple),store.retireLegacyFile)!=='live')throw Error('Selected legacy disposition unavailable');issued=true;await store.mergeLegacyOwner(turn,lease,row.refId,binding.targetSessionId,binding.invocation.operationId,check);scope.ownerConfirmed.add(row.refId);check()});check()
+     await qualify(row);await ports.mutate(context,async turn=>{turn.assertCurrent();check();await qualify(row);const tuple=rowCommitment(row);if(await readSlots(store.directory,resolve(directory,'revoke'),revokedTuple(root),store.retireLegacyFile)!=='live'||await readSlots(store.directory,expiryBase(store.directory,tuple),expiredTuple(store.workspaceId,tuple),store.retireLegacyFile)!=='live')throw Error('Selected legacy disposition unavailable');issued=true;const owner=scope.owners.get(row.refId);if(!owner)throw Error('Original selected owner unavailable');await owner.issue(check);check()});check()
     }
     await publish('applied.json',appliedFor(root));check()
     const confirmed=await loadPlan(store,{bootstrap:{invocation:c.invocation,manifestDigest:facts.manifestDigest,seedDigest:facts.seedDigest},selectedView:c.targetView},check);check()

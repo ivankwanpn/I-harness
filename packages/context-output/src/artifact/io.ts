@@ -129,6 +129,57 @@ export async function confirmAtomicJson(root: string, path: string, value: unkno
     return confirmed(diagnostics)
   } catch (cause) { return metadataFailure(cause) }
 }
+/** Original immutable publication operation. Allocate and retain before issue. */
+export function createAtomicJsonPublication(root: string, path: string, value: unknown, retire?: RetireFile) {
+  const bytes = immutableBytes(value), snapshot = JSON.parse(bytes.toString('utf8'))
+  let identity: { dev: bigint; ino: bigint } | undefined, created: FileHandle | undefined
+  const debt = new Set<FileHandle>()
+  const identify = async (handle: FileHandle) => {
+    const info = await handle.stat({ bigint: true })
+    if (!info.isFile() || info.dev === 0n || info.ino === 0n) throw Error('Original metadata identity unavailable')
+    identity = { dev: info.dev, ino: info.ino }
+  }
+  const retireOwned: RetireFile = async handle => {
+    debt.add(handle)
+    // The original handle is retained synchronously on create, before stat can
+    // fail. Never close the only native proof until its identity is retained.
+    if (handle === created && !identity) await identify(handle)
+    await retireFile(handle, retire); debt.delete(handle)
+  }
+  const close = async () => { for (const handle of debt) await retireOwned(handle) }
+  const matches = async (handle: FileHandle) => {
+    const info = await handle.stat({ bigint: true })
+    return !!identity && info.isFile() && info.dev === identity.dev && info.ino === identity.ino
+  }
+  const confirm = async (): Promise<ImmutableMetadataOutcome> => {
+    await close()
+    if (!identity) return { kind: 'not-issued' }
+    let handle: FileHandle | undefined
+    try {
+      await ownedPath(root, path); handle = await open(path, 'r')
+      if (!await matches(handle)) return { kind: 'conflict' }
+    } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') return metadataFailure(cause); return { kind: 'unknown' } }
+    finally { if (handle) await retireOwned(handle) }
+    const result = await confirmAtomicJson(root, path, snapshot, retireOwned)
+    await close()
+    const final = await lstat(path, { bigint: true })
+    if (!final.isFile() || final.isSymbolicLink() || final.dev !== identity.dev || final.ino !== identity.ino) return { kind: 'conflict' }
+    return result
+  }
+  const issue = async (current: () => boolean, passive = false): Promise<ImmutableMetadataOutcome> => {
+    await close()
+    const state = await inspectImmutable(root, path, bytes, retireOwned)
+    if (state.final) return confirm()
+    if (identity && !state.pending) return { kind: 'unknown' }
+    if (passive && !identity) return { kind: 'not-issued' }
+    return continueAtomicJson(root, path, snapshot, current, retireOwned, {
+      resumeOnly: passive,
+      async onCreated(handle) { created = handle; await identify(handle) },
+      allowExisting: matches,
+    }).then(async outcome => outcome.kind === 'confirmed' ? confirm() : outcome)
+  }
+  return Object.freeze({ close, confirm: () => confirm().catch(metadataFailure), issue: (current: () => boolean) => issue(current).catch(metadataFailure), settle: (current: () => boolean) => issue(current, true).catch(metadataFailure) })
+}
 /** Run under the existing artifact mutation lease. Never replaces a known
  * conflicting final or pending file. Each create/write/link/unlink checks current
  * after the immediately preceding await; partial issuance remains unknown. */
