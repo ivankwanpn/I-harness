@@ -218,7 +218,8 @@ export function createRetainedBindings(
     let owner = owners.get(id), fresh = false
     if (owner?.retired) throw new Failure('conflict')
     if (!owner) { owner = createOwner(id, key); fresh = true }
-    const retirementListeners = new Set<(operation: RetainedCleanupOperation) => void | Promise<void>>()
+    type RetirementListener = (operation: RetainedCleanupOperation) => void | Promise<void>
+    const retirementListeners = new Map<RetirementListener, { readonly invoke: RetirementListener }>()
     const reference: Reference = { owner, active: true, counted: true, cleaned: false, busy: false, acquisition: owner.acquired.promise, signal, attached: false, notified: false, retired, cleanup: undefined! }
     reference.cleanup = createRetainedCleanupTarget(async () => {
       if (reference.signal && reference.attached) { Reflect.apply(removeListener, reference.signal, ['abort', reference.abort]); reference.attached = false }
@@ -234,7 +235,7 @@ export function createRetainedBindings(
       // dispatches only after the actual read/profile lifetime has drained.
       const drained = reference.read
       const dispatch = (identity: object, invoke: () => void | Promise<void>) => runRetainedRetirementSink(operation, domain, identity, () => drained ? drained.then(invoke) : invoke())
-      for (const listener of [...retirementListeners]) dispatch(listener, () => listener(operation))
+      for (const registration of [...retirementListeners.values()]) dispatch(registration, () => registration.invoke(operation))
       retirementListeners.clear()
       if (!reference.notified) { reference.notified = true; dispatch(reference, () => reference.retired(operation)) }
 
@@ -334,7 +335,16 @@ export function createRetainedBindings(
       })
       return result.promise
     }
-    issuedReferences.set(ref, { issuer, request: requestRetirement, preflight() { preflight([id], [key]); original.assertOutside([id], [key]) }, observe(listener) { currentReference(reference); if (retirementListeners.size >= 64) throw new Failure('conflict'); retirementListeners.add(listener); return () => { retirementListeners.delete(listener) } } })
+    issuedReferences.set(ref, { issuer, request: requestRetirement, preflight() { preflight([id], [key]); original.assertOutside([id], [key]) }, observe(listener) {
+      currentReference(reference)
+      let registration = retirementListeners.get(listener)
+      if (!registration) {
+        if (retirementListeners.size >= 64) throw new Failure('conflict')
+        registration = Object.freeze({ invoke: listener }); retirementListeners.set(listener, registration)
+      }
+      const captured = registration
+      return () => { if (retirementListeners.get(listener) === captured) retirementListeners.delete(listener) }
+    } })
     return ref
   }
   function retire(ids: readonly string[], keys: readonly string[], operation: RetainedCleanupOperation, all = false): Promise<void>[] {
