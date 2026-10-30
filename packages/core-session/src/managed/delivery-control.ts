@@ -7,6 +7,16 @@ const controls = new WeakMap<object, {
   debt: Set<object>;
 }>();
 const ports = new WeakMap<object, ReturnType<typeof createDeliveryControl>>();
+const listeners = new WeakMap<object, Set<() => void>>();
+export function subscribeDeliveryControl(view: SessionView, listener: () => void): () => void {
+  let set = listeners.get(view);
+  if (!set) { set = new Set(); listeners.set(view, set); }
+  set.add(listener);
+  return () => { set!.delete(listener); if (!set!.size) listeners.delete(view); };
+}
+function notify(view: SessionView): void {
+  for (const listener of [...(listeners.get(view) ?? [])]) { try { listener(); } catch { /* Observers do not own delivery. */ } }
+}
 export function assertDeliveryIssue(view: SessionView, events: readonly SessionEventView[]): void {
   ports.get(view)?.assert(events);
 }
@@ -38,11 +48,14 @@ export function createDeliveryControl(view: SessionView) {
       control.through = Math.max(control.through, view.events.length - 1);
       const token = {};
       control.debt.add(token);
+      notify(view);
       return () => {
         control.debt.delete(token);
+        notify(view);
       };
     }, retire() {
       control.retired = true;
+      notify(view);
     }, assert(events: readonly SessionEventView[]) {
       // Unrelated groups never need a delivery read. Relevant groups use the
       // original committed index afresh at this actual issuance boundary.

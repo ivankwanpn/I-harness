@@ -39,8 +39,9 @@ export type CodeModeTextRetentionResult =
   | { kind: "ready"; envelope: ResultEnvelope }
   | { kind: "unavailable"; reason: Exclude<CodeModeTextUnavailable, "storage-unknown"> }
   | { kind: "recovery-required" }
-export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; instructionReplan?: import('@i-harness/core-tools').InstructionReplanData; yielded?: true; yieldReason?: "user-steer" }
+export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; instructionReplan?: import('@i-harness/core-tools').InstructionReplanData; yielded?: true; yieldReason?: "user-steer" | "background-event" }
 export interface CodeModeObserveOptions {
+  backgroundEvent?: UserSteerSource
   userSteer?: UserSteerSource
   retained?: { observed(): void; progress(): void; unavailable(): void; ready(output: CodeModeObservation): void }
 }

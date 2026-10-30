@@ -121,6 +121,7 @@ export { semanticSeedResultRefs, iterateSelectedResultRefs, sameManagedArtifactR
 
 export * from './events/delivery.ts'
 export { readDeliveries, validateDeliveryFrame } from './conversation/delivery.ts'
+export { isBoundDeliveryInput, isDeliveryExecutable, subscribeDeliveryControl } from './managed/delivery-control.ts'
 export type { DeliveryState, DeliveryActionOrigin, DeliveryOriginLookup } from './conversation/delivery.ts'
 
 export { validateResultsSummary } from './conversation/selected-results-codec.ts'

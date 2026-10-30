@@ -1,15 +1,16 @@
-import { readInbox, subscribe } from "@i-harness/core-session"
+import { readInbox, subscribe, isBoundDeliveryInput, isDeliveryExecutable, subscribeDeliveryControl } from "@i-harness/core-session"
 import type { ToolExec } from "./index.ts"
 
 export interface ObservationChanges { subscribe(listener: () => void): () => void }
 export interface UserSteerSource extends ObservationChanges { pending(): boolean }
-export type ObservationReason = "ready" | "deadline" | "user-steer" | "aborted"
+export type ObservationReason = "ready" | "deadline" | "user-steer" | "background-event" | "aborted"
 export interface ObservationOptions {
   ready(): boolean
   changes: ObservationChanges
   timeoutMs?: number
   abortSignal?: AbortSignal
   userSteer?: UserSteerSource
+  backgroundEvent?: UserSteerSource
 }
 
 /** Observe an owner's state without taking ownership of its work or input. */
@@ -55,12 +56,14 @@ export function waitForObservation(options: ObservationOptions): Promise<Observa
         if (options.abortSignal?.aborted) finish("aborted")
         else if (options.ready()) finish("ready")
         else if (options.userSteer?.pending()) finish("user-steer")
+        else if (options.backgroundEvent?.pending()) finish("background-event")
         else if (Date.now() >= deadline) finish("deadline")
       } catch (error) { fail(error) }
     }
     try {
       own(options.changes.subscribe(check))
       if (!decided && options.userSteer) own(options.userSteer.subscribe(check))
+      if (!decided && options.backgroundEvent) own(options.backgroundEvent.subscribe(check))
       if (!decided && options.abortSignal) {
         const signal = options.abortSignal
         signal.addEventListener("abort", check, { once: true })
@@ -83,6 +86,23 @@ export function waitForObservation(options: ObservationOptions): Promise<Observa
     } catch (error) { fail(error) }
     finally { setupComplete = true; complete() }
   })
+}
+
+export function backgroundEventForTool(exec: ToolExec): UserSteerSource | undefined {
+  if (!exec.session || exec.resultConsumer === "code") return undefined
+  const session = exec.session
+  return {
+    pending: () => readInbox(session).pending().some(input => isBoundDeliveryInput(session, input.inputId) && isDeliveryExecutable(session, input.inputId)),
+    subscribe: listener => {
+      const offControl = subscribeDeliveryControl(session, listener)
+      try {
+        const offEvents = subscribe(session, event => {
+          if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled" || event.type === "agent/delivery-generation" || event.type === "agent/delivery-source" || event.type === "agent/delivery-received") listener()
+        })
+        return () => { offEvents(); offControl() }
+      } catch (error) { offControl(); throw error }
+    },
+  }
 }
 
 export function userSteerForTool(exec: ToolExec): UserSteerSource | undefined {

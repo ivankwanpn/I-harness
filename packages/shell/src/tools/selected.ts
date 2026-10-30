@@ -1,5 +1,5 @@
 import type { Tool } from "@i-harness/core-tools"
-import { declareToolResultOutcome, userSteerForTool } from "@i-harness/core-tools"
+import { declareToolResultOutcome, backgroundEventForTool, userSteerForTool } from "@i-harness/core-tools"
 import { SandboxUnavailableError } from "@i-harness/sandbox"
 import type { ResolvedAgentShell, ShellToolDeps } from "../types.ts"
 import { capturedShell, agentShellPrompt, shellFlags, boundShellEnvironment } from "../command/resolve.ts"
@@ -72,9 +72,11 @@ export function createSelectedShellTool(deps: SelectedDeps, bash: Tool, versionI
         const command = { ...spec, abortSignal: exec.abortSignal }
         const backgroundAfterMs = deps.backgroundAfterMs
         const promotionWake = userSteerForTool(exec)
+        const backgroundEventWake = backgroundEventForTool(exec)
         const runOptions = {
           ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
           ...(promotionWake === undefined ? {} : { promotionWake }),
+          ...(backgroundEventWake === undefined ? {} : { backgroundEventWake }),
         }
         const result = await deps.exec.run(command, runOptions)
         if ('promoted' in result) return promotedResult(result, 'shell', deps.timeoutMs)

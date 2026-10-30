@@ -29,6 +29,8 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   const notifications = new TaskNotifications()
   const maxConcurrency = opts.maxConcurrency ?? Infinity
   const persistence = new TaskPersistence(opts.coordinator, opts.stateId, Boolean(opts.reportPolicy), snapshot, opts.ownedTask)
+  const retentionSaves = new WeakMap<TaskRecord, import('./persistence.ts').OwnedTaskSave>()
+  const retentionFlights = new WeakMap<TaskRecord, Promise<void>>()
   const save = () => persistence.save()
 
   function snapshot(): TaskProtocolDocument {
@@ -53,7 +55,18 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     task.retentionError = task.result?.kind === "retained" ? "Retained task body reader unavailable" : "Retained task body incomplete"
   }
 
-  async function retainResult(taskId: string): Promise<void> {
+  function retainResult(taskId: string): Promise<void> {
+    const task = records.get(taskId)
+    if (!task) return Promise.reject(new Error(`unknown task: ${taskId}`))
+    const previous = retentionFlights.get(task)
+    if (previous) return previous
+    const flight = retainResultOnce(taskId)
+    retentionFlights.set(task, flight)
+    void flight.finally(() => { if (retentionFlights.get(task) === flight) retentionFlights.delete(task) }).catch(() => {})
+    return flight
+  }
+
+  async function retainResultOnce(taskId: string): Promise<void> {
     const task = records.get(taskId)
     if (!task) throw new Error(`unknown task: ${taskId}`)
     if (!task.result && (task.publication === 'unqualified' || documentVersion === 2 && task.legacyFormatVersion !== 1)) throw new Error('Retained task body incomplete')
@@ -62,17 +75,12 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
     // The in-memory authoritative outcome is already complete. Persistence
     // failure changes delivery evidence only; it never reopens execution.
     if (!opts.coordinator || !opts.stateId) { task.retention = "memory"; return }
-    if (task.retention === "pending") {
-      await persistence.flush()
-      const settledRetention = records.get(taskId)?.retention
-      if (settledRetention === "durable") return
-      if (settledRetention === "failed") throw new Error(task.retentionError)
-    }
     if (task.retention === "durable") return
     task.retention = "pending"
     try {
-      const originalSave = persistence.captureSave()
-      if (originalSave) { await originalSave.done; originalSave.assertHandoff() }
+      const previous = retentionSaves.get(task)
+      const originalSave = previous ?? persistence.captureSave(true)
+      if (originalSave) { retentionSaves.set(task, originalSave); if (previous) await originalSave.retry(); else await originalSave.done; originalSave.assertHandoff() }
       else await save()
       if (task.result?.kind === 'retained' && task.result.envelope.retention.kind === 'unavailable') {
         task.retention = 'failed'
@@ -81,6 +89,7 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
         task.retention = "durable"
         delete task.retentionError
       }
+      originalSave?.release()
     } catch (error) {
       task.retention = "failed"
       task.retentionError = error instanceof Error ? error.message : String(error)
@@ -111,6 +120,23 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
   }
 
   const registry: TaskRegistry = {
+    bindForegroundHandoff(taskId) {
+      const task = records.get(taskId)
+      if (!task || task.delivery !== 'tool') throw new Error('Original foreground task unavailable')
+      // A recipient binding certifies source identity, not owned task storage.
+      // Unsupported compositions keep their original tool/manual route.
+      if (!opts.coordinator || !opts.stateId || !opts.reportPolicy || !opts.ownedTask) return () => ({ kind: 'manual' })
+      let selected: ReturnType<TaskRegistry['bindForegroundHandoff']> extends () => infer R ? R : never
+      return () => {
+        if (selected) return selected
+        if (records.get(taskId) !== task) throw new Error('Original foreground task replaced')
+        if (task.outcome !== undefined) return selected = { kind: 'ready' }
+        task.delivery = 'parent'
+        const save = persistence.captureSave(true)
+        if (!save) { task.delivery = 'tool'; throw new Error('Durable foreground handoff unavailable') }
+        return selected = { kind: 'parent', save }
+      }
+    },
     async prepareResult(taskId, context, current) {
       const task = records.get(taskId)
       if (!task) throw new Error(`unknown task: ${taskId}`)

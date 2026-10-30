@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { FactRecoveryRequiredError, isNondurableSession } from "@i-harness/core-session"
-import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
+import { declareToolResultOutcome, declareInstructionReplan, retainInstructionCell, backgroundEventForTool, userSteerForTool, type Tool, type ToolExec, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
@@ -141,7 +141,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), retained })
+      const out = await runtime.exec(args as CodeModeExecInput, { sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID(), callEventSeq: exec.callEventSeq, abortSignal: exec.abortSignal, generationLineage: exec.modelGeneration?.codeLineage, bindInstructionCell: cellId => retainInstructionCell(exec, cellId) }, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
       declareObservationReplan(exec, out)
       declareToolResultOutcome(exec, out.status === 'failed' ? 'failed' : out.status === 'terminated' ? 'canceled' : 'succeeded')
       return observationOutput(out)
@@ -154,7 +154,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
       const retained = retainedObservation(exec, refreshObservation)
       await ready
-      const out = await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec), retained })
+      const out = await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec), backgroundEvent: backgroundEventForTool(exec), retained })
       declareObservationReplan(exec, out)
       return observationOutput(out)
     },
