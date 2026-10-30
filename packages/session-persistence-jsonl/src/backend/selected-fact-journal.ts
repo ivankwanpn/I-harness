@@ -10,7 +10,7 @@ import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { selectedResultsPreparationFacts } from '../../../session-persistence/src/coordinator/selected-results-preparation.ts'
 
-type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBytes:Buffer;capturedFrames?:ReturnType<typeof captureBatch>[];attempt?:object}
+type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBytes:Buffer;capturedFrames?:ReturnType<typeof captureBatch>[];acknowledged?:Set<number>;attempt?:object}
 export type SelectedLaneScope=Readonly<{kind:'selected-lane'}>
 type Birth=NonNullable<Awaited<ReturnType<typeof resolveSelectedBirth>>>
 const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
@@ -76,7 +76,7 @@ function bindCapturedLane(id:string,owner:import('@i-harness/session-persistence
  const batch=encodeFactBatch('bootstrap:'+stage.invocation.operationId+':seed',prefix.prefixDigest,records as import('@i-harness/core-session').SessionEvent[]),seed=captureBatch(prefix,batch)
  if(prior){const data=check(id,owner,prior);if(data.attempt!==attempt||!same(data.route,route)||!same(data.stage,stage)||!data.capturedFrames||!data.capturedFrames[0]!.bytes.equals(seed.bytes))throw TypeError('Captured lane changed');return prior}
  const lane=Object.freeze({kind:'selected-lane' as const})
- scopes.set(lane,{route:JSON.parse(canonicalJsonData(route)),stage:JSON.parse(canonicalJsonData(stage)),owner:owner.owner,birthBytes:Buffer.from(stage.headerBytes),capturedFrames:[seed],attempt});return lane
+ scopes.set(lane,{route:JSON.parse(canonicalJsonData(route)),stage:JSON.parse(canonicalJsonData(stage)),owner:owner.owner,birthBytes:Buffer.from(stage.headerBytes),capturedFrames:[seed],acknowledged:new Set(),attempt});return lane
 }
 /** The same entry supplies its completion only after genuine dependency confirmation. */
 function prepareCapturedCompletion(id:string,owner:HeldFactOwner,scope:SelectedLaneScope,frame:import('../../../session-persistence/src/coordinator/bootstrap-types.ts').BootstrapFrame):void {
@@ -149,6 +149,9 @@ async function appendSelectedOwnedBatch(path:string,id:string,owner:import('@i-h
   const decoded=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta), frames=decoded.frames
   const seed=frames[0],complete=frames[1],count=data.stage.seed.seedLength,op=data.stage.invocation.operationId
   if(decoded.torn||!same(decoded.prefix,prefix)){outcome={kind:'conflict',key};return outcome}
+  if(data.capturedFrames){
+   for(let i=0;i<Math.min(frames.length,2);i++){const expected=data.capturedFrames[i],actual=frames[i];if(!expected||!data.acknowledged!.has(i)||!actual||!same(actual.prefix,expected.prefix)||!Buffer.from(actual.batch.bytes).equals(expected.bytes))throw TypeError('Original captured acknowledgement required')}
+  }
   if(key.batchId.startsWith('bootstrap:')) {
    const expected=data.capturedFrames?.[frames.length]
    if(!expected||!same(expected.prefix,prefix)||!expected.bytes.equals(bytes))throw TypeError('Original captured frame required')
@@ -177,6 +180,7 @@ async function appendSelectedOwnedBatch(path:string,id:string,owner:import('@i-h
    ? {kind:'not-issued',code:code as import('@i-harness/core-session').FactCode} : {kind:issued?'unknown':'absent',key}
  }
  finally {if(handle){try{await captureIO.close(ledger,resource!)}catch{if(synced&&outcome.kind==='committed')outcome={...outcome,cleanupDiagnostic:'file-close-failed'};else if(issued)outcome={kind:'unknown',key}}try{check(id,owner,scope)}catch{if(issued)outcome={kind:'unknown',key}}}}
+ if(outcome.kind==='committed'&&data.capturedFrames){const index=data.capturedFrames.findIndex(frame=>same(frame.key,key)&&frame.bytes.equals(bytes));if(index>=0)data.acknowledged!.add(index)}
  return outcome
 }
 
@@ -214,6 +218,7 @@ async function reconcileSelectedOwnedBatch(path:string,id:string,owner:HeldFactO
   outcome=actual.length===bytes.length?{kind:'committed',receipt:{owner:{...owner.owner},key,lastSeq:key.firstSeq+key.count-1,prefixDigest:batch.prefixDigest}}:{kind:'absent',key}
  }catch{outcome={kind:'unknown',key}}
  finally{if(handle){try{await captureIO.close(ledger,resource!)}catch{if(synced&&outcome.kind==='committed')outcome={...outcome,cleanupDiagnostic:'file-close-failed'};else outcome={kind:'unknown',key}}try{check(id,owner,scope)}catch{outcome={kind:'unknown',key}}}}
+ if(outcome.kind==='committed'&&data.capturedFrames){const index=data.capturedFrames.findIndex(frame=>same(frame.key,key)&&frame.bytes.equals(bytes));if(index>=0)data.acknowledged!.add(index)}
  return outcome
 }
 
