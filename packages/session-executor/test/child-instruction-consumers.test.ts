@@ -13,6 +13,8 @@ const observed = vi.hoisted(() => ({
   results: [] as { id: string; parent: string; revision: string; sourceCurrent: (() => boolean) | undefined; captureCurrent: (() => boolean) | undefined; settlements: { before: boolean; after: boolean; kind: string }[] }[],
   factory: undefined as import('@i-harness/subagent').ChildInstructionContextFactory | undefined,
   routes: [] as { session: import('@i-harness/core-session').SessionView | undefined; path: string; status: string }[],
+  beforeResponse: undefined as undefined | (() => Promise<void>),
+  followup: undefined as undefined | ((entry: import('@i-harness/subagent').ChildAgentEntry) => Promise<void>),
 }))
 vi.mock('@i-harness/subagent', async original => {
   const native = await original<typeof import('@i-harness/subagent')>()
@@ -115,6 +117,7 @@ async function cold(model?: ModelClient, count = 1, mount?: CodeModeFactory, sim
   observed.generations = []
   observed.results = []
   observed.factory = undefined; observed.routes = []
+  observed.beforeResponse = undefined; observed.followup = undefined
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'consumer-'))
   await writeFile(join(root, 'settings.json'), '{}'); await writeFile(join(root, 'AGENTS.md'), 'RESIDENT_ROOT_RULE')
   for (const name of ['a', 'b', 'c']) {
@@ -142,11 +145,12 @@ async function cold(model?: ModelClient, count = 1, mount?: CodeModeFactory, sim
   const environment = createProjectInstructionEnvironment()
   let requests = 0
   const service = createSessionService({ workspace: root, coordinator, instructionEnvironment: environment,
-    model: model ?? controlledModel(async function* () { requests++; yield { type: 'text/chunk', text: 'resident result' }; yield { type: 'end' } }),
+    model: model ?? controlledModel(async function* () { requests++; await observed.beforeResponse?.(); yield { type: 'text/chunk', text: 'resident result' }; yield { type: 'end' } }),
     modelPolicy: 'test-mock', codeMode: { mode: 'mixed' }, codeModeFactory: mount, contextWindow: 100000, maxOutputTokens: 1000, modelActionTimeoutMs: 60000, modelActionMaxAttempts: 3,
     restoredState: { formatVersion: 1, jobs: [], roles, agentTable }, contextOutputSettingsPath: join(root, 'settings.json'),
     extensionsFor: async () => ({ options: {}, async mount() { mounted.resolve(); await release.promise } }) })
   const constructing = service.assemblyFor('parent'); void constructing.catch(() => {})
+  observed.followup = async entry => { const assembly = await constructing; await assembly.tools.get('followup_task')!.execute({ target: entry.path, message: 'genuine supplemental filesystem inbox' }, {}) }
   await mounted.promise
   const sub = observed.sub!, entries = agentTable.map(row => sub.table.get(row.path)!)
   return { root, service, coordinator, backend, environment, sub, entries, constructing, release: release.resolve, requests: () => requests,
@@ -156,9 +160,27 @@ async function cold(model?: ModelClient, count = 1, mount?: CodeModeFactory, sim
     }; await environment.close(); await coordinator.close() } }
 }
 async function dispatch(entry: ChildAgentEntry, name: string, args: unknown) {
-  // Supplemental routing controls invoke the inherited real fs object. The
-  // physical test above exercises admission/dispatch through the real broker.
-  return entry.toolRegistry!.get(name)!.execute(args, { session: entry.session, sessionId: entry.sessionId, callId: `actual-${name}` })
+  const result = Promise.withResolvers<unknown>(); let entered = false
+  observed.beforeResponse = async () => {
+    observed.beforeResponse = undefined; entered = true
+    try { expect(entry.status).toBe('running'); result.resolve(await dispatchRegistered(entry.toolRegistry!, name, args, { session: entry.session, sessionId: entry.sessionId, callId: `actual-${name}` }, entry.factOwner)) }
+    catch (error) { result.reject(error) }
+  }
+  await observed.followup!(entry)
+  const turn = entry.followupChain!
+  void turn.then(() => { if (!entered) result.reject(new Error(entry.error ?? 'Original followup ended before filesystem probe')) }, result.reject)
+  try { const value = await result.promise; await turn; return value }
+  finally { observed.beforeResponse = undefined }
+}
+async function dispatchRegistered(registry: import('@i-harness/core-tools').ToolRegistry, name: string, args: unknown, identity: import('@i-harness/core-tools').ToolPrepareIdentity, owner?: import('@i-harness/core-session').FactOwner) {
+  // The original registered preparer captures the native plan and binds its
+  // exact exec; a direct fs body call has no native execution authority.
+  const finished = Promise.withResolvers<void>()
+  const action = owner?.beginAction(), source = action?.registerSettlementSource(() => finished.promise)
+  try {
+    const prepared = await registry.prepare({ name, args }, undefined, { ...identity, ...(source ? { settlementSource: source } : {}) })
+    return await registry.dispatch(prepared)
+  } finally { finished.resolve(); await source?.close(); action?.finish() }
 }
 const currentText = (entry: ChildAgentEntry) => JSON.stringify(entry.session.events.findLast(event => event.type === 'runtime/context'))
 async function activateResidents(f: Awaited<ReturnType<typeof cold>>) {
@@ -181,6 +203,7 @@ it('installs one exact cold-resident lease before physical issue and routes actu
     let body = ''; for await (const chunk of request) body += chunk
     const f = fixture!, row = observed.leases[0], entry = f.entries[0]!
     requests.push({ body, publication: currentText(entry), current: row ? row.lease.requestContext.current(row.lease.requestContext.capture()) : false })
+    await observed.beforeResponse?.()
     response.writeHead(200, { 'content-type': 'text/event-stream' })
     const delta = requests.length === 1
       ? { tool_calls: [{ index: 0, id: 'actual-broker-read', type: 'function', function: { name: 'code_exec', arguments: JSON.stringify({ code: `text(await tools.read({path:${JSON.stringify(join(f.root, 'a', 'data'))}})); text(await tools.list_dir({path:${JSON.stringify(join(f.root, 'a'))}}));`, yield_time_ms: 5000 }) } }] }
@@ -216,9 +239,10 @@ it('installs one exact cold-resident lease before physical issue and routes actu
     await dispatch(entry, 'list_dir', { path: join(f.root, 'c') })
     await assembly.tools.get('followup_task')!.execute({ target: entry.path, message: 'genuine next inbox' }, {})
     await entry.followupChain
-    expect(requests).toHaveLength(3); expect(observed.leases).toHaveLength(1)
-    expect(requests[2]!.publication).toContain('RESIDENT_C_RULE')
-    expect(requests[2]!.publication).not.toContain('RESIDENT_A_RULE'); expect(row.succeeded).toBe(3)
+    expect(requests).toHaveLength(4); expect(observed.leases).toHaveLength(1)
+    expect(requests[3]!.publication).toContain('RESIDENT_C_RULE')
+    expect(requests[3]!.publication).not.toContain('RESIDENT_A_RULE'); expect(row.succeeded).toBe(4)
+    expect(entry.session.events.filter(event => event.type === 'user/message' && event.text === 'saved inbox 0')).toHaveLength(1)
     expect(observed.handoffs.map(handoff => handoff.physicalExecutionReceipt)).toEqual(expect.arrayContaining([expect.objectContaining({ version: 1, payloadKind: 'http-json-body', sendId: expect.any(String), candidateId: expect.any(String) })]))
     expect(observed.handoffs.every(handoff => handoff.outcome.kind === 'committed')).toBe(true)
     expect(entry.controller).not.toBe(original); expect(row.input.lifetime.available()).toBe(true)
@@ -333,7 +357,7 @@ it.each(['mapping', 'reconcile'] as const)('joins the actual resident original h
       restore = () => mapping.mockRestore()
       operation = dispatch(entry, 'read', { path })
     } else {
-      await dispatch(entry, 'list_dir', { path: join(f.root, 'c') })
+      expect(await observed.host!.observe({ path: join(f.root, 'c'), kind: 'directory' }, { session: entry.session, sessionId: entry.sessionId })).toMatchObject({ status: 'queued' })
       const create = f.environment.host.create.bind(f.environment.host)
       f.environment.host.create = scope => { const source = create(scope), prepare = source.prepare.bind(source); return { ...source, async prepare(...args) { entered.resolve(); await release.promise; return prepare(...args) } } }
       restore = () => { f.environment.host.create = create }
@@ -428,7 +452,7 @@ it('holds actual resident unknown runtime publication and its original pin ahead
       return result
     }
     f.backend.reconcileOwnedBatch = (...args) => !acknowledged && unknown?.batchId === args[3].key.batchId ? Promise.resolve({ kind: 'unknown', key: args[3].key }) : reconcile(...args)
-    await dispatch(entry, 'list_dir', { path: join(f.root, 'c') })
+    expect(await observed.host!.observe({ path: join(f.root, 'c'), kind: 'directory' }, { session: entry.session, sessionId: entry.sessionId })).toMatchObject({ status: 'queued' })
     await expect(observed.leases[0]!.lease.requestContext.reconcile()).rejects.toThrow()
     await entry.followupChain
     expect(unknown).toBeDefined(); expect(f.requests()).toBe(1); expect(observed.leases).toHaveLength(1)
@@ -451,7 +475,8 @@ it('retains an original installed-resident pin release failure and does not repl
   try {
     const assembly = await activateResidents(f), entry = f.entries[0]!, row = observed.leases[0]!
     const evidence = row.lease.requestContext.capture()!, pin = row.lease.requestContext.retain(evidence)
-    await dispatch(entry, 'list_dir', { path: join(f.root, 'c') }); await row.lease.requestContext.reconcile()
+    expect(await observed.host!.observe({ path: join(f.root, 'c'), kind: 'directory' }, { session: entry.session, sessionId: entry.sessionId })).toMatchObject({ status: 'queued' })
+    await row.lease.requestContext.reconcile()
     await expect(pin.release()).rejects.toBe(false)
     const document = await f.coordinator.openManagedDocument('child0'), closeDocument = vi.spyOn(document, 'close')
     await expect(assembly.dispose()).rejects.toBeInstanceOf(AggregateError)
@@ -492,7 +517,7 @@ it('keeps an actual parent file mapping inside the original assembly host finite
     const assembly = await activateResidents(f), parent = await f.coordinator.openManagedDocument('parent'), closeParent = vi.spyOn(parent, 'close'), path = join(f.root, 'c', 'data')
     const mapping = vi.spyOn(fs, 'realpath').mockImplementation(async (...args) => { if (String(args[0]) === path) { entered.resolve(); await release.promise }; return original(...args) })
     restoreMapping = () => mapping.mockRestore()
-    reading = assembly.tools.get('read')!.execute({ path }, { session: parent.view, sessionId: 'parent' }); void reading.catch(() => {})
+    reading = dispatchRegistered(assembly.tools, 'read', { path }, { session: parent.view, sessionId: 'parent' }, assembly.factOwner); void reading.catch(() => {})
     await entered.promise
     closing = assembly.dispose(); void closing.catch(() => {})
     await expect.poll(() => observed.hostCloses).toBe(1)
@@ -603,8 +628,9 @@ it('routes disjoint restored residents by exact view while denying parent, forei
     for (const entry of f.entries) await observed.leases.find(row => row.input.session === entry.session)!.lease.requestContext.reconcile()
     expect(currentText(a!)).toContain('RESIDENT_A_RULE'); expect(currentText(a!)).not.toContain('RESIDENT_B_RULE')
     expect(currentText(b!)).toContain('RESIDENT_B_RULE'); expect(currentText(b!)).not.toContain('RESIDENT_A_RULE')
-    const read = assembly.tools.get('read')!, path = join(f.root, 'c', 'data')
-    for (const session of [{ ...a!.session }, createSession()]) expect(await read.execute({ path }, { session })).toMatchObject({ instruction_scope: { status: 'reference-only', reason: 'outside-root' } })
+    const path = join(f.root, 'c', 'data')
+    const clone = { ...a!.session }, foreign = createSession()
+    for (const session of [clone, foreign]) expect(await dispatchRegistered(assembly.tools, 'read', { path }, { session })).toMatchObject({ instruction_scope: { status: 'reference-only', reason: 'outside-root' } })
     const parent = observed.agents.find(options => options.session !== a!.session && options.session !== b!.session)!
     await parent.requestContext!.reconcile()
     expect(JSON.stringify(parent.session.events.findLast(event => event.type === 'runtime/context'))).not.toContain('RESIDENT_A_RULE')
