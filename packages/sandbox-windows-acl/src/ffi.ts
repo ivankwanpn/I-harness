@@ -72,6 +72,7 @@ export interface Win32Bindings {
   localFree(memory: NativePtr): NativePtr
   // ---- SIDs ----------------------------------------------------------------
   convertStringSidToSidW(stringSid: string, sid: NativePtr): number
+  convertSidToStringSidW(sid: NativePtr, stringSid: NativePtr): number
   createWellKnownSid(type: number, domainSid: null, sid: NativePtr, size: NativePtr): number
   isValidSid(sid: NativePtr): number
   getLengthSid(sid: NativePtr): number
@@ -403,6 +404,7 @@ function bindings(): Win32Bindings {
     localAlloc: bind(kernel32, 'LocalAlloc', PVOID, ['uint32', 'size_t']),
     localFree: bind(kernel32, 'LocalFree', PVOID, [PVOID]),
     convertStringSidToSidW: bind(advapi32, 'ConvertStringSidToSidW', 'int', ['str16', PPVOID]),
+    convertSidToStringSidW: bind(advapi32, 'ConvertSidToStringSidW', 'int', [PVOID, PPVOID]),
     createWellKnownSid: bind(advapi32, 'CreateWellKnownSid', 'int', ['int', PVOID, PVOID, koffi.pointer('uint32')]),
     isValidSid: bind(advapi32, 'IsValidSid', 'int', [PVOID]),
     getLengthSid: bind(advapi32, 'GetLengthSid', 'uint32', [PVOID]),
@@ -530,3 +532,4 @@ export function throwLastError(api: Win32Bindings, name: string, detail?: string
 export function throwWin32(api: Win32Bindings, name: string, win32Code: number, detail?: string): never {
   throw new Win32Error(name, win32Code, detail ?? errorText(api, win32Code))
 }
+
