@@ -1,7 +1,7 @@
 import { stat, type FileHandle } from 'node:fs/promises'
 import { types } from 'node:util'
-import { canonicalJsonData, readFactJournal, isStrictFactData, decodeFactBatch, validJournalPrefix } from '@i-harness/core-session'
-import { isHeldFactOwner, type HeldFactOwner, type SelectedResultsRoute, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
+import { canonicalJsonData, readFactJournal, isStrictFactData, decodeFactBatch, encodeFactBatch, validJournalPrefix } from '@i-harness/core-session'
+import { isHeldFactOwner, captureSelectedResultsRoute, type HeldFactOwner, type SelectedResultsRoute, type SelectedResultsHeaderStageV2 } from '@i-harness/session-persistence'
 import { resolveSelectedBirth } from './selected-birth.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
 import { bootstrapNamespace } from './bootstrap-stage.ts'
@@ -10,7 +10,7 @@ import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { selectedResultsPreparationFacts } from '../../../session-persistence/src/coordinator/selected-results-preparation.ts'
 
-type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBytes:Buffer}
+type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBytes:Buffer;capturedFrames?:ReturnType<typeof captureBatch>[];attempt?:object}
 export type SelectedLaneScope=Readonly<{kind:'selected-lane'}>
 type Birth=NonNullable<Awaited<ReturnType<typeof resolveSelectedBirth>>>
 const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
@@ -66,6 +66,30 @@ if(birth){
   const prior=owners.get(owner.owner);if(prior)return prior
   const lane=Object.freeze({kind:'selected-lane' as const});scopes.set(lane,{route:birth.route,stage:birth.stage,owner:owner.owner,birthBytes:Buffer.from(checked.birthBytes)});owners.set(owner.owner,lane);return lane
  }
+/** Called only by the original entry after its checked capture succeeds. */
+function bindCapturedLane(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,route:SelectedResultsRoute,stage:SelectedResultsHeaderStageV2,records:unknown,attempt:object,prior?:SelectedLaneScope):SelectedLaneScope {
+ captureIO.scope(id,owner)
+ if(typeof owner.beforeIssue!=='function'||!attempt||typeof attempt!=='object'||types.isProxy(attempt))throw TypeError('Original captured owner required')
+ route=captureSelectedResultsRoute(route);selectedResultsPreparationFacts(stage,records)
+ if(!same(route.request,stage.captureReservation.request)||id!==route.request.invocation.targetSessionId)throw TypeError('Original captured route required')
+ const meta=JSON.parse(stage.headerBytes),prefix={eventCount:0,bodyBytes:0,prefixDigest:meta.journal.legacyPrefixDigest}
+ const batch=encodeFactBatch('bootstrap:'+stage.invocation.operationId+':seed',prefix.prefixDigest,records as import('@i-harness/core-session').SessionEvent[]),seed=captureBatch(prefix,batch)
+ if(prior){const data=check(id,owner,prior);if(data.attempt!==attempt||!same(data.route,route)||!same(data.stage,stage)||!data.capturedFrames||!data.capturedFrames[0]!.bytes.equals(seed.bytes))throw TypeError('Captured lane changed');return prior}
+ const lane=Object.freeze({kind:'selected-lane' as const})
+ scopes.set(lane,{route:JSON.parse(canonicalJsonData(route)),stage:JSON.parse(canonicalJsonData(stage)),owner:owner.owner,birthBytes:Buffer.from(stage.headerBytes),capturedFrames:[seed],attempt});return lane
+}
+/** The same entry supplies its completion only after genuine dependency confirmation. */
+function prepareCapturedCompletion(id:string,owner:HeldFactOwner,scope:SelectedLaneScope,frame:import('../../../session-persistence/src/coordinator/bootstrap-types.ts').BootstrapFrame):void {
+ const data=check(id,owner,scope),seed=data.capturedFrames?.[0]
+ if(!seed||!frame||types.isProxy(frame)||Reflect.ownKeys(frame).length!==2)throw TypeError('Captured lane required')
+ const p=Object.getOwnPropertyDescriptor(frame,'prefix'),b=Object.getOwnPropertyDescriptor(frame,'batch')
+ if(!p||!('value' in p)||!p.enumerable||!b||!('value' in b)||!b.enumerable)throw TypeError('Invalid captured completion')
+ const complete=captureBatch(p.value,b.value),after={eventCount:seed.key.count,bodyBytes:seed.bytes.length,prefixDigest:seed.batch.prefixDigest}
+ if(!same(complete.prefix,after)||complete.key.batchId!=='bootstrap:'+data.stage.invocation.operationId+':complete'||complete.key.count!==1)throw TypeError('Captured completion mismatch')
+ const meta=JSON.parse(data.stage.headerBytes);readFactJournal(Buffer.concat([seed.bytes,complete.bytes]),meta.journal,meta.formatVersion,meta)
+ const prior=data.capturedFrames![1];if(prior){if(!same(prior.prefix,complete.prefix)||!prior.bytes.equals(complete.bytes))throw TypeError('Captured completion changed');return}
+ data.capturedFrames!.push(complete)
+}
 function check(id:string,owner:HeldFactOwner,scope:SelectedLaneScope):ScopeData {
  if(!isHeldFactOwner(owner))throw new TypeError('Original owner required')
  const data=scopes.get(scope);if(!data||data.owner!==owner.owner||id!==data.owner.sessionId)throw new TypeError('Selected lane scope mismatch')
@@ -125,12 +149,17 @@ async function appendSelectedOwnedBatch(path:string,id:string,owner:import('@i-h
   const decoded=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta), frames=decoded.frames
   const seed=frames[0],complete=frames[1],count=data.stage.seed.seedLength,op=data.stage.invocation.operationId
   if(decoded.torn||!same(decoded.prefix,prefix)){outcome={kind:'conflict',key};return outcome}
-  if(key.batchId.startsWith('bootstrap:'))throw TypeError('Checked birth cannot issue bootstrap phases')
+  if(key.batchId.startsWith('bootstrap:')) {
+   const expected=data.capturedFrames?.[frames.length]
+   if(!expected||!same(expected.prefix,prefix)||!expected.bytes.equals(bytes))throw TypeError('Original captured frame required')
+  } else {
   if(!seed||seed.batch.key.batchId!==`bootstrap:${op}:seed`||seed.batch.key.firstSeq!==0||seed.batch.key.count!==count)throw new TypeError('Original selected seed unavailable')
   if(!complete||complete.batch.key.batchId!==`bootstrap:${op}:complete`||complete.batch.key.firstSeq!==count||complete.batch.key.count!==1)throw new TypeError('Original selected completion unavailable')
   selectedResultsPreparationFacts(data.stage,decoded.events.slice(0,count))
+  }
   const candidate=Buffer.concat([raw.subarray(end+1),bytes])
-  readFactJournal(candidate,meta.journal,meta.formatVersion,meta)
+  if(data.capturedFrames&&frames.length===0)readBootstrapFactJournal(candidate,meta.journal,meta.formatVersion,meta)
+  else readFactJournal(candidate,meta.journal,meta.formatVersion,meta)
   await assertNotDeleted('session',id);check(id,owner,scope)
   await verifyUnchanged(handle,raw,()=>check(id,owner,scope));check(id,owner,scope)
   const stage=await lookupSelectedBootstrapStage(path,{kind:'route',route:data.route},stageIO(ledger,path,()=>check(id,owner,scope)));check(id,owner,scope)
@@ -228,7 +257,7 @@ async function confirmSelectedFrames(path:string,id:string,owner:HeldFactOwner,s
 }
  return {
   resolveBirth:(id:string)=>resolveSelectedBirth(filePath(id),id,assertNotDeleted),
-  resolveCheckedBirth,bindCheckedBirthLane,
+  resolveCheckedBirth,bindCheckedBirthLane,bindCapturedLane,prepareCapturedCompletion,
   readJournalPrefix(id:string,owner:HeldFactOwner,scope:SelectedLaneScope){check(id,owner,scope);return captureIO.tracked(id,owner,ledger=>readSelectedJournalPrefix(filePath(id),id,owner,scope,assertNotDeleted,ledger))},
   appendOwnedBatch(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,scope:SelectedLaneScope,prefix:import('@i-harness/core-session').JournalPrefix,batch:import('@i-harness/core-session').EncodedFactBatch){
    check(id,owner,scope);const snapshot=captureBatch(prefix,batch)

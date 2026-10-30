@@ -29,7 +29,7 @@ import { captureSelectedResultsRoute, type SelectedResultsRoute } from './select
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl;
@@ -578,6 +578,13 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       io.activeIssue=()=>{check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
       try{
         const state=await ownership.withSessionOperation(id,()=>selectedEntry.attempt!.capture());await settleCapture(owned);check()
+        if(state.kind==='captured'){
+          const journal=(backend as PersistenceBackend & {selectedJournal?:{bindCapturedLane(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2,records:unknown,attempt:object,prior?:Readonly<{kind:'selected-lane'}>):Readonly<{kind:'selected-lane'}>}}).selectedJournal
+          if(!journal)throw TypeError('Selected journal unavailable')
+          check();const lane=journal.bindCapturedLane(id,io.issuer,route,state.stage,state.seed.records,selectedEntry.attempt!,selectedEntry.lane);check()
+          if(selectedEntry.lane&&selectedEntry.lane!==lane)throw Error('Original selected lane changed')
+          selectedEntry.lane=lane
+        }
         if(state.kind==='captured'&&selectedEntry.header?.kind!=='committed'){
           const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
           const reconcile=selectedEntry.headerIssued===true

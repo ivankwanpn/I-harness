@@ -131,3 +131,29 @@ it('retains nested stage-read close debt in the same original settlement ledger'
   expect((await f.journal.confirmFrames('target',f.held,f.scope,f.frames)).kind).toBe('committed')
  }finally{await f.close()}
 })
+
+it('issues only the two retained captured frames before a completed birth exists',async()=>{
+ const f=await fixture()
+ try{
+  await writeFile(f.path,Buffer.from(f.built.headerBytes))
+  const attempt={},records=decodeFactBatch(f.first.bytes).events
+  const lane=f.journal.bindCapturedLane('target',f.issuer,f.route,f.built.stage,records,attempt)
+  expect(lane).not.toBe(f.scope)
+  expect(f.journal.bindCapturedLane('target',f.issuer,f.route,f.built.stage,records,attempt,lane)).toBe(lane)
+  const otherOwner=heldFactOwner({sessionId:'target',incarnation:'original'},f.ownership,()=>f.held.assertHeld())
+  expect(()=>f.journal.bindCapturedLane('target',issuingFactOwner(otherOwner,()=>{}),f.route,f.built.stage,records,attempt,lane)).toThrow()
+  expect(()=>f.journal.readJournalPrefix('target',f.held,{...lane})).toThrow()
+  expect(()=>createJsonlBackend(f.root).selectedJournal.readJournalPrefix('target',f.held,lane)).toThrow()
+  let getter=false;const malicious={...f.frames[1]!};Object.defineProperty(malicious,'batch',{enumerable:true,get(){getter=true;throw Error('getter')}})
+  expect(()=>f.journal.prepareCapturedCompletion('target',f.held,lane,malicious)).toThrow();expect(getter).toBe(false)
+  const foreign=encodeFactBatch('bootstrap:op:seed',f.initial.prefixDigest,[{type:'plan/mode',mode:'on',seq:0}])
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.initial,foreign)).kind).toBe('absent')
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[0]!.prefix,f.frames[0]!.batch)).kind).toBe('committed')
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[1]!.prefix,f.frames[1]!.batch)).kind).toBe('absent')
+  f.journal.prepareCapturedCompletion('target',f.held,lane,f.frames[1]!)
+  f.journal.prepareCapturedCompletion('target',f.held,lane,f.frames[1]!)
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[1]!.prefix,f.frames[1]!.batch)).kind).toBe('committed')
+  expect((await f.journal.confirmFrames('target',f.held,lane,f.frames)).kind).toBe('committed')
+  expect(await readFile(f.path)).toEqual(f.raw)
+ }finally{await f.close()}
+})
