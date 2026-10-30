@@ -235,21 +235,26 @@ export function validateBridgePath(path: string, platform = process.platform, ar
   if (arch !== 'x64') throw new Error('ACL wait bridge requires x64')
   if (!isAbsolute(path)) throw new Error('ACL wait bridge path must be absolute')
 }
-const ownedService = createWaitBridgeOwner(async root => {
-  const assets = verifyWaitAssets(root)
-  const epoch = randomUUID()
-  let owner: WaitDrainService | undefined
-  try {
+const ownedService = createWaitBridgeOwner(root => {
+  let owner: WaitDrainService | undefined, worker: Worker | undefined, constructionIssued = false
+  const service = Promise.resolve().then(async () => {
+    const assets = verifyWaitAssets(root)
+    const epoch = randomUUID()
     const koffiEntry = createRequire(import.meta.url).resolve('koffi')
-    const worker = new Worker(assets.workerPath, { execArgv: [], workerData: { protocol: 1, epoch, capacity: 256, bridgePath: assets.bridgePath, bridgeSha256: assets.manifest.files['ih-acl-wait-bridge.dll'], koffiVersion: assets.manifest.koffiVersion, koffiEntry } })
+    constructionIssued = true
+    worker = new Worker(assets.workerPath, { execArgv: [], workerData: { protocol: 1, epoch, capacity: 256, bridgePath: assets.bridgePath, bridgeSha256: assets.manifest.files['ih-acl-wait-bridge.dll'], koffiVersion: assets.manifest.koffiVersion, koffiEntry } })
     owner = createWaitDrainService(worker, epoch)
     await owner.ready
     return owner
-  } catch (error) {
+  })
+  return { service, async cleanup() {
+    await service.catch(() => {})
     if (owner) await owner.close()
-    throw error
-  }
+    else if (constructionIssued) throw new Error('Worker construction outcome unknown without an acknowledged original service')
+    // No construction issued: validation/module resolution failed before any Worker call.
+  } }
 })
+
 const defaultRoot = () => fileURLToPath(new URL(process.env.I_HARNESS_DIST ? './' : '../native/runtime/', import.meta.url))
 /** Prewarm before native channel/wait creation. Fixed verified assets only. */
 export function createWaitDrainBridge(root = defaultRoot()): Promise<WaitDrainService> {
