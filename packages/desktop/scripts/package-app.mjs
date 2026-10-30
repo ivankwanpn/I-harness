@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 import { verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
+import { copyAclWaitAssets, verifyAclWaitAssets } from "../../../scripts/runtime-acl-wait-assets.mjs"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 import { resolvePackagePaths, validateGatewayRuntime } from "./package-inputs.mjs"
 
@@ -30,6 +31,8 @@ for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", 
 
 verifyNativeAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-windows-psec"))
 verifyWslAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-wsl/worker"))
+const aclWaitAssets = join(gatewayDir, "node_modules/@i-harness/sandbox-windows-acl/native/runtime")
+verifyAclWaitAssets(aclWaitAssets)
 const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("electron"))
 const electronExe = join(electronDist, "electron.exe")
 if (!existsSync(electronExe)) throw new Error(`electron.exe not found at ${electronExe}`)
@@ -40,6 +43,7 @@ renameSync(join(appDir, "electron.exe"), join(appDir, `${appName}.exe`))
 
 const resources = join(appDir, "resources")
 cpSync(outDir, join(resources, "app", "out"), { recursive: true, dereference: true })
+copyAclWaitAssets(aclWaitAssets, join(resources, "app/out/native/runtime"))
 cpSync(join(packageRoot, "licenses"), join(resources, "app", "licenses"), { recursive: true })
 copyFileSync(join(packageRoot, "src", "renderer", "session", "SLASH_SOURCES.md"), join(resources, "app", "licenses", "ui-controls", "SLASH_SOURCES.md"))
 copyFileSync(join(packageRoot, "src", "renderer", "session", "COMPOSER_SOURCES.md"), join(resources, "app", "licenses", "ui-controls", "COMPOSER_SOURCES.md"))

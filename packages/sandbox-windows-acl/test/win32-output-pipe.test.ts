@@ -159,3 +159,59 @@ it('replaces an owned failed connect observer during cleanup without losing orig
   expect(observations).toBe(2)
   expect(f.live.size).toBe(0)
 })
+
+it('owns successful security conversion before decoding and retains the out-slot through cleanup decode failure', async () => {
+  const f = fixture()
+  const decode = f.api.decodePointer
+  const localFree = f.api.localFree
+  let decodes = 0, localFrees = 0
+  f.api.decodePointer = p => { if (++decodes <= 2) throw new Error('decode failed'); return decode(p) }
+  f.api.localFree = p => { localFrees++; return localFree(p) }
+  const owner = createWin32OutputPipe('S-1-5-5-1-2', f.api)
+  await expect(owner.initialize()).rejects.toThrow('decode failed')
+  expect(f.live.size).toBe(2)
+  await expect(owner.cleanup()).rejects.toThrow('decode failed')
+  expect(f.live.size).toBe(2)
+  await owner.cleanup()
+  expect(f.live.size).toBe(0)
+  expect(localFrees).toBe(1)
+})
+
+it('preserves unexpected ERROR_OPERATION_ABORTED status as the original native error', async () => {
+  const f = fixture()
+  const owner = createWin32OutputPipe('S-1-5-5-1-2', f.api)
+  await owner.initialize(); await owner.closeWriter()
+  f.api.read = () => { f.error(995); return 0 }
+  await expect(owner.readAll()).rejects.toMatchObject({ api: 'ReadFile', win32Code: 995 })
+  await owner.cleanup()
+  expect(f.live.size).toBe(0)
+})
+
+it('retains a decoded security descriptor and its out-slot until LocalFree succeeds', async () => {
+  const f = fixture(); f.setPeerFailure()
+  const localFree = f.api.localFree
+  let frees = 0
+  f.api.localFree = p => { if (++frees === 1) { f.error(6); return p } return localFree(p) }
+  const owner = createWin32OutputPipe('S-1-5-5-1-2', f.api)
+  await expect(owner.initialize()).rejects.toThrow(/peer/)
+  await expect(owner.cleanup()).rejects.toMatchObject({ api: 'LocalFree(pipe security)', win32Code: 6 })
+  expect(f.live.size).toBe(2)
+  await owner.cleanup()
+  expect(f.live.size).toBe(0)
+  expect(frees).toBe(2)
+})
+
+it.each(['read', 'connect'] as const)('retains unknown %s submission debt without freeing or reissuing after a missing FFI return', async operation => {
+  const f = fixture()
+  const original = new Error('FFI returned no status')
+  let issues = 0
+  f.api[operation] = () => { issues++; throw original }
+  const owner = createWin32OutputPipe('S-1-5-5-1-2', f.api)
+  if (operation === 'connect') await expect(owner.initialize()).rejects.toBe(original)
+  else { await owner.initialize(); await owner.closeWriter(); await expect(owner.readAll()).rejects.toBe(original) }
+  const retained = f.live.size
+  await expect(owner.cleanup()).rejects.toThrow(/submission outcome unknown/)
+  await expect(owner.cleanup()).rejects.toThrow(/submission outcome unknown/)
+  expect(f.live.size).toBe(retained)
+  expect(issues).toBe(1)
+})

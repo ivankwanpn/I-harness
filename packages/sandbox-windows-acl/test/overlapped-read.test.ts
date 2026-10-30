@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest'
 import { createReadOwner, type ReadBoundary } from '../src/overlapped-read.ts'
+import { Win32Error } from '../src/errors.ts'
 
 it('joins pending readiness, copies data and observes EOF before release', async () => {
   let wake!: () => void
@@ -18,6 +19,30 @@ it('joins pending readiness, copies data and observes EOF before release', async
   wake()
   expect((await reading).toString()).toBe('tail')
   expect(trace).toEqual(['unregister', 'release'])
+})
+
+it.each(['unregister', 'trampoline release'])('keeps terminal native error first when %s fails, without rereading on cleanup retry', async label => {
+  const primary = new Win32Error('GetOverlappedResult', 5)
+  const retirement = new Error(label)
+  const laterFree = new Error('free failed')
+  let results = 0, closes = 0, releases = 0
+  const owner = createReadOwner({
+    submit: () => ({ kind: 'pending' }),
+    observe: () => ({ signalled: Promise.resolve(), close: async () => { if (++closes === 1) throw retirement } }),
+    result: () => { results++; return { kind: 'error', error: primary } },
+    cancel: () => {},
+    release: () => { if (++releases === 1) throw laterFree },
+  })
+  const reading = owner.readAll()
+  const failure = await reading.catch(error => error)
+  expect(failure).toBeInstanceOf(AggregateError)
+  expect(failure.errors).toEqual([primary, retirement])
+  const cleanupFailure = await owner.cleanup().catch(error => error)
+  expect(cleanupFailure.errors).toEqual([primary, laterFree])
+  await owner.cleanup()
+  expect(results).toBe(1)
+  await expect(owner.readAll()).rejects.toBe(failure)
+  expect(failure.errors[0]).toBe(primary)
 })
 
 it('does not release pending storage on cancellation until result and unregister are acknowledged', async () => {

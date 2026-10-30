@@ -9,6 +9,7 @@ vi.mock('koffi', () => ({ default: {
   proto: (...args: unknown[]) => { state.prototypeArguments = args; return 'callback' },
   pointer: (type: unknown) => ({ type }),
   alloc: () => 10n,
+  encode: () => {},
   decode: () => { if (state.decodeFails-- > 0) throw new Error('decode failed'); return 77n },
   free: () => { state.frees++ },
   register: (callback: () => void) => { state.callback = callback; return 20n },
@@ -17,12 +18,13 @@ vi.mock('koffi', () => ({ default: {
 } }))
 import { registerWin32Wait } from '../src/win32-wait.ts'
 import type { NativePtr } from '../src/ffi.ts'
+function provider(unregister: (handle: NativePtr) => Promise<number>) { return { reserve: () => ({ unregister: async (handle: NativePtr) => ({ status: await unregister(handle), acknowledge: async () => {} }), release: () => {}, rejoin: () => {} }) } }
 beforeEach(() => { state.registered = 1; state.decodeFails = 0; state.releaseFails = 0; state.frees = 0; state.releases = 0 })
 
 it('uses BOOLEAN callback ABI and one-shot infinite wait, retaining native slot until ACK', async () => {
   let ack!: (code: number) => void
   const unregister = vi.fn(() => new Promise<number>(r => { ack = r }))
-  const wait = registerWin32Wait(42n as NativePtr, unregister)
+  const wait = registerWin32Wait(42n as NativePtr, provider(unregister))
   expect(state.prototypeArguments).toEqual(['__stdcall', 'void', ['void *', 'uint8']])
   expect(state.nativeArguments).toEqual([10n, 42n, 20n, null, 0xffffffff, 8])
   state.callback!()
@@ -37,7 +39,7 @@ it('uses BOOLEAN callback ABI and one-shot infinite wait, retaining native slot 
 it('returns an owned failed observer for native registration failure', async () => {
   state.registered = 0
   const unregister = vi.fn(async () => 0)
-  const wait = registerWin32Wait(42n as NativePtr, unregister)
+  const wait = registerWin32Wait(42n as NativePtr, provider(unregister))
   await expect(wait.signalled).rejects.toMatchObject({ api: 'RegisterWaitForSingleObject', win32Code: 5 })
   expect(state.frees).toBe(0)
   await wait.close()
@@ -48,7 +50,7 @@ it('returns an owned failed observer for native registration failure', async () 
 it('retains a successful native registration even if decoding its out-slot throws', async () => {
   state.decodeFails = 1
   const unregister = vi.fn(async () => 0)
-  const wait = registerWin32Wait(42n as NativePtr, unregister)
+  const wait = registerWin32Wait(42n as NativePtr, provider(unregister))
   await expect(wait.signalled).rejects.toThrow('decode failed')
   await wait.close()
   expect(unregister).toHaveBeenCalledWith(77n)
@@ -58,7 +60,7 @@ it('retains a successful native registration even if decoding its out-slot throw
 it('retries failed trampoline release without resubmitting native unregister', async () => {
   state.releaseFails = 1
   const unregister = vi.fn(async () => 0)
-  const wait = registerWin32Wait(42n as NativePtr, unregister)
+  const wait = registerWin32Wait(42n as NativePtr, provider(unregister))
   await expect(wait.close()).rejects.toThrow('callback release failed')
   expect(state.frees).toBe(0)
   await wait.close()

@@ -1,5 +1,5 @@
-type Outcome = { kind: 'data'; bytes: Buffer } | { kind: 'eof' } | { kind: 'aborted' } | { kind: 'error'; error: unknown }
-type Submission = Outcome | { kind: 'pending' }
+type Outcome = { kind: 'data'; bytes: Buffer } | { kind: 'eof' } | { kind: 'aborted'; error?: unknown } | { kind: 'error'; error: unknown }
+type Submission = Outcome | { kind: 'pending' } | { kind: 'unknown'; error: unknown }
 export interface ReadBoundary {
   submit(): Submission
   observe(): { signalled: Promise<void>; close(): Promise<void> }
@@ -16,7 +16,20 @@ export function createReadOwner(api: ReadBoundary) {
   let released = false
   let operation: Promise<Buffer> | undefined
   let cleanup: Promise<void> | undefined
+  let acknowledged: Outcome | undefined
+  let unknownSubmission = false
   const chunks: Buffer[] = []
+  function retain(outcome: Outcome): Outcome {
+    acknowledged = outcome.kind === 'aborted' && outcome.error === undefined
+      ? { kind: 'aborted', error: new Error('read aborted') } : outcome
+    return acknowledged
+  }
+  function withPrimary(error: unknown): unknown {
+    const primary = acknowledged?.kind === 'error' || acknowledged?.kind === 'aborted' ? acknowledged : undefined
+    if (!primary || error === primary.error) return error
+    if (error instanceof AggregateError && error.errors[0] === primary.error) return error
+    return new AggregateError([primary.error, error], 'native read failed and cleanup is incomplete', { cause: primary.error })
+  }
   async function settlePending(): Promise<Outcome> {
     observer ??= api.observe()
     try { await observer.signalled } catch (error) {
@@ -26,20 +39,21 @@ export function createReadOwner(api: ReadBoundary) {
       try { await observer.close(); observer = undefined } catch { /* retry debt */ }
       throw error
     }
-    const outcome = api.result()
+    const outcome = retain(api.result())
     pending = false
-    await observer.close()
+    try { await observer.close() } catch (error) { throw withPrimary(error) }
     observer = undefined
     return outcome
   }
   async function release(): Promise<void> {
+    if (unknownSubmission) throw new Error('read submission outcome unknown; native storage remains owned')
     if (pending) await settlePending()
     if (observer) { await observer.close(); observer = undefined }
     if (!released) { api.release(); released = true }
   }
   function cleanupOnce(): Promise<void> {
     if (cleanup) return cleanup
-    const attempt = release()
+    const attempt = release().catch(error => { throw withPrimary(error) })
     cleanup = attempt
     void attempt.finally(() => { if (cleanup === attempt) cleanup = undefined }).catch(() => {})
     return attempt
@@ -50,12 +64,17 @@ export function createReadOwner(api: ReadBoundary) {
       try {
         while (!cancelled) {
           let result = api.submit()
+          if (result.kind === 'unknown') {
+            unknownSubmission = true
+            pending = true
+            throw result.error
+          }
           if (result.kind === 'pending') {
             pending = true
             result = await settlePending()
-          }
+          } else result = retain(result)
           if (result.kind === 'eof') break
-          if (result.kind === 'aborted') throw new Error('read aborted')
+          if (result.kind === 'aborted') throw result.error
           if (result.kind === 'error') throw result.error
           if (result.bytes.length === 0) throw new Error('zero-length successful pipe read')
           chunks.push(Buffer.from(result.bytes))

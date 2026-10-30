@@ -4,6 +4,7 @@ import { isInvalidHandle, isNullPtr, type NativePtr } from './ffi.ts'
 import { Win32Error } from './errors.ts'
 import { createReadOwner } from './overlapped-read.ts'
 import { registerWin32Wait } from './win32-wait.ts'
+import { WaitDrainTransportError, type WaitDrainService } from './native-wait-bridge.ts'
 
 type Observer = { signalled: Promise<void>; close(): Promise<void> }
 /** Original synchronous Win32 calls and native-memory operations. Injection is for causal tests only. */
@@ -33,7 +34,7 @@ export interface Win32PipeApi {
 }
 
 /** No DLL/native execution occurs until this adapter is explicitly requested. */
-export function win32PipeApi(unregister: (registration: NativePtr) => Promise<number>): Win32PipeApi {
+export function win32PipeApi(service: Pick<WaitDrainService, 'reserve'>): Win32PipeApi {
   if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('ACL output pipes require Windows x64')
   const kernel = koffi.load('kernel32.dll')
   const advapi = koffi.load('advapi32.dll')
@@ -78,7 +79,7 @@ export function win32PipeApi(unregister: (registration: NativePtr) => Promise<nu
     reset: event => reset(event) as number,
     close: handle => close(handle) as number,
     lastError: () => lastError() as number,
-    observe: event => registerWin32Wait(event, unregister),
+    observe: event => registerWin32Wait(event, service),
   }
 }
 
@@ -98,6 +99,7 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
   let initialization: Promise<void> | undefined
   let reader: ReturnType<typeof createReadOwner> | undefined
   let connectPending = false
+  let connectUnknown = false
   let connectWait: Observer | undefined
   let connected = false
   let stopped = false
@@ -114,9 +116,14 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
     api.zero(p, size)
     return p
   }
-  function handle(value: NativePtr, label: string, kind: Entry['kind'] = 'read') {
-    if (isInvalidHandle(value)) failure(label)
-    const entry = own(() => { if (!api.close(value)) failure(`CloseHandle(${label})`) }, kind)
+  function handle(acquire: () => NativePtr, label: string, kind: Entry['kind'] = 'read') {
+    let value: NativePtr | undefined
+    const entry = own(() => {
+      if (value === undefined) throw new WaitDrainTransportError('unknown', `${label} acquisition outcome unknown`)
+      if (!api.close(value)) failure(`CloseHandle(${label})`)
+    }, kind)
+    value = acquire()
+    if (isInvalidHandle(value)) { entry.done = true; failure(label) }
     if (kind === 'writer') writerEntry = entry
     return value
   }
@@ -158,7 +165,7 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
     if (!ok) {
       const code = api.lastError()
       if (code === 109 || code === 232) return { kind: 'eof' as const }
-      if (code === 995) return { kind: 'aborted' as const }
+      if (code === 995) return { kind: 'aborted' as const, error: new Win32Error(name, code) }
       if (name === 'ReadFile' && code === 997) return { kind: 'pending' as const }
       if (code === 996 && name === 'GetOverlappedResult') failure(name, code)
       return { kind: 'error' as const, error: new Win32Error(name, code) }
@@ -172,22 +179,35 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
     if (stopped) return Promise.reject(new Error('pipe owner stopped'))
     initialization = (async () => {
       const descriptorSlot = allocation(8)
-      if (!api.convertSecurity(`D:P(A;;0x0012019f;;;${logonSid})`, descriptorSlot)) failure('ConvertStringSecurityDescriptorToSecurityDescriptorW')
-      const descriptor = api.decodePointer(descriptorSlot)
+      let conversion: 'unknown' | 'success' | 'failed' = 'unknown'
+      let descriptor: NativePtr | undefined
+      // Install out-slot ownership before conversion. Success can allocate a
+      // descriptor even if subsequent pointer decoding throws; retry decoding
+      // during cleanup and never free the slot ahead of the descriptor.
+      own(() => {
+        if (conversion === 'failed') return
+        descriptor ??= api.decodePointer(descriptorSlot)
+        if (isNullPtr(descriptor)) throw new Error('null converted pipe security descriptor')
+        if (!isNullPtr(api.localFree(descriptor))) failure('LocalFree(pipe security)')
+      })
+      if (!api.convertSecurity(`D:P(A;;0x0012019f;;;${logonSid})`, descriptorSlot)) { conversion = 'failed'; failure('ConvertStringSecurityDescriptorToSecurityDescriptorW') }
+      conversion = 'success'
+      descriptor = api.decodePointer(descriptorSlot)
       if (isNullPtr(descriptor)) throw new Error('null pipe security descriptor')
-      own(() => { if (!isNullPtr(api.localFree(descriptor))) failure('LocalFree(pipe security)') })
       const attributes = allocation(24)
       api.securityAttributes(attributes, descriptor)
       buffer = allocation(capacity)
       overlapped = allocation(32)
       count = allocation(4)
       const pidSlot = allocation(4)
-      event = handle(api.createEvent(), 'CreateEventW')
+      event = handle(() => api.createEvent(), 'CreateEventW')
       const name = `\\\\.\\pipe\\ih-acl-${randomUUID()}`
-      server = handle(api.createNamedPipe(name, 0x40080001, 8, 1, attributes), 'CreateNamedPipeW')
-      writerHandle = handle(api.openClient(name, 0x100002), 'CreateFileW', 'writer')
+      server = handle(() => api.createNamedPipe(name, 0x40080001, 8, 1, attributes), 'CreateNamedPipeW')
+      writerHandle = handle(() => api.openClient(name, 0x100002), 'CreateFileW', 'writer')
       prepare()
-      if (!api.connect(server, overlapped)) {
+      let connectResult: number
+      try { connectResult = api.connect(server, overlapped) } catch (error) { connectUnknown = true; throw error }
+      if (!connectResult) {
         const code = api.lastError()
         if (code === 997) { connectPending = true; await settleConnect() }
         else if (code !== 535) failure('ConnectNamedPipe', code)
@@ -196,7 +216,12 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
       if (api.uint32(pidSlot) !== process.pid) throw new Error('named pipe peer is not host PID')
       connected = true
       reader = createReadOwner({
-        submit() { prepare(); return outcome(api.read(server, buffer, capacity, count, overlapped), 'ReadFile') },
+        submit() {
+          prepare()
+          let result: number
+          try { result = api.read(server, buffer, capacity, count, overlapped) } catch (error) { return { kind: 'unknown', error } }
+          return outcome(result, 'ReadFile')
+        },
         observe: () => api.observe(event),
         result() {
           const value = outcome(api.result(server, overlapped, count), 'GetOverlappedResult')
@@ -220,6 +245,7 @@ export function createWin32OutputPipe(logonSid: string, api: Win32PipeApi, capac
     const attempt = (async () => {
       if (connectPending) cancelOperation()
       if (initialization) await initialization.catch(() => {})
+      if (connectUnknown) throw new WaitDrainTransportError('unknown', 'connect submission outcome unknown; native storage remains owned')
       if (connectPending || connectWait) await settleConnect()
       if (reader) await reader.cancel()
       releaseLedger(true)
