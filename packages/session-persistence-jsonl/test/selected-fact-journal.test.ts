@@ -174,3 +174,17 @@ it('adopts a checked selected birth under the actual managed document owner and 
   await document.close()
  }finally{await f.close()}
 })
+
+it('reconciles an uncertain original selected seed before authorizing completion',async()=>{
+ const f=await fixture()
+ try{
+  await writeFile(f.path,Buffer.from(f.built.headerBytes))
+  const lane=f.journal.bindCapturedLane('target',f.issuer,f.route,f.built.stage,decodeFactBatch(f.first.bytes).events,{})
+  f.journal.prepareCapturedCompletion('target',f.held,lane,f.frames[1]!)
+  faults.sync=true;expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[0]!.prefix,f.frames[0]!.batch)).kind).toBe('unknown')
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[1]!.prefix,f.frames[1]!.batch)).kind).toBe('absent')
+  expect((await f.journal.reconcileOwnedBatch('target',f.held,lane,f.frames[0]!.prefix,f.frames[0]!.batch)).kind).toBe('committed')
+  expect((await f.journal.appendOwnedBatch('target',f.issuer,lane,f.frames[1]!.prefix,f.frames[1]!.batch)).kind).toBe('committed')
+  expect(await readFile(f.path)).toEqual(f.raw)
+ }finally{await f.close()}
+})
