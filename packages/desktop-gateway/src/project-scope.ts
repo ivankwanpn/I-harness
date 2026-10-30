@@ -9,7 +9,7 @@ import type { SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 import { captureBootstrapProject, type BootstrapProjectCapture, type BootstrapProjectPreparation, type BootstrapTargetScope } from './bootstrap-project.ts'
-import { assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedExistingBinding, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
+import { requestRetainedReferenceRetirementFor, runRetainedRetirementSink, assertOutsideRetirementSink, joinRetainedRetirementSinks, assertRetainedBindingReferenceFor, preflightRetainedBindingReleaseFor, observeRetainedBindingRetirementFor, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedExistingBinding, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { isConversationMetadata } from './session-visibility.ts'
 import type { BindingObservations } from '../../session-persistence/src/coordinator/binding-observation.ts'
 export type { BootstrapProjectCapture, BootstrapProjectPreparation, BootstrapTargetScope } from './bootstrap-project.ts'
@@ -37,6 +37,7 @@ async function directory(value: unknown, field: string): Promise<string> {
  * catalog supplies roots. Reopening a session never restores saved authority. */
 export function createProjectScopeBroker(coordinator: SessionCoordinator, _workspace: string, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async () => true, moveOptions: ProjectMoveOptions = {}) {
   const fence = moveOptions.fence ?? createSessionManagementFence()
+  fence.associateRetainedDomain(coordinator)
   const projects = new Map<string, ConfirmedProjectScope>()
   const bindings = new Map<string, Binding>()
   const parents = new Map<string, string>()
@@ -72,16 +73,17 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   let closing: Promise<void> | undefined
   const assertOpen = () => { if (closed) throw new Error("Project scope broker is closed") }
   let inspectorCount = 0
-  let inspectorAdmissions = 0
-  const brokerFlights = new WeakSet<Promise<unknown>>()
+  let globalInspectorAdmissions = 0
+  const pendingInspectorIds = new Map<string, number>()
+  const inspectorPending = (id: string) => globalInspectorAdmissions > 0 || pendingInspectorIds.has(id)
   type Inspector = { id: string; preflight(): void; retire(operation: RetainedCleanupOperation): Promise<void> }
   const inspectors = new Set<Inspector>()
-  type BrokerCleanup = { operation: RetainedCleanupOperation; active: boolean; nested: Set<Promise<unknown>> }
+  type BrokerCleanup = { operation: RetainedCleanupOperation; active: boolean }
   const brokerOperation = new AsyncLocalStorage<BrokerCleanup>()
   function preflightInspectors(ids?: readonly string[]) { for (const inspector of inspectors) if (!ids || ids.includes(inspector.id)) inspector.preflight() }
   async function joinInspectorCleanup(jobs: readonly Promise<void>[]) {
     const results = await Promise.allSettled(jobs)
-    const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    const errors = [...new Set(results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))]
     if (errors.length === 1) throw errors[0]
     if (errors.length) throw new AggregateError(errors, 'Execution observation cleanup failed')
   }
@@ -263,15 +265,17 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     observeExecutionBinding(reference: RetainedExistingBinding, retired: (operation: RetainedCleanupOperation) => void | Promise<void>) {
       if (inspectorCount >= 32) throw new Error('Execution binding observation capacity reached')
       inspectorCount++
-      let charged = true, active = true
+      let charged = true, active = true, detached = false, cleanupRequested = false, cleanupSettled = false
+      let cleanupFailure: { error: unknown } | undefined
       let stopReference: (() => void) | undefined
       let inspector: Inspector | undefined
       let cleanup: Promise<void> | undefined
       let notified = false
       let fenceObserver: ReturnType<SessionManagementFence['observe']> | undefined
       const uncharge = () => { if (charged) { charged = false; inspectorCount--; if (inspector) inspectors.delete(inspector) } }
+      const detach = () => { if (detached) return; detached = true; fenceObserver?.release(); stopReference?.() }
       const retire = (operation: RetainedCleanupOperation): Promise<void> => {
-        active = false; fenceObserver?.release(); stopReference?.()
+        active = false; cleanupRequested = true; detach()
         if (cleanup) return cleanup
         const result = Promise.withResolvers<void>(); cleanup = result.promise
         void cleanup.catch(() => {})
@@ -280,12 +284,13 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         let notification: Promise<void> = Promise.resolve()
         if (!notified) {
           notified = true
-          try { const returned = retired(operation); notification = returned && brokerFlights.has(returned) ? Promise.resolve() : Promise.resolve(returned) } catch (error) { notification = Promise.reject(error) }
+          try { notification = runRetainedRetirementSink(operation, coordinator, inspector!, () => retired(operation)) } catch (error) { notification = Promise.reject(error) }
         }
         void Promise.allSettled([release, notification]).then(results => {
+          cleanupSettled = true
           if (results[0]!.status === 'fulfilled') uncharge()
           const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : [])
-          if (errors.length) { cleanup = undefined; result.reject(errors.length === 1 ? errors[0] : new AggregateError(errors, 'Execution observation cleanup failed')) }
+          if (errors.length) { cleanup = undefined; cleanupFailure = { error: errors[0] }; result.reject(errors.length === 1 ? errors[0] : new AggregateError(errors, 'Execution observation cleanup failed')) }
           else result.resolve()
         })
         return result.promise
@@ -295,11 +300,11 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         assertRetainedBindingReferenceFor(coordinator, reference)
         preflightRetainedBindingReleaseFor(coordinator, reference)
         assertOpen()
-        if (inspectorAdmissions) throw new Error('Project binding operation pending')
+        if (globalInspectorAdmissions) throw new Error('Project binding operation pending')
         const meta = reference.metadata(), id = identifier(meta.sessionId)
         fence.assertOpen(id)
         if (meta.archived || !isConversationMetadata(meta)) throw new Error('Session is unavailable')
-        if (operations.has(id) || loading.has(id) || catalogPending) throw new Error('Project binding operation pending')
+        if (inspectorPending(id) || operations.has(id) || loading.has(id) || catalogPending) throw new Error('Project binding operation pending')
         const document = reference.binding(), own = parseBinding(document.kind === 'present' ? document.value : undefined)
         assertRetainedBindingReferenceFor(coordinator, reference)
         observeBinding(id, own); parents.delete(id)
@@ -309,7 +314,7 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         const stamp = canonicalJsonData([own, bindingRevisions.get(id) ?? 0, projectId ?? null, revisions.get(projectId ?? '') ?? 0, referenceRevision, projectId ? projects.get(projectId) : null])
         inspector = { id, preflight: () => preflightRetainedBindingReleaseFor(coordinator, reference), retire }
         inspectors.add(inspector)
-        fenceObserver = fence.observe(id, retire, inspector.preflight)
+        fenceObserver = fence.observe(id, operation => cleanup ?? retire(operation), inspector.preflight, operation => { void retire(operation).catch(() => {}) })
         if (!active) fenceObserver.release()
         stopReference = observeRetainedBindingRetirementFor(coordinator, reference, operation => retire(operation))
         if (!active) stopReference()
@@ -319,14 +324,19 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
             assertOpen(); fenceObserver!.assertCurrent(); assertRetainedBindingReferenceFor(coordinator, reference)
             const currentMeta = reference.metadata()
             if (currentMeta.sessionId !== id || currentMeta.archived || !isConversationMetadata(currentMeta)) throw new Error('Session is unavailable')
-            if (inspectorAdmissions || operations.has(id) || loading.has(id) || catalogPending || referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) throw new Error('Project scope changed')
+            if (inspectorPending(id) || operations.has(id) || loading.has(id) || catalogPending || referenceFailure || referenceUpdates || scopeUpdates.has(projectId ?? '') || pendingChanges.has(projectId ?? '')) throw new Error('Project scope changed')
             assertAvailable(projectId)
             const current = canonicalJsonData([bindings.get(id), bindingRevisions.get(id) ?? 0, projectId ?? null, revisions.get(projectId ?? '') ?? 0, referenceRevision, projectId ? projects.get(projectId) : null])
             if (current !== stamp || parents.has(id)) throw new Error('Project binding observation changed')
-          } catch (error) { active = false; try { invalidateInspectors([id]) } catch {} throw error }
+          } catch (error) {
+            active = false; cleanupRequested = true
+            const ticket = requestRetainedReferenceRetirementFor(coordinator, reference, error)
+            void ticket.then(() => { cleanupSettled = true; uncharge() }, failure => { cleanupSettled = true; cleanupFailure = { error: failure } })
+            throw error
+          }
         }
         assertCurrent()
-        return Object.freeze({ assertCurrent, release() { if (!active) return; active = false; fenceObserver?.release(); stopReference?.(); uncharge() } })
+        return Object.freeze({ assertCurrent, release() { active = false; detach(); if (!cleanupRequested || (cleanupSettled && !cleanupFailure)) uncharge() } })
       } catch (error) { if (inspector) invalidateInspectors([inspector.id]); else { active = false; fenceObserver?.release(); stopReference?.(); uncharge() }; throw error }
     },
     async retainSelectedBindingRead(sessionIds:readonly string[],binding:Awaited<ReturnType<BindingObservations['acquireSelectedBindingRead']>>,sourceId:string) {
@@ -760,17 +770,16 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   function admission<A extends unknown[], R>(original: (...args: A) => Promise<R>, selectedIds: (...args: A) => readonly string[] | undefined, isClose = false): (...args: A) => Promise<R> {
     return (...args) => {
       const ids = selectedIds(...args)
-      try { preflightInspectors(ids) } catch (error) { return Promise.reject(error) }
+      try { preflightInspectors(ids); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }
       if (isClose && inspectorClose) return inspectorClose as Promise<R>
       const previous = brokerOperation.getStore()
       const inherited = previous?.active ? previous : undefined
-      const context: BrokerCleanup = inherited ?? { operation: createRetainedCleanupOperation(), active: true, nested: new Set() }
+      const context: BrokerCleanup = inherited ?? { operation: createRetainedCleanupOperation(), active: true }
       const operation = context.operation
       const done = Promise.withResolvers<R>()
-      brokerFlights.add(done.promise)
-      if (inherited) context.nested.add(done.promise)
       if (isClose) inspectorClose = done.promise as Promise<void>
-      inspectorAdmissions++
+      if (ids) for (const id of ids) pendingInspectorIds.set(id, (pendingInspectorIds.get(id) ?? 0) + 1)
+      else globalInspectorAdmissions++
       brokerOperation.run(context, () => {
         const jobs = retireInspectors(operation, ids)
         // Preserve the original method's synchronous admission/revision and V1
@@ -779,24 +788,16 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
         let work: Promise<R>
         try { work = original(...args) } catch (error) { work = Promise.reject(error) }
         void (async () => {
-          const [primary, cleanup] = await Promise.allSettled([work, joinInspectorCleanup(jobs)])
+          const [primary, cleanup] = await Promise.allSettled([work, joinInspectorCleanup([...jobs, joinRetainedRetirementSinks(operation)])])
           let outcome: { ok: true; value: R } | { ok: false; error: unknown }
           if (primary.status === 'rejected') outcome = { ok: false, error: cleanup.status === 'rejected' ? new AggregateError([primary.reason, cleanup.reason], 'Broker operation and cleanup failed') : primary.reason }
           else if (cleanup.status === 'rejected') outcome = { ok: false, error: cleanup.reason }
           else outcome = { ok: true, value: primary.value }
           if (!inherited) {
-            const joined = new Set<Promise<unknown>>()
-            const errors: unknown[] = []
-            while ([...context.nested].some(flight => !joined.has(flight))) {
-              const batch = [...context.nested].filter(flight => !joined.has(flight))
-              batch.forEach(flight => joined.add(flight))
-              const results = await Promise.allSettled(batch)
-              errors.push(...results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))
-            }
-            if (errors.length) outcome = { ok: false, error: new AggregateError([...(outcome.ok ? [] : [outcome.error]), ...errors], 'Broker operation and nested cleanup failed') }
-            context.active = false; context.nested.clear(); finishRetainedCleanupOperation(operation)
+            context.active = false; finishRetainedCleanupOperation(operation)
           }
-          inspectorAdmissions--
+          if (ids) for (const id of ids) { const count = pendingInspectorIds.get(id)! - 1; if (count) pendingInspectorIds.set(id, count); else pendingInspectorIds.delete(id) }
+          else globalInspectorAdmissions--
           if (outcome.ok) done.resolve(outcome.value)
           else { if (isClose) inspectorClose = undefined; done.reject(outcome.error) }
         })()

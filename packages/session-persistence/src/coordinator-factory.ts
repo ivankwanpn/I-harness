@@ -7,7 +7,7 @@ import { createLifecycle } from './coordinator/lifecycle.ts'
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
 import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
-import { associateRetainedCoordinatorClose, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './coordinator/retained-cleanup.ts'
+import { associateRetainedCoordinatorClose, assertOutsideRetirementSink, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './coordinator/retained-cleanup.ts'
 import { createProcessReadLatches } from './coordinator/process-read-latches.ts'
 import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
 import { captureBootstrapInvocation } from './coordinator/bootstrap-header.ts'
@@ -118,6 +118,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
       assertOutsideForkController(coordinator)
       observations.assertOutsideOwnedOperations([], [], true)
       observations.preflightClose()
+      assertOutsideRetirementSink(coordinator)
       const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()

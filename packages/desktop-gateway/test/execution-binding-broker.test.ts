@@ -193,7 +193,7 @@ it('coordinator retirement joins the broker sink under its still-active cleanup 
   } finally { gate.resolve(); await broker.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it('retirement callback reentry into broker close joins cleanup without a cycle', async () => {
+it('retirement sink full-close reentry refuses rather than reporting partial close success', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'broker-reentry-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
   const broker = createProjectScopeBroker(coordinator, root)
@@ -201,22 +201,23 @@ it('retirement callback reentry into broker close joins cleanup without a cycle'
     await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
     const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
     broker.observeExecutionBinding(ref, () => broker.close())
+    await expect(broker.close()).rejects.toThrow(/retirement sink/i)
     await broker.close()
   } finally { await broker.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it('explicit token release joins original-reference observer sinks before host fallback can finish', async () => {
+it('outer host joins explicit-token release and sinks before full coordinator fallback', async () => {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'broker-host-token-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
   const broker = createProjectScopeBroker(coordinator, root), gate = Promise.withResolvers<void>(), entered = Promise.withResolvers<void>()
-  const { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation } = await import('@i-harness/session-persistence/internal/retained-inspection')
+  const { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation, joinRetainedRetirementSinks } = await import('@i-harness/session-persistence/internal/retained-inspection')
   const operation = createRetainedCleanupOperation()
   try {
     await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
     const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
     broker.observeExecutionBinding(ref, async token => { expect(token).toBe(operation); entered.resolve(); await gate.promise; await ref.release(token) })
     let settled = false
-    const releasing = ref.release(operation).then(() => { settled = true })
+    const releasing = (async () => { await ref.release(operation); await joinRetainedRetirementSinks(operation); settled = true })()
     await entered.promise; await Promise.resolve(); expect(settled).toBe(false)
     gate.resolve(); await releasing; await closeCoordinatorWithRetainedCleanupOperation(coordinator, operation)
   } finally { gate.resolve(); finishRetainedCleanupOperation(operation); await broker.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }

@@ -3,7 +3,7 @@ import { types as utilTypes } from 'node:util'
 import { canonicalJsonData, freezeJsonData, isStrictFactData } from '@i-harness/core-session'
 import { SessionBindingObservationError as Failure, type ObservedDocument, type PersistenceBackend, type SessionCoordinator, type SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
-import { assertRetainedCleanupOperation, createRetainedCleanupOperation, createRetainedCleanupTarget, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './retained-cleanup.ts'
+import { assertOutsideRetirementSink, inRetainedRetirementSink, runRetainedRetirementSink, joinRetainedRetirementSinks, assertRetainedCleanupOperation, createRetainedCleanupOperation, createRetainedCleanupTarget, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './retained-cleanup.ts'
 
 export type InspectorProfile = Awaited<ReturnType<SessionCoordinator['profile']>>
 export interface RetainedExistingBinding {
@@ -12,10 +12,12 @@ export interface RetainedExistingBinding {
   metadata(): Readonly<SessionMeta>
   binding(): ObservedDocument
   withRead<T>(run: (profile: () => Promise<InspectorProfile>) => Promise<T>): Promise<T>
+  /** No token owns an outer release lifecycle. Explicit tokens belong to an
+   * outer owner; an active sink may only join its preselected resources. */
   release(operation?: RetainedCleanupOperation): Promise<void>
 }
 export interface RetainedBindingRequest { sessionId: string; signal?: AbortSignal }
-const issuedReferences = new WeakMap<object, { issuer: object; preflight(): void; observe(listener: (operation: RetainedCleanupOperation) => void | Promise<void>): () => void }>()
+const issuedReferences = new WeakMap<object, { issuer: object; preflight(): void; request(reason: unknown): Promise<void>; observe(listener: (operation: RetainedCleanupOperation) => void | Promise<void>): () => void }>()
 const coordinatorIssuers = new WeakMap<SessionCoordinator, object>()
 export function assertRetainedBindingReference(reference: RetainedExistingBinding): void {
   if (!issuedReferences.has(reference)) throw new Failure('invalid')
@@ -36,6 +38,11 @@ export function observeRetainedBindingRetirementFor(coordinator: SessionCoordina
   assertRetainedBindingReferenceFor(coordinator, reference)
   return issuedReferences.get(reference)!.observe(listener)
 }
+export function requestRetainedReferenceRetirementFor(coordinator: SessionCoordinator, reference: RetainedExistingBinding, reason: unknown): Promise<void> {
+  const original = issuedReferences.get(reference)
+  if (!original || coordinatorIssuers.get(coordinator) !== original.issuer) throw new Failure('invalid')
+  return original.request(reason)
+}
 type Pin = Awaited<ReturnType<Ownership['pinOwnership']>>
 type Lock = Awaited<ReturnType<Ownership['acquireLease']>>
 type Resource<T> = { value: T; release(): Promise<void>; disposed: boolean }
@@ -45,13 +52,13 @@ type Reference = {
   owner: Owner; active: boolean; counted: boolean; cleaned: boolean; busy: boolean; signal?: AbortSignal
   acquisition: Promise<void>; read?: Promise<void>
   abort?: () => void; attached: boolean; notified: boolean; retired(operation: RetainedCleanupOperation): void
-  cleanup: ReturnType<typeof createRetainedCleanupTarget>; retirementJoins: Promise<void>[]; retirementOperation?: RetainedCleanupOperation
+  cleanup: ReturnType<typeof createRetainedCleanupTarget>; retirementTicket?: Promise<void>
 }
 type Owner = {
   id: string; key: string; identity: object; retired: boolean; disposed: boolean; ready: boolean
   pin?: Resource<Pin>; lock?: Resource<Lock>; assertPin?: () => void
   metadata?: Readonly<SessionMeta>; binding?: ObservedDocument; references: Set<Reference>
-  acquired: PromiseWithResolvers<void>; reads: Set<Promise<void>>; referenceCleanup: Promise<void>[]
+  acquired: PromiseWithResolvers<void>; reads: Set<Promise<void>>; tickets: Set<Promise<void>>; referenceCleanup: Promise<void>[]
   failure?: { error: unknown }; cleanup: ReturnType<typeof createRetainedCleanupTarget>
   queue?: Ownership['withSessionOperation']; profile?: NonNullable<PersistenceBackend['profile']>
 }
@@ -85,6 +92,7 @@ export function createRetainedBindings(
   const owners = new Map<string, Owner>()
   const issuer = Object.freeze({})
   let associated = false
+  let domain: object = issuer
   const failures = new WeakMap<object, { retry(): Promise<void> }>()
   const contexts = new AsyncLocalStorage<readonly Context[]>()
   let charged = 0
@@ -119,7 +127,7 @@ export function createRetainedBindings(
   function select(owner: Owner, operation: RetainedCleanupOperation) { return owner.cleanup.select(operation) }
   function createOwner(id: string, key: string): Owner {
     const owner: Owner = { id, key, identity: Object.freeze({}), retired: false, disposed: false, ready: false,
-      references: new Set(), acquired: Promise.withResolvers<void>(), reads: new Set(), referenceCleanup: [], cleanup: undefined! }
+      references: new Set(), acquired: Promise.withResolvers<void>(), reads: new Set(), tickets: new Set(), referenceCleanup: [], cleanup: undefined! }
     owner.cleanup = createRetainedCleanupTarget(() => finite(id, async () => {
       await owner.acquired.promise
       await Promise.all([...owner.reads])
@@ -135,7 +143,7 @@ export function createRetainedBindings(
       if (failures.length) throw new AggregateError(failures, 'Retained binding cleanup failed')
       owner.disposed = true
       for (const reference of [...owner.references]) forget(reference)
-      if (owners.get(id) === owner) owners.delete(id)
+      if (!owner.tickets.size && owners.get(id) === owner) owners.delete(id)
     }), operation => {
       owner.retired = true
       owner.referenceCleanup = [...owner.references].map(reference => reference.cleanup.select(operation))
@@ -165,20 +173,31 @@ export function createRetainedBindings(
     } catch (error) { owner.failure = { error } }
     finally { owner.acquired.resolve() }
   }
+  function selectReferenceResources(reference: Reference, operation: RetainedCleanupOperation): Promise<void>[] {
+    const last = ![...reference.owner.references].some(other => other !== reference && other.active)
+    // Prepublish the owning attempt before reference notifications can reenter.
+    const owning = last || reference.owner.retired ? select(reference.owner, operation) : undefined
+    const own = reference.cleanup.select(operation)
+    return owning ? [own, owning] : [own]
+  }
   function releaseReference(reference: Reference, token?: RetainedCleanupOperation): Promise<void> {
     preflight([reference.owner.id], [reference.owner.key]); original.assertOutside([reference.owner.id], [reference.owner.key])
+    const resourceOnly = inRetainedRetirementSink(domain, token)
     const operation = token ?? createRetainedCleanupOperation()
     assertRetainedCleanupOperation(operation)
-    const notifying = reference.active
-    const own = reference.cleanup.select(operation)
-    const last = ![...reference.owner.references].some(other => other.active)
-    const joined = last || reference.owner.retired ? [own, select(reference.owner, operation)] : [own]
-    const done = Promise.allSettled([...joined, ...(notifying && reference.retirementOperation === operation ? reference.retirementJoins : [])]).then(results => {
+    if (resourceOnly) {
+      const own = reference.cleanup.joinSelected(operation)
+      const last = ![...reference.owner.references].some(other => other.active)
+      return Promise.all(last || reference.owner.retired ? [own, reference.owner.cleanup.joinSelected(operation)] : [own]).then(() => {})
+    }
+    const joined = selectReferenceResources(reference, operation)
+    const done = Promise.allSettled(token ? joined : [...joined, joinRetainedRetirementSinks(operation)]).then(results => {
       const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
       if (failures.length) throw new AggregateError(failures, 'Retained reference cleanup failed')
     })
     return token ? done : done.finally(() => finishRetainedCleanupOperation(operation))
   }
+
   async function acquire(request: RetainedBindingRequest, retired: (operation: RetainedCleanupOperation) => void): Promise<RetainedExistingBinding> {
     let id: string, signal: AbortSignal | undefined
     try {
@@ -191,6 +210,7 @@ export function createRetainedBindings(
       signal = fields.signal?.value; aborted(signal)
     } catch (cause) { throw new Failure('invalid', { cause }) }
     const key = original.key(id)
+    assertOutsideRetirementSink(domain)
     preflight([id], [key]); original.assertOutside([id], [key]); original.assertAdmission(id, key)
     if (!ownership.lockEnabled || !ownership.pinOwnership || !ownership.withSessionOperation || !backend.profile || !backend.readDocumentObserved) throw new Failure('unsupported')
     if (aborted(signal)) throw new Failure('revoked')
@@ -199,7 +219,7 @@ export function createRetainedBindings(
     if (owner?.retired) throw new Failure('conflict')
     if (!owner) { owner = createOwner(id, key); fresh = true }
     const retirementListeners = new Set<(operation: RetainedCleanupOperation) => void | Promise<void>>()
-    const reference: Reference = { owner, active: true, counted: true, cleaned: false, busy: false, acquisition: owner.acquired.promise, signal, attached: false, notified: false, retired, cleanup: undefined!, retirementJoins: [] }
+    const reference: Reference = { owner, active: true, counted: true, cleaned: false, busy: false, acquisition: owner.acquired.promise, signal, attached: false, notified: false, retired, cleanup: undefined! }
     reference.cleanup = createRetainedCleanupTarget(async () => {
       if (reference.signal && reference.attached) { Reflect.apply(removeListener, reference.signal, ['abort', reference.abort]); reference.attached = false }
       // Fencing this reference closes new work immediately, but a shared owner
@@ -210,14 +230,14 @@ export function createRetainedBindings(
       reference.cleaned = true; forget(reference)
     }, operation => {
       reference.active = false
-      reference.retirementOperation = operation
-      for (const listener of [...retirementListeners]) {
-        let flight: Promise<void>
-        try { flight = Promise.resolve(listener(operation)) } catch (error) { flight = Promise.reject(error) }
-        void flight.catch(() => {}); reference.retirementJoins.push(flight)
-      }
+      // Publish sink records before any consumer effect. A read-time request
+      // dispatches only after the actual read/profile lifetime has drained.
+      const drained = reference.read
+      const dispatch = (identity: object, invoke: () => void | Promise<void>) => runRetainedRetirementSink(operation, domain, identity, () => drained ? drained.then(invoke) : invoke())
+      for (const listener of [...retirementListeners]) dispatch(listener, () => listener(operation))
       retirementListeners.clear()
-      if (!reference.notified) { reference.notified = true; try { void Promise.resolve(reference.retired(operation)).catch(() => {}) } catch {} }
+      if (!reference.notified) { reference.notified = true; dispatch(reference, () => reference.retired(operation)) }
+
     })
     charged++; owner.references.add(reference)
     if (fresh) void setup(owner)
@@ -226,10 +246,8 @@ export function createRetainedBindings(
         reference.abort = () => {
           const operation = createRetainedCleanupOperation()
           // Abort is a nonwaiting fence, even when fired by an active reader.
-          const own = reference.cleanup.select(operation)
-          const last = ![...owner.references].some(other => other.active)
-          const work = last ? [own, select(owner, operation)] : [own]
-          void Promise.allSettled([...work, ...(reference.retirementOperation === operation ? reference.retirementJoins : [])]).finally(() => finishRetainedCleanupOperation(operation))
+          const work = selectReferenceResources(reference, operation)
+          void Promise.allSettled([...work, joinRetainedRetirementSinks(operation)]).finally(() => finishRetainedCleanupOperation(operation))
         }
         reference.attached = true; Reflect.apply(addListener, signal, ['abort', reference.abort, { once: true }])
         if (aborted(signal)) reference.abort()
@@ -240,12 +258,10 @@ export function createRetainedBindings(
     } catch (error) {
       const operation = createRetainedCleanupOperation()
       try {
-        if (owner.failure) await select(owner, operation)
-        else {
-          const own = reference.cleanup.select(operation)
-          const last = ![...owner.references].some(other => other.active)
-          await Promise.all(last || owner.retired ? [own, select(owner, operation)] : [own])
-        }
+        const resources = owner.failure ? [select(owner, operation)] : selectReferenceResources(reference, operation)
+        const results = await Promise.allSettled([...resources, joinRetainedRetirementSinks(operation)])
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+        if (errors.length) throw new AggregateError(errors, 'Retained acquisition disposal failed')
       }
       catch (cleanup) {
         const failure = new AggregateError([error, cleanup], 'Retained binding acquisition and cleanup failed')
@@ -301,21 +317,36 @@ export function createRetainedBindings(
         return work
       },
     })
-    issuedReferences.set(ref, { issuer, preflight() { preflight([id], [key]); original.assertOutside([id], [key]) }, observe(listener) { currentReference(reference); if (retirementListeners.size >= 64) throw new Failure('conflict'); retirementListeners.add(listener); return () => { retirementListeners.delete(listener) } } })
+    const requestRetirement = (_reason: unknown): Promise<void> => {
+      if (reference.retirementTicket) return reference.retirementTicket
+      const operation = createRetainedCleanupOperation(), result = Promise.withResolvers<void>()
+      reference.retirementTicket = result.promise; owner.tickets.add(result.promise)
+      void result.promise.catch(() => {})
+      // No public release preflight: select fences synchronously and its own
+      // disposal ledger already waits acquisition, callback and profile work.
+      const resources = selectReferenceResources(reference, operation)
+      void Promise.allSettled([...resources, joinRetainedRetirementSinks(operation)]).then(results => {
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+        finishRetainedCleanupOperation(operation); owner.tickets.delete(result.promise)
+        if (owner.disposed && !owner.tickets.size && owners.get(id) === owner) owners.delete(id)
+        if (errors.length) result.reject(new AggregateError(errors, 'Deferred retained retirement failed'))
+        else result.resolve()
+      })
+      return result.promise
+    }
+    issuedReferences.set(ref, { issuer, request: requestRetirement, preflight() { preflight([id], [key]); original.assertOutside([id], [key]) }, observe(listener) { currentReference(reference); if (retirementListeners.size >= 64) throw new Failure('conflict'); retirementListeners.add(listener); return () => { retirementListeners.delete(listener) } } })
     return ref
   }
   function retire(ids: readonly string[], keys: readonly string[], operation: RetainedCleanupOperation, all = false): Promise<void>[] {
     assertRetainedCleanupOperation(operation); preflight(ids, keys, all)
     const selected = [...owners.values()].filter(owner => matches(owner, ids, keys, all))
     const joins = selected.map(owner => select(owner, operation))
-    // Join trusted lifecycle sinks only at the outer retirement boundary.
-    // Resource disposal itself never awaits a listener that may join disposal.
-    return [...joins, ...selected.flatMap(owner => [...owner.references].flatMap(reference => reference.retirementOperation === operation ? reference.retirementJoins : []))]
+    return [...joins, ...selected.flatMap(owner => [...owner.tickets]), joinRetainedRetirementSinks(operation)]
   }
-  return { acquire, preflight, retire,
+  return { acquire, preflight(ids: readonly string[], keys: readonly string[], all = false) { preflight(ids, keys, all); assertOutsideRetirementSink(domain) }, retire,
     associateCoordinator(coordinator: SessionCoordinator) {
       if (associated || coordinatorIssuers.has(coordinator)) throw new TypeError('Retained owner already associated')
-      associated = true; coordinatorIssuers.set(coordinator, issuer)
+      associated = true; domain = coordinator; coordinatorIssuers.set(coordinator, issuer)
     },
     cleanupForError(error: unknown) { return error !== null && typeof error === 'object' ? failures.get(error) : undefined } }
 }

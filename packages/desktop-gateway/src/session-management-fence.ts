@@ -1,14 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { assertRetainedCleanupOperation, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
+import { runRetainedRetirementSink, joinRetainedRetirementSinks, assertOutsideRetirementSink, assertRetainedCleanupOperation, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 
 /** Shared by input admission, runtime starts and structural management. Holding
  * this fence drains already admitted producers and refuses new ones. */
 export function createSessionManagementFence() {
+  let domain: object = Object.freeze({}), associated = false
   const blocked = new Set<string>()
   const retired = new Set<string>()
   const work = new Map<string, Set<Promise<unknown>>>()
   const admitted = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>()
-  type Observer = { id: string; active: boolean; charged: boolean; preflight?(): void; retired(operation: RetainedCleanupOperation): void | Promise<void> }
+  type Observer = { id: string; active: boolean; charged: boolean; preflight?(): void; prepare?(operation: RetainedCleanupOperation): void; retired(operation: RetainedCleanupOperation): void | Promise<void> }
   const observers = new Set<Observer>()
   let count = 0
   function assertOpen(id: string) {
@@ -21,7 +22,7 @@ export function createSessionManagementFence() {
     for (const observer of selected) observer.active = false
     return selected.map(observer => {
       let job: Promise<void>
-      try { job = Promise.resolve(observer.retired(operation)) } catch (error) { job = Promise.reject(error) }
+      try { observer.prepare?.(operation); job = runRetainedRetirementSink(operation, domain, observer, () => observer.retired(operation)) } catch (error) { job = Promise.reject(error) }
       const done = job.finally(() => uncharge(observer))
       void done.catch(() => {})
       return done
@@ -29,15 +30,16 @@ export function createSessionManagementFence() {
   }
   async function join(jobs: readonly Promise<void>[]) {
     const results = await Promise.allSettled(jobs)
-    return results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+    return [...new Set(results.flatMap(result => result.status === 'rejected' ? [result.reason] : []))]
   }
   return {
+    associateRetainedDomain(owner: object) { if (associated && domain !== owner) throw new TypeError('Foreign fence lifecycle domain'); domain = owner; associated = true },
     assertOpen,
-    observe(id: string, onRetired: (operation: RetainedCleanupOperation) => void | Promise<void>, preflight?: () => void) {
+    observe(id: string, onRetired: (operation: RetainedCleanupOperation) => void | Promise<void>, preflight?: () => void, prepare?: (operation: RetainedCleanupOperation) => void) {
       if (typeof id !== 'string' || !id || id.length > 256 || typeof onRetired !== 'function') throw new TypeError('Invalid management observation')
       assertOpen(id)
       if (count >= 64) throw new Error('Management observation capacity reached')
-      const observer: Observer = { id, active: true, charged: true, retired: onRetired, preflight }
+      const observer: Observer = { id, active: true, charged: true, retired: onRetired, preflight, prepare }
       count++; observers.add(observer)
       return Object.freeze({
         assertCurrent() { if (!observer.active) throw new Error('Management observation retired'); assertOpen(id) },
@@ -45,11 +47,11 @@ export function createSessionManagementFence() {
       })
     },
     retire(id: string, supplied?: RetainedCleanupOperation): Promise<void> {
+      preflightObservers(id); assertOutsideRetirementSink(domain)
       const operation = supplied ?? createRetainedCleanupOperation()
       assertRetainedCleanupOperation(operation)
-      preflightObservers(id)
       retired.add(id)
-      const done = join(notify(id, operation)).then(errors => { if (errors.length) throw new AggregateError(errors, 'Management observation cleanup failed') })
+      const done = join([...notify(id, operation), joinRetainedRetirementSinks(operation)]).then(errors => { if (errors.length) throw new AggregateError(errors, 'Management observation cleanup failed') })
       const result = supplied ? done : done.finally(() => finishRetainedCleanupOperation(operation))
       void result.catch(() => {})
       return result
@@ -68,11 +70,11 @@ export function createSessionManagementFence() {
       try { return await pending } finally { token.active = false; jobs.delete(pending); if (!jobs.size) work.delete(id) }
     },
     async exclusive<T>(id: string, operation: (cleanup: RetainedCleanupOperation) => Promise<T>, preflight?: () => Promise<void>, supplied?: RetainedCleanupOperation): Promise<T> {
-      assertOpen(id); preflightObservers(id)
+      preflightObservers(id); assertOutsideRetirementSink(domain); assertOpen(id)
       const cleanup = supplied ?? createRetainedCleanupOperation()
       assertRetainedCleanupOperation(cleanup)
       blocked.add(id)
-      const cleanupResult = join(notify(id, cleanup))
+      const cleanupResult = join([...notify(id, cleanup), joinRetainedRetirementSinks(cleanup)])
       let primary: { error: unknown } | undefined
       try {
         // Refuse live turns/approval waits immediately before draining short
