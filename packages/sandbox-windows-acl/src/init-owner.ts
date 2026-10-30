@@ -1,21 +1,49 @@
 import koffi from 'koffi'
 import { allocBytes, allocPtrSlot, allocUint32, decodePtr, encodeUint32, isNullPtr, isInvalidHandle, throwLastError, throwWin32, type NativePtr, type Win32Bindings } from './ffi.ts'
 
-type Entry = { done: boolean; domain: 'heap' | 'handle' | 'local' | 'control'; value?: NativePtr; scope?: NativeInitOwner; release(): void }
+type Entry = { done: boolean; unknown?: boolean; unknownError?: unknown; domain: 'heap' | 'handle' | 'local' | 'control'; value?: NativePtr; scope?: NativeInitOwner; release(): void }
+export class NativeReleaseUnknown extends Error {
+  readonly outcome = 'unknown'
+  constructor(name: string, cause: unknown) { super(`${name} release outcome unknown; original resource remains pinned`, { cause }) }
+}
 /** Original init owner: reverse dependency order, allocator provenance and retry state. */
 export class NativeInitOwner {
   private entries: Entry[] = []
   constructor(readonly api: Win32Bindings) {}
-  defer(release: () => void) { const entry = this.own(release); return () => { if (!entry.done) { entry.release(); entry.done = true } } }
+  deferBool(name: string, invoke: () => number, afterSuccess?: () => void) {
+    const entry = this.own(() => { this.consume(entry, name, invoke, boolAck, () => throwLastError(this.api, name)); afterSuccess?.() })
+    return () => this.retire(entry)
+  }
   scope() { const scope = new NativeInitOwner(this.api); const entry = this.own(() => scope.cleanup()) as Entry; entry.scope = scope; return scope }
-  cleanupScopes() { for (const entry of [...this.entries].reverse()) if (entry.scope && !entry.done) { entry.release(); entry.done = true } }
+  cleanupScopes() { for (const entry of [...this.entries].reverse()) if (entry.scope) this.retire(entry) }
+  private retire(entry: Entry) {
+    if (entry.done) return
+    if (entry.unknown) throw entry.unknownError
+    entry.release()
+    entry.done = true
+  }
+  private consume(entry: Entry, name: string, invoke: () => unknown, classify: (result: unknown) => 'released' | 'not-released' | 'unknown', fail: () => never) {
+    // Set before issue. An unclassified exception can occur after consumption.
+    entry.unknown = true
+    let result: unknown
+    try { result = invoke() } catch (error) { entry.unknownError = new NativeReleaseUnknown(name, error); throw entry.unknownError }
+    const ack = classify(result)
+    if (ack === 'released') { entry.done = true; entry.unknown = false; return }
+    if (ack === 'not-released') { entry.unknown = false; fail() }
+    entry.unknownError = new NativeReleaseUnknown(name, new Error('invalid native release acknowledgment'))
+    throw entry.unknownError
+  }
+  private heap(value: NativePtr) {
+    const entry = this.own(() => this.consume(entry, 'koffi.free', () => koffi.free(value), result => result === undefined ? 'released' : 'unknown', () => { throw new Error('unreachable heap failure status') }), value, 'heap')
+    return value
+  }
   private own(release: () => void, value?: NativePtr, domain: Entry['domain'] = 'control') { const entry = { release, value, domain, done: false }; this.entries.push(entry); return entry }
-  bytes(size: number) { const value = allocBytes(size); if (isNullPtr(value)) throw new Error('native allocation failed'); this.own(() => koffi.free(value), value, 'heap'); return value }
-  slot() { const value = allocPtrSlot(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.own(() => koffi.free(value), value, 'heap'); koffi.encode(value, 'void *', null); return value }
-  uint32() { const value = allocUint32(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.own(() => koffi.free(value), value, 'heap'); encodeUint32(value, 0); return value }
+  bytes(size: number) { const value = allocBytes(size); if (isNullPtr(value)) throw new Error('native allocation failed'); return this.heap(value) }
+  slot() { const value = allocPtrSlot(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.heap(value); koffi.encode(value, 'void *', null); return value }
+  uint32() { const value = allocUint32(); if (isNullPtr(value)) throw new Error('native allocation failed'); this.heap(value); encodeUint32(value, 0); return value }
   handle(acquire: () => NativePtr, name: string) {
     let known = false
-    const entry = this.own(() => { if (!known) throw new Error(`${name} acquisition unresolved`); if (!this.api.closeHandle(entry.value!)) throwLastError(this.api, 'CloseHandle', name) }, undefined, 'handle')
+    const entry = this.own(() => { if (!known) throw new Error(`${name} acquisition unresolved`); this.consume(entry, 'CloseHandle', () => this.api.closeHandle(entry.value!), boolAck, () => throwLastError(this.api, 'CloseHandle', name)) }, undefined, 'handle')
     const value = acquire()
     if (isInvalidHandle(value)) { entry.done = true; throwLastError(this.api, name) }
     entry.value = value; known = true
@@ -30,8 +58,8 @@ export class NativeInitOwner {
       if (state === 'failed') return
       const pointer = value()
       if (pointer === null) return
-      if (kind === 'handle') { if (!this.api.closeHandle(pointer)) throwLastError(this.api, 'CloseHandle', name) }
-      else if (!isNullPtr(this.api.localFree(pointer))) throwLastError(this.api, 'LocalFree', name)
+      if (kind === 'handle') this.consume(entry, 'CloseHandle', () => this.api.closeHandle(pointer), boolAck, () => throwLastError(this.api, 'CloseHandle', name))
+      else this.consume(entry, 'LocalFree', () => this.api.localFree(pointer), result => result === null || result === 0n ? 'released' : result === pointer ? 'not-released' : 'unknown', () => throwLastError(this.api, 'LocalFree', name))
     }, undefined, kind)
     const value = (): NativePtr | null => {
       if (!decoded) { pointer = decodePtr(slot); if (pointer === null && (!nullable || state !== 'success')) throw new Error(`${name} output acquisition unresolved`); entry.value = pointer ?? undefined; decoded = true }
@@ -48,16 +76,20 @@ export class NativeInitOwner {
   release(value: NativePtr, domain: Entry['domain']) {
     const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value && entry.domain === domain)
     if (!entry) throw new Error('resource is not owned')
-    entry.release(); entry.done = true
+    this.retire(entry)
   }
   cleanup(except?: NativePtr) {
     const retained = except === undefined ? undefined : [...this.entries].reverse().find(entry => !entry.done && entry.value === except)
+    if (retained?.unknown) throw retained.unknownError
     for (const entry of [...this.entries].reverse()) {
       if (entry.done || entry === retained) continue
-      entry.release(); entry.done = true
+      this.retire(entry)
     }
   }
-  transfer(value: NativePtr) { this.cleanup(value); const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value); if (entry) entry.done = true }
+  transfer(value: NativePtr) { this.cleanup(value); const entry = [...this.entries].reverse().find(entry => !entry.done && entry.value === value); if (entry?.unknown) throw entry.unknownError; if (entry) entry.done = true }
+}
+function boolAck(result: unknown): 'released' | 'not-released' | 'unknown' {
+  return typeof result !== 'number' || !Number.isInteger(result) || result < -0x80000000 || result > 0x7fffffff ? 'unknown' : result === 0 ? 'not-released' : 'released'
 }
 type CleanupOwner = { disposeAsync(): Promise<void> } | { dispose(): void }
 export class NativeInitializationFailure extends AggregateError {

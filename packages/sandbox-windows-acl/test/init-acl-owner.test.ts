@@ -21,7 +21,7 @@ beforeEach(() => {
 
 
 vi.mock('node:fs', async original => ({ ...await original<any>(), mkdirSync: () => {} }))
-import { grantWrite, revokeWrite } from '../src/acl.ts'
+import { grantWrite, revokeWrite, withPathLock } from '../src/acl.ts'
 import { NativeInitOwner } from '../src/init-owner.ts'
 import { AclSandbox } from '../src/index.ts'
 beforeEach(() => {
@@ -89,4 +89,18 @@ it('original init owner retains lower ACL debt and does not repeat an acknowledg
   await failure.disposeAsync()
   expect(applies).toBe(2)
   expect(state.live.size).toBe(0)
+})
+
+it('pins an effect-then-throw unlock without repeating it or releasing OVERLAPPED/lock handle', () => {
+  const owner = new NativeInitOwner(state.api)
+  let unlocks = 0
+  state.api.unlockFileEx = () => { unlocks++; throw new Error('unlock return lost') }
+  expect(() => withPathLock(state.api, process.cwd(), () => 1, owner)).toThrow()
+  const retained = state.live.size
+  expect(() => owner.cleanupScopes()).toThrow(/unknown/)
+  expect(() => owner.cleanup()).toThrow(/unknown/)
+  expect(unlocks).toBe(1)
+  expect(state.live.size).toBe(retained)
+  expect([...state.live.values()]).toContain('handle')
+  expect([...state.live.values()]).toContain('heap')
 })

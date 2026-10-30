@@ -35,6 +35,7 @@ export class AclWriteGrant {
   private readonly revocablePaths: string[] = []
   private readonly standingPaths: string[] = []
   private freed = false
+  private closing = false
 
   private constructor(api: Win32Bindings, writeSid: string) {
     this.api = api
@@ -77,7 +78,7 @@ export class AclWriteGrant {
    *   dispose — the temp-directory lifecycle).
    */
   add(path: string, standing = false): void {
-    if (this.freed || this.sidPtr === undefined) throw new Error('AclWriteGrant has been disposed')
+    if (this.freed || this.closing || this.sidPtr === undefined) throw new Error('AclWriteGrant has been disposed')
     ;(standing ? this.standingPaths : this.revocablePaths).push(path)
     grantWrite(this.api, path, this.sidPtr, this.owner)
   }
@@ -90,6 +91,7 @@ export class AclWriteGrant {
   /** Revoke every revocable grant (standing ACEs stay) and free the SID; reports every cleanup failure. */
   dispose(): void {
     if (this.freed) return
+    this.closing = true
     this.owner.cleanupScopes()
     const failures: unknown[] = []
     const stillGranted: string[] = []

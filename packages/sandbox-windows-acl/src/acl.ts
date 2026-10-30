@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { decodePtr, decodeUint8At, decodeUint16At, decodeUint32At, getTempPath, ptrAddress, sameSidAt, throwLastError, throwWin32 } from './ffi.ts'
+import { decodePtr, decodeUint8At, decodeUint16At, decodeUint32At, getTempPath, ptrAddress, sameSidAt, throwWin32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 import { NativeInitOwner, NativeCleanupFailure, runInitScope } from './init-owner.ts'
 import * as abi from './win32-abi.ts'
@@ -82,11 +82,7 @@ export function withPathLock<T>(api: Win32Bindings, path: string, action: (scope
       abi.FILE_SHARE_READ | abi.FILE_SHARE_WRITE, null, abi.OPEN_ALWAYS, 0, null), 'CreateFileW')
     const overlapped = scope.bytes(32)
     let locked: 'unknown' | 'yes' | 'no' = 'unknown'
-    const unlock = scope.defer(() => {
-      if (locked === 'no') return
-      if (!api.unlockFileEx(handle, 0, 1, 0, overlapped)) throwLastError(api, 'UnlockFileEx', lockPath)
-      locked = 'no'
-    })
+    const unlock = scope.deferBool('UnlockFileEx', () => locked === 'no' ? 1 : api.unlockFileEx(handle, 0, 1, 0, overlapped), () => { locked = 'no' })
     let result!: T, failed = false, primary: unknown
     try {
       if (!api.lockFileEx(handle, abi.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped)) { const code = api.getLastError(); locked = 'no'; throwWin32(api, 'LockFileEx', code, lockPath) }
