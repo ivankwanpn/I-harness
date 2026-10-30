@@ -3,8 +3,8 @@ import { win32ArtifactApi, type Win32ArtifactApi } from './win32-artifact-api.ts
 
 type Directory = Readonly<{ volume: string; id: string; sensitive: boolean; final: string }>
 type Evidence = Readonly<{ path: string; directory: Directory }>
-type Snapshot = { kind: 'ready'; key: string; evidence: Evidence[] } | { kind: 'needs-parents'; evidence: Evidence[] }
-export type Win32ArtifactPathCapture = Readonly<{ kind: 'ready'; key: string; assertCurrent(): void } | { kind: 'needs-parents'; assertCurrent(): void }>
+type Snapshot = { kind: 'ready'; key: string; evidence: Evidence[] } | { kind: 'needs-parents' | 'needs-root'; evidence: Evidence[] }
+export type Win32ArtifactPathCapture = Readonly<{ kind: 'ready'; key: string; assertCurrent(): void } | { kind: 'needs-parents'; assertCurrent(): void } | { kind: 'needs-root'; preparation: Readonly<{ kind: 'root-only'; path: string }>; assertCurrent(): void }>
 type Handle = { value?: bigint; unknown: boolean; closed?: boolean; cause?: unknown }
 const MAX_UNITS = 32_768
 class NativeIdentityError extends Error {
@@ -150,7 +150,23 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
       const leaf = path.basename(target), encoded = Buffer.from(containing.sensitive ? leaf : fold(leaf), 'utf16le')
       return { kind: 'ready', key: `artifact-dir-v1:${containing.volume}:${containing.id}:${containing.sensitive ? 'S' : 'I'}:${encoded.length}:${encoded.toString('hex')}`, evidence }
     } catch (cause) {
-      if (missingAllowed && cause instanceof NativeIdentityError && cause.operation === 'CreateFileW' && (cause.code === 2 || cause.code === 3)) return { kind: 'needs-parents', evidence }
+      if (missingAllowed && cause instanceof NativeIdentityError && cause.operation === 'CreateFileW' && (cause.code === 2 || cause.code === 3)) {
+        if (boundRoot === undefined && evidence.length === 0) {
+          // An absent constructor root grants no target-parent authority. Capture
+          // only original-spelling existing ancestors for root-only preparation.
+          for (let count = 0; count < rootParts.length; count++) {
+            const ancestor = path.join(path.parse(root).root, ...rootParts.slice(0, count))
+            try { evidence.push(Object.freeze({ path: ancestor, directory: directory(ancestor) })) }
+            catch (error) {
+              if (count > 0 && error instanceof NativeIdentityError && error.operation === 'CreateFileW' && (error.code === 2 || error.code === 3)) break
+              throw error
+            }
+          }
+          if (!evidence.length) throw new Error('No original root preparation ancestor proved')
+          return { kind: 'needs-root', evidence }
+        }
+        return { kind: 'needs-parents', evidence }
+      }
       throw cause
     }
   }
@@ -179,7 +195,9 @@ export function createWin32ArtifactPathOwnerWithApi(root: string, input: Win32Ar
       }
       result = original.kind === 'ready'
         ? Object.freeze({ kind: 'ready' as const, key: original.key, assertCurrent })
-        : Object.freeze({ kind: 'needs-parents' as const, assertCurrent })
+        : original.kind === 'needs-root'
+          ? Object.freeze({ kind: 'needs-root' as const, preparation: Object.freeze({ kind: 'root-only' as const, path: root }), assertCurrent })
+          : Object.freeze({ kind: 'needs-parents' as const, assertCurrent })
       return result
     },
     settleResources() {
