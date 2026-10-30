@@ -9,7 +9,30 @@ export class NativeReleaseUnknown extends Error {
 /** Original init owner: reverse dependency order, allocator provenance and retry state. */
 export class NativeInitOwner {
   private entries: Entry[] = []
+  private retirementRevision = 0
   constructor(readonly api: Win32Bindings) {}
+  /** A finite native-use guard; even a failed retirement attempt ends that use. */
+  captureCurrent() {
+    const revision = this.retirementRevision
+    return () => { if (revision !== this.retirementRevision) throw new Error('Native resource owner is retiring') }
+  }
+  /** Register before BOOL initialization; VOID deletion is acknowledged only on return. */
+  voidControl(initializeName: string, initialize: () => number, releaseName: string, release: () => void) {
+    let state: 'unknown' | 'ready' | 'failed' = 'unknown'
+    let failure: unknown = new Error(`${initializeName} outcome unknown`)
+    const entry = this.own(() => {
+      if (state === 'unknown') throw failure
+      if (state === 'failed') return
+      this.consume(entry, releaseName, release, result => result === undefined ? 'released' : 'unknown', () => { throw new Error('VOID control cannot report failure status') })
+    })
+    let result: number
+    try { result = initialize() } catch (error) { failure = new Error(`${initializeName} outcome unknown`, { cause: error }); throw failure }
+    const ack = boolAck(result)
+    if (ack === 'unknown') throw failure
+    if (ack === 'not-released') { state = 'failed'; throwLastError(this.api, initializeName) }
+    state = 'ready'
+    return () => this.retire(entry)
+  }
   deferBool(name: string, invoke: () => number, afterSuccess?: () => void) {
     const entry = this.own(() => { this.consume(entry, name, invoke, boolAck, () => throwLastError(this.api, name)); afterSuccess?.() })
     return () => this.retire(entry)
@@ -18,6 +41,7 @@ export class NativeInitOwner {
   cleanupScopes() { for (const entry of [...this.entries].reverse()) if (entry.scope) this.retire(entry) }
   private retire(entry: Entry) {
     if (entry.done) return
+    this.retirementRevision++
     if (entry.unknown) throw entry.unknownError
     entry.release()
     entry.done = true
