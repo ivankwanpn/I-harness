@@ -1199,6 +1199,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let constructionComplete = false
   const residentActivation = opts.residentActivation ?? createResidentActivation(() => constructionComplete && !disposing && !executionSurfaceRetired && opts.executionCallerAvailable?.() !== false)
   let offCodeModeSurface: (() => void) | undefined
+  let offExecSurface: (() => void) | undefined
+  let offWorkflowSurface: (() => void) | undefined
   const executionSurfaceListeners = new Set<() => void>()
   const executionSurfaceChanged = () => {
     for (const listener of [...executionSurfaceListeners]) {
@@ -1212,6 +1214,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     if (executionSurfaceRetired) return
     executionSurfaceRetired = true
     offCodeModeSurface?.(); offCodeModeSurface = undefined
+    offExecSurface?.(); offExecSurface = undefined
+    offWorkflowSurface?.(); offWorkflowSurface = undefined
     executionSurfaceChanged()
   }
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
@@ -1594,6 +1598,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     cancelRootCodeMode = codeModeMount?.cancel.bind(codeModeMount)
     disposeRootCodeMode = codeModeMount?.dispose.bind(codeModeMount)
     offCodeModeSurface = codeModeMount?.onSurfaceChanged?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offExecSurface = execService.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
+    offWorkflowSurface = workflowMount?.executor.subscribeJobs?.(() => { if (!executionSurfaceRetired) executionSurfaceChanged() })
     await codeModeMount?.ready?.()
     const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
     let overheadOverride = opts.compact?.overheadTokens

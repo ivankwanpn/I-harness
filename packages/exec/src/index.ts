@@ -133,6 +133,7 @@ export interface ExecService {
   getOutput(jobId: string): BackgroundJobView
   readJobOutputFrames?(jobId: string, query: import('./capture/frames.ts').JobOutputFrameQuery): Promise<import('./capture/frames.ts').ExecFrameRead>
   observeJobOutput?(jobId: string, options?: import('./capture/frames.ts').JobOutputSelectors): Promise<JobOutputObservation>
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   /** Passive metadata only: no observer registration or storage settlement. */

@@ -24,6 +24,8 @@ function joinReader<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
 /** The sole job registry, ID allocator and service disposal owner. */
 export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): NativeExecService {
   const jobs = new Map<string, Job>()
+  const collection = new Set<() => void>()
+  function publishCollection() { for (const listener of [...collection]) { try { listener() } catch {} } }
   const captureJobs = new WeakMap<Capture, Job>()
   const captureInstances = new WeakMap<Capture, string>()
   // Only pending/captured ownership lives here. Publication transfers the token
@@ -34,7 +36,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
 
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
   const createCapture = createCaptureFactory(options, supervisor, launchTransport)
-  const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture))
+  const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture), publishCollection)
   const makeCapture: typeof createCapture = async (...args) => {
     // Allocate synchronously before admission/native launch, including foreground
     // captures which may later promote. Failed launches publish no identity.
@@ -83,6 +85,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     jobs.set(id, job)
     captureJobs.set(capture, job)
     pendingInstances.delete(instanceId)
+    publishCollection()
     void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
     void capture.execution.handle.settled.then(settlement => {
       job.settlement = settlement
@@ -116,6 +119,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
   }
 
   function publish(job: Job): void {
+    publishCollection()
     // Observers receive independent views and cannot interrupt owner transitions.
     for (const listener of [...job.listeners]) {
       try { listener(view(job)) } catch { /* The producer retains ownership. */ }
@@ -223,6 +227,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       if (job.status !== "running") void observe(job.capture)
       return view(job)
     },
+    subscribeJobs(listener) { if (disposed) throw new Error('Exec service disposed'); collection.add(listener); return () => { collection.delete(listener) } },
     subscribeJob(jobId, listener) {
       const job = jobs.get(jobId)
       if (!job || disposed || !canAccess(job.owner)) throw new Error("unknown job: " + jobId)
@@ -280,6 +285,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     launchTransport, cancelExecution,
     async dispose() {
       disposed = true
+      publishCollection(); collection.clear()
       let unresolved: string[] = []
       try {
         await supervisor.dispose()

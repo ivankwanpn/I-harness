@@ -1,4 +1,4 @@
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { resolve } from 'node:path'
 import { createExecutionLease, type TransportExecutionBackend } from '@i-harness/sandbox'
 import { compileExecutionPolicy } from '@i-harness/sandbox-policy'
@@ -9,10 +9,10 @@ type Finish = { kind: 'artifact' } | { kind: 'unknown' } | { kind: 'refused' }
 
 /** Real exec service + controlled transport + the real frame capture: only the
  * artifact sink and observer behaviour are controlled. */
-async function runJob(control: { finishes: Finish[]; observeThrows?: number }) {
+async function runJob(control: { finishes: Finish[]; observeThrows?: number; onCollection?: (exec: ReturnType<typeof createExecService>) => void }) {
   let drain!: () => void, release!: () => void
   const drained = new Promise<void>(done => { drain = done }), gate = new Promise<void>(done => { release = done })
-  let launches = 0, attempts = 0, observations = 0, frameCapture!: ExecFrameCapture
+  let launches = 0, attempts = 0, observations = 0, settlements = 0, frameCapture!: ExecFrameCapture
   const backend: TransportExecutionBackend = {
     async probe() { return { id: 'recovery-source', availability: 'available', assurance: 'unverified', features: { writeIsolation: false, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: true } } },
     async prepare(spec, policy) { return { policy, async rollback() {}, async commit(check) {
@@ -35,9 +35,10 @@ async function runJob(control: { finishes: Finish[]; observeThrows?: number }) {
             : { kind: 'refused' as const, reason: 'storage-refused' as const, observedEncodedBytes: 0 } },
         async reconcile() { throw new Error('The capture itself owns finish retries') },
       }) }) },
-      async settle(capture) { return capture.settle() },
+      async settle(capture) { settlements++; return capture.settle() },
       async observe(capture) { observations++; if (control.observeThrows && observations <= control.observeThrows) throw new Error('observer storage failed'); return capture.settle() },
     } satisfies ExecResultRetention })
+  control.onCollection?.(exec)
   const { jobId } = await exec.runBackground({ argv: ['controlled-recovery-source'] })
   const terminal = new Promise<BackgroundJobView>((done, fail) => {
     const timer = setTimeout(() => fail(new Error('No terminal view')), 5000)
@@ -45,7 +46,7 @@ async function runJob(control: { finishes: Finish[]; observeThrows?: number }) {
   })
   release()
   const first = await terminal
-  return { exec, first, jobId, release, counters: () => ({ launches, attempts, observations }), capture: () => frameCapture }
+  return { exec, first, jobId, release, counters: () => ({ launches, attempts, observations }), capture: () => frameCapture, settlements: () => settlements }
 }
 
 it('keeps an unknown settlement retriable through query/list/close on the original capture', async () => {
@@ -130,4 +131,65 @@ it('passive job metadata neither retries unknown storage nor registers an observ
     expect(job.counters()).toEqual({ launches: 1, attempts: 2, observations: 1 })
     expect(job.exec.getJobView(job.jobId).retained?.sourceId).toBe(first.nativeJob.sourceId)
   } finally { job.release(); await job.exec.dispose() }
+})
+
+it('publishes a newly registered job to collection observers', async () => {
+  const counts: number[] = []
+  const job = await runJob({ finishes: [{ kind: 'refused' }], onCollection: exec => {
+    exec.subscribeJobs!(() => { throw Error('first consumer fails') })
+    exec.subscribeJobs!(() => counts.push(exec.listJobViews!().length))
+  } })
+  try { expect(counts[0]).toBe(1); expect(counts.length).toBeGreaterThan(1); const before = counts.length; await job.exec.dispose(); expect(counts).toHaveLength(before + 1) }
+  finally { await job.exec.dispose() }
+})
+
+it('notifies only the actual passive recovery disposition after ordinary terminal publications drain', async () => {
+  const job = await runJob({ finishes: [{ kind: 'unknown' }, { kind: 'artifact' }] })
+  const seen: BackgroundJobView[] = []
+  let off = () => {}
+  try {
+    await new Promise<void>(done => setImmediate(done)); await new Promise<void>(done => setImmediate(done))
+    const original = job.exec.getJobView(job.jobId).nativeJob
+    job.exec.subscribeJobs!(() => { throw Error('isolated first consumer') })
+    off = job.exec.subscribeJobs!(() => seen.push(job.exec.getJobView(job.jobId)))
+    const before = { ...job.counters(), settlements: job.settlements() }
+    job.exec.getJobView(job.jobId); job.exec.listJobViews()
+    await new Promise<void>(done => setImmediate(done))
+    expect(seen).toEqual([]); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
+    job.exec.getOutput(job.jobId)
+    await new Promise<void>(done => setImmediate(done))
+    expect(seen).toHaveLength(1)
+    expect(seen[0]!.nativeJob).toBe(original)
+    expect(seen[0]!.retained).toMatchObject({ sourceId: original.sourceId, retention: { kind: 'artifact' } })
+    expect(seen[0]!.retentionFailure).toBeUndefined()
+    expect(job.counters()).toEqual({ launches: 1, attempts: 2, observations: 1 })
+    job.exec.getOutput(job.jobId)
+    await new Promise<void>(done => setImmediate(done))
+    expect(seen).toHaveLength(1)
+    off(); await job.exec.dispose(); expect(seen).toHaveLength(1)
+  } finally { off(); await job.exec.dispose() }
+})
+
+it('keeps settled collection subscriptions passive for ten virtual minutes before and after unsubscribe', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  let job: Awaited<ReturnType<typeof runJob>> | undefined
+  let calls = 0, off = () => {}
+  let reads: { mockClear(): unknown; mockRestore(): unknown }[] = []
+  try {
+    job = await runJob({ finishes: [{ kind: 'artifact' }], onCollection: exec => {
+      reads = ['getOutput', 'listJobs', 'getJobView', 'listJobViews'].map(name => vi.spyOn(exec, name as 'getOutput'))
+      off = exec.subscribeJobs!(() => { calls++ })
+    } })
+    // Drain only real IO/microtasks. Never advance timers or reset the clock
+    // between source construction, subscription and either idle phase.
+    await new Promise<void>(done => setImmediate(done))
+    const baseline = calls, before = { ...job.counters(), settlements: job.settlements() }
+    reads.forEach(read => read.mockClear())
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(calls).toBe(baseline); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
+    reads.forEach(read => expect(read).not.toHaveBeenCalled()); expect(vi.getTimerCount()).toBe(0)
+    off(); await vi.advanceTimersByTimeAsync(600_000)
+    expect(calls).toBe(baseline); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
+    reads.forEach(read => expect(read).not.toHaveBeenCalled()); expect(vi.getTimerCount()).toBe(0)
+  } finally { reads.forEach(read => read.mockRestore()); off(); try { await job?.exec.dispose() } finally { vi.useRealTimers() } }
 })

@@ -74,9 +74,9 @@ export function createCodeModeSettings(path: string, service: Pick<SessionServic
 
 export function createDesktopExecution(coordinator: SessionCoordinator, service: Pick<SessionService, "liveAssembly">) {
   return {
-    async read(sessionId: string, options: { offset?: number; limit?: number } = {}, assertCurrent?: () => void): Promise<DesktopExecutionView> {
+    async read(sessionId: string, options: { offset?: number; limit?: number } = {}, assertCurrent?: () => void, profile?: () => ReturnType<SessionCoordinator["profile"]>): Promise<DesktopExecutionView> {
       assertCurrent?.()
-      resourceId(sessionId); assertCurrent?.(); await coordinator.profile(sessionId)
+      resourceId(sessionId); assertCurrent?.(); await (profile ? profile() : coordinator.profile(sessionId))
       assertCurrent?.()
       const offset = boundedInteger(options.offset, 0, Number.MAX_SAFE_INTEGER, 0)
       const limit = boundedInteger(options.limit, 1, 20, 10)
