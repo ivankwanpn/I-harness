@@ -22,7 +22,8 @@ function joinReader<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 
 /** The sole job registry, ID allocator and service disposal owner. */
-export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): NativeExecService {
+export function createJobService(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor): NativeExecService { return createJobServiceWithReservation(options, host, supervisor).service }
+export function createJobServiceWithReservation(options: ExecServiceOptions, host: ExecExecutionHost, supervisor: ExecutionSupervisor) {
   const jobs = new Map<string, Job>()
   const collection = new Set<() => void>()
   function publishCollection() { for (const listener of [...collection]) { try { listener() } catch {} } }
@@ -37,18 +38,35 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
   const { launchTransport, canAccess } = createTransportLaunch(options, host, supervisor, () => disposed)
   const createCapture = createCaptureFactory(options, supervisor, launchTransport)
   const retention = createJobRetention(options.resultRetention, capture => captureJobs.get(capture), publishCollection)
-  const makeCapture: typeof createCapture = async (...args) => {
-    // Allocate synchronously before admission/native launch, including foreground
-    // captures which may later promote. Failed launches publish no identity.
+  const reservations = new WeakMap<object, { instanceId: string; state: 'reserved' | 'started' | 'released' }>()
+  function reserve(): object {
+    if (disposed) throw new Error('Exec service disposed')
     const instanceId = randomUUID()
     if (pendingInstances.has(instanceId) || [...jobs.values()].some(job => job.instanceId === instanceId)) throw new Error('Native job instance collision')
     pendingInstances.add(instanceId)
+    const handle = Object.freeze({})
+    reservations.set(handle, { instanceId, state: 'reserved' })
+    return handle
+  }
+  function consume(handle: object) {
+    const entry = reservations.get(handle)
+    if (!entry || entry.state !== 'reserved' || disposed) throw new Error('Original reservation unavailable')
+    entry.state = 'started'
+    return entry
+  }
+  function release(handle: object) {
+    const entry = reservations.get(handle)
+    if (!entry || entry.state !== 'reserved') throw new Error('Original reservation unavailable')
+    entry.state = 'released'; pendingInstances.delete(entry.instanceId)
+  }
+  async function captureReserved(entry: { instanceId: string }, ...args: Parameters<typeof createCapture>) {
     try {
       const capture = await createCapture(...args)
-      captureInstances.set(capture, instanceId)
+      captureInstances.set(capture, entry.instanceId)
       return retention.track(capture)
-    } catch (error) { pendingInstances.delete(instanceId); throw error }
+    } catch (error) { pendingInstances.delete(entry.instanceId); throw error }
   }
+  const makeCapture: typeof createCapture = (...args) => captureReserved(consume(reserve()), ...args)
   const { observe, record } = retention
 
   const run = createJobObservation({ makeCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })
@@ -146,7 +164,7 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
     return true
   }
 
-  return {
+  const service: NativeExecService = {
     supportsNativeJobKill: true,
     run: run as NativeExecService["run"],
     async runBackground(command) { const capture = await makeCapture(command, undefined, true); const nativeJob = registerJob(capture); return { jobId: nativeJob.jobId, nativeJob } },
@@ -299,4 +317,28 @@ export function createJobService(options: ExecServiceOptions, host: ExecExecutio
       pendingInstances.clear()
     },
   }
+  const port = Object.freeze({
+    reserve,
+    instanceId(handle: object) {
+      const entry = reservations.get(handle)
+      if (!entry || entry.state !== 'reserved' || disposed) throw new Error('Original reservation unavailable')
+      return entry.instanceId
+    },
+    release,
+    async start(handle: object, command: import('../index.ts').ExecCommand, mode: 'foreground' | 'background', runOptions?: import('../index.ts').ExecRunOptions) {
+      const entry = consume(handle)
+      let captured = false
+      const reservedCapture: typeof createCapture = (...args) => { captured = true; return captureReserved(entry, ...args) }
+      try {
+        if (mode === 'background') {
+          const capture = await reservedCapture(command, undefined, true)
+          const nativeJob = registerJob(capture)
+          return { jobId: nativeJob.jobId, nativeJob }
+        }
+        if (mode !== 'foreground') throw new Error('Invalid reservation mode')
+        return await createJobObservation({ makeCapture: reservedCapture, registerJob, releaseCapture, isDisposed: () => disposed, observe })(command, runOptions)
+      } finally { if (!captured) pendingInstances.delete(entry.instanceId) }
+    },
+  })
+  return { service, port }
 }
