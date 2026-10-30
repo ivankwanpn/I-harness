@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { expect } from 'vitest'
 import { createContextOutputService, contextSourceIdentity, type LegacyForkCapture, type LegacyReadObservation, type LegacyPreparationRequest } from '../src/index.ts'
-import { createSessionCoordinator, compileSemanticSeed, type BootstrapTargetPreparationPort } from '../../session-persistence/src/index.ts'
-import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
+import { compileSemanticSeed, type BootstrapTargetPreparationPort } from '../../session-persistence/src/index.ts'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createProjectScopeBroker } from '../../desktop-gateway/src/project-scope.ts'
 import { createBootstrapRequestIntent } from '../../session-persistence/src/coordinator/bootstrap-intent.ts'
 import { createSession, append, exportConversationSeed } from '@i-harness/core-session'
@@ -22,7 +23,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
     return !!scope && (!metadata.owner.source || metadata.owner.source.sourceId === contextSourceIdentity('workspace', project.primaryRoot, scope.scope))
   }
   let service = createContextOutputService({ root, workspaceId: 'workspace', requireObservedLegacyRecipients: true, config: { enabled: true, ...(options.retentionDays !== undefined ? { retentionDays: options.retentionDays } : {}) }, authorizeResult, documentDeletions: listener => { deleted = listener; return () => {} } })
-  let coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  let coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
   let broker = createProjectScopeBroker(coordinator, workspace)
   coordinator.onDocumentDeleted!(id => deleted([id]))
   await coordinator.create({ sessionId: 'source' }); await broker.configure(project); await broker.bind('source', 'p')
@@ -158,7 +159,7 @@ export async function legacyFixture(options: { observations?: number; disabled?:
     async sourceClear() { await service.clear('source'); alive = false; await coordinator.closeManagedDocument('source') },
     async reopen() {
       await service.close(); await broker.close(); await coordinator.close()
-      coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+      coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
       coordinator.onDocumentDeleted!(id => deleted([id]))
       broker = createProjectScopeBroker(coordinator, workspace); await broker.configure(project)
       readScopes.clear()

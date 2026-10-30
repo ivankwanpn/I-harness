@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import * as persistence from '@i-harness/session-persistence'
 import { createBootstrapRequestIntent } from '../../session-persistence/src/coordinator/bootstrap-intent.ts'
-import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { createJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createProjectScopeBroker } from '../src/project-scope.ts'
 
 const cleanup: (() => Promise<void>)[] = []
@@ -13,9 +14,9 @@ vi.mock('node:fs/promises', async original => { const fs = await original<typeof
 afterEach(async () => { vi.mocked(realpath).mockImplementation((await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')).realpath); for (const close of cleanup.splice(0).reverse()) await close() })
 const bindingKey = (id: string) => 'desktop-session-project-' + createHash('sha256').update(id).digest('hex')
 async function setup() {
-  const root = await mkdtemp(join(tmpdir(), 'bootstrap-project-')); cleanup.push(() => rm(root, { recursive: true, force: true }))
+  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'bootstrap-project-')); cleanup.push(() => rm(root, { recursive: true, force: true }))
   const workspace = join(root, 'workspace'); await mkdir(workspace)
-  const coordinator = persistence.createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
+  const coordinator = createJsonlTaskTransitionCoordinator(join(root, 'sessions'), { lock: { enabled: true } }, taskDocumentStorageContract)
   cleanup.push(() => coordinator.close())
   await coordinator.create({ sessionId: 'source' })
   const broker = createProjectScopeBroker(coordinator, workspace); cleanup.push(() => broker.close())

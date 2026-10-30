@@ -310,7 +310,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     const flight=Promise.resolve().then(async():Promise<BootstrapOutcome>=>{
       try{
         await previous;assertCurrent()
-        if (transitions) { originalBootstrapEntries.set(entry,{id:invocation.targetSessionId,documents}); if (entry.cachedTaskBarrier?.retired) entry.cachedTaskBarrier = undefined; entry.cachedTaskBarrier ??= transitions.bootstrap(invocation.targetSessionId,entry,route,undefined); candidate.bootstrap!.taskBarrier = entry.cachedTaskBarrier; entry.cachedTaskBarrier.setGuard(() => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); assertCurrent(); targetCurrent(guards) }); await entry.cachedTaskBarrier.openOwner() }
+        if (transitions) { originalBootstrapEntries.set(entry,{id:invocation.targetSessionId,documents}); if (entry.cachedTaskBarrier?.retired) entry.cachedTaskBarrier = undefined; entry.cachedTaskBarrier ??= transitions.bootstrap(invocation.targetSessionId,entry,route,undefined); candidate.bootstrap!.taskBarrier = entry.cachedTaskBarrier; entry.cachedTaskBarrier.setGuard(() => { if (guards.signal?.aborted) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); assertCurrent() }); await entry.cachedTaskBarrier.openOwner() }
         const state=entry.cachedTaskBarrier ? await entry.cachedTaskBarrier.readState() : await read(invocation,route);assertCurrent()
         // Cached observation changes no original namespace/publication fence.
         // In particular, usable READY bytes cannot erase a foreign sibling or
@@ -350,6 +350,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   async function run(entry:ManagedEntry,guards:BootstrapGuards,observation={revocation:entry.revocation}):Promise<BootstrapOutcome> {
     const b=entry.bootstrap!,id=b.invocation.targetSessionId
+    // Target currentness is a post-preparation capability for this invocation.
+    // Header/task ownership must be acquired before the project can prepare it.
+    let targetPrepared = false
     if (documents.get(id) !== entry) throw new Error('Invalid original bootstrap entry')
     originalBootstrapEntries.set(entry,{id,documents})
     let held=entry.captureIO?.held??heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>{})
@@ -360,7 +363,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if (transitions) {
         if (b.taskBarrier?.retired || b.taskBarrier?.completed) b.taskBarrier = undefined
         b.taskBarrier ??= transitions.bootstrap(id,entry,entry.route ?? {protocol:'public',invocation:b.invocation},undefined,entry.captureIO ? {claim:entry.captureIO.claim,held:entry.captureIO.held} : undefined)
-        b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); targetCurrent(guards) }); await b.taskBarrier.openOwner(); held = b.taskBarrier.held()
+        b.taskBarrier.setGuard(() => { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}); if (targetPrepared) targetCurrent(guards) }); await b.taskBarrier.openOwner(); held = b.taskBarrier.held()
       }
       if(b.pending&&entry.document) {
         const pending=b.pending,key='key' in pending?pending.key:'receipt' in pending?pending.receipt.key:undefined
@@ -415,7 +418,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if (transitions && !predecessorBirth) {
         if (!b.taskBarrier?.mode && (b.request.target.kind === 'resume' || b.request.target.kind === 'new' && !!state.meta)) return {kind:'not-issued',reason:'unsupported'}
         const barrier = b.taskBarrier; if (!barrier) return blocked(entry)
-        barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new'); barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); targetCurrent(guards) })
+        barrier.setMode(b.request.target.kind === 'existing-empty' ? 'existing-empty' : 'new'); barrier.setGuard(() => { if (barrier.headerWasIssued) { if (guards.signal?.aborted || entry.revoked) throw Object.assign(new Error('FACT_CANCELLED'),{code:'FACT_CANCELLED'}) } else current(guards,entry); if (targetPrepared) targetCurrent(guards) })
         try { await barrier.prepare(); held = barrier.held(); await barrier.settleHeader() }
         catch (error) { const conflict = barrier.taskConflict; if (!barrier.taskIssued || conflict) { await barrier.close(); b.taskBarrier = undefined }; return conflict ? {kind:'refused',reason:'conflict'} : blocked(entry) }
       }
@@ -439,13 +442,17 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         return blocked(entry)
       }
       if (predecessorBirth && b.taskBarrier) { try { await b.taskBarrier.settleHeader() } catch { return blocked(entry) } }
-      if (!predecessorBirth && b.taskBarrier) { b.headerOutcome = outcome; b.taskBarrier.markHeaderCommitted(); try { await b.taskBarrier.finishHeader() } catch { return blocked(entry) } }
+      if (!predecessorBirth && b.taskBarrier) { b.headerOutcome = outcome; b.taskBarrier.markHeaderCommitted() }
       entry.headerUnknown=false
       state=b.taskBarrier && !b.taskBarrier.completed ? await b.taskBarrier.readState() : await read(b.invocation,entry.route)
       if(!state.meta||!state.events||!state.prefix)return blocked(entry)
       const doc=entry.document??attach(id,entry,buildSession(state.meta,state.events),state.prefix)
       b.phase='dependencies'
       if (!await prepareTarget(b.stage, guards, false, entry, b.request.seed.records)) return blocked(entry, 'dependency-unavailable')
+      targetPrepared = true
+      // Keep the original task/header operation through a blocked preparation.
+      // A warm retry must not classify its already-issued birth as a new target.
+      if (!predecessorBirth && b.taskBarrier) { try { await b.taskBarrier.finishHeader() } catch { return blocked(entry) } }
       const closure=await dependencies(b.stage,state.events,guards,false,entry)
       if(!closure)return blocked(entry,'dependency-unavailable')
       current(guards,entry)
