@@ -1,10 +1,10 @@
-import type { SessionEvent } from '@i-harness/core-session'
+import type { SessionEventView } from '@i-harness/core-session'
 import { validateTaskDocument } from './validation.ts'
 import type { TaskProtocolDocument } from './types.ts'
 
 /** Pure calculation over history already validated by its original journal owner.
  * This function neither establishes completeness nor grants transition authority. */
-function consistency(parent: string, events: readonly SessionEvent[], seedLength: number, value: unknown) {
+function consistency(parent: string, events: readonly SessionEventView[], seedLength: number, value: unknown) {
   if (!parent || !Number.isSafeInteger(seedLength) || seedLength < 0 || seedLength > events.length) throw new Error('Invalid task history scope')
   const ids = new Set<string>()
   for (let index = seedLength; index < events.length; index++) {

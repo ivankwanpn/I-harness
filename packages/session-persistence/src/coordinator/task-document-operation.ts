@@ -76,7 +76,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
         await observation?.catch(() => {}); await retrying?.catch(() => {}); await confirmation?.catch(() => {}); await writeFlight?.catch(() => {})
         if (session) await settleResources!()
         if (processToken) { processToken.end(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); processToken = undefined }
-        if (writeAdmission) { writeAdmission.finish(); writeAdmission = undefined }
+        if (writeAdmission) { writeAdmission.finish(writeResult?.kind === 'committed' || writeResult?.kind === 'conflict' || writeResult?.kind === 'not-issued' ? 'settled' : 'unknown'); writeAdmission = undefined }
         if (lease) { await releaseLease!(); lease = undefined }
         if (pin) { await releasePin!(); pin = undefined }
         closed = true; remove(); records.delete(record)
@@ -140,8 +140,8 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
             try { assertWrite() } catch (error) { return Promise.reject(error) }
             if (writeResult && !writeResult.cleanupPending && writeResult.kind !== 'unknown') return Promise.resolve(writeResult)
             if (kind === 'reconcile' && !issued) return Promise.reject(new Error('TASK_DOCUMENT_CONFLICT'))
-            try { active(); if (!writeAdmission) { writeAdmission = registration.beginOwnedWrite(); try { processToken = processLatches?.beginMutation({ sessionIds: [], documentKeys: [`task-${captured.id}`], kind: 'other' }) } catch (error) { writeAdmission.finish(); writeAdmission = undefined; throw error } } } catch (error) { return Promise.reject(error) }
-            writeFlight = runMethod(() => Promise.resolve().then(async () => { const result = await (kind === 'issue' ? issue() : kind === 'reconcile' ? reconcile() : retry()); writeResult = result; assertWrite(); ioDebt = result.cleanupPending || result.kind === 'unknown'; if (!result.cleanupPending && (result.kind === 'committed' || result.kind === 'conflict' || result.kind === 'not-issued')) { processToken?.end('settled'); processToken = undefined; writeAdmission?.finish(); writeAdmission = undefined }; active(); return result }))
+            try { active(); if (!writeAdmission) { writeAdmission = registration.beginOwnedWrite(); try { processToken = processLatches?.beginMutation({ sessionIds: [], documentKeys: [`task-${captured.id}`], kind: 'other' }) } catch (error) { writeAdmission.finish('settled'); writeAdmission = undefined; throw error } } } catch (error) { return Promise.reject(error) }
+            writeFlight = runMethod(() => Promise.resolve().then(async () => { const result = await (kind === 'issue' ? issue() : kind === 'reconcile' ? reconcile() : retry()); writeResult = result; assertWrite(); ioDebt = result.cleanupPending || result.kind === 'unknown'; if (!result.cleanupPending && (result.kind === 'committed' || result.kind === 'conflict' || result.kind === 'not-issued')) { processToken?.end('settled'); processToken = undefined; writeAdmission?.finish('settled'); writeAdmission = undefined }; active(); return result }))
             void writeFlight.then(() => { writeFlight = undefined }, () => { writeFlight = undefined; ioDebt = true })
             return writeFlight
           }

@@ -9,11 +9,12 @@ import { heldFactOwner } from './fact-owner.ts'
 import { createBootstrapOwner, markManagedEntryRevoked, revokeManagedEntry, type ManagedEntry } from './bootstrap.ts'
 import { captureBootstrapRoute } from './bootstrap-route.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 /** Sole opening/ready registry. A failed public call cannot evict issued work. */
 export function createManagedDocuments(backend: PersistenceBackend, ownership: Ownership,
   loadOwned: (id: string) => Promise<{ session: Session }>, options: CoordinatorOptions | undefined,
-  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}) {
+  report: (error: unknown) => void, mutations: Mutations, processLatches?: ReturnType<typeof createProcessReadLatches>, assertTaskOutside: (id: string) => void = () => {}, revokeTaskOperations: (id: string) => Promise<void> = async () => {}, transitions?: ReturnType<typeof createTaskDocumentTransitions>) {
   for (const value of [options?.maxPendingGroups, options?.coalesceTargetBytes]) {
     if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) throw new TypeError('Managed scheduling options must be positive safe integers')
   }
@@ -58,7 +59,7 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     outcome='settled'
     } finally { token?.end(outcome) }
   }
-  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches)
+  const bootstrap=createBootstrapOwner(backend,ownership,documents,attach,mutations,processLatches,transitions)
   return {
     ...bootstrap,
     captureProcessRead(document: ManagedDocument, documentKeys: readonly string[]) {
@@ -103,10 +104,11 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
       if(!ownership.lockEnabled||!backend.appendOwnedBatch||!backend.reconcileOwnedBatch||!backend.readJournalPrefix)return Promise.reject(Object.assign(new Error('Exclusive owned fact backend is required'),{code:'FACT_OWNER_UNSUPPORTED'}))
       const existing=documents.get(id)
       if(existing){try{assertEntry(existing)}catch(error){return Promise.reject(error)}return existing.flight ? existing.flight.then(()=>existing.document!) : Promise.resolve(existing.document!)}
-      const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+      let token=transitions ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       const entry:ManagedEntry={};documents.set(id,entry)
       const operation=(async()=>{
         const {session}=await loadOwned(id)
+        if (transitions) token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
         return ownership.withSessionOperation(id,async()=>{
           ownership.assertHeld(id)
           const prefix=await backend.readJournalPrefix!(id,heldFactOwner({sessionId:id,incarnation:'cold-recovery'},ownership,()=>{}))

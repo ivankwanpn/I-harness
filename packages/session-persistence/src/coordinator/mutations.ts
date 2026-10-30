@@ -7,6 +7,7 @@ import { ensureWritableFormatUnlocked } from "./writable-format.ts"
 import { preflightBatchShape } from "../format/validation.ts"
 import { createConversationIndexes } from "./conversation-index.ts"
 import type { createProcessReadLatches } from './process-read-latches.ts'
+import type { createTaskDocumentTransitions } from './task-document-transition.ts'
 
 export function createMutations(
   backend: Pick<PersistenceBackend, "create" | "append" | "updateMeta" | "read" | "id" | "upgradeSessionFormat">,
@@ -17,14 +18,17 @@ export function createMutations(
   assertManagedMutation: (id: string) => void = () => {},
   observations?: BindingObservations,
   processLatches?: ReturnType<typeof createProcessReadLatches>,
+  transitions?: ReturnType<typeof createTaskDocumentTransitions>,
+  transitionWrite?: (id: string, events: SessionEvent[]) => Promise<void>,
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
   const conversation = createConversationIndexes(backend)
-  async function appendUnlocked(sessionId: string, events: SessionEvent[]) {
+  async function appendUnlocked(sessionId: string, events: SessionEvent[], check?: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue?: () => void) {
     try {
       const staged = await conversation.stage(sessionId, events)
-      if (staged.events.length || events.length === 0) await backend.append(sessionId, staged.events)
+      check?.(staged.events.map((event, position) => event.seq === undefined ? { ...event, seq: staged.baseLength + position } : event))
+      if (staged.events.length || events.length === 0) { markIssue?.(); await backend.append(sessionId, staged.events) }
       staged.commit()
     } catch (error) { conversation.invalidate(sessionId); throw error }
   }
@@ -43,6 +47,7 @@ export function createMutations(
         // retains the batch for the next enqueue/flush attempt; a held lease
         // survives background write failures for the same reason.
         write: async (events) => {
+          if (transitionWrite) return transitionWrite(sessionId, events)
           await withSessionOperation(sessionId, async () => {
             assertManagedMutation(sessionId)
             await ensureOwnership(sessionId)
@@ -81,6 +86,12 @@ export function createMutations(
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
       assertWritable(id)
       observations?.assertSessionAdmission(id)
+      if (transitions) {
+        const fullMeta: SessionMeta = { sessionId: id, createdAt: new Date().toISOString(), ...meta, formatVersion: CURRENT_FORMAT_VERSION }
+        validateSubagentHeader(fullMeta)
+        await transitions.create(id, fullMeta)
+        return { id }
+      }
       return processMutation(id, () => metadataMutation(id, () => withSessionOperation(id, async () => {
         assertWritable(id)
         // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
@@ -105,6 +116,23 @@ export function createMutations(
         return { id }
       })))
     },
+    async appendQueuedDrainUnlocked(sessionId: string, events: SessionEvent[]) {
+      assertManagedMutation(sessionId)
+      await ensureOwnership(sessionId)
+      await appendUnlocked(sessionId, events)
+    },
+    async appendTransitionUnlocked(sessionId: string, events: SessionEvent[], check: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue: () => void) {
+      assertWritable(sessionId)
+      await appendUnlocked(sessionId, events, check, markIssue)
+    },
+    async updateMetaTransitionUnlocked(sessionId: string, patch: Partial<SessionMeta>, markIssue: () => void) {
+      assertWritable(sessionId)
+      if (Object.hasOwn(patch, 'formatVersion') && patch.formatVersion !== CURRENT_FORMAT_VERSION) throw new Error('cannot downgrade session format')
+      const previous = await ensureWritableFormatUnlocked(backend, sessionId)
+      if (Object.hasOwn(patch, 'subagentProtocolVersion') && patch.subagentProtocolVersion !== previous.meta?.subagentProtocolVersion) throw new Error('Subagent protocol is immutable creation metadata')
+      validateSubagentHeader({ ...previous.meta, ...patch })
+      markIssue(); return backend.updateMeta(sessionId, patch)
+    },
     async append(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
       observations?.assertOutsideOwnedOperations([sessionId])
@@ -121,6 +149,7 @@ export function createMutations(
     },
     enqueue(sessionId: string, events: SessionEvent[]) {
       assertWritable(sessionId)
+      if (transitionWrite) observations?.assertSessionAdmission(sessionId)
       observations?.assertOutsideOwnedOperations([sessionId])
       preflightBatchShape(CURRENT_FORMAT_VERSION, events)
       const wb = writeBehindFor(sessionId)

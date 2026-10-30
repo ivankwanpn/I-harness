@@ -5,15 +5,15 @@ import { isHeldFactOwner, bootstrapManifest, validateOwnedCaptureStage } from '@
 import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import type { BootstrapBackend } from '@i-harness/session-persistence'
-import { lookupBootstrapStage, ordinaryStageIO } from './bootstrap-stage.ts'
+import { lookupBootstrapStage, ordinaryStageIO, type StageLookupIO } from './bootstrap-stage.ts'
 
 /** Ordinary replacement may rewrite a suffix, never the actual birth frames
  * whose keys/bytes establish the retained operation's historical receipts. */
-export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: SessionMeta, candidate: readonly SessionEvent[]) {
+export async function preserveBootstrapBirth(path: string, raw: Buffer, meta: SessionMeta, candidate: readonly SessionEvent[], stageIO?: StageLookupIO) {
   const reservation = meta.semanticSeed
   if (!reservation) throw new TypeError('Bootstrap reservation required')
   const invocation = { version: 1 as const, operationId: reservation.operationId, targetSessionId: meta.sessionId, createdAt: meta.createdAt, requestDigest: reservation.requestDigest }
-  const selected = await lookupBootstrapStage(path,{kind:'header',meta},ordinaryStageIO(path))
+  const selected = await lookupBootstrapStage(path,{kind:'header',meta},stageIO ?? ordinaryStageIO(path))
   if(selected.kind!=='full')throw new TypeError('Unique bootstrap birth unavailable')
   const stage=selected.stage
   const original = JSON.parse(stage.headerBytes) as SessionMeta

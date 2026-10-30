@@ -16,8 +16,8 @@ const sameIdentity = (a: Identity, b: Identity) => a.dev === b.dev && a.ino === 
 const meaningful = (value: Identity) => typeof value.dev === 'bigint' && typeof value.ino === 'bigint' && value.ino > 0n
 class Conflict extends Error {}
 /** One retained candidate. Replacement excludes cooperative writers via the original lease. */
-export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Array; preimage?: { bytes: Uint8Array; identity: Identity }; guard(): void; verifyRoot(): Promise<void> }) {
-  if (input.bytes.byteLength > 64 * 1024 * 1024) throw new RangeError('Task document too large')
+export function createOwnedDocumentWrite(input: { path: string; bytes: Uint8Array; preimage?: { bytes: Uint8Array; identity: Identity }; maxBytes?: number | null; guard(): void; verifyRoot(): Promise<void> }) {
+  if (input.maxBytes !== null && input.bytes.byteLength > (input.maxBytes ?? 64 * 1024 * 1024)) throw new RangeError('Task document too large')
   if (input.preimage && !meaningful(input.preimage.identity)) throw new Error('Task document identity unavailable')
   const bytes = Buffer.from(input.bytes), before = input.preimage && { bytes: Buffer.from(input.preimage.bytes), identity: input.preimage.identity }, temp = `${input.path}.${randomUUID()}.tmp`
   const resources = new Set<Resource>()

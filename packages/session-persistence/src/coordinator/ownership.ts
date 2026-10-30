@@ -2,6 +2,7 @@ import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs
 import type { CoordinatorOptions, PersistenceBackend } from "./types.ts"
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { assertOutsideTaskDocumentSessionOperation } from './task-document-operation.ts'
+import { assertOutsideTaskTransitionSession } from './task-document-transition.ts'
 
 type Claim = { assertHeld(): void; retainLive(): void; release(): Promise<void> }
 type ClaimRecord = { id: string; claim: Claim; assertHeld: Claim['assertHeld']; retainLive: Claim['retainLive']; release: Claim['release'] }
@@ -52,7 +53,7 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
     }
   }
   async function withSessionOperation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
-    assertOutsideTaskDocumentSessionOperation(owner, sessionId)
+    assertOutsideTaskDocumentSessionOperation(owner, sessionId); assertOutsideTaskTransitionSession(owner, sessionId)
     const previous = sessionOperations.get(sessionId) ?? Promise.resolve()
     const gate = Promise.withResolvers<void>()
     sessionOperations.set(sessionId, gate.promise)
@@ -114,6 +115,19 @@ export function createOwnership(backend: Pick<PersistenceBackend, "lockRoot">, o
   const owner = {
     assertHeld(id: string) { if (!lockEnabled || !slots.get(id)?.lock?.held || slots.get(id)?.debt) throw Object.assign(new Error('Exclusive managed ownership is unavailable'), { code: 'FACT_OWNER_UNSUPPORTED' }) },
     lockEnabled, acquireLease, withSessionOperation, ensureOwnership, borrowOwnership,
+    captureActiveSessionOperation(id: string) {
+      let original = sessionContext.getStore()
+      while (original && (!original.active || original.id !== id)) original = original.parent
+      if (!original) throw new Error('Session operation admission required')
+      const captured = original
+      const token = Object.freeze({ assertCurrent() {
+        if (this !== token || !captured.active) throw new Error('Session operation admission expired')
+        let current = sessionContext.getStore()
+        while (current && current !== captured) current = current.parent
+        if (current !== captured) throw new Error('Session operation admission unavailable')
+      } })
+      return token
+    },
     assertOutsideSessionOperation(id: string) { for (let current = sessionContext.getStore(); current; current = current.parent) if (current.active && current.id === id) throw new Error('Session operation reentry conflict') },
     pinOwnership: borrowOwnership, releaseOwnershipUnlocked,
     ownerOf: (id: string) => slots.get(id)?.lock?.held === true,
