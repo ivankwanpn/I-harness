@@ -13,6 +13,54 @@ import { writeSuggestionMarketplace } from "./resource-suggestions-fixture.ts"
 import * as materialization from "../../plugin-registry/src/materialize.ts"
 import * as installation from "../../plugin-registry/src/install.ts"
 
+it.each([false, true])("joins an admitted mutation through its later held refresh (lease failure=%s)", async failLease => {
+  const root = await mkdtemp(join(tmpdir(), "ih-plugin-mutation-close-"))
+  const leaseFailure = new Error("mutation lease cleanup")
+  const close = vi.fn(async () => { if (failLease && close.mock.calls.length === 1) throw leaseFailure })
+  const acquire = vi.fn(() => ({ ready: Promise.resolve({ epoch: 1, revision: 0 }), subscribe: () => () => {}, close }))
+  const sharedClose = vi.fn(async () => {})
+  const plugins = createDesktopPlugins(root, { watch: { acquire, close: sharedClose } })
+  await plugins.mutate({ action: "source/add", source: fileURLToPath(new URL("../../plugin-registry/test/fixtures/marketplace-a", import.meta.url)) })
+  await plugins.mutate({ action: "install", id: "Marketplace A__hello" })
+  let releaseMutation!: () => void, releaseRefresh!: () => void
+  const materializing = new Promise<void>(resolve => { releaseMutation = resolve })
+  const refreshing = new Promise<void>(resolve => { releaseRefresh = resolve })
+  const original = materialization.materializePlugin
+  let entered = false, refreshCalls = 0, refreshFinished = false
+  const materialize = vi.spyOn(materialization, "materializePlugin").mockImplementation(async (...args) => { entered = true; await materializing; return original(...args) })
+  const observer = plugins.bindRefresh(async () => { if (++refreshCalls === 2) { await refreshing; refreshFinished = true } })
+  let mutation: Promise<unknown> | undefined, closing: Promise<unknown> | undefined
+  try {
+    await vi.waitFor(() => expect(refreshCalls).toBe(1))
+    mutation = plugins.mutate({ action: "enable", id: "Marketplace A__hello" })
+    await vi.waitFor(() => expect(entered).toBe(true))
+    let done = false
+    closing = plugins.close().then(() => undefined, error => error).finally(() => { done = true })
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1))
+    expect(done).toBe(false)
+    await expect(plugins.mutate({ action: "disable", id: "Marketplace A__hello" })).rejects.toThrow("closed")
+    releaseMutation()
+    await vi.waitFor(() => expect(refreshCalls).toBe(2))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(done).toBe(false)
+    expect(refreshFinished).toBe(false)
+    releaseRefresh(); await mutation
+    const outcome = await closing
+    expect(refreshFinished).toBe(true)
+    if (failLease) {
+      const causes = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(causes) : [error]
+      expect(causes(outcome)).toContain(leaseFailure)
+    } else expect(outcome).toBeUndefined()
+    await plugins.close(); await observer.close()
+    expect(close).toHaveBeenCalledTimes(failLease ? 2 : 1)
+    expect(acquire).toHaveBeenCalledTimes(1); expect(sharedClose).not.toHaveBeenCalled()
+    expect(materialize).toHaveBeenCalledTimes(1); expect(refreshCalls).toBe(2)
+  } finally {
+    releaseMutation(); releaseRefresh(); await mutation; await closing
+    materialize.mockRestore(); await plugins.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 })
+  }
+})
+
 it("blocks original input reads behind held materialization and installs only once", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-plugin-materialize-lock-"))
   const watch = createFsWatchService()
