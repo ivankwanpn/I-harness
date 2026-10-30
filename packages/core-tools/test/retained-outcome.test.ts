@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createContext } from '@i-harness/core-plugin'
 import { FactRecoveryRequiredError } from '@i-harness/core-session'
-import { createSessionCoordinator } from '../../session-persistence/src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '../../session-persistence-jsonl/src/index.ts'
 import { createToolRegistry, retainedToolOutcome, type RetainedOutcomeSink } from '../src/index.ts'
 

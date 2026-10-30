@@ -101,7 +101,9 @@ import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 import { builtinRoles, type ChildAgentEntry, type SubagentStateSnapshot } from '@i-harness/subagent'
 import { createSession, committedFactSeqs, decodeFactBatch, type BatchKey } from '@i-harness/core-session'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createOpenAICompatibleClient } from '../../llm-openai-compatible/src/index.ts'
 import { createSessionService } from '../src/service.ts'
@@ -130,7 +132,7 @@ async function cold(model?: ModelClient, count = 1, mount?: CodeModeFactory, sim
   const agentTable: SubagentStateSnapshot['agentTable'] = []
   for (let i = 0; i < count; i++) {
     const sessionId = `child${i}`
-    await coordinator.create({ sessionId, parentSession: 'parent', origin: 'subagent' })
+    await coordinator.create({ sessionId, parentSession: 'parent', origin: 'subagent', seedLength: 0 })
     const document = await coordinator.openManagedDocument(sessionId)
     if (staleRuntime) {
       const action = document.beginAction()

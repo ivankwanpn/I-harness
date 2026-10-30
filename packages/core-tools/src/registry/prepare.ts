@@ -11,8 +11,9 @@ import type { CapturedToolCall, ToolPrepareIdentity, NativePlan, NativeMutation,
 import { isDecision, mergeDecision } from "../approval/decision.ts"
 import { captureApproval } from "../approval/identity.ts"
 import type { createCatalog } from "./catalog.ts"
+import { createPreparedBodyInvoker, type ToolExecutionOwnerContext } from './prepared-body.ts'
 
-export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined) {
+export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<typeof createCatalog>, "captureBinding">, getRegistry: () => ToolRegistry, instructionsRequired = false, verifyOrigin?: (origin: AcceptedInstructionCall, capture: CapturedToolCall) => boolean, retainCell?: (origin: AcceptedInstructionCall, capture: CapturedToolCall, cellId: string, request: object) => InstructionCellLease | undefined, executionOwner?: ToolExecutionOwnerContext) {
   type Capture = { call: ToolCall; identity: ToolPrepareIdentity; tool: ReturnType<typeof catalog.captureBinding>['tool']; executeBinding: ReturnType<typeof catalog.captureBinding>['executeBinding']; bindingGeneration: number; bindingValidation: () => boolean; native?: NativePlan; concurrencySafe: boolean; used: boolean; origin?: AcceptedInstructionCall; authority?: NativeMutation }
   const captures = new WeakMap<CapturedToolCall, Capture>()
   const executions = new WeakMap<PreparedCall, () => Promise<unknown>>()
@@ -188,7 +189,7 @@ export function createPreparer(ctx: PluginContext, catalog: Pick<ReturnType<type
     registerInstructionExec(exec)
     // The callback stays private to this registry; hooks cannot replace the
     // executable, receiver, frozen arguments or exec through prepared metadata.
-    executions.set(prepared, () => executeBinding.call(tool, call.args as never, exec))
+    executions.set(prepared, createPreparedBodyInvoker(prepared, executeBinding, executionOwner, signal))
     return prepared
   }
 

@@ -88,7 +88,7 @@ export type { InputFacts, AgentFacts, ToolFacts, MetadataFacts, FactPorts, Settl
 export type { FactOwner, ProducerFactOutcome, NondurableFactOutcome, MetadataFactSource, FeedbackFactSource, CodeSettlementFact } from './managed/ports.ts'
 export { createFactPorts } from './managed/ports-factory.ts'
 export { bindFactSettlementSource, delegateFactSettlementSource, isManagedSettlementSource, isOwnedSettlementSource, settlementSourceSessionId } from './managed/source-scope.ts'
-export { createNondurableFactOwner, isNondurableSession, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
+export { createNondurableFactOwner, isNondurableSession, isNondurableFactOwner, metadataFactsFor, feedbackFactsFor } from './managed/nondurable.ts'
 export { committedFactSeqs } from './managed/outcome.ts'
 
 export { projectConversationCandidate } from "./conversation/candidate.ts"

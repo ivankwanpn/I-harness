@@ -1,4 +1,7 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import { captureExecutionOwnerContext, preparedExecutionOwnerContext, type ToolExecutionOwnerContext } from './registry/prepared-body.ts'
+export { bindPreparedShellLeaf, assertPreparedExecutionOwnerContext } from './registry/prepared-body.ts'
+export type { PreparedShellBodyClaim, ToolExecutionOwnerContext } from './registry/prepared-body.ts'
 import type { ToolRegistry, ToolCall, ToolResult } from "./types.ts"
 import { createCatalog } from "./registry/catalog.ts"
 import { createPreparer } from "./registry/prepare.ts"
@@ -31,7 +34,10 @@ export type { ContextRemainingOptions } from "./context-remaining.ts"
 const registryRetention = new WeakMap<ToolRegistry, ToolResultRetention | undefined>()
 const registryInstructions = new WeakMap<ToolRegistry, { required: boolean; verify?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; retainCell?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined }>()
 export function registryRequiresInstructionOrigin(registry: ToolRegistry): boolean { return registryInstructions.get(registry)?.required === true }
-export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined } = {}): ToolRegistry {
+export function createToolRegistry(ctx: PluginContext, options: { resultRetention?: ToolResultRetention; inheritResultRetention?: ToolRegistry; executionOwner?: ToolExecutionOwnerContext; instructionsRequired?: boolean; instructionOriginVerifier?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall) => boolean; instructionCellRetainer?: (origin: import('./types.ts').AcceptedInstructionCall, capture: import('./types.ts').CapturedToolCall, cellId: string, request: object) => import('./types.ts').InstructionCellLease | undefined } = {}): ToolRegistry {
+  const ownerDescriptor = Object.getOwnPropertyDescriptor(options,'executionOwner')
+  if (ownerDescriptor && !('value' in ownerDescriptor)) throw new TypeError('Execution owner must be own data')
+  const executionOwner = captureExecutionOwnerContext(ctx, ownerDescriptor?.value)
   if (options.inheritResultRetention && !registryRetention.has(options.inheritResultRetention)) throw new Error('Original tool registry unavailable')
   const retention = options.resultRetention ?? (options.inheritResultRetention ? registryRetention.get(options.inheritResultRetention) : undefined)
   const catalog = createCatalog()
@@ -44,10 +50,10 @@ export function createToolRegistry(ctx: PluginContext, options: { resultRetentio
   if (retainerDescriptor && (!('value' in retainerDescriptor) || typeof retainerDescriptor.value !== 'function')) throw new TypeError('Invalid instruction cell retainer')
   const retainCell = inherited?.retainCell ?? (retainerDescriptor && 'value' in retainerDescriptor ? retainerDescriptor.value.bind(options) : undefined)
   const required = inherited?.required === true || options.instructionsRequired === true
-  const preparer = createPreparer(ctx, catalog, () => registry, required, verify, retainCell)
+  const preparer = createPreparer(ctx, catalog, () => registry, required, verify, retainCell, executionOwner)
   const prepareCaptured: ToolRegistry['prepareCaptured'] = async (...args) => {
     const prepared = await preparer.prepareCaptured(...args)
-    await retention?.prepare?.(prepared)
+    await retention?.prepare?.(prepared, preparedExecutionOwnerContext(prepared))
     return prepared
   }
   const prepare: ToolRegistry['prepare'] = async (...args) => {

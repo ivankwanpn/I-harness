@@ -571,7 +571,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const resultStore = await acquireAssemblyResultStore(opts)
   opts = { ...opts, ...(resultStore.service ? { contextOutput: resultStore.service } : {}), ...(resultStore.sourceFor ? { contextOutputSourceFor: resultStore.sourceFor } : {}), ...(resultStore.withLegacyReadObservation ? { contextOutputLegacyReadObservation: resultStore.withLegacyReadObservation } : {}) }
   const ctx: PluginContext = createContext()
-  const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId) })
+  const tools = createToolRegistry(ctx, { resultRetention: createToolResultRetention(opts.contextOutput, opts.contextOutputSourceFor, opts.sessionId), executionOwner: {view:session,factOwner,context:ctx,...opts.sessionId!==undefined?{sessionId:opts.sessionId}:{}} })
 
   // ── session: live source of truth + coordinator mirror (write-behind) ──────
   // Created BEFORE the execution environment on purpose: the sandbox policy

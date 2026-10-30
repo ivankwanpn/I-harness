@@ -47,7 +47,9 @@ vi.mock('../src/lifecycle/task-result-retention.ts', async original => {
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { builtinRoles, driveFollowups, type SubagentStateSnapshot } from '@i-harness/subagent'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createSessionService } from '../src/service.ts'
 import { controlledModel } from './controlled-model.ts'
@@ -61,7 +63,7 @@ async function heldCold(limits: { timeoutMs?: number; maxAttempts?: number } = {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'gap-'))
   await writeFile(join(root, 'settings.json'), '{}')
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const child = await coordinator.openManagedDocument('child')
   await child.delivery.record({ type: 'subagent/inbox', messageId: 'original', message: 'queued', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   await child.close(); await coordinator.releaseOwnership('child')
@@ -85,7 +87,7 @@ it('holds the original cold inbox until exact live publication and runs a second
   await writeFile(join(root, 'settings.json'), '{}')
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
   await coordinator.create({ sessionId: 'parent' })
-  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const child = await coordinator.openManagedDocument('child')
   await child.delivery.record({ type: 'subagent/inbox', messageId: 'original', message: 'first original inbox', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   await child.close(); await coordinator.releaseOwnership('child')
@@ -364,7 +366,7 @@ it.each([true, false])('opens a standalone ticket only at actual construction co
   controls.subs = []; controls.subStores = []; controls.sourceInputs = []; controls.captures = 0
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR!, 'direct-'))
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, 'sessions')), { lock: { enabled: true } })
-  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent' })
+  await coordinator.create({ sessionId: 'parent' }); await coordinator.create({ sessionId: 'child', parentSession: 'parent', origin: 'subagent', seedLength: 0 })
   const original = await coordinator.openManagedDocument('child')
   await original.delivery.record({ type: 'subagent/inbox', messageId: 'direct', message: 'direct queued inbox', provenance: { kind: 'child-report', authority: 'observation', scope: 'turn', producer: 'team.delivery' } })
   await original.close(); await coordinator.releaseOwnership('child')

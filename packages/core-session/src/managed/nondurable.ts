@@ -20,9 +20,10 @@ import { committedFactSeqs } from './outcome.ts'
 import { installMemoryGroup } from './memory-group.ts'
 import { validateBootstrapReadiness } from '../conversation/bootstrap-validation.ts'
 const memoryDeliveryControls = new WeakMap<Session,ReturnType<typeof createDeliveryControl>>()
-const memoryRecoveryHolds = new WeakMap<Session, { holds: Set<object>; sticky: boolean }>()
+const memoryRecoveryHolds = new WeakMap<Session, { holds: Set<object>; sticky: boolean; owners: WeakSet<object> }>()
 /** Package-private observation of the existing standalone owner registration. */
 export function hasNondurableFactOwner(session: Session): boolean { return memoryRecoveryHolds.has(session) }
+export function isNondurableFactOwner(view: SessionView, owner: object): boolean { return !managedSessions.has(view) && memoryRecoveryHolds.get(view as Session)?.owners.has(owner) === true }
 
 /** Explicit standalone memory adapter. It has no receipt and makes no durable
  * recovery promise. A managed/frozen Session can never silently enter it. */
@@ -32,13 +33,13 @@ export function isNondurableSession(session: SessionView): session is Session {
 export function createNondurableFactOwner(session: Session): FactOwner<NondurableFactOutcome> {
   if (!isNondurableSession(session)) throw new TypeError('Managed Session requires its owned fact capability')
   let holds = memoryRecoveryHolds.get(session)
-  if (!holds) memoryRecoveryHolds.set(session, holds = { holds: new Set(), sticky: false })
+  if (!holds) memoryRecoveryHolds.set(session, holds = { holds: new Set(), sticky: false, owners: new WeakSet() })
   let deliveryControl=memoryDeliveryControls.get(session)
   if(!deliveryControl){deliveryControl=createDeliveryControl(session);memoryDeliveryControls.set(session,deliveryControl)}
   const delivery=deliveryControl
   const recoveryState = holds, recoveryHolds = holds.holds
   const assertNewWork = () => { validateBootstrapReadiness(session.events, session.formatVersion, session.header ?? {}); if (recoveryState.sticky || recoveryHolds.size) throw Object.assign(new Error('Managed facts require reconciliation'), { code: 'FACT_RECOVERY_REQUIRED' }) }
-  return {
+  const owner: FactOwner<NondurableFactOutcome> = {
     view: session,
     registerReceivedInputSource(drain) {
       assertNewWork()
@@ -179,6 +180,8 @@ export function createNondurableFactOwner(session: Session): FactOwner<Nondurabl
       }
     },
   }
+  holds.owners.add(owner)
+  return owner
 }
 
 /** A missing managed capability is an error, before any producer effects. */
