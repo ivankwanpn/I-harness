@@ -217,9 +217,14 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
         try {
           guard();const actual=Buffer.alloc(operation.headerBytes.length);let offset=0
           while(offset<actual.length){const read=await resource.handle.read(actual,offset,actual.length-offset,offset);guard();if(!read.bytesRead)break;offset+=read.bytesRead}
-          if(offset!==actual.length||!actual.equals(Buffer.from(operation.headerBytes)))return {kind:Buffer.from(operation.headerBytes).subarray(0,offset).equals(actual.subarray(0,offset))?'unknown':'conflict'}
+          let expected=Buffer.from(operation.headerBytes)
+          if(offset===actual.length&&!actual.equals(expected)) {
+            const original=JSON.parse(expected.toString('utf8'))
+            if(original.formatVersion===13) {const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n');if(actual.equals(upgraded))expected=upgraded}
+          }
+          if(offset!==actual.length||!actual.equals(expected))return {kind:expected.subarray(0,offset).equals(actual.subarray(0,offset))?'unknown':'conflict'}
           await resource.handle.sync();guard();await assertNotDeleted('session',id)
-          return {kind:'committed',headerDigest:rawHeaderDigest(operation.headerBytes)}
+          return {kind:'committed',headerDigest:rawHeaderDigest(expected)}
         }finally{await close(ledger,resource)}
       }catch(error){ledger.diagnostics.push(error);return {kind:'unknown'}}
     })

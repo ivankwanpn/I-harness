@@ -1,6 +1,6 @@
 import { CURRENT_FORMAT_VERSION, createConversationValidationIndex, type ConversationValidationIndex, type SessionEvent } from "@i-harness/core-session"
 import { SessionFormatUnsupportedError } from "../format/registry.ts"
-import { preflightBatchShape } from "../format/validation.ts"
+import { preflightBatchShape, preflightSessionFormat } from "../format/validation.ts"
 import { ensureWritableFormatUnlocked } from "./writable-format.ts"
 import type { PersistenceBackend } from "./types.ts"
 
@@ -10,12 +10,14 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
   return {
     invalidate(id: string) { indexes.delete(id) },
     clear() { indexes.clear() },
-    async stage(id: string, events: SessionEvent[]) {
+    async stage(id: string, events: SessionEvent[], preservePhysical = false) {
       let index = indexes.get(id)
-      const loaded = await ensureWritableFormatUnlocked(backend, id)
+      const loaded = preservePhysical ? await backend.read(id) : await ensureWritableFormatUnlocked(backend, id)
+      if (preservePhysical) preflightSessionFormat(loaded.version,loaded.events,loaded.meta)
+      const version = preservePhysical ? loaded.version : CURRENT_FORMAT_VERSION
       let suffix = events
-      if (!index || index.formatVersion !== CURRENT_FORMAT_VERSION || index.eventCount !== loaded.events.length) {
-        index = createConversationValidationIndex(loaded.events, { formatVersion: CURRENT_FORMAT_VERSION, header: loaded.meta })
+      if (!index || index.formatVersion !== version || index.eventCount !== loaded.events.length) {
+        index = createConversationValidationIndex(loaded.events, { formatVersion: version, header: loaded.meta })
         indexes.set(id, index)
         // A retained write-behind batch may already be durable after an uncertain
         // append. Compare actual persisted records once on reload; never cache bodies.
@@ -29,7 +31,7 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
         }
         suffix = events.slice(overlap)
       }
-      preflightBatchShape(CURRENT_FORMAT_VERSION, suffix)
+      preflightBatchShape(version, suffix)
       try {
         const staged = index.stage(suffix, { readCurrentEvent: position => loaded.events[position] })
         return { events: suffix, baseLength: loaded.events.length, commit: () => staged.commit() }

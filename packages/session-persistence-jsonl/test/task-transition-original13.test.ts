@@ -42,3 +42,17 @@ predecessor.each(['bootstrap13-public','bootstrap13-child'])('upgrades original 
   expect(JSON.parse(await readFile(join(root,'task-target.doc.jsonl'),'utf8')).formatVersion).toBe(2)
  }finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
+predecessor('finishes an actual original13 interrupted birth before transitioning its live header',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'incomplete-predecessor-')),source=join(fixture!,'incomplete13-public'),{readdir}=await import('node:fs/promises')
+ const stageName=(await readdir(source)).find(name=>name.startsWith('target.jsonl.bootstrap-')&&name.endsWith('.stage'))!;await copyFile(join(source,'target.jsonl'),join(root,'target.jsonl'));await copyFile(join(source,stageName),join(root,stageName))
+ const before=await readFile(join(root,'target.jsonl')),stage=await readFile(join(root,stageName)),core=await import('@i-harness/core-session')
+ const payload={invocation:{version:1 as const,operationId:'public',targetSessionId:'target',createdAt:'2026-10-23T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage:{origin:'fork' as const,parentSession:'parent'},seed:{digest:core.EMPTY_SEMANTIC_SEED_DIGEST,dependencyDigest:core.EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sourceObservation:{kind:'none' as const},records:[]}},guards={assertCurrent(){},dependencies:{async confirm(){throw Error('unused')},async reconcile(){throw Error('unused')}}}
+ const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{const result=await coordinator.resumeSemanticTarget(payload.invocation,guards,payload);expect(result.kind).toBe('ready');const live=await readFile(join(root,'target.jsonl'));expect(JSON.parse(live.subarray(0,live.indexOf(10)).toString()).formatVersion).toBe(14);expect(await readFile(join(root,stageName))).toEqual(stage);expect(JSON.parse(before.toString()).formatVersion).toBe(13);expect(JSON.parse(await readFile(join(root,'task-target.doc.jsonl'),'utf8')).formatVersion).toBe(2)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+},30000)
+predecessor('reconciles a cached original child13 birth after its live header upgrades',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'cached-child13-')),source=join(fixture!,'bootstrap13-child'),{readdir}=await import('node:fs/promises')
+ for(const name of (await readdir(source)).filter(name=>name==='target.jsonl'||name.startsWith('target.jsonl.bootstrap-')))await copyFile(join(source,name),join(root,name))
+ const {pair,guards}=await import('../../session-persistence/test/child-bootstrap-fixture.ts'),{request,payload}=pair(),coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{const doc=await coordinator.openManagedDocument('target'),result=await coordinator.resumeChildTarget!(request,guards,payload);expect(result.kind).toBe('already-ready');if(result.kind==='already-ready')expect(result.document).toBe(doc)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
+},30000)

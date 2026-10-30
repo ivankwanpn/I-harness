@@ -290,9 +290,16 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         if(!target)return {kind:'unknown'}
         if(originalEmptyTarget(target,id,operation))return {kind:'unknown'}
         if(target.length<operation.headerBytes.length)return {kind:target.equals(Buffer.from(operation.headerBytes.subarray(0,target.length)))?'unknown':'conflict'}
-        if(!target.subarray(0,operation.headerBytes.length).equals(Buffer.from(operation.headerBytes)))return {kind:'conflict'}
-        if(!await syncExact(path,operation.headerBytes,id,owner))return {kind:'unknown'}
-        return {kind:'committed',headerDigest:rawHeaderDigest(operation.headerBytes)}
+        let liveBytes=Buffer.from(operation.headerBytes)
+        if(!target.subarray(0,liveBytes.length).equals(liveBytes)) {
+          const original=JSON.parse(liveBytes.toString('utf8'))
+          if(original.formatVersion!==13)return {kind:'conflict'}
+          const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n')
+          if(!target.subarray(0,upgraded.length).equals(upgraded))return {kind:'conflict'}
+          liveBytes=upgraded
+        }
+        if(!await syncExact(path,liveBytes,id,owner))return {kind:'unknown'}
+        return {kind:'committed',headerDigest:rawHeaderDigest(liveBytes)}
       } catch{return {kind:'unknown'}}
     },
   }

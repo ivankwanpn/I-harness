@@ -1,9 +1,16 @@
 import { expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, copyFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { EMPTY_SEMANTIC_SEED_DIGEST, EMPTY_SEMANTIC_DEPENDENCY_DIGEST } from '@i-harness/core-session'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
+
+// Produced by the immutable 5cb58e6 writer; the 12 sample is synthetic.
+async function copyBirth(root:string,name:string) {
+  const source=join(import.meta.dirname,'fixtures',name)
+  for(const file of await readdir(source)) await copyFile(join(source,file),join(root,file))
+}
+const public13Request=()=>({invocation:{version:1 as const,operationId:'public',targetSessionId:'target',createdAt:'2026-10-23T00:00:00.000Z',requestDigest:'a'.repeat(64)},target:{kind:'new' as const},metadata:{},lineage:{origin:'fork' as const,parentSession:'parent'},seed:{digest:EMPTY_SEMANTIC_SEED_DIGEST,dependencyDigest:EMPTY_SEMANTIC_DEPENDENCY_DIGEST,sourceObservation:{kind:'none' as const},records:[]}})
 
 it('initializes the actual fresh bootstrap target task file before readiness', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-bootstrap-'))
@@ -62,9 +69,9 @@ it('initializes the original public capture target under its reservation', async
 
 it('confirms an existing-empty target task file before replacing its bootstrap header', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-existing-empty-'))
-  const { createHash } = await import('node:crypto'), { legacyPrefixDigest } = await import('@i-harness/core-session'), { createJsonlBackend } = await import('../src/backend-factory.ts')
-  const backend = createJsonlBackend(root), createdAt = '2026-10-23T00:00:00.000Z'
-  await backend.create('target', { sessionId: 'target', formatVersion: 13, createdAt })
+  const { createHash } = await import('node:crypto'), { legacyPrefixDigest } = await import('@i-harness/core-session')
+  const createdAt = '2026-10-23T00:00:00.000Z'
+  await copyBirth(root,'empty13-target')
   const before = await readFile(join(root, 'target.jsonl')), task = '{ "formatVersion": 1, "tasks": [], "notifications": [] }\n'
   await writeFile(join(root, 'task-target.doc.jsonl'), task)
   const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt, requestDigest: 'a'.repeat(64) }, target: { kind: 'existing-empty' as const, expectedHeaderDigest: createHash('sha256').update(before).digest('hex'), expectedPrefix: { eventCount: 0, bodyBytes: 0, prefixDigest: legacyPrefixDigest(0,new Uint8Array()) } }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
@@ -78,80 +85,48 @@ it('confirms an existing-empty target task file before replacing its bootstrap h
 
 it('confirms a completed original13 birth before initializing its missing task file on cold resume', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-cold-birth-'))
-  const { createJsonlSessionCoordinator } = await import('../src/backend-factory.ts')
-  const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
+  const request = public13Request()
   const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
-  const original = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
-  try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
+  await copyBirth(root,'bootstrap13-public')
   const parent = await readFile(join(root, 'target.jsonl')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     expect((await coordinator.resumeSemanticTarget(request.invocation, guards)).kind).toBe('already-ready')
-    expect(await readFile(join(root, 'target.jsonl'))).toEqual(parent)
+    expect((await readFile(join(root, 'target.jsonl'))).subarray((await readFile(join(root, 'target.jsonl'))).indexOf(10)+1)).toEqual(parent.subarray(parent.indexOf(10)+1))
     expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it('preserves a constructed original12 birth while confirming task storage and upgrading its live header', async () => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-bootstrap12-'))
-  const p = await import('@i-harness/session-persistence'), core = await import('@i-harness/core-session')
-  const { pair, guards } = await import('../../session-persistence/test/child-bootstrap-fixture.ts')
-  const { buildBootstrapHeader, bootstrapManifest } = await import('../../session-persistence/src/coordinator/bootstrap-header.ts')
-  const { bootstrapPaths } = await import('../src/backend/bootstrap-stage.ts'), { createJsonlBackend } = await import('../src/backend-factory.ts')
-  const { payload } = pair(), current = buildBootstrapHeader(payload).stage, headerBase = { ...current.headerBase, formatVersion: 12 }, draft = { ...current, headerBase }, header = JSON.parse(current.headerBytes)
-  header.formatVersion = 12; header.semanticSeed.manifestDigest = bootstrapManifest(draft, payload.seed.records)
-  const stage = { ...draft, headerBytes: core.canonicalJsonData(header) + '\n' }, built = buildBootstrapHeader(payload, stage), path = join(root, 'target.jsonl'), paths = bootstrapPaths(path, payload.invocation)
-  await writeFile(paths.stage, built.operation.stageBytes); await writeFile(path, built.operation.headerBytes)
-  const backend = createJsonlBackend(root), originalUpgrade = backend.upgradeSessionFormat!
-  backend.upgradeSessionFormat = async () => { throw Error('hold original12 birth') }
-  const old = p.createSessionCoordinator(backend, { lock: { enabled: true } })
-  try { expect((await old.resumeSemanticTarget(payload.invocation, guards, payload)).kind).toBe('blocked') } finally { await old.close(); backend.upgradeSessionFormat = originalUpgrade }
-  const before = await readFile(path), stageBefore = await readFile(paths.stage), originalBody = before.subarray(before.indexOf(10) + 1)
-  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  try {
-    expect((await coordinator.resumeSemanticTarget(payload.invocation, guards, payload)).kind).toBe('already-ready')
-    const after = await readFile(path); expect(after.subarray(after.indexOf(10) + 1)).toEqual(originalBody); expect(await readFile(paths.stage)).toEqual(stageBefore)
-    expect(JSON.parse(after.subarray(0, after.indexOf(10)).toString()).formatVersion).toBe(13)
-    expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
-  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+it('preserves a synthetic12 compatibility birth while upgrading its live header', async () => {
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'task-transition-bootstrap12-'))
+ const {pair,guards}=await import('../../session-persistence/test/child-bootstrap-fixture.ts'),{bootstrapPaths}=await import('../src/backend/bootstrap-stage.ts'),{payload}=pair(),path=join(root,'target.jsonl'),paths=bootstrapPaths(path,payload.invocation)
+ await copyBirth(root,'synthetic12-child');const before=await readFile(path),stageBefore=await readFile(paths.stage),originalBody=before.subarray(before.indexOf(10)+1)
+ const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{expect((await coordinator.resumeSemanticTarget(payload.invocation,guards,payload)).kind).toBe('already-ready');const after=await readFile(path);expect(after.subarray(after.indexOf(10)+1)).toEqual(originalBody);expect(await readFile(paths.stage)).toEqual(stageBefore);expect(JSON.parse(after.subarray(0,after.indexOf(10)).toString()).formatVersion).toBe(14);expect(JSON.parse(await readFile(join(root,'task-target.doc.jsonl'),'utf8')).formatVersion).toBe(2)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 
-it('finishes the original incomplete13 birth before the task barrier without rewriting birth bytes', async () => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-incomplete-birth-'))
-  const { pair, guards } = await import('../../session-persistence/test/child-bootstrap-fixture.ts')
-  const { buildBootstrapHeader } = await import('../../session-persistence/src/coordinator/bootstrap-header.ts'), { bootstrapPaths } = await import('../src/backend/bootstrap-stage.ts')
-  const { payload } = pair(), built = buildBootstrapHeader(payload), path = join(root, 'target.jsonl'), paths = bootstrapPaths(path, payload.invocation)
-  await writeFile(paths.stage, built.operation.stageBytes); await writeFile(path, built.operation.headerBytes)
-  const stageBefore = await readFile(paths.stage), headerBefore = await readFile(path)
-  const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
-  try {
-    const result = await coordinator.resumeSemanticTarget(payload.invocation, guards, payload); if (result.kind !== 'ready') throw new Error(JSON.stringify({ result, parent: (await readFile(path,'utf8')).split('\n').length, stage: (await readFile(paths.stage)).length })); expect(result.kind).toBe('ready')
-    const after = await readFile(path); expect(after.subarray(0, headerBefore.length)).toEqual(headerBefore); expect(await readFile(paths.stage)).toEqual(stageBefore)
-    expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
-  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+it('finishes a genuine incomplete13 birth before the task barrier without rewriting stage bytes', async () => {
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'task-transition-incomplete-birth-')),payload=public13Request(),guards={assertCurrent(){},dependencies:{async confirm(){throw Error('unused')},async reconcile(){throw Error('unused')}}}
+ await copyBirth(root,'incomplete13-public');const {bootstrapPaths}=await import('../src/backend/bootstrap-stage.ts'),path=join(root,'target.jsonl'),paths=bootstrapPaths(path,payload.invocation),stageBefore=await readFile(paths.stage),headerBefore=JSON.parse((await readFile(path,'utf8')).trim())
+ const coordinator=createJsonlTaskTransitionCoordinator(root,{lock:{enabled:true}},taskDocumentStorageContract)
+ try{expect((await coordinator.resumeSemanticTarget(payload.invocation,guards,payload)).kind).toBe('ready');const after=await readFile(path),live=JSON.parse(after.subarray(0,after.indexOf(10)).toString());expect(live).toEqual({...headerBefore,formatVersion:14});expect(await readFile(paths.stage)).toEqual(stageBefore);expect(JSON.parse(await readFile(join(root,'task-target.doc.jsonl'),'utf8')).formatVersion).toBe(2)}finally{await coordinator.close();await rm(root,{recursive:true,force:true})}
 })
 
 it('opens a completed original13 semantic birth through the actual managed cold-open path', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-managed-birth-'))
-  const { createJsonlSessionCoordinator } = await import('../src/backend-factory.ts')
-  const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
-  const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
-  const original = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
-  try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
+  await copyBirth(root,'bootstrap13-public')
   const before = await readFile(join(root, 'target.jsonl')), coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     const document = await coordinator.openManagedDocument('target'); expect(document.view.events).toHaveLength(1)
-    expect(await readFile(join(root, 'target.jsonl'))).toEqual(before)
+    expect((await readFile(join(root, 'target.jsonl'))).subarray((await readFile(join(root, 'target.jsonl'))).indexOf(10)+1)).toEqual(before.subarray(before.indexOf(10)+1))
     expect(JSON.parse(await readFile(join(root, 'task-target.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
 it('resumes the same cached original semantic document through its retained task boundary', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-cached-birth-'))
-  const { createJsonlSessionCoordinator } = await import('../src/backend-factory.ts')
-  const request = { invocation: { version: 1 as const, operationId: 'op', targetSessionId: 'target', createdAt: '2026-10-23T00:00:00.000Z', requestDigest: 'a'.repeat(64) }, target: { kind: 'new' as const }, metadata: {}, lineage: { origin: 'fork' as const, parentSession: 'parent' }, seed: { digest: EMPTY_SEMANTIC_SEED_DIGEST, dependencyDigest: EMPTY_SEMANTIC_DEPENDENCY_DIGEST, sourceObservation: { kind: 'none' as const }, records: [] } }
+  const request = public13Request()
   const guards = { assertCurrent() {}, dependencies: { async confirm() { throw Error('unused') }, async reconcile() { throw Error('unused') } } }
-  const original = createJsonlSessionCoordinator(root, { lock: { enabled: true } })
-  try { expect((await original.bootstrapSemanticTarget(request, guards)).kind).toBe('ready') } finally { await original.close() }
+  await copyBirth(root,'bootstrap13-public')
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     const document = await coordinator.openManagedDocument('target')

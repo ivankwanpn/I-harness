@@ -14,7 +14,7 @@ import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
 import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest, HeaderOutcome } from './bootstrap-types.ts'
 import type { createManagedDocument } from './managed-document.ts'
-import type { PersistenceBackend } from './types.ts'
+import type { PersistenceBackend, SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts'
@@ -201,6 +201,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     // The task transition borrows this exact claim. Its original file and
     // document-lease cleanup must finish before the capture owner retires it.
     await entry.bootstrap?.taskBarrier?.retryClose()
+    await entry.selected?.taskBarrier?.retryClose()
     await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
@@ -728,25 +729,44 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
       if(entry.revoked||captureClosed)return Promise.resolve({kind:'blocked'})
       if(entry.flight)return entry.flight.then(()=>({kind:'blocked' as const}),()=>({kind:'blocked' as const}))
-      return Promise.resolve({kind:entry.document&&entry.selected.resultReceipt?'qualification-required':'blocked'})
+      if(entry.document)return Promise.resolve({kind:entry.selected.resultReceipt?'qualification-required':'blocked'})
+      if(!entry.selected.cold)return Promise.resolve({kind:'conflict'})
     }
     if(captureClosed||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)return Promise.resolve({kind:'blocked'})
     const journal=(backend as PersistenceBackend & {selectedJournal?:{inspectCheckedBirth(route:SelectedResultsRoute,held:HeldFactOwner):Promise<
-      {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix}}
+      {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix};meta:SessionMeta}
     >}}).selectedJournal
     if(!journal)return Promise.resolve({kind:'blocked'})
-    entry={selected:{cold:true,route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}}
-    documents.set(id,entry);const owned=entry
+    if(!entry){entry={selected:{cold:true,route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}};documents.set(id,entry)}
+    const owned=entry
     const check=()=>{if(captureClosed||owned.revoked||documents.get(id)!==owned)throw new FactRecoveryRequiredError()}
     const flight=Promise.resolve().then(async()=>{
-      await backend.checkBootstrapCaptureRoot!();check();const io=await captureBundle(owned);check()
+      await backend.checkBootstrapCaptureRoot!();check();const io=await captureBundle(owned);await settleCapture(owned);check()
       io.settled=false
-      const result=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held))
+      let result=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held))
       await settleCapture(owned);check()
       if(result.kind!=='checked')return {kind:result.kind==='conflict'?'conflict' as const:'blocked' as const}
+      if(transitions&&!owned.selected?.taskBarrier?.completed){
+        originalBootstrapEntries.set(owned,{id,documents})
+        const selected=owned.selected!; selected.taskBarrier ??= transitions.bootstrap(id,owned,route,'completed',{claim:io.claim,held:io.held})
+        const barrier=selected.taskBarrier;barrier.setGuard(check);await barrier.prepare();check()
+        const capture=(backend as PersistenceBackend & {selectedCapture?:{confirmSelectedBirthHeader(id:string,held:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,version:number):Promise<HeaderOutcome>}}).selectedCapture
+        if(!capture)throw new FactRecoveryRequiredError()
+        const stage=result.birth.stage,operation:BootstrapHeaderOperation={invocation:stage.invocation,target:stage.originalTarget,stageBytes:Buffer.from(canonicalJsonData(stage)+'\n'),headerBytes:Buffer.from(stage.headerBytes)}
+        if(!barrier.headerCommitted){
+          io.settled=false;const header=await barrier.runHeader(held=>capture.confirmSelectedBirthHeader(id,held,route,operation,result.kind==='checked'?result.meta.formatVersion:-1));await settleCapture(owned);check()
+          if(header.kind!=='committed')throw new FactRecoveryRequiredError()
+          barrier.markHeaderCommitted()
+        }
+        if(result.meta.formatVersion<CURRENT_FORMAT_VERSION||barrier.upgradePending)await barrier.upgrade()
+        await barrier.finishHeader();check()
+        io.settled=false;const current=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held));await settleCapture(owned);check()
+        if(current.kind!=='checked'||current.meta.formatVersion!==CURRENT_FORMAT_VERSION||!sameBootstrapData(current.birth.stage,result.birth.stage)||!sameBootstrapData(current.history.events,result.history.events)||!sameBootstrapData(current.history.prefix,result.history.prefix))throw new FactRecoveryRequiredError()
+        result=current
+      }
       const {birth,history}=result,completion=history.events[birth.stage.seed.seedLength]
       if(!completion||completion.type!=='session/bootstrap')return {kind:'blocked' as const}
-      const facts=birth.facts,meta=JSON.parse(birth.stage.headerBytes)
+      const facts=birth.facts,meta=result.meta
       const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
       await owned.control!.bindSelected!();check()
       owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
@@ -755,7 +775,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).catch(()=>({kind:'blocked' as const})).finally(async()=>{
       try {
         await settleCapture(owned)
-        if(!owned.document) {
+        if(!owned.document&&!owned.selected?.taskBarrier) {
           await releaseCapture(owned)
           if(documents.get(id)===owned)documents.delete(id)
         }

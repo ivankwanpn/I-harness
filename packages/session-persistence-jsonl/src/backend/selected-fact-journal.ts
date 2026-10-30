@@ -41,7 +41,7 @@ function captureBatch(prefixInput:import('@i-harness/core-session').JournalPrefi
 /** Private factory; no selected bootstrap authoring capability is advertised. */
 export function createSelectedFactJournalBackend(filePath:(id:string)=>string,assertNotDeleted:(kind:string,id:string)=>Promise<void>,captureIO:BootstrapCaptureIO) {
  const scopes=new WeakMap<object,ScopeData>()
- const checkedBirths=new WeakMap<object,{id:string;owner:HeldFactOwner['owner'];birthBody:Buffer;history:ReturnType<typeof readBootstrapFactJournal>}>()
+ const checkedBirths=new WeakMap<object,{id:string;owner:HeldFactOwner['owner'];birthBody:Buffer;history:ReturnType<typeof readBootstrapFactJournal>;meta:ReturnType<typeof parseHeader>}>()
  const birthLanes=new WeakMap<object,WeakMap<object,SelectedLaneScope>>()
  const issuedBatches=new WeakMap<object,Map<string,{prefix:import('@i-harness/core-session').JournalPrefix;bytes:Buffer}>>()
  const stageIO=(ledger:CaptureLedger,path:string,guard:()=>void)=>({namespace:()=>bootstrapNamespace(path),read:(p:string,limit:number)=>captureIO.bytes(ledger,p,limit,guard),assertCurrent:guard})
@@ -59,21 +59,21 @@ let observed:Buffer|undefined
    const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{stage:io.stage,async readJournal(){observed=await io.readJournal();return observed}});guard();captureIO.assertNoCleanupDebt(ledger)
 if(birth){
     const raw=observed!,end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8')),journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta),last=journal.frames[1]!
-    checkedBirths.set(birth,{id,owner:owner.owner,birthBody:Buffer.from(raw.subarray(end+1,end+1+last.prefix.bodyBytes+last.batch.bytes.length)),history:journal})
+    checkedBirths.set(birth,{id,owner:owner.owner,birthBody:Buffer.from(raw.subarray(end+1,end+1+last.prefix.bodyBytes+last.batch.bytes.length)),history:journal,meta})
    }
    return birth
   })
  }
  /** Qualify the entire original route before exposing the held checked birth. */
  async function inspectCheckedBirth(input:SelectedResultsRoute,owner:HeldFactOwner):Promise<
-  {kind:'checked';birth:Birth;history:ReturnType<typeof readBootstrapFactJournal>}|{kind:'unavailable'}|{kind:'conflict'}> {
+  {kind:'checked';birth:Birth;history:ReturnType<typeof readBootstrapFactJournal>;meta:ReturnType<typeof parseHeader>}|{kind:'unavailable'}|{kind:'conflict'}> {
   const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
   const birth=await resolveCheckedBirth(id,owner)
   if(!birth)return {kind:'unavailable'}
   if(!same(route,birth.route))return {kind:'conflict'}
-  const history=checkedBirths.get(birth)!.history
+  const {history,meta}=checkedBirths.get(birth)!
   if(history.torn)throw TypeError('Selected journal has incomplete suffix')
-  return {kind:'checked',birth,history}
+  return {kind:'checked',birth,history,meta}
  }
  function bindCheckedBirthLane(id:string,owner:HeldFactOwner,birth:Birth):SelectedLaneScope {
   captureIO.scope(id,owner)

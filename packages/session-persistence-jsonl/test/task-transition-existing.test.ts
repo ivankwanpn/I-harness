@@ -1,14 +1,17 @@
-import { mkdtemp, readFile, rm, writeFile, appendFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, appendFile, copyFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createJsonlBackend } from '../src/backend-factory.ts'
 import { createJsonlTaskTransitionCoordinator } from '../src/task-document-factory.ts'
 
+// Produced by the immutable original 5cb58e6 writer; never reconstructed from a new header.
+const seedOriginal13 = (root:string) => copyFile(join(import.meta.dirname,'fixtures/original13-empty.jsonl'),join(root,'p.jsonl'))
+
 it('refuses a missing task document when complete local history names a task', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-existing-'))
   const backend = createJsonlBackend(root)
-  await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: '2026-01-01' })
+  await seedOriginal13(root)
   await backend.append('p', [{ type: 'subagent/start', version: 1, taskId: 'task-1', agentPath: 'a', role: 'worker', description: 'd' }])
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
@@ -19,7 +22,7 @@ it('refuses a missing task document when complete local history names a task', a
 
 it('initializes a missing task document only for an empty complete local history', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-existing-empty-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  await seedOriginal13(root)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.loadOwned('p')
@@ -29,7 +32,7 @@ it('initializes a missing task document only for an empty complete local history
 
 it.each([1, 2])('confirms literal v%s task bytes without rewriting them', async formatVersion => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-existing-present-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  await seedOriginal13(root)
   const literal = `{ "notifications": [], "tasks": [], "formatVersion": ${formatVersion} }\n`
   await writeFile(join(root, 'task-p.doc.jsonl'), literal)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -39,7 +42,7 @@ it.each([1, 2])('confirms literal v%s task bytes without rewriting them', async 
 
 it('refuses a present task document that omits an original local task', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-inconsistent-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   await backend.append('p', [{ type: 'subagent/start', version: 1, taskId: 'task-1', agentPath: 'a', role: 'worker', description: 'd' }])
   const literal = '{"formatVersion":2,"tasks":[],"notifications":[]}\n'; await writeFile(join(root, 'task-p.doc.jsonl'), literal)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -49,7 +52,7 @@ it('refuses a present task document that omits an original local task', async ()
 
 it('repairs a torn framed tail before proving local task history', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-torn-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   await backend.append('p', [{ type: 'subagent/start', version: 1, taskId: 'task-1', agentPath: 'a', role: 'worker', description: 'd' }])
   await appendFile(join(root, 'p.jsonl'), '{"incomplete":')
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
@@ -62,7 +65,7 @@ it('repairs a torn framed tail before proving local task history', async () => {
 
 it('refuses direct writable admission when prior local task history lacks its document', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-direct-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   await backend.append('p', [{ type: 'subagent/start', version: 1, taskId: 'task-1', agentPath: 'a', role: 'worker', description: 'd' }])
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
@@ -73,7 +76,7 @@ it('refuses direct writable admission when prior local task history lacks its do
 
 it('appends and updates metadata only after the original existing task transition', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-direct-positive-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.append('p', [{ type: 'user/message', text: 'kept' }])
@@ -84,15 +87,15 @@ it('appends and updates metadata only after the original existing task transitio
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
-it('initializes task storage before upgrading an actual framed predecessor', async () => {
+it('initializes task storage before upgrading a synthetic framed12 compatibility sample', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-predecessor-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   const path = join(root, 'p.jsonl'), raw = await readFile(path, 'utf8'), lines = raw.split('\n'), header = JSON.parse(lines[0]!)
   header.formatVersion = 12; lines[0] = JSON.stringify(header); await writeFile(path, lines.join('\n'))
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
   try {
     await coordinator.loadOwned('p')
-    expect((await backend.read('p')).version).toBe(13)
+    expect((await backend.read('p')).version).toBe(14)
     expect(JSON.parse(await readFile(join(root, 'task-p.doc.jsonl'), 'utf8')).formatVersion).toBe(2)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
@@ -105,7 +108,7 @@ it('preserves a complete legacy body without a final newline when upgrading', as
   try {
     const loaded = await coordinator.loadOwned('p'); expect(loaded.session.events).toHaveLength(1)
     const raw = await readFile(path, 'utf8'); expect(raw.endsWith(body + '\n')).toBe(true)
-    const header = JSON.parse(raw.slice(0, raw.indexOf('\n'))); expect(header.formatVersion).toBe(13); expect(header.journal.legacyEventCount).toBe(1)
+    const header = JSON.parse(raw.slice(0, raw.indexOf('\n'))); expect(header.formatVersion).toBe(14); expect(header.journal.legacyEventCount).toBe(1)
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
 
@@ -123,7 +126,7 @@ it('persists required legacy recovery before rereading and upgrading', async () 
 
 it('drains the original queued write through the task transition', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-enqueue-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true }, maxDelayMs: 60000 }, taskDocumentStorageContract)
   try {
     coordinator.enqueue('p', [{ type: 'user/message', text: 'queued' }]); await coordinator.flush('p')
@@ -134,7 +137,7 @@ it('drains the original queued write through the task transition', async () => {
 
 it('drains previously queued parent work inside its original transition admission', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-drain-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true }, maxDelayMs: 60000 }, taskDocumentStorageContract)
   try {
     coordinator.enqueue('p', [{ type: 'user/message', text: 'queued before load' }])
@@ -145,12 +148,13 @@ it('drains previously queued parent work inside its original transition admissio
 
 it('does not initialize task storage after a queued local start becomes committed', async () => {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-transition-queued-start-'))
-  const backend = createJsonlBackend(root); await backend.create('p', { sessionId: 'p', formatVersion: 13, createdAt: 'x' })
+  const backend = createJsonlBackend(root); await seedOriginal13(root)
   const coordinator = createJsonlTaskTransitionCoordinator(root, { lock: { enabled: true }, maxDelayMs: 60000 }, taskDocumentStorageContract)
   try {
     coordinator.enqueue('p', [{ type: 'subagent/start', version: 1, taskId: 'task-1', agentPath: 'a', role: 'worker', description: 'd' }])
     await expect(coordinator.loadOwned('p')).rejects.toThrow()
     expect((await backend.read('p')).events).toHaveLength(1)
+    expect((await backend.read('p')).version).toBe(13)
     await expect(readFile(join(root, 'task-p.doc.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' })
   } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })
