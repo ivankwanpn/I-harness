@@ -1,3 +1,4 @@
+import { createArtifactQualificationIO, type ArtifactQualificationIO } from './qualification-io.ts'
 import { mkdir } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { canonicalJsonData, type BootstrapDependencyRequest, type BootstrapDependencyOutcome, type ManagedArtifactRef } from '@i-harness/core-session'
@@ -14,7 +15,7 @@ import { captureHost, captureRequest, captureTarget, TransferBlocked, type SeedD
 import { canonicalCompare, createTransferClosure } from './transfer-closure.ts'
 export type { SeedDependencyHostAccess, SeedDependencyTransferBinding, SeedDependencyTransferScope } from './transfer-codec.ts'
 
-interface Registration { access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
+interface Registration { io:ArtifactQualificationIO; access: SeedDependencyHostAccess; request?: string; target?: string; revoked: boolean; publications?: Map<string, { value: string; original: ReturnType<typeof createAtomicJsonPublication> }> }
 interface SourceRelation { ref: ManagedArtifactRef; viaCatalog?: ManagedArtifactRef }
 interface Publication { path: string; value: ArtifactPin | TransferMembership | { version: 1; sessionId: string; revision: string; pinId: string }; relations: Set<SourceRelation> }
 export function createSeedDependencyTransfer(deps: {
@@ -24,14 +25,20 @@ export function createSeedDependencyTransfer(deps: {
   authorized(access: ContextAccess, ref: ManagedArtifactRef, viaCatalog?: ManagedArtifactRef, verifyOriginalCatalog?: boolean): Promise<ArtifactOperation>;
   membership: ReturnType<typeof createDependencyMembership>;
 }) {
+  let qualificationClosing=false
   const scopes = new WeakMap<SeedDependencyTransferScope, Registration>()
   // Original publication IO cleanup only; this collection grants no authority.
+  const qualificationIO = new Set<ArtifactQualificationIO>()
   const publicationIO = new Set<ReturnType<typeof createAtomicJsonPublication>>()
+  // The WeakMap scope retains identity. Only active/debt IO needs strong cleanup ownership.
+  function retireEmptyQualification(io:ArtifactQualificationIO){try{io.assertSettled();qualificationIO.delete(io)}catch{/* original active cleanup debt stays reachable */}}
+  async function settleQualification(io:ArtifactQualificationIO){qualificationIO.add(io);try{await io.settle()}finally{retireEmptyQualification(io)}}
   function registerSeedDependencyTransfer(access: SeedDependencyHostAccess, originalPublication?: 'original-publication'): SeedDependencyTransferScope {
     const captured = captureHost(access)
     if (!deps.available(captured.binding.targetDocumentId)) throw new TransferBlocked('unavailable')
     const scope = Object.freeze({ kind: 'seed-dependency-transfer' as const })
-    scopes.set(scope, { access: captured, revoked: false, ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
+    const io=createArtifactQualificationIO()
+    scopes.set(scope, { io, access: captured, revoked: false, ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
   }
   function metadataOutcome(result: ImmutableMetadataOutcome): void {
     if (result.kind !== 'confirmed') throw new TransferBlocked(result.kind === 'conflict' ? 'conflict' : result.kind === 'absent' || result.kind === 'not-issued' ? 'unavailable' : 'unknown')
@@ -50,6 +57,7 @@ export function createSeedDependencyTransfer(deps: {
       const { access } = registration, binding = access.binding, passive = caller === undefined
       let targetSourceId: string
       const check = () => {
+        if(passive&&qualificationClosing)throw new TransferBlocked('unavailable')
         if (!deps.available(binding.targetSessionId) || !deps.available(binding.targetDocumentId)) throw new TransferBlocked('unavailable')
         if (registration.revoked) throw new TransferBlocked('policy')
         try {
@@ -70,8 +78,9 @@ export function createSeedDependencyTransfer(deps: {
       // Every asynchronous boundary checks currentness before its result can
       // inform another read, mutation, or successful acknowledgement.
       const wait = async <T>(promise: Promise<T>): Promise<T> => { const result = await promise; check(); return result }
+      qualificationIO.add(registration.io)
       try {
-        check()
+        await registration.io.settle();check()
         const roots = [...request.artifacts].sort((a, b) => canonicalCompare(a.ref, b.ref)), operations = new Map<string, ArtifactOperation>()
         const publications = new Map<string, Publication>(), closure = createTransferClosure(deps.options.workspaceId, binding)
         // These are immutable relation descriptors for this attempt, never
@@ -100,10 +109,10 @@ export function createSeedDependencyTransfer(deps: {
         async function operation(ref: ManagedArtifactRef) {
           const key = canonicalJsonData(ref), prior = operations.get(key)
           if (prior) return prior
-          const value = await wait(deps.membership.operation(ref))
+          const value = await wait(deps.membership.operation(ref,registration.io))
           // A zero-length verified range checks the retained manifest, index
           // header/root and physical file sizes without reading body bytes.
-          await wait(readVerifiedArtifactBytes(deps.root, deps.directory(ref.id), ref, 0, 0))
+          await wait(readVerifiedArtifactBytes(deps.root, deps.directory(ref.id), ref, 0, 0, registration.io))
           operations.set(key, value); return value
         }
         function targetCompatible(value: ArtifactOperation) {
@@ -145,7 +154,7 @@ export function createSeedDependencyTransfer(deps: {
             if (!validTransferMembership(record)) throw new TransferBlocked('unavailable')
             const path = deps.membership.companion(memberRef, binding.targetDocumentId, artifact.ref)
             publication(path, record, relation)
-          }, use.count))
+          }, use.count, registration.io))
         }
         // All original metadata, catalog EOF and source witnesses are verified
         // before the first target mutation. Existing final/pending bytes also
@@ -154,7 +163,7 @@ export function createSeedDependencyTransfer(deps: {
         for (const publication of publications.values()) {
           const { path, value } = publication
           if (!registration.publications) {
-            const result = await wait(confirmAtomicJson(deps.root, path, value))
+            const result = await wait(confirmAtomicJson(deps.root, path, value,undefined,registration.io))
             if (passive || result.kind === 'conflict') metadataOutcome(result)
             if (result.kind !== 'confirmed') unfinished.push(publication)
             continue
@@ -185,7 +194,7 @@ export function createSeedDependencyTransfer(deps: {
             const directories = isCompanion ? [dirname(parent), parent] : [parent]
             for (const directory of directories) {
               check()
-              try { await wait(mkdir(directory)) } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; check() }
+              try { await wait(mkdir(directory)) } catch (cause) { if ((cause as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw cause; check() }
               await wait(ownedPath(deps.root, directory))
             }
             await renew(relations)
@@ -195,23 +204,25 @@ export function createSeedDependencyTransfer(deps: {
         }
         // A surviving source is irrelevant to passive confirmation. Only exact
         // target publications, original operations and target policy gate it.
-        for (const { path, value } of publications.values()) metadataOutcome(await wait(registration.publications ? registration.publications.get(path)!.original.confirm() : confirmAtomicJson(deps.root, path, value)))
+        for (const { path, value } of publications.values()) metadataOutcome(await wait(registration.publications ? registration.publications.get(path)!.original.confirm() : confirmAtomicJson(deps.root, path, value,undefined,registration.io)))
         for (const value of operations.values()) {
-          if (canonicalJsonData(await wait(deps.membership.operation(value.ref!))) !== canonicalJsonData(value)) throw new TransferBlocked('conflict')
-          await wait(readVerifiedArtifactBytes(deps.root, deps.directory(value.id), value.ref!, 0, 0))
+          if (canonicalJsonData(await wait(deps.membership.operation(value.ref!,registration.io))) !== canonicalJsonData(value)) throw new TransferBlocked('conflict')
+          await wait(readVerifiedArtifactBytes(deps.root, deps.directory(value.id), value.ref!, 0, 0, registration.io))
         }
         for (const value of operations.values()) targetCompatible(value)
         // No source callbacks in PASSIVE. NEW must renew all direct and via
         // relations after the last publication/integrity await before success.
         await renew(sourceRelations.values())
-        check(); return { kind: 'confirmed', closureDigest: closure.finish() }
+        registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: closure.finish() }
       } catch (cause) {
-        return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException).code === 'ENOENT' ? 'unavailable' : 'unknown' }
-      }
+        return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT' ? 'unavailable' : 'unknown' }
+      } finally {retireEmptyQualification(registration.io)}
     })
   }
   return { registerSeedDependencyTransfer,
-    async closeTransfers() { for (const original of publicationIO) await original.close() },
+    closeTransferAdmission(){qualificationClosing=true},
+    settleSeedDependencyTransfer(scope:SeedDependencyTransferScope){const registration=scopes.get(scope);if(!registration)throw Error('Original artifact transfer scope required');return deps.mutate(()=>settleQualification(registration.io))},
+    async closeTransfers() { const results=await Promise.allSettled([...qualificationIO].map(settleQualification).concat([...publicationIO].map(original=>original.close())));const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Original transfer IO cleanup failed') },
     confirmSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest, current: () => boolean): Promise<BootstrapDependencyOutcome> => typeof current === 'function' ? invoke(scope, request, current) : Promise.resolve({ kind: 'blocked', reason: 'conflict' }),
     reconcileSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest) => invoke(scope, request, undefined) }
 }

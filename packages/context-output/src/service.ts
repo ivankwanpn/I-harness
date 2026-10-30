@@ -1,3 +1,4 @@
+import type { SeedDependencyTransferScope } from './artifact/bootstrap-transfer.ts'
 import { access as fileAccess } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { checkAbort, serializedBytes } from './bytes.ts'
@@ -16,6 +17,8 @@ import { commitment } from './legacy/fork-codec.ts'
 import type { LegacyReadObservation, LegacyReadQuery, LegacySearchQuery } from './legacy/fork-types.ts'
 import { createSelectedMetadata } from './legacy/selected-metadata.ts'
 
+const artifactSettlement=new WeakMap<ContextOutputService,(scope:SeedDependencyTransferScope)=>Promise<void>>()
+export function settleSeedDependencyTransferIO(service:ContextOutputService,scope:SeedDependencyTransferScope){const settle=artifactSettlement.get(service);if(!settle)throw Error('Original artifact service required');return settle(scope)}
 type SelectedMetadataOwner=Awaited<ReturnType<typeof createSelectedMetadata>>
 type SelectedCleanup={retry():Promise<void>}
 type SelectedAcquisitionDebt={failure:unknown;store:ContextStore;settled:boolean;cleanup:SelectedCleanup}
@@ -422,6 +425,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
     },
     async close() {
       if (closed) return
+      artifacts.closeTransferAdmission()
       for(const reader of selectedReaders)reader.revoke()
       // The transition tail swallows failures to preserve queue ordering. Close
       // callers must join the original outcome instead, retaining the permanent
@@ -448,6 +452,7 @@ export function createContextOutputService(inputOptions: ContextOutputOptions): 
       await closeFlight
     },
   }
+  artifactSettlement.set(service,artifacts.settleSeedDependencyTransfer)
   selectedLegacyOwners.set(service,legacy.selected)
   selectedMetadataOwners.set(service,{cleanupForError(error){for(const debt of selectedAcquisitionDebts)if(debt.failure===error)return debt.cleanup;for(const reader of selectedReaders){const cleanup=reader.cleanupForError(error);if(cleanup)return cleanup}},async acquire(observation){
     assertOpen()

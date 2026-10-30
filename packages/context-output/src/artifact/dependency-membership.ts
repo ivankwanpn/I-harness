@@ -1,3 +1,4 @@
+import type { ArtifactQualificationIO } from './qualification-io.ts'
 import { mkdir } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { canonicalJsonData, isStrictFactData, validManagedArtifactRef, type ManagedArtifactRef, type ResultDependency } from '@i-harness/core-session'
@@ -59,11 +60,11 @@ export function validTransferMembership(value: unknown): value is TransferMember
  * private scope supplies semantics; these companions never grant a pin. */
 export function createDependencyMembership(root: string, workspaceId: string, directory: (id: string) => string, quota: () => number) {
   const companion = (member: ManagedArtifactRef, documentId: string, catalog: ManagedArtifactRef) => resolve(directory(member.id), 'pin-memberships', sha(documentId), sha(JSON.stringify([catalog.id, catalog.revision])) + '.json')
-  async function operation(ref: ManagedArtifactRef): Promise<ArtifactOperation> {
+  async function operation(ref: ManagedArtifactRef, io?: ArtifactQualificationIO): Promise<ArtifactOperation> {
     if (!validManagedArtifactRef(ref)) throw new Error('Dependency reference unavailable')
     const path = resolve(directory(ref.id), 'operation.json')
     await ownedPath(root, path)
-    const value = await boundedJson(path) as ArtifactOperation
+    const value = await boundedJson(path,65536,undefined,io) as ArtifactOperation
     if (value.version !== 1 || value.phase !== 'committed' || value.id !== ref.id || !value.ref || !sameArtifactRef(value.ref, ref) || !value.manifest || !validOwner(value.owner)) throw new Error('Dependency operation stale or unavailable')
     validateManifest(value.manifest, ref)
     return value
