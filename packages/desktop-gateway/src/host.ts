@@ -229,7 +229,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow,id=>service.liveAssembly(id)?.metadataFacts),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
-  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
+  const instructionWatch = createFsWatchService()
+  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"), { watch: instructionWatch })
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
   let autoCompactionEnabled = settings.get().compaction.auto
@@ -243,7 +244,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
       hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
-  const instructionWatch = createFsWatchService()
+
   const instructionEnvironment = createInstructionEnvironment({ settingsPath, watch: instructionWatch })
   const service: SessionService = createSessionService({
     instructionEnvironment,
@@ -522,6 +523,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
       shutdownRequested = true
+      stopPluginObserver.dispose()
       instructionEnvironment.dispose()
       const attempt = (async () => {
         const failures: Array<{ name: string; cause: unknown }> = []
@@ -533,7 +535,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("trust watcher fence", () => trustWatcher.dispose())
         await once("policy timer", () => clearInterval(policyTimer))
         await once("interaction", () => interaction.close())
-        await once("plugin observer", () => stopPluginObserver())
+
         await once("terminal", () => terminal.close())
         await once("interaction subscription", () => offInteraction())
         await once("input", () => input.close())
@@ -551,12 +553,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         if(forksJoined)await once("session service", () => service.close())
         if(forksJoined)await once("native context", () => nativeContext.close())
         await once("approvals", () => approvals.flush())
+        await once("plugin observer", () => stopPluginObserver.close())
         await once("plugins", () => plugins.close())
         // A refresh may await creating session assemblies. Fence early, but
         // join only after their owners can settle shutdown dependencies.
         await once("trust watcher", () => trustWatcher.close())
         if (cleaned.has('session service')) await once('instructions', () => instructionEnvironment.close())
-        if (cleaned.has('trust watcher') && cleaned.has('instructions')) await once('instruction watch', () => instructionWatch.close())
+        if (cleaned.has('trust watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
         if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => coordinator.close())

@@ -1,4 +1,5 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { createFsWatchService } from "@i-harness/fs-watch"
+import { mkdtemp, mkdir, rm, writeFile, rename } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -14,7 +15,8 @@ it("withdraws skills-only and command plugin resources from the same existing as
   const root = await mkdtemp(join(tmpdir(), "ih-live-plugin-resources-"))
   await mkdir(join(root, "plugins"))
   await writeFile(join(root, "plugins", "state.json"), JSON.stringify({ version: 1, sources: [], plugins: [] }))
-  const plugins = createDesktopPlugins(join(root, "plugins"))
+  const watch = createFsWatchService()
+  const plugins = createDesktopPlugins(join(root, "plugins"), { watch })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock",
     extensionsFor: async id => pluginExtensions(await plugins.inputs(), root, id, () => {}) })
   const stop = plugins.bindRefresh(() => service.refreshExtensions())
@@ -44,7 +46,7 @@ it("withdraws skills-only and command plugin resources from the same existing as
     await expect(original.tools.execute({ name: "skill_get", args: { name: "brainstorming" } })).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" })
     await expect(runCommand(original.ctx, "review-changes", "example.ts")).rejects.toThrow("unknown command")
     expect(listCommands(original.ctx)).toEqual([])
-  } finally { await stop(); await service.close(); await plugins.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+  } finally { await stop.close(); await service.close(); await plugins.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
 })
 
 it("live-mounts the same MCP plugin into two independent existing agents", async () => {
@@ -84,7 +86,8 @@ it("withdraws a command while a model turn remains in flight on the same agent",
 
 it("observes enablement changes made through another registry host", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-cross-host-"))
-  const writer = createDesktopPlugins(join(root, "plugins")); const reader = createDesktopPlugins(join(root, "plugins"))
+  const watch = createFsWatchService()
+  const writer = createDesktopPlugins(join(root, "plugins"), { watch }); const reader = createDesktopPlugins(join(root, "plugins"), { watch })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", extensionsFor: async (id) => pluginExtensions(await reader.inputs(), root, id, () => {}) })
   const stop = reader.bindRefresh(() => service.refreshExtensions())
   try {
@@ -96,12 +99,13 @@ it("observes enablement changes made through another registry host", async () =>
     await writer.mutate({ action: "disable", id: "Marketplace A__hello" })
     await vi.waitFor(() => expect(listCommands(original.ctx)).toEqual([]), { timeout: 5000 })
     expect(await service.assemblyFor("s")).toBe(original)
-  } finally { await stop(); await service.close(); await reader.close(); await writer.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+  } finally { await stop.close(); await service.close(); await reader.close(); await writer.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
 })
 
 it("enables and disables commands on the same existing agent without replacing history", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-plugins-"))
-  const plugins = createDesktopPlugins(join(root, "plugins"))
+  const watch = createFsWatchService()
+  const plugins = createDesktopPlugins(join(root, "plugins"), { watch })
   const service = createSessionService({ workspace: root, modelPolicy: "test-mock", mockScript: [{ role: "assistant", text: "done" }],
     extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), root, id, () => {}), transformPrompt: expandPluginPrompt })
   const stop = plugins.bindRefresh(() => service.refreshExtensions())
@@ -122,5 +126,27 @@ it("enables and disables commands on the same existing agent without replacing h
     await expect(service.submit("s", "/hello test", new AbortController().signal)).rejects.toThrow("unknown command")
     await plugins.mutate({ action: "enable", id: "Marketplace A__hello" })
     expect(listCommands(original.ctx).filter((row) => row.name === "hello")).toHaveLength(1)
-  } finally { await stop(); await service.close(); await plugins.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+  } finally { await stop.close(); await service.close(); await plugins.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+})
+
+
+it("refreshes after atomic state replacement and recreation", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-plugin-watch-replace-"))
+  const watch = createFsWatchService()
+  const plugins = createDesktopPlugins(join(root, "plugins"), { watch })
+  let calls = 0
+  const observer = plugins.bindRefresh(async () => { calls++; await plugins.inputs() })
+  try {
+    await vi.waitFor(() => expect(calls).toBeGreaterThan(0), { timeout: 5000 })
+    await mkdir(join(root, "plugins"), { recursive: true })
+    const state = JSON.stringify({ version: 1, sources: [], plugins: [] })
+    await writeFile(join(root, "plugins", "next.json"), state)
+    const before = calls
+    await rename(join(root, "plugins", "next.json"), join(root, "plugins", "state.json"))
+    await vi.waitFor(() => expect(calls).toBeGreaterThan(before), { timeout: 5000 })
+    const after = calls
+    await rm(join(root, "plugins", "state.json"))
+    await writeFile(join(root, "plugins", "state.json"), state)
+    await vi.waitFor(() => expect(calls).toBeGreaterThan(after), { timeout: 5000 })
+  } finally { await observer.close(); await plugins.close(); await watch.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
 })

@@ -1,3 +1,5 @@
+import { resolve } from "node:path"
+import { FsWatchError, type FsWatchService } from "@i-harness/fs-watch"
 import { createManagedPluginRegistry } from "@i-harness/plugin-registry/managed"
 
 export type PluginCommand =
@@ -8,8 +10,18 @@ function text(value: unknown): string {
   if (typeof value !== "string" || !value.trim() || value.length > 4096 || value.includes("\0")) throw new Error("Invalid plugin parameter")
   return value
 }
-export function createDesktopPlugins(root: string) {
-  const managed = createManagedPluginRegistry({ root })
+export function createDesktopPlugins(root: string, options: { watch: FsWatchService }) {
+  let watchError: string | undefined
+  const managed = createManagedPluginRegistry({ root }, { acquireStateWatch(path) {
+    const lease = options.watch.acquire({ roots: [path], persistent: false })
+    const normalize = (value: string) => { const absolute = resolve(value); return process.platform === "win32" ? absolute.toLowerCase() : absolute }
+    const selected = normalize(path)
+    return { ready: lease.ready, close: () => lease.close(), subscribe: listener => lease.subscribe(event => {
+      if (event.kind === "unavailable") { const error = new FsWatchError(event.code, `Plugin state watch unavailable: ${event.code}`); watchError = String(error); listener({ kind: "unavailable", error }) }
+      else if (event.kind === "reset") { watchError = undefined; listener({ kind: "reset" }) }
+      else if (event.changes.some(change => normalize(change.path) === selected)) listener({ kind: "changed" })
+    }) }
+  } })
   const diagnostics = new Map<string, string[]>()
   let refresh: (() => Promise<void>) | undefined
   let refreshError: string | undefined
@@ -21,7 +33,7 @@ export function createDesktopPlugins(root: string) {
   }
   return {
     refresh: refreshLive,
-    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...(refreshError ? { refreshError } : {}) })),
+    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...((watchError ?? refreshError) !== undefined ? { refreshError: watchError ?? refreshError } : {}) })),
     bindRefresh(callback: () => Promise<void>) { refresh = callback; return managed.observe(refreshLive, (error) => { refreshError = String(error) }) },
     commands: () => managed.run((registry) => registry.runtimeInputs().commandDescriptors.map(({ name, description, argumentHints }) => ({ name, description, argumentHints }))),
     report(sessionId: string, messages: string[]) {
