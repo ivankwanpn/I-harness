@@ -45,7 +45,9 @@ it.each(['unknown','conflict','cleanup','pending'] as const)('original %s confir
  await f.ops.joinTaskDocumentIO()
  }finally{release.resolve();await f.close()}
 })
-it.each(['backend','lease','pin'].flatMap(phase=>[false,undefined].flatMap(cause=>(phase==='backend'?[false]:[false,true]).map(consumed=>({phase,cause,consumed})))) )('falsey $phase cleanup cause=$cause consumed=$consumed cannot grant or revive read',async({phase,cause,consumed})=>{
+// Lease failures below occur outside Ownership's guarded release; pin failures
+// occur at the captured claim invocation. Native sticky debt is tested separately.
+it.each(['backend','lease','pin'].flatMap(phase=>[false,undefined].flatMap(cause=>(phase==='backend'?[false]:[false,true]).map(consumed=>({phase,cause,consumed})))) )('outer invocation $phase cleanup cause=$cause releaseSucceeded=$consumed cannot grant or revive read',async({phase,cause,consumed})=>{
  const f=await fixture()
  try{const {op,handle}=await f.armed();probe.phase=phase;probe.fail=true;probe.cause=cause;probe.consumeRelease=consumed;await expect(op.close()).rejects.toBe(cause);const before={backend:probe.closes,lease:probe.leases,pin:probe.pins};expect(()=>handle.consume()).toThrow();handle.abandon();expect(()=>handle.consume()).toThrow();await expect(f.ops.joinTaskDocumentIO()).rejects.toMatchObject({errors:[cause]});probe.fail=false;await op.retryClose();expect(()=>handle.consume()).toThrow();handle.abandon();await f.ops.joinTaskDocumentIO();expect(probe.closes).toBeGreaterThanOrEqual(before.backend);probe.phase='';const fresh=await f.armed();await fresh.op.close();fresh.handle.consume()
  }finally{await f.close()}
