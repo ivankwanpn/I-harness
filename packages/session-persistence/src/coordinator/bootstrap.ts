@@ -26,6 +26,7 @@ import { preparationFacts } from './bootstrap-preparation-facts.ts'
 import { captureManagedReadyObservation, type ManagedReadyObservation } from './managed-document.ts'
 import type { createProcessReadLatches } from './process-read-latches.ts'
 import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
+import { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
@@ -600,6 +601,12 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).finally(()=>{if(owned.flight===flight)owned.flight=undefined})
     owned.flight=flight;return flight
   }
+  function inspectSelected(input:SelectedResultsRoute,identity:object) {
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
+    if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
+    const state=selected.attempt?.inspect();if(!state||state.kind!=='captured')throw Error('Original selected capture unavailable')
+    io.held.assertHeld();return Object.freeze({invocation:route.request.invocation,manifestDigest:JSON.parse(state.headerBytes).semanticSeed.manifestDigest as string,facts:selectedResultsPreparationFacts(state.stage,state.seed.records)})
+  }
   async function releaseSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),entry=documents.get(route.request.invocation.targetSessionId)
     if(!entry||!entry.selected||entry.selected.identity!==identity)return
@@ -620,7 +627,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     entry.flight=flight;return flight
   }
   return {
-    prepareSelectedCapture,captureSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,inspectSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

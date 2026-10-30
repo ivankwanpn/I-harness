@@ -1,1 +1,1 @@
-export { selectedSourceFor,createSelectedRuntimeCapture } from './coordinator-factory.ts'
+export { selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget } from './coordinator-factory.ts'

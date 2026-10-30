@@ -10,7 +10,7 @@ import {createProcessAwareResultService} from '@i-harness/session-executor/inter
 import {lookupProcessReadContext} from '@i-harness/session-persistence/internal/process-read-context'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
 import {captureBootstrapProject,type BootstrapProjectCapture,type BootstrapProjectPreparation} from './bootstrap-project.ts'
-import {selectedSourceFor,createSelectedRuntimeCapture} from '@i-harness/session-persistence/internal/selected-source-owner'
+import {selectedSourceFor,createSelectedRuntimeCapture,inspectSelectedTarget} from '@i-harness/session-persistence/internal/selected-source-owner'
 import {discoverResultLineage,assertResultLineage,legacyObservationFor} from '../../session-executor/src/lifecycle/result-observation.ts'
 import type {createProjectScopeBroker} from './project-scope.ts'
 import {readSelectedResultsOperation} from '../../session-persistence/src/selected-results-fork-contract.ts'
@@ -32,6 +32,7 @@ interface NativeContextOptions {
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly (ContextResultRef|ManagedArtifactRef)[]>
   registerJob?:CodeRetrievalOptions['registerJob']
+  prepareSelectedInheritance?:ReturnType<typeof createProjectScopeBroker>['prepareSelectedInheritance']
   retainSelectedProjectRead?:ReturnType<typeof createProjectScopeBroker>['retainSelectedBindingRead']
 }
 type ObservedBindings = {
@@ -155,7 +156,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
     }
   }
   const selectedOperations=new Map<string,string>()
-  function makeSelectedSourceOperation(input:unknown) {
+  function makeSelectedSourceOperation(input:unknown,target:object) {
     assertAvailable();assertSelectedResultsNodeAdmission(input);const operation=readSelectedResultsOperation(input),key=operation.invocation.operationId,encoded=JSON.stringify(operation)
     if(selectedOperations.has(key))throw Error('Selected operation already owned');selectedOperations.set(key,encoded)
     let original:Awaited<ReturnType<typeof acquireSelectedSourceObservation>>|undefined,firstStarted=false,retired=false,active:Promise<unknown>|undefined
@@ -171,6 +172,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       const stable=holderSource??(holderSource=held)
       return source.use(()=>handoffs.run(entry,async()=>{try{guard();captureSlot={source,assertCurrent:guard};const value=await work({source:stable,assertCurrent:guard});guard();return value}finally{captureSlot=undefined;entry.active=false}}))
     }
+    let projectPreparation:ReturnType<NonNullable<NativeContextOptions['prepareSelectedInheritance']>>|undefined
     let holderSource:Parameters<Parameters<typeof sourceHandoff>[1]>[0]['source']|undefined
     const single=<T>(run:()=>Promise<T>):Promise<T>=>{available();if(active)throw Error('Selected handoff already active');const flight=Promise.resolve().then(run);active=flight;void flight.finally(()=>{if(active===flight)active=undefined}).catch(()=>{});return flight}
     const holder=Object.freeze({
@@ -178,9 +180,17 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
       warm<T>(work:Parameters<typeof sourceHandoff<T>>[1],signal?:AbortSignal){return single(async()=>{if(!original)throw Error('Original selected source unavailable');return sourceHandoff(original,work,signal)})},
       passive<T>(work:(handoff:{assertCurrent():never})=>Promise<T>){return single(()=>{const entry={active:true};return handoffs.run(entry,async()=>{try{return await work({assertCurrent():never{throw Error('Passive selected handoff cannot issue')}})}finally{entry.active=false}})})},
       exportOnceInCurrentUse:capture,
+      async confirmTarget(){
+        if(!options.prepareSelectedInheritance)throw Error('Selected project preparation unavailable')
+        const slot=captureSlot;if(!slot)throw Error('Selected source handoff unavailable');slot.assertCurrent()
+        const inspection=inspectSelectedTarget(options.coordinator as SessionCoordinator,target)
+        projectPreparation??=options.prepareSelectedInheritance({operation,target,sourceAvailable:()=>{try{if(!captureSlot)return false;captureSlot.assertCurrent();return true}catch{return false}},assertNewWorkCurrent:()=>{if(!captureSlot)throw Error('Selected source handoff unavailable');captureSlot.assertCurrent()},targetAvailable:()=>{try{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);return true}catch{return false}}})
+        const result=await projectPreparation.confirm(inspection.facts,()=>{try{slot.assertCurrent();return true}catch{return false}})
+        slot.assertCurrent();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);return result
+      },
       assertOutsideUse(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close')},
       revoke(){retired=true;original?.revoke()},
-      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
+      async close(){if(handoffs.getStore()?.active)throw Error('Selected handoff self-close');projectPreparation?.close();retired=true;original?.revoke();if(active)await active.catch(()=>{});if(original)await original.close()},
     })
     return holder
   }

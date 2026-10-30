@@ -59,3 +59,19 @@ it('does not confirm a byte-equal foreign header when original header issue neve
  }finally{await runtime.close();await projects.close();await coordinator.close()}
 })
 
+
+it('confirms the selected target through the original captured operation and project broker',async()=>{
+ const f=await createGatewayForkFixture();try{
+  await f.coordinator.append('source',[{type:'turn/start'},{type:'user/message',text:'selected'},{type:'turn/end'}])
+  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{},results:'selected-results-v1'}),{intent,requestDigest}=createSelectedResultsIntent(core,{kind:'project',projectId:'p'}),operation=readSelectedResultsOperation({version:2,kind:'session-fork-operation',prepared:{version:2,kind:'session-fork-prepared',core,requestIntent:intent,requestDigest},invocation:{version:1,operationId:'selected-project',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}}),holder=f.runtime.createSelectedSourceHolder(operation)
+  expect((await holder.captureFirst()).kind).toBe('captured')
+  const forged=f.projects.prepareSelectedInheritance({operation,target:{},sourceAvailable:()=>true,assertNewWorkCurrent:()=>{},targetAvailable:()=>true})
+  expect((await forged.confirm({} as never,()=>true)).kind).toBe('blocked');forged.close()
+  expect(await holder.confirmTarget()).toEqual({kind:'confirmed'})
+  const {createHash}=await import('node:crypto');const bindingKey='desktop-session-project-'+createHash('sha256').update('target').digest('hex')
+  expect(await f.coordinator.getDocument(bindingKey)).toEqual({version:1,projectId:'p'})
+  await (await f.coordinator.openManagedDocument('source')).metadata.enterPlan('revoke')
+  await expect(holder.confirmTarget()).rejects.toThrow()
+  await holder.close()
+ }finally{await f.close()}
+})
