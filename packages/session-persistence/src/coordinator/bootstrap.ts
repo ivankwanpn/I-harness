@@ -29,8 +29,10 @@ import type { createTaskDocumentTransitions } from './task-document-transition.t
 import { captureSelectedResultsRoute, type SelectedResultsRoute } from './selected-results-route.ts'
 import { selectedResultsPreparationFacts } from './selected-results-preparation.ts'
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
+import { createColdSelectedInspection, type ColdSelectedTarget, type ColdSelectedObservation } from './cold-selected-target.ts'
 
 export interface ManagedEntry {
+  coldSelected?: ReturnType<typeof createColdSelectedInspection>;
   selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
@@ -132,6 +134,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     })
   }
   let captureClosed=false
+  const coldTargets = new WeakMap<object, ReturnType<typeof createColdSelectedInspection>>()
   function assertOutsideCapture(id?:string) { const scope=callbackScope.getStore();if(scope?.active&&(id===undefined||scope.id===id))throw new SessionBindingObservationError('conflict') }
   function captureSelfConflict(input:unknown,wrapped=false) {
     const scope=callbackScope.getStore();if(!scope?.active)return false
@@ -730,7 +733,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   }
   /** Cold admission retains the original entry and owner, but does not release
    * readiness until the completed-target transition and target qualification. */
-  function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required'|'conflict'|'blocked'}> {
+  function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required';target:ColdSelectedTarget}|{kind:'conflict'|'blocked'}> {
     if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
     let entry=documents.get(id)
@@ -738,7 +741,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
       if(entry.revoked||captureClosed)return Promise.resolve({kind:'blocked'})
       if(entry.flight)return entry.flight.then(()=>({kind:'blocked' as const}),()=>({kind:'blocked' as const}))
-      if(entry.document)return Promise.resolve({kind:entry.selected.resultReceipt?'qualification-required':'blocked'})
+      if(entry.document) {
+        try { entry.coldSelected?.assertCurrent() } catch { return Promise.resolve({kind:'blocked'}) }
+        return Promise.resolve(entry.coldSelected ? {kind:'qualification-required',target:entry.coldSelected.target} : {kind:'blocked'})
+      }
       if(!entry.selected.cold)return Promise.resolve({kind:'conflict'})
     }
     if(captureClosed||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)return Promise.resolve({kind:'blocked'})
@@ -779,8 +785,13 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
       await owned.control!.bindSelected!();check()
       owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      const inspection=createColdSelectedInspection(owned,route,birth,history.prefix,{
+        assertCurrent:check,assertOutside:()=>assertOutsideCapture(id),settle:()=>settleCapture(owned),
+        async enter<T>(work:()=>Promise<T>):Promise<T>{const scope={id,active:true};try{return await callbackScope.run(scope,work)}finally{scope.active=false}},
+      })
+      owned.coldSelected=inspection;coldTargets.set(inspection.target,inspection)
       void doc
-      return {kind:'qualification-required' as const}
+      return {kind:'qualification-required' as const,target:inspection.target}
     }).catch(()=>({kind:'blocked' as const})).finally(async()=>{
       try {
         await settleCapture(owned)
@@ -791,6 +802,15 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       } finally {if(owned.flight===flight)owned.flight=undefined}
     })
     owned.flight=flight;return flight
+  }
+  function coldSelectedRoute(target:object) {
+    const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
+    assertOutsideCapture(original.route.request.invocation.targetSessionId);original.assertCurrent();return original.route
+  }
+  async function useColdSelected<T>(target:object,work:(observation:ColdSelectedObservation)=>Promise<T>):Promise<T> {
+    const original=coldTargets.get(target);if(!original)throw new TypeError('Original cold selected target required')
+    if(typeof work!=='function'||utilTypes.isProxy(work))throw new TypeError('Invalid cold target callback')
+    return original.use(work)
   }
   function inspectSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
@@ -834,7 +854,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     entry.flight=flight;return flight
   }
   return {
-    prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,publishSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,coldSelectedRoute,useColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,
