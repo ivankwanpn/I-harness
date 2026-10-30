@@ -39,7 +39,9 @@ export function historyFact(event: SessionEventView, index: number, inheritedBou
   const base = { index, type: event.type, ...(event.seq === undefined ? {} : { seq: event.seq }), ...resultFactMetadata(event) }
   switch (event.type) {
     case 'agent/delivery-generation': return {...base, deliveryOperation:event.op, ...(event.op==='open'?{deliveryGeneration:event.generationId,deliveryDependencies:[event.originInputSeq]}:{})}
-    case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryDependencies:[event.callSeq,event.startSeq]}
+    case 'agent/delivery-source': return {...base,deliveryGeneration:event.generationId,deliveryDependencies:event.kind==='subagent'?[event.callSeq,event.startSeq]:[event.callSeq]}
+    case 'agent/delivery-handoff': return {...base,deliveryDependencies:[event.sourceSeq]}
+    case 'exec/end': return {...base,deliveryDependencies:[event.sourceSeq]}
     case 'agent/delivery-received': return {...base,inputId:event.inputId,deliverySourceSeq:event.sourceSeq,deliveryDependencies:[event.sourceSeq,event.terminalSeq,event.seq!+1]}
     case 'conversation/seed-manifest': return { ...base, seedArtifacts: event.artifacts.map(artifact => ({ ...artifact.ref })), seedTurns: { ...event.turns, completed: event.turns.completed.map(interval => [...interval] as const) } }
     case 'conversation/seed-results': return { ...base, seedExtent: { ...event.page.extent }, seedResults: structuredClone(event.page.rows) }

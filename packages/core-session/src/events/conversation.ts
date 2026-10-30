@@ -1,4 +1,4 @@
-import { isDeliveryEventType, validDeliveryEvent } from './delivery.ts'
+import { deliveryMinimumFormat, isDeliveryEventType, validDeliveryEvent } from './delivery.ts'
 import { validateRuntimeContextDiscriminant } from './runtime-context.ts'
 import { validAcceptedRequest, type AcceptedRequestAttributionV1 } from "./attribution.ts"
 import { validateReplacementShape } from './replacement.ts'
@@ -60,7 +60,7 @@ function conversationEventShape(event: SessionEvent, formatVersion: number, sour
     if (event.state !== 'failed' || !isStrictFactData(value) || !value || typeof value !== 'object' || !fields(value, ['code', 'currentFingerprint', 'reason', 'splitRequired', 'applied', 'notApplied', 'effectsUnknown']) || value.code !== 'INSTRUCTIONS_REPLAN_REQUIRED' || typeof value.currentFingerprint !== 'string' || value.currentFingerprint.length > 256 || !['missing-origin', 'unseen-rules', 'changed-dependency', 'unavailable', 'mixed-mutation', 'revoked'].includes(value.reason) || value.splitRequired !== undefined && value.splitRequired !== true || !validPaths(value.applied) || !validPaths(value.notApplied) || !validPaths(value.effectsUnknown)) conversationFormatError('invalid instruction replan observation')
   }
   if (isDeliveryEventType(Object.getOwnPropertyDescriptor(event, 'type')?.value)) {
-    if (formatVersion < 13 || !validDeliveryEvent(event)) conversationFormatError('invalid required delivery fact or format')
+    if (!validDeliveryEvent(event) || formatVersion < deliveryMinimumFormat(event)) conversationFormatError('invalid required delivery fact or format')
     return
   }
   if (Object.getOwnPropertyDescriptor(event, 'type')?.value === 'runtime/context') return

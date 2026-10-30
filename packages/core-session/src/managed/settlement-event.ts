@@ -2,9 +2,10 @@ import { types } from 'node:util'
 import { isStrictFactData } from './capture.ts'
 import { validateResultFact } from '../results/validate.ts'
 import { validContextEvent } from '../events/context.ts'
+import { validExecDeliveryEvent } from '../events/exec-delivery.ts'
 
 export type SettlementEventKind = 'recovery' | 'tool-result' | 'code' | 'delivery' | 'rewind' | 'retention' | 'lifecycle' | 'usage' | 'assistant-audit'
-const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered'])
+const delivery = new Set(['subagent/end', 'subagent/inbox', 'job/status', 'team/member', 'team/task', 'team/message/queued', 'team/message/delivered', 'exec/end', 'agent/delivery-handoff'])
 const lifecycle = new Set(['step/end', 'turn/end', 'step/failed', 'reasoning'])
 const terminal = new Set(['completed', 'failed', 'terminated', 'interrupted'])
 
@@ -33,7 +34,7 @@ export function validSettlementEvent(kind: SettlementEventKind, event: unknown):
         const state = Object.getOwnPropertyDescriptor(event, 'state')
         return type.value === 'code/cell' && !!state && 'value' in state && terminal.has(state.value)
       }
-      case 'delivery': return delivery.has(type.value)
+      case 'delivery': return delivery.has(type.value) && (!['exec/end', 'agent/delivery-handoff'].includes(type.value) || validExecDeliveryEvent(event))
       case 'rewind': return type.value === 'rewind/point'
       case 'retention': return type.value === 'context/result-ref' && isStrictFactData(event)
       case 'lifecycle': return lifecycle.has(type.value)

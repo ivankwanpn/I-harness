@@ -5,6 +5,7 @@ import type { ManagedArtifactRef } from './types.ts'
 import type { ManagedResultObservation } from '../conversation/selected-results-types.ts'
 import { resultData as data, resultScalars, closedResultMetadata } from './metadata.ts'
 import { validManagedArtifactRef } from './validate.ts'
+import { validExecDeliveryEvent } from '../events/exec-delivery.ts'
 
 export function resultText(envelope: ResultEnvelope): string {
   if (envelope.retention.kind === 'inline' && !envelope.dependencies) return stringifyJsonData(envelope.retention.value) ?? 'null'
@@ -17,6 +18,12 @@ export function resultDisposition(envelope: ResultEnvelope): 'unknown' | 'not-di
 }
 /** Only closed actual result slots create reference dependencies. */
 export function managedResultRefs(event: SessionEventView): readonly ManagedArtifactRef[] {
+  // Required delivery authority is never a semantic seed slot. Its actual
+  // original frame dependency still grants local/cold result-read membership.
+  if (data(event, 'type') === 'exec/end') {
+    if (!validExecDeliveryEvent(event) || event.type !== 'exec/end') throw new TypeError('Invalid Exec result dependency')
+    return 'dependency' in event && event.dependency.retention.kind === 'artifact' ? [event.dependency.retention.ref] : []
+  }
   return managedResultSlots(event).map(slot => slot.ref)
 }
 /** Injective event × actual ref-slot observations, before physical deduplication. */

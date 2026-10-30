@@ -69,7 +69,7 @@ export function createDeliveryControl(view: SessionView) {
       for (const event of events) {
         if (event.type === 'agent/delivery-generation' && event.op === 'open' && (control.retired || control.debt.size > 0 || event.originInputSeq <= control.through))
           stale();
-        if (event.type === 'agent/delivery-source' || event.type === 'agent/delivery-received')
+        if (event.type === 'agent/delivery-source' || event.type === 'agent/delivery-received' || event.type === 'agent/delivery-handoff')
           current();
         if (event.type === 'agent/input/promoted' && read().isBound(event.inputId) && !executable(read(), event.inputId, control))
           stale();
