@@ -736,6 +736,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required';target:ColdSelectedTarget}|{kind:'conflict'|'blocked'}> {
     if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    assertOutsideCapture(id)
     let entry=documents.get(id)
     if(entry) {
       if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
