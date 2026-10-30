@@ -28,7 +28,7 @@ export function captureExecutionOwnerContext(ctx: PluginContext, value: unknown)
   return Object.freeze({ view,factOwner,context:ctx,...sessionId !== undefined ? {sessionId:sessionId as string} : {} })
 }
 const identityFields = ['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const
-type Body = { prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean }
+type Body = { prepared: PreparedCall; tool: Tool; leaf: Tool['execute']; exec: ToolExec; call: PreparedCall['call']; context?: ToolExecutionOwnerContext; foreignContext: boolean; source?: SettlementFacts<ProducerFactOutcome>; view?: SessionView; snapshots: Map<string,PropertyDescriptor | undefined>; validations: Pick<PreparedCall,'bindingValidation'|'authorityValidation'|'approvalValidation'>; signal?: AbortSignal; claimed: boolean; permit?: { assertCurrent(): void }; attaching?: boolean; entered?: boolean }
 type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal; domain?: SessionView }
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
@@ -47,9 +47,25 @@ function checkIdentity(body: Body) {
 function check(body: Body, frame?: Frame) {
   if (frame && !frame.active) throw new Error('Prepared body expired')
   checkIdentity(body)
+  body.permit?.assertCurrent()
   for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
   if (!body.validations.bindingValidation() || body.validations.authorityValidation?.() === false || body.validations.approvalValidation?.() === false) throw new Error('Prepared binding is no longer current')
   if (aborted(body.signal) || frame && (own(body.exec,'abortSignal') !== frame.signal || aborted(frame.signal))) throw new Error('Prepared body aborted')
+}
+export function attachPreparedModelOrigin(prepared: PreparedCall, registry: import('../types.ts').ToolRegistry, proof: object, take: import('../model-origin.ts').ConstructorModelOriginVerifier['take']): void {
+  const body = records.get(prepared)
+  if (!body || body.permit || body.attaching || body.entered) throw new Error('Prepared model origin unavailable')
+  checkIdentity(body)
+  const callId = own(body.exec, 'callId'), callEventSeq = own(body.exec, 'callEventSeq')
+  if (!body.context || !body.view || !body.source || typeof callId !== 'string' || typeof callEventSeq !== 'number') throw new Error('Original model call identity required')
+  body.attaching = true
+  try {
+    const permit = take(proof, Object.freeze({registry,prepared,view:body.view,source:body.source,callId,callEventSeq,name:body.call.name,args:body.call.args}))
+    if (!permit || typeof permit.assertCurrent !== 'function') throw new Error('Invalid model origin permit')
+    const assertCurrent = permit.assertCurrent.bind(permit)
+    assertCurrent()
+    body.permit = Object.freeze({assertCurrent})
+  } finally { body.attaching = false }
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerContext | undefined, signal?: AbortSignal): () => Promise<unknown> {
   if (records.has(prepared) || byExec.has(prepared.exec)) throw new Error('Prepared body already registered')
@@ -67,7 +83,9 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
     snapshots:new Map(identityFields.map(key=>[key,Object.getOwnPropertyDescriptor(prepared.exec,key)])),validations:{bindingValidation:prepared.bindingValidation,authorityValidation:prepared.authorityValidation,approvalValidation:prepared.approvalValidation},signal,claimed:false}
   records.set(prepared,body);byExec.set(body.exec,body)
   return async () => {
-    const frame:Frame={body,parent:active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
+    if (body.permit) { checkIdentity(body); if (body.entered) throw new Error('Model body already entered'); body.permit.assertCurrent() }
+    body.entered = true
+    const frame:Frame={body,parent:body.permit ? undefined : active.getStore(),active:true,signal:own(body.exec,'abortSignal') as AbortSignal | undefined,
       domain:body.view && body.source && isOwnedSettlementSource(body.view,body.source)?body.view:undefined}
     return active.run(frame,async()=>{try{return await leaf.call(body.tool,body.call.args as never,body.exec)}finally{frame.active=false}})
   }
