@@ -3,6 +3,7 @@ import { createContext } from '@i-harness/core-plugin'
 import { createSession, createNondurableFactOwner, committedFactSeqs } from '@i-harness/core-session'
 import * as tools from '../src/index.ts'
 import type { Tool, ToolExec, PreparedCall } from '../src/types.ts'
+import { preparedExecutionOwnerContext } from '../src/registry/prepared-body.ts'
 import { createToolResultRetention } from '../../session-executor/src/lifecycle/result-retention.ts'
 import { resultSourceBinding } from '../../session-executor/src/lifecycle/result-sources.ts'
 
@@ -56,6 +57,79 @@ it('keeps an authenticated child independent and a same-view workflow nested', a
   parent.registry.register({name:'workflow',description:'',inputSchema:{},async execute(){await child.registry.dispatch(await child.prepare('shell'));await nested.registry.dispatch(await nested.prepare('shell'));await absent.registry.dispatch(await absent.prepare('shell'));return 'workflow'}})
   try { await parent.registry.dispatch(await parent.prepare('workflow'));expect(received).toEqual([child.view,undefined,undefined]) }
   finally { await absent.close();await nested.close();await child.close();await parent.close() }
+})
+
+it.each(['fulfilled','false-rejection'] as const)('retains expired Workflow ancestry for detached same-view work after %s', async outcome => {
+  const parent=fixture(),nested=fixture(parent,true),child=fixture(parent)
+  const release=Promise.withResolvers<void>();let detached:Promise<void>|undefined,entry:any
+  const received:unknown[]=[]
+  const leaf:Tool['execute']=async(_args,exec)=>{received.push(entry.enter(exec)?.context.view);return 'shell'}
+  const shell:Tool={name:'shell',description:'',inputSchema:{},execute:leaf};entry=bind(shell,leaf)
+  nested.registry.register(shell);child.registry.register(shell)
+  parent.registry.register({name:'workflow',description:'',inputSchema:{},async execute(){
+    detached=release.promise.then(async()=>{await nested.registry.dispatch(await nested.prepare('shell'));await child.registry.dispatch(await child.prepare('shell'))})
+    if(outcome==='false-rejection')throw false
+    return 'workflow'
+  }})
+  try {
+    const outer=parent.registry.dispatch(await parent.prepare('workflow'))
+    if(outcome==='false-rejection')await expect(outer).rejects.toBe(false)
+    else expect(await outer).toBe('workflow')
+    expect(received).toEqual([]);release.resolve();await detached
+    expect(received).toEqual([undefined,child.view])
+  }finally{release.resolve();await detached;await child.close();await nested.close();await parent.close()}
+})
+
+it.each(['session','sessionId','callId','callEventSeq','resultConsumer','modelGeneration'] as const)('refuses changed %s across the original retention descriptor await', async field => {
+  for(const getter of [false,true]){
+    const f=fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+    let prepared:PreparedCall|undefined,reads=0
+    const original=createToolResultRetention({} as any,async()=>{entered.resolve();await release.promise;return undefined})
+    const retention={...original,prepare(call:PreparedCall,context?:tools.ToolExecutionOwnerContext){prepared=call;return original.prepare!(call,context)}}
+    const registry=tools.createToolRegistry(f.ctx,{resultRetention:retention,executionOwner:f.context})
+    registry.register({name:'shell',description:'',inputSchema:{},async execute(){return 'unused'}})
+    const pending=registry.prepare({name:'shell',args:{}},f.action.signal,{session:f.view,sessionId:f.id,callId:'original',callEventSeq:0,settlementSource:f.source})
+    void pending.catch(()=>{})
+    try{
+      await entered.promise
+      const replacement=field==='session'?createSession():field==='callEventSeq'?9:field==='resultConsumer'?'code':'changed'
+      Object.defineProperty(prepared!.exec,field,{enumerable:true,configurable:true,...getter?{get(){reads++;return replacement}}:{value:replacement,writable:true}})
+      expect(()=>preparedExecutionOwnerContext(prepared!)).toThrow()
+      release.resolve();await expect(pending).rejects.toThrow()
+      expect(resultSourceBinding(prepared!.exec)).toBeUndefined();expect(reads).toBe(0)
+    }finally{release.resolve();await pending.catch(()=>{});await f.close()}
+  }
+})
+
+it.each(['exec','tool','call'] as const)('refuses replacement %s references during retention preparation without reading getters', async field => {
+  const f=fixture(),entered=Promise.withResolvers<void>(),release=Promise.withResolvers<void>()
+  let prepared:PreparedCall|undefined,exec:ToolExec|undefined,reads=0
+  const original=createToolResultRetention({} as any,async()=>{entered.resolve();await release.promise;return undefined})
+  const retention={...original,prepare(call:PreparedCall,context?:tools.ToolExecutionOwnerContext){prepared=call;exec=call.exec;return original.prepare!(call,context)}}
+  const registry=tools.createToolRegistry(f.ctx,{resultRetention:retention,executionOwner:f.context})
+  registry.register({name:'shell',description:'',inputSchema:{},async execute(){return 'unused'}})
+  const pending=registry.prepare({name:'shell',args:{}},f.action.signal,{session:f.view,sessionId:f.id,callId:'original',settlementSource:f.source})
+  void pending.catch(()=>{})
+  try{
+    await entered.promise
+    Object.defineProperty(prepared!,field,{enumerable:true,configurable:true,get(){reads++;return {}}})
+    release.resolve();await expect(pending).rejects.toThrow()
+    expect(resultSourceBinding(exec!)).toBeUndefined();expect(reads).toBe(0)
+  }finally{release.resolve();await pending.catch(()=>{});await f.close()}
+})
+
+it('reads a defined execution context without invoking policy callbacks or checking body activity or Stop', async () => {
+  const f=fixture()
+  f.registry.register({name:'shell',description:'',inputSchema:{},async execute(){return 'unused'}})
+  try{
+    const prepared=await f.prepare('shell');let policyReads=0
+    prepared.bindingValidation=()=>{policyReads++;throw Error('policy must not run')}
+    f.action.stop()
+    const context=preparedExecutionOwnerContext(prepared)
+    expect(context?.view).toBe(f.view)
+    tools.assertPreparedExecutionOwnerContext(prepared,context)
+    expect(policyReads).toBe(0)
+  }finally{await f.close()}
 })
 
 it('rejects a pre-prepare wrapper invoking the saved leaf before any body effect', async () => {

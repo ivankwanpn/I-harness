@@ -33,18 +33,22 @@ type Frame = { body: Body; parent?: Frame; active: boolean; signal?: AbortSignal
 const records = new WeakMap<PreparedCall, Body>(), byExec = new WeakMap<ToolExec, Body>(), active = new AsyncLocalStorage<Frame>()
 const signalAborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted')!.get!
 const aborted = (signal: AbortSignal | undefined) => signal !== undefined && signalAborted.call(signal) === true
-function check(body: Body, frame?: Frame) {
-  if (frame && !frame.active) throw new Error('Prepared body expired')
+function checkIdentity(body: Body) {
   if (own(body.prepared,'exec') !== body.exec || own(body.prepared,'tool') !== body.tool || own(body.prepared,'call') !== body.call) throw new Error('Prepared body identity changed')
   for (const [key, expected] of body.snapshots) {
     const actual = Object.getOwnPropertyDescriptor(body.exec,key)
     if (!!actual !== !!expected || actual && (!('value' in actual) || actual.value !== expected!.value || actual.enumerable !== expected!.enumerable)) throw new Error('Prepared exec identity changed')
   }
-  for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
-  if (!body.validations.bindingValidation() || body.validations.authorityValidation?.() === false || body.validations.approvalValidation?.() === false) throw new Error('Prepared binding is no longer current')
-  if(body.context && (own(body.context.factOwner,'view')!==body.context.view || !isManagedFactOwner(body.context.view,body.context.factOwner)&&!isNondurableFactOwner(body.context.view,body.context.factOwner)))throw new Error('Execution owner changed')
+  if(body.context && (body.view!==body.context.view || !body.source || !isOwnedSettlementSource(body.context.view,body.source)
+    || own(body.context.factOwner,'view')!==body.context.view || !isManagedFactOwner(body.context.view,body.context.factOwner)&&!isNondurableFactOwner(body.context.view,body.context.factOwner)))throw new Error('Execution owner changed')
   const original = assertResultPrepared(body.prepared)
   if (original.view !== body.view || original.source !== body.source) throw new Error('Prepared result source changed')
+}
+function check(body: Body, frame?: Frame) {
+  if (frame && !frame.active) throw new Error('Prepared body expired')
+  checkIdentity(body)
+  for(const key of ['bindingValidation','authorityValidation','approvalValidation'] as const)if(own(body.prepared,key)!==body.validations[key])throw new Error('Prepared validation changed')
+  if (!body.validations.bindingValidation() || body.validations.authorityValidation?.() === false || body.validations.approvalValidation?.() === false) throw new Error('Prepared binding is no longer current')
   if (aborted(body.signal) || frame && (own(body.exec,'abortSignal') !== frame.signal || aborted(frame.signal))) throw new Error('Prepared body aborted')
 }
 export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['execute'], configured: ToolExecutionOwnerContext | undefined, signal?: AbortSignal): () => Promise<unknown> {
@@ -69,7 +73,9 @@ export function createPreparedBodyInvoker(prepared: PreparedCall, leaf: Tool['ex
   }
 }
 export function preparedExecutionOwnerContext(prepared: PreparedCall): ToolExecutionOwnerContext | undefined {
-  const body=records.get(prepared);if(!body)throw new Error('Foreign prepared execution');return body.context
+  const body=records.get(prepared);if(!body)throw new Error('Foreign prepared execution')
+  if(body.context)checkIdentity(body)
+  return body.context
 }
 export function assertPreparedExecutionOwnerContext(prepared: PreparedCall, context: ToolExecutionOwnerContext | undefined): void {
   if (preparedExecutionOwnerContext(prepared) !== context) throw new Error('Original prepared execution context required')
@@ -85,7 +91,7 @@ export function bindPreparedShellLeaf(tool: Tool, leaf: Tool['execute']) {
     if(body.foreignContext)throw new Error('Foreign prepared execution context')
     if(body.claimed)throw new Error('Prepared Shell body already claimed')
     if(!body.context||!body.source||!frame.domain||body.exec.resultConsumer==='code')return
-    for(let parent=frame.parent;parent;parent=parent.parent)if(parent.active&&parent.domain===frame.domain)return
+    for(let parent=frame.parent;parent;parent=parent.parent)if(parent.domain===frame.domain)return
     body.claimed=true;let consumed=false
     const claim:PreparedShellBodyClaim=Object.freeze({ context:body.context,source:body.source,exec:body.exec,
       assertCurrent(){if(this!==claim)throw new Error('Foreign body claim receiver');check(body,frame)},
