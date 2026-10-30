@@ -9,6 +9,7 @@ function consistency(parent: string, events: readonly SessionEvent[], seedLength
   const ids = new Set<string>()
   for (let index = seedLength; index < events.length; index++) {
     const event = events[index]!
+    if ((event.type === 'subagent/start' || event.type === 'subagent/end') && event.seq !== undefined && (!Number.isSafeInteger(event.seq) || event.seq < 0)) throw new Error('Invalid local task sequence')
     if (event.type === 'subagent/start') {
       if (event.version !== 1 || typeof event.taskId !== 'string' || !event.taskId || typeof event.agentPath !== 'string' || !event.agentPath || typeof event.role !== 'string' || !event.role || typeof event.description !== 'string' || event.parentSessionId !== undefined && event.parentSessionId !== parent) throw new Error('Invalid local task start')
       ids.add(event.taskId)

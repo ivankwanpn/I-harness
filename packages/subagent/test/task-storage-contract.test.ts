@@ -20,6 +20,7 @@ it('checks local committed task identities without treating inherited seed or pr
   expect(taskDocumentStorageContract.consistency('parent', [start('inherited')], 1, undefined)).toEqual({ kind: 'consistent', knownIds: [] })
   expect(() => taskDocumentStorageContract.consistency('parent', [start('foreign', 'other')], 0, undefined)).toThrow()
   expect(() => taskDocumentStorageContract.consistency('parent', [start('')], 0, undefined)).toThrow()
+  expect(() => taskDocumentStorageContract.consistency('parent', [{ ...start('local'), seq: -1 }], 0, undefined)).toThrow()
 })
 
 it('requires exactly one own row for each known ID and permits extra legacy rows', () => {
