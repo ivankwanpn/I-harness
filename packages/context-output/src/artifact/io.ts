@@ -51,11 +51,11 @@ export async function atomicJson(path: string, value: unknown, renameRejected?: 
     const info = await existing.stat()
     if (info.size > 65536) throw new Error('Artifact metadata corrupt')
     if (info.size === bytes.length && (await readExact(existing, info.size, 0)).equals(bytes)) { await existing.sync(); return }
-  } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') throw cause }
+  } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') throw cause }
   finally { await existing?.close() }
   let handle: FileHandle
   try { handle = await open(temporary, 'wx+') }
-  catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause; handle = await open(temporary, 'r+') }
+  catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause; handle = await open(temporary, 'r+') }
   try {
     const info = await handle.stat()
     if (!info.isFile() || info.size > bytes.length || info.size && !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new Error('Artifact metadata transaction conflict')
@@ -87,7 +87,7 @@ export async function inspectImmutable(root: string, path: string, bytes: Buffer
       if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('Artifact path unavailable')
     } else await ownedPath(root, dirname(path))
   }
-  catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return { final: false, pending: false }; throw cause }
+  catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return { final: false, pending: false }; throw cause }
   const prefix = basename(path) + '.'
   // All siblings in this transaction namespace are retained and accounted for,
   // including foreign hashes and malformed pending names.
@@ -102,7 +102,7 @@ export async function inspectImmutable(root: string, path: string, bytes: Buffer
       if (!info.isFile() || info.size > bytes.length || !partial && info.size !== bytes.length
         || !(await readExact(handle, info.size, 0)).equals(bytes.subarray(0, info.size))) throw new MetadataConflict('Immutable artifact metadata conflict')
       return true
-    } catch (cause) { if ((cause as NodeJS.ErrnoException).code === 'ENOENT') return false; throw cause }
+    } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return false; throw cause }
     finally { if (handle) await retireFile(handle, io?.retire ?? retire) }
   }
   return { final: await inspect(path, false), pending: await inspect(temporary, true) }
@@ -189,7 +189,7 @@ export function createAtomicJsonPublication(root: string, path: string, value: u
     try {
       await ownedPath(root, path); handle = await open(path, 'r')
       if (!await matches(handle)) return { kind: 'conflict' }
-    } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== 'ENOENT') return metadataFailure(cause); return { kind: 'unknown' } }
+    } catch (cause) { if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'ENOENT') return metadataFailure(cause); return { kind: 'unknown' } }
     finally { if (handle) await retireOwned(handle) }
     const result = await confirmAtomicJson(root, path, snapshot, retireOwned)
     await close()
@@ -229,7 +229,7 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
       await ownedPath(root,temporary);handle=await open(temporary,'r+')
     }else try { handle = await open(temporary, 'wx+');created=true }
     catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
+      if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause
       await ownedPath(root, temporary)
       handle = await open(temporary, 'r+')
     }
@@ -249,7 +249,7 @@ export async function continueAtomicJson(root: string, path: string, value: unkn
     // Unsupported links have no overwriting fallback; pending work survives.
     try { await link(temporary, path) }
     catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== 'EEXIST') throw cause
+      if ((cause as NodeJS.ErrnoException | null | undefined)?.code !== 'EEXIST') throw cause
       const state = await inspectImmutable(root, path, bytes, retire)
       if (!state.final) return { kind: 'unknown' }
     }

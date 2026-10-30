@@ -30,11 +30,14 @@ export function createSeedDependencyTransfer(deps: {
   // Original publication IO cleanup only; this collection grants no authority.
   const qualificationIO = new Set<ArtifactQualificationIO>()
   const publicationIO = new Set<ReturnType<typeof createAtomicJsonPublication>>()
+  // The WeakMap scope retains identity. Only active/debt IO needs strong cleanup ownership.
+  function retireEmptyQualification(io:ArtifactQualificationIO){try{io.assertSettled();qualificationIO.delete(io)}catch{/* original active cleanup debt stays reachable */}}
+  async function settleQualification(io:ArtifactQualificationIO){qualificationIO.add(io);try{await io.settle()}finally{retireEmptyQualification(io)}}
   function registerSeedDependencyTransfer(access: SeedDependencyHostAccess, originalPublication?: 'original-publication'): SeedDependencyTransferScope {
     const captured = captureHost(access)
     if (!deps.available(captured.binding.targetDocumentId)) throw new TransferBlocked('unavailable')
     const scope = Object.freeze({ kind: 'seed-dependency-transfer' as const })
-    const io=createArtifactQualificationIO();qualificationIO.add(io)
+    const io=createArtifactQualificationIO()
     scopes.set(scope, { io, access: captured, revoked: false, ...(originalPublication === 'original-publication' ? { publications: new Map() } : {}) }); return scope
   }
   function metadataOutcome(result: ImmutableMetadataOutcome): void {
@@ -75,6 +78,7 @@ export function createSeedDependencyTransfer(deps: {
       // Every asynchronous boundary checks currentness before its result can
       // inform another read, mutation, or successful acknowledgement.
       const wait = async <T>(promise: Promise<T>): Promise<T> => { const result = await promise; check(); return result }
+      qualificationIO.add(registration.io)
       try {
         await registration.io.settle();check()
         const roots = [...request.artifacts].sort((a, b) => canonicalCompare(a.ref, b.ref)), operations = new Map<string, ArtifactOperation>()
@@ -211,14 +215,14 @@ export function createSeedDependencyTransfer(deps: {
         await renew(sourceRelations.values())
         registration.io.assertSettled();check(); return { kind: 'confirmed', closureDigest: closure.finish() }
       } catch (cause) {
-        return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException).code === 'ENOENT' ? 'unavailable' : 'unknown' }
-      }
+        return { kind: 'blocked', reason: cause instanceof TransferBlocked ? cause.reason : (cause as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT' ? 'unavailable' : 'unknown' }
+      } finally {retireEmptyQualification(registration.io)}
     })
   }
   return { registerSeedDependencyTransfer,
     closeTransferAdmission(){qualificationClosing=true},
-    settleSeedDependencyTransfer(scope:SeedDependencyTransferScope){const registration=scopes.get(scope);if(!registration)throw Error('Original artifact transfer scope required');return deps.mutate(()=>registration.io.settle())},
-    async closeTransfers() { const results=await Promise.allSettled([...qualificationIO].map(io=>io.settle()).concat([...publicationIO].map(original=>original.close())));const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Original transfer IO cleanup failed') },
+    settleSeedDependencyTransfer(scope:SeedDependencyTransferScope){const registration=scopes.get(scope);if(!registration)throw Error('Original artifact transfer scope required');return deps.mutate(()=>settleQualification(registration.io))},
+    async closeTransfers() { const results=await Promise.allSettled([...qualificationIO].map(settleQualification).concat([...publicationIO].map(original=>original.close())));const failures=results.flatMap(result=>result.status==='rejected'?[result.reason]:[]);if(failures.length)throw new AggregateError(failures,'Original transfer IO cleanup failed') },
     confirmSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest, current: () => boolean): Promise<BootstrapDependencyOutcome> => typeof current === 'function' ? invoke(scope, request, current) : Promise.resolve({ kind: 'blocked', reason: 'conflict' }),
     reconcileSeedDependencies: (scope: SeedDependencyTransferScope, request: BootstrapDependencyRequest) => invoke(scope, request, undefined) }
 }
