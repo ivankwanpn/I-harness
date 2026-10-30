@@ -95,6 +95,7 @@ export function createTaskDocumentOperations(ownership: Ownership, admission: Re
     try { registration = admission.registerOwnedDocumentOperation(captured.id, `task-${captured.id}`, { revoke() { externallyRevoked = true; revoked = true }, close, retryClose, assertOutside() { if (inSelf()) fail() } }); remove = () => registration.unregister() }
     catch (error) { records.delete(record); throw error }
     acquire = enqueue(async () => {
+      await registration.join()
       active(); pin = await pinOwnership(captured.id); releasePin = method(pin, 'release'); active()
       lease = await acquireLease(`doc:task-${captured.id}`); releaseLease = method(lease, 'release'); active()
       const scope = issueHeldTaskDocumentScope(ownership, captured.id, pin, { assertActive: active })

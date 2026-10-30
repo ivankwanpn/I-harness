@@ -7,6 +7,7 @@ import { createLifecycle } from './coordinator/lifecycle.ts'
 import { createManagedDocuments } from './coordinator/managed-documents.ts'
 import { assertOutsideForkController, closeForkControllerAdmission } from './fork-controller.ts'
 import { associateObservationCleanupOwner } from './coordinator/binding-observation.ts'
+import { associateRetainedCoordinatorClose, createRetainedCleanupOperation, finishRetainedCleanupOperation, type RetainedCleanupOperation } from './coordinator/retained-cleanup.ts'
 import { createProcessReadLatches } from './coordinator/process-read-latches.ts'
 import type { ProcessReadStorage } from './coordinator/process-read-storage.ts'
 import { captureBootstrapInvocation } from './coordinator/bootstrap-header.ts'
@@ -30,6 +31,8 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
 
   async function retire<T>(id: string, run: () => Promise<T>) {
     managed.assertOutsideCapture(id)
+    observations.assertOutsideObservedSession(id)
+    observations.assertOutsideOwnedOperations([id])
     observations.assertOutsideOwnedOperations([id])
     const token = processLatches?.beginMutation({ sessionIds: [id], documentKeys: [], kind: 'other' })
     let outcome: 'settled' | 'unknown' = 'unknown'
@@ -49,7 +52,7 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     return managed.trackBootstrapInvocation(invocation, run)
   }
   const coordinator: SessionCoordinator = {
-    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation } : {}),
+    ...(ownership.lockEnabled && backend.readDocumentObserved && (process.platform === 'win32' || process.platform === 'linux') ? { withSessionBindingObservation: observations.withSessionBindingObservation, withExistingSessionBindingObservation: observations.withExistingSessionBindingObservation, retainExistingSessionBindingObservation: observations.retainExistingSessionBindingObservation } : {}),
     bootstrapSemanticTarget(request, guards) { if(managed.captureSelfConflict(request,true))return Promise.resolve({kind:'refused',reason:'conflict'}); return trackBootstrap(request,true,()=>observations.withBootstrapRequest(request, guards, (captured, capturedGuards) => managed.bootstrapSemanticTarget(captured, capturedGuards))) },
     resumeSemanticTarget(invocation, guards, originalPayload) { if(managed.captureSelfConflict(invocation))return Promise.resolve({kind:'refused',reason:'conflict'}); return trackBootstrap(invocation,false,()=>observations.withBootstrapResume(invocation, guards, originalPayload, (captured, capturedGuards, payload) => managed.resumeSemanticTarget(captured, capturedGuards, payload))) },
     ...(managed.captureSupported()?{
@@ -99,11 +102,24 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
     updateMeta: mutations.updateMeta,
     async flush(id) { observations.assertOutsideOwnedOperations([id]); await mutations.flush(id); await documents.joinTaskDocumentIO() },
     async close() {
+      const operation = createRetainedCleanupOperation()
+      try { await closeWithRetained(operation) } finally { finishRetainedCleanupOperation(operation) }
+    },
+    putDocument: documents.putDocument,
+    putDocumentStrict: documents.putDocumentStrict,
+    getDocument: documents.getDocument,
+    ownerOf: ownership.ownerOf,
+    hasLiveOwnership: ownership.hasLiveOwnership,
+    adoptOwnership: mutations.adoptOwnership,
+    releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
+  }
+  async function closeWithRetained(operation: RetainedCleanupOperation) {
       managed.assertOutsideCapture()
       assertOutsideForkController(coordinator)
       observations.assertOutsideOwnedOperations([], [], true)
+      observations.preflightClose()
+      const join = observations.closeAdmission(operation)
       processLatches?.closeAdmission()
-      const join = observations.closeAdmission()
       const joinCapture = managed.closeCaptureAdmission()
       const joinFork = closeForkControllerAdmission(coordinator)
       const errors: unknown[] = []
@@ -115,15 +131,9 @@ export function createSessionCoordinatorCore(backend: PersistenceBackend, opts?:
         try { await lifecycle.close(false) } catch (error) { errors.push(error) }
         throw new AggregateError(errors, 'Coordinator cleanup is unresolved')
       }
-    },
-    putDocument: documents.putDocument,
-    putDocumentStrict: documents.putDocumentStrict,
-    getDocument: documents.getDocument,
-    ownerOf: ownership.ownerOf,
-    hasLiveOwnership: ownership.hasLiveOwnership,
-    adoptOwnership: mutations.adoptOwnership,
-    releaseOwnership(sessionId) { return retire(sessionId, async () => { await managed.closeOne(sessionId); await mutations.releaseOwnership(sessionId) }) },
   }
+  associateRetainedCoordinatorClose(coordinator, closeWithRetained)
+  observations.associateRetainedCoordinator(coordinator)
   associateObservationCleanupOwner(coordinator, observations.cleanupForError)
   if (documents.taskOperations) associateTaskDocumentOperations(coordinator, documents.taskOperations)
   if (processLatches) onConstruct?.({ managed, latches: processLatches })
