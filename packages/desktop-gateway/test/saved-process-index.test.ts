@@ -294,3 +294,7 @@ it('rejects a later selected-instance observation with a conflicting immutable f
   fixed.append(4, [{ type: 'tool/call', callId: 'c', name: 'job_output', args: { job_id: 'j', job_instance_id: 'a' }, seq: 5 }, { type: 'tool/result', callId: 'c', name: 'job_output', envelope: env(output(ref('b'))), seq: 6 }])
   expect(() => fixed.current()).toThrow(/conflict/)
 })
+it('accepts observed format14 and continues to reject unknown future formats',()=>{
+ expect(buildObservedSavedProcessIndex({session:{formatVersion:14,events:[]},highWater:0} as never,'owner').candidates).toEqual([])
+ expect(()=>buildObservedSavedProcessIndex({session:{formatVersion:15,events:[]},highWater:0} as never,'owner')).toThrow('Unsupported process read initial')
+})

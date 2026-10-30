@@ -1,12 +1,12 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { buildSession } from '../src/format/validation.ts'
+import { mkdtemp, rm, writeFile, readFile, copyFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterAll, expect, it, vi } from 'vitest'
 import { lockPathFor } from '@i-harness/fs-lock'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createJsonlTaskDocumentCoordinator } from '../../session-persistence-jsonl/src/task-document-factory.ts'
 import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
 import { createTaskDocumentObservation } from '../../session-persistence-jsonl/src/backend/task-document-observation.ts'
-import { taskDocumentOperationsFor } from '../src/coordinator/task-document-association.ts'
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createDocuments } from '../src/coordinator/documents.ts'
 import { createMutations } from '../src/coordinator/mutations.ts'
@@ -48,7 +48,7 @@ vi.mock('node:fs/promises', async original => {
 afterAll(() => { EventTarget.prototype.addEventListener = faults.add; EventTarget.prototype.removeEventListener = faults.remove })
 
 const literal = '{"formatVersion":2,"tasks":[],"notifications":[]}'
-async function fixture(hook: (ownership: ReturnType<typeof createOwnership>) => void, at: 'validator' | 'observe' | 'confirm' = 'validator') {
+async function fixture(hook: (ownership: ReturnType<typeof createOwnership>) => void, at: 'validator' | 'observe' | 'confirm' = 'validator', historicalAbsent = false) {
   const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-boundary-')), backend = createJsonlBackend(root), options = { lock: { enabled: true } }
   const ownership = createOwnership(backend, options)
   let managed: ReturnType<typeof createManagedDocuments>
@@ -63,9 +63,16 @@ async function fixture(hook: (ownership: ReturnType<typeof createOwnership>) => 
   const mutations = createMutations(backend, ownership, 200, () => {}, undefined, documents.observations), loads = createLoads(backend, ownership, mutations)
   managed = createManagedDocuments(backend, ownership, loads.loadOwned, options, () => {}, mutations, undefined,
     id => documents.observations.assertOutsideOwnedOperations([id]), id => documents.observations.revokeOwnedDocumentOperations(id))
-  await mutations.create({ sessionId: 'parent' }); const parent = await managed.open('parent')
-  await writeFile(join(root, 'task-parent.doc.jsonl'), literal)
-  return { root, ownership, documents, parent, operations: documents.taskOperations!, async close() {
+  // Historical lower-owner control: retain genuine original13 bytes/id without writable14 admission.
+  const original = fileURLToPath(new URL('../../session-persistence-jsonl/test/fixtures/original13-empty.jsonl', import.meta.url))
+  const id = historicalAbsent ? 'p' : 'parent'
+  if (historicalAbsent) await copyFile(original, join(root, 'p.jsonl'))
+  else await mutations.create({ sessionId: id })
+  if (historicalAbsent) managed = createManagedDocuments(backend, ownership, async sessionId => { await ownership.ensureOwnership(sessionId); const raw = await backend.read(sessionId); return { session: buildSession(raw.meta, raw.events) } }, options, () => {}, mutations, undefined,
+    sessionId => documents.observations.assertOutsideOwnedOperations([sessionId]), sessionId => documents.observations.revokeOwnedDocumentOperations(sessionId))
+  const parent = await managed.open(id)
+  if (!historicalAbsent) await writeFile(join(root, 'task-parent.doc.jsonl'), literal)
+  return { root, ownership, documents, parent, async assertHistoricalUnchanged() { expect(await readFile(join(root, 'p.jsonl'))).toEqual(await readFile(original)) }, operations: documents.taskOperations!, async close() {
     await documents.observations.closeAdmission()(); await managed.close(); await Promise.all(ownership.releaseHeldLocks()); await rm(root, { recursive: true, force: true })
   } }
 }
@@ -92,9 +99,9 @@ it.each(['validator', 'observe', 'confirm'] as const)('refuses original parent q
 })
 
 it('owns a falsey listener install failure and retries only its original cleanup after possible registration', async () => {
-  const root = await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!, 'task-signal-')), coordinator = createJsonlTaskDocumentCoordinator(root, { lock: { enabled: true } }, taskDocumentStorageContract)
+  const f = await fixture(() => {}, 'validator', true)
   try {
-    await coordinator.create({ sessionId: 'parent' }); const parent = await coordinator.openManagedDocument('parent'), operations = taskDocumentOperationsFor(coordinator)!, token = operations.parent(parent)
+    const operations = f.operations, token = operations.parent(f.parent)
     const controller = new AbortController(); faults.signal = controller.signal; faults.failInstall = true; faults.failRemove = true
     let failure: unknown; try { await operations.begin(token, { signal: controller.signal }) } catch (error) { failure = error }
     expect(failure).toBeInstanceOf(Error); expect((failure as Error).cause).toBeNull()
@@ -103,11 +110,11 @@ it('owns a falsey listener install failure and retries only its original cleanup
     await expect(operations.begin(token)).rejects.toThrow()
     await expect(cleanup!.retry()).rejects.toBe(false)
     faults.failInstall = false; faults.failRemove = false; await cleanup!.retry()
-    const operation = await operations.begin(token); expect(await operation.observe()).toEqual({ kind: 'absent' }); await operation.close()
+    const operation = await operations.begin(token); expect(await operation.observe()).toEqual({ kind: 'absent' }); await operation.close(); await f.assertHistoricalUnchanged()
   } finally {
     faults.failInstall = false; faults.failRemove = false
     if (faults.signal && faults.listener) Reflect.apply(faults.remove, faults.signal, ['abort', faults.listener])
-    faults.signal = undefined; faults.listener = undefined; await coordinator.close(); await rm(root, { recursive: true, force: true })
+    faults.signal = undefined; faults.listener = undefined; await f.close()
   }
 })
 

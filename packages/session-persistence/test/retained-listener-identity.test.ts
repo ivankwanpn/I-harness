@@ -2,7 +2,9 @@ import { expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createSessionCoordinator } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { observeRetainedBindingRetirementFor } from '../src/coordinator/retained-binding.ts'
 

@@ -32,12 +32,17 @@ export function createLoads(
   async function transitionLoad(sessionId: string, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>, skipPending = false) {
       if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
         assertWritable(sessionId)
-        const pending = skipPending ? undefined : pendingWriteBehind(sessionId)
-        return transitions.existing(sessionId, async () => {
+        let pending = skipPending ? undefined : pendingWriteBehind(sessionId)
+        // A current-format queued batch must cross its own task transition.
+        // Only predecessor work can be drained before the historical proof.
+        if (pending?.hasWork && (await read(sessionId)).version >= 14) { await pending.flush(); pending = undefined }
+        return transitions.existing(sessionId, async (beforeRepair,markRepair) => {
           invalidateConversation(sessionId)
           const peeked = await read(sessionId)
           preflightSessionFormat(peeked.version, peeked.events, peeked.meta)
           await migrate(peeked.version, guardIgnorable(peeked.events, true), peeked.meta)
+          await beforeRepair(peeked.version,peeked.events,peeked.meta?.seedLength ?? 0)
+          markRepair()
           const repaired = await backend.repair(sessionId)
           preflightSessionFormat(repaired.version, repaired.events, repaired.meta)
           const migrated = await migrate(repaired.version, guardIgnorable(repaired.events, true), repaired.meta)
@@ -73,6 +78,13 @@ export function createLoads(
       } }
     },
     async load(sessionId: string) {
+      // Physical14 recovery is a parent mutation owned by the retained task
+      // transition. Historical public loads retain their original semantics.
+      if (transitions) {
+        const source = await read(sessionId)
+        preflightSessionFormat(source.version, source.events, source.meta)
+        if (source.version >= 14) return transitionLoad(sessionId)
+      }
       return processMutation(sessionId, () => withSessionOperation(sessionId, async () => {
         invalidateConversation(sessionId)
         const peeked = await read(sessionId)
@@ -84,6 +96,8 @@ export function createLoads(
           const owned = await read(sessionId)
           preflightSessionFormat(owned.version, owned.events, owned.meta)
           await migrate(owned.version, guardIgnorable(owned.events, true), owned.meta)
+          // A concurrent upgrade must reenter with the transition's task lease.
+          if (transitions && owned.version >= 14) throw new Error('TASK_TRANSITION_RETRY_REQUIRED')
           repaired = await backend.repair(sessionId)
         } finally {
           await borrowed.release()

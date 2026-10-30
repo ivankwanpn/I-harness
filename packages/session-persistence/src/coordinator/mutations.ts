@@ -24,9 +24,9 @@ export function createMutations(
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
   const conversation = createConversationIndexes(backend)
-  async function appendUnlocked(sessionId: string, events: SessionEvent[], check?: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue?: () => void) {
+  async function appendUnlocked(sessionId: string, events: SessionEvent[], check?: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue?: () => void, preservePhysical = false) {
     try {
-      const staged = await conversation.stage(sessionId, events)
+      const staged = await conversation.stage(sessionId, events, preservePhysical)
       check?.(staged.events.map((event, position) => event.seq === undefined ? { ...event, seq: staged.baseLength + position } : event))
       if (staged.events.length || events.length === 0) { markIssue?.(); await backend.append(sessionId, staged.events) }
       staged.commit()
@@ -119,7 +119,7 @@ export function createMutations(
     async appendQueuedDrainUnlocked(sessionId: string, events: SessionEvent[]) {
       assertManagedMutation(sessionId)
       await ensureOwnership(sessionId)
-      await appendUnlocked(sessionId, events)
+      await appendUnlocked(sessionId, events, undefined, undefined, true)
     },
     async appendTransitionUnlocked(sessionId: string, events: SessionEvent[], check: (events: readonly import('@i-harness/core-session').SessionEventView[]) => void, markIssue: () => void) {
       assertWritable(sessionId)

@@ -10,10 +10,16 @@ import { parseHeader } from '../format.ts'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { selectedResultsPreparationFacts } from '../../../session-persistence/src/coordinator/selected-results-preparation.ts'
 
-type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBytes:Buffer;capturedFrames?:ReturnType<typeof captureBatch>[];acknowledged?:Set<number>;attempt?:object}
+type ScopeData={route:SelectedResultsRoute;stage:SelectedResultsHeaderStageV2;owner:HeldFactOwner['owner'];birthBody:Buffer;capturedFrames?:ReturnType<typeof captureBatch>[];acknowledged?:Set<number>;attempt?:object}
 export type SelectedLaneScope=Readonly<{kind:'selected-lane'}>
 type Birth=NonNullable<Awaited<ReturnType<typeof resolveSelectedBirth>>>
 const same=(a:unknown,b:unknown)=>canonicalJsonData(a)===canonicalJsonData(b)
+function matchesBirth(raw:Buffer,end:number,meta:ReturnType<typeof parseHeader>,data:ScopeData) {
+ const original=JSON.parse(data.stage.headerBytes)
+ const header=original.formatVersion===13 && meta.formatVersion===14 ? canonicalJsonData({...original,formatVersion:14})+'\n' : data.stage.headerBytes
+ if(!raw.subarray(0,end+1).equals(Buffer.from(header)))return false
+ return raw.subarray(end+1,end+1+data.birthBody.length).equals(data.birthBody)
+}
 const byteLength=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(Uint8Array.prototype),'length')!.get!
 function snapshotBytes(input:unknown):Buffer {
  if(types.isProxy(input)||!types.isUint8Array(input))throw TypeError('Invalid batch bytes')
@@ -35,7 +41,7 @@ function captureBatch(prefixInput:import('@i-harness/core-session').JournalPrefi
 /** Private factory; no selected bootstrap authoring capability is advertised. */
 export function createSelectedFactJournalBackend(filePath:(id:string)=>string,assertNotDeleted:(kind:string,id:string)=>Promise<void>,captureIO:BootstrapCaptureIO) {
  const scopes=new WeakMap<object,ScopeData>()
- const checkedBirths=new WeakMap<object,{id:string;owner:HeldFactOwner['owner'];birthBytes:Buffer}>()
+ const checkedBirths=new WeakMap<object,{id:string;owner:HeldFactOwner['owner'];birthBody:Buffer;history:ReturnType<typeof readBootstrapFactJournal>;meta:ReturnType<typeof parseHeader>}>()
  const birthLanes=new WeakMap<object,WeakMap<object,SelectedLaneScope>>()
  const issuedBatches=new WeakMap<object,Map<string,{prefix:import('@i-harness/core-session').JournalPrefix;bytes:Buffer}>>()
  const stageIO=(ledger:CaptureLedger,path:string,guard:()=>void)=>({namespace:()=>bootstrapNamespace(path),read:(p:string,limit:number)=>captureIO.bytes(ledger,p,limit,guard),assertCurrent:guard})
@@ -52,11 +58,22 @@ let observed:Buffer|undefined
    const io=birthIO(ledger,path,guard)
    const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{stage:io.stage,async readJournal(){observed=await io.readJournal();return observed}});guard();captureIO.assertNoCleanupDebt(ledger)
 if(birth){
-    const raw=observed!,end=raw.indexOf(10),meta=JSON.parse(birth.stage.headerBytes),journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta),last=journal.frames[1]!
-    checkedBirths.set(birth,{id,owner:owner.owner,birthBytes:Buffer.from(raw.subarray(0,end+1+last.prefix.bodyBytes+last.batch.bytes.length))})
+    const raw=observed!,end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8')),journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta),last=journal.frames[1]!
+    checkedBirths.set(birth,{id,owner:owner.owner,birthBody:Buffer.from(raw.subarray(end+1,end+1+last.prefix.bodyBytes+last.batch.bytes.length)),history:journal,meta})
    }
    return birth
   })
+ }
+ /** Qualify the entire original route before exposing the held checked birth. */
+ async function inspectCheckedBirth(input:SelectedResultsRoute,owner:HeldFactOwner):Promise<
+  {kind:'checked';birth:Birth;history:ReturnType<typeof readBootstrapFactJournal>;meta:ReturnType<typeof parseHeader>}|{kind:'unavailable'}|{kind:'conflict'}> {
+  const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+  const birth=await resolveCheckedBirth(id,owner)
+  if(!birth)return {kind:'unavailable'}
+  if(!same(route,birth.route))return {kind:'conflict'}
+  const {history,meta}=checkedBirths.get(birth)!
+  if(history.torn)throw TypeError('Selected journal has incomplete suffix')
+  return {kind:'checked',birth,history,meta}
  }
  function bindCheckedBirthLane(id:string,owner:HeldFactOwner,birth:Birth):SelectedLaneScope {
   captureIO.scope(id,owner)
@@ -64,7 +81,7 @@ if(birth){
   if(!checked||checked.id!==id||checked.owner!==owner.owner)throw TypeError('Original held checked birth required')
   let owners=birthLanes.get(birth);if(!owners){owners=new WeakMap();birthLanes.set(birth,owners)}
   const prior=owners.get(owner.owner);if(prior)return prior
-  const lane=Object.freeze({kind:'selected-lane' as const});scopes.set(lane,{route:birth.route,stage:birth.stage,owner:owner.owner,birthBytes:Buffer.from(checked.birthBytes)});owners.set(owner.owner,lane);return lane
+  const lane=Object.freeze({kind:'selected-lane' as const});scopes.set(lane,{route:birth.route,stage:birth.stage,owner:owner.owner,birthBody:Buffer.from(checked.birthBody)});owners.set(owner.owner,lane);return lane
  }
 /** Called only by the original entry after its checked capture succeeds. */
 function bindCapturedLane(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,route:SelectedResultsRoute,stage:SelectedResultsHeaderStageV2,records:unknown,attempt:object,prior?:SelectedLaneScope):SelectedLaneScope {
@@ -76,7 +93,7 @@ function bindCapturedLane(id:string,owner:import('@i-harness/session-persistence
  const batch=encodeFactBatch('bootstrap:'+stage.invocation.operationId+':seed',prefix.prefixDigest,records as import('@i-harness/core-session').SessionEvent[]),seed=captureBatch(prefix,batch)
  if(prior){const data=check(id,owner,prior);if(data.attempt!==attempt||!same(data.route,route)||!same(data.stage,stage)||!data.capturedFrames||!data.capturedFrames[0]!.bytes.equals(seed.bytes))throw TypeError('Captured lane changed');return prior}
  const lane=Object.freeze({kind:'selected-lane' as const})
- scopes.set(lane,{route:JSON.parse(canonicalJsonData(route)),stage:JSON.parse(canonicalJsonData(stage)),owner:owner.owner,birthBytes:Buffer.from(stage.headerBytes),capturedFrames:[seed],acknowledged:new Set(),attempt});return lane
+ scopes.set(lane,{route:JSON.parse(canonicalJsonData(route)),stage:JSON.parse(canonicalJsonData(stage)),owner:owner.owner,birthBody:Buffer.alloc(0),capturedFrames:[seed],acknowledged:new Set(),attempt});return lane
 }
 /** The same entry supplies its completion only after genuine dependency confirmation. */
 function prepareCapturedCompletion(id:string,owner:HeldFactOwner,scope:SelectedLaneScope,frame:import('../../../session-persistence/src/coordinator/bootstrap-types.ts').BootstrapFrame):void {
@@ -110,7 +127,7 @@ async function readSelectedJournalPrefix(path:string,id:string,owner:HeldFactOwn
  if(!birth||!same(birth.route,data.route)||!same(birth.stage,data.stage))throw new TypeError('Original selected birth unavailable')
  const raw=await readWhole(ledger,path,()=>check(id,owner,scope));check(id,owner,scope)
  const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))
- if(!raw.subarray(0,data.birthBytes.length).equals(data.birthBytes)||!raw.subarray(0,end+1).equals(Buffer.from(data.stage.headerBytes))||!meta.journal)throw new TypeError('Original selected header unavailable')
+ if(!matchesBirth(raw,end,meta,data)||!meta.journal)throw new TypeError('Original selected header unavailable')
  const decoded=readFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta)
  const birthFrames=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta).frames
  const seed=birthFrames[0],complete=birthFrames[1],count=data.stage.seed.seedLength,op=data.stage.invocation.operationId
@@ -145,7 +162,7 @@ async function appendSelectedOwnedBatch(path:string,id:string,owner:import('@i-h
   resource=await captureIO.acquire(ledger,path,'r+');handle=resource.handle;check(id,owner,scope)
   const raw=await handle.readFile();check(id,owner,scope)
   const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))
-  if(!meta.journal||!raw.subarray(0,data.birthBytes.length).equals(data.birthBytes)||!raw.subarray(0,end+1).equals(Buffer.from(data.stage.headerBytes)))throw new TypeError('Original selected header unavailable')
+  if(!meta.journal||!matchesBirth(raw,end,meta,data))throw new TypeError('Original selected header unavailable')
   const decoded=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta), frames=decoded.frames
   const seed=frames[0],complete=frames[1],count=data.stage.seed.seedLength,op=data.stage.invocation.operationId
   if(decoded.torn||!same(decoded.prefix,prefix)){outcome={kind:'conflict',key};return outcome}
@@ -195,7 +212,7 @@ async function reconcileSelectedOwnedBatch(path:string,id:string,owner:HeldFactO
   resource=await captureIO.acquire(ledger,path,'r+');handle=resource.handle;check(id,owner,scope)
   const raw=await handle.readFile();check(id,owner,scope)
   const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))
-  if(!meta.journal||!raw.subarray(0,data.birthBytes.length).equals(data.birthBytes)||!raw.subarray(0,end+1).equals(Buffer.from(data.stage.headerBytes)))throw TypeError('Original selected header unavailable')
+  if(!meta.journal||!matchesBirth(raw,end,meta,data))throw TypeError('Original selected header unavailable')
   const position=end+1+prefix.bodyBytes
   if(raw.length<position||raw.length>position+bytes.length){outcome={kind:'conflict',key};return outcome}
   const prior=raw.subarray(end+1,position),decoded=readBootstrapFactJournal(prior,meta.journal,meta.formatVersion,meta)
@@ -238,7 +255,7 @@ async function confirmSelectedFrames(path:string,id:string,owner:HeldFactOwner,s
   resource=await captureIO.acquire(ledger,path,'r+');handle=resource.handle;check(id,owner,scope)
   const raw=await handle.readFile();check(id,owner,scope)
   const end=raw.indexOf(10),meta=parseHeader(raw.subarray(0,end).toString('utf8'))
-  if(!meta.journal||!raw.subarray(0,data.birthBytes.length).equals(data.birthBytes)||!raw.subarray(0,end+1).equals(Buffer.from(data.stage.headerBytes)))throw TypeError('Original selected header unavailable')
+  if(!meta.journal||!matchesBirth(raw,end,meta,data))throw TypeError('Original selected header unavailable')
   const decoded=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta),count=data.stage.seed.seedLength,op=data.stage.invocation.operationId
   if(decoded.torn)throw TypeError('Torn journal')
   readFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta)
@@ -262,7 +279,7 @@ async function confirmSelectedFrames(path:string,id:string,owner:HeldFactOwner,s
 }
  return {
   resolveBirth:(id:string)=>resolveSelectedBirth(filePath(id),id,assertNotDeleted),
-  resolveCheckedBirth,bindCheckedBirthLane,bindCapturedLane,prepareCapturedCompletion,
+  resolveCheckedBirth,inspectCheckedBirth,bindCheckedBirthLane,bindCapturedLane,prepareCapturedCompletion,
   readJournalPrefix(id:string,owner:HeldFactOwner,scope:SelectedLaneScope){check(id,owner,scope);return captureIO.tracked(id,owner,ledger=>readSelectedJournalPrefix(filePath(id),id,owner,scope,assertNotDeleted,ledger))},
   appendOwnedBatch(id:string,owner:import('@i-harness/session-persistence').IssuingFactOwner,scope:SelectedLaneScope,prefix:import('@i-harness/core-session').JournalPrefix,batch:import('@i-harness/core-session').EncodedFactBatch){
    check(id,owner,scope);const snapshot=captureBatch(prefix,batch)

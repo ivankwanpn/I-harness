@@ -1,4 +1,4 @@
-import { canonicalJsonData, freezeJsonData, isStrictFactData, legacyPrefixDigest, validateSubagentHeader, validateResultsSummary, type SeedHeaderV3 } from '@i-harness/core-session'
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, freezeJsonData, isStrictFactData, legacyPrefixDigest, validateSubagentHeader, validateResultsSummary, type SeedHeaderV3 } from '@i-harness/core-session'
 import { types } from 'node:util'
 import { semanticSeedBodyFromRecords, seedLayout } from '@i-harness/core-session/internal/bootstrap'
 import { bootstrapHash, compileSelectedResultsSemanticSeed } from '../semantic-seed.ts'
@@ -26,7 +26,8 @@ function captureData(input: unknown): any {
   return JSON.parse(canonicalJsonData(input))
 }
 /** Pure construction only; validates commitments but does not grant capture or publication authority. */
-export function buildSelectedResultsHeader(input: unknown, reservationInput: unknown) {
+export function buildSelectedResultsHeader(input: unknown, reservationInput: unknown, formatVersion: 13 | 14 = CURRENT_FORMAT_VERSION) {
+  if (formatVersion !== 13 && formatVersion !== 14) invalid()
   const request = captureData(input)
   bootstrapFields(request,['invocation','target','metadata','lineage','seed'])
   bootstrapFields(request.target,['kind']); if (request.target.kind !== 'new') invalid()
@@ -48,7 +49,7 @@ export function buildSelectedResultsHeader(input: unknown, reservationInput: unk
   const layout = seedLayout(first)
   const invocation = captured.invocation, metadata = captured.core.metadata
   const lineage = {origin:'fork' as const,parentSession:captured.core.sourceSessionId}
-  const headerBase = {formatVersion:13 as const,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
+  const headerBase = {formatVersion,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
     journal:{version:1 as const,legacyBodyBytes:0 as const,legacyEventCount:0 as const,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0 as const},
     seedLength:layout.seedLength,origin:lineage.origin,parentSession:lineage.parentSession,
     ...(metadata.title === undefined ? {} : {title:metadata.title}),...(metadata.workspaceId === undefined ? {} : {workspaceId:metadata.workspaceId}),
@@ -96,7 +97,8 @@ export function parseSelectedResultsHeaderStage(bytes: Uint8Array): SelectedResu
   seedLayout(semantic)
   bootstrapFields(semantic,['version','codec','profile','results','resultPageCount','operationId','requestDigest','manifestDigest','seedDigest','dependencyDigest','seedLength','groupCount'])
   const invocation=request.invocation, metadata=request.core.metadata
-  const expectedBase={formatVersion:13,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
+  if (stage.headerBase.formatVersion !== 13 && stage.headerBase.formatVersion !== 14) invalid()
+  const expectedBase={formatVersion:stage.headerBase.formatVersion,sessionId:invocation.targetSessionId,createdAt:invocation.createdAt,
     journal:{version:1,legacyBodyBytes:0,legacyEventCount:0,legacyPrefixDigest:legacyPrefixDigest(0,new Uint8Array()),separatorBytes:0},
     seedLength:seed.seedLength,origin:'fork',parentSession:request.core.sourceSessionId,
     ...(metadata.title === undefined ? {} : {title:metadata.title}),...(metadata.workspaceId === undefined ? {} : {workspaceId:metadata.workspaceId}),
@@ -119,7 +121,7 @@ export function reconstituteSelectedResultsStage(input: unknown, recordInput: un
   const seed=semanticSeedBodyFromRecords(records)
   if (seed.version !== 3 || seed.profile !== 'public-completed') throw new TypeError('Public selected seed required')
   const compiled=compileSelectedResultsSemanticSeed({kind:'seed',seed,digest:stage.seed.digest,sourceObservationDigest:stage.seed.sourceObservation.digest})
-  const rebuilt=buildSelectedResultsHeader({invocation:stage.invocation,target:stage.originalTarget,metadata:stage.metadata,lineage:stage.lineage,seed:compiled},stage.captureReservation)
+  const rebuilt=buildSelectedResultsHeader({invocation:stage.invocation,target:stage.originalTarget,metadata:stage.metadata,lineage:stage.lineage,seed:compiled},stage.captureReservation,stage.headerBase.formatVersion)
   if (!same(compiled.records,records) || !same(rebuilt.stage,stage)) invalid()
   return Object.freeze({stage,seed:freezeJsonData(compiled)})
 }

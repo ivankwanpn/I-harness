@@ -16,7 +16,8 @@ import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createForkSessionController } from "@i-harness/session-persistence"
-import { createJsonlSessionCoordinator } from "@i-harness/session-persistence-jsonl"
+import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
@@ -129,9 +130,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
   const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
-  const coordinator = createJsonlSessionCoordinator(options.sessionDir, {
+  const coordinator = createJsonlTaskTransitionCoordinator(options.sessionDir, {
     lock: { enabled: true, lockRoot: options.sessionDir },
-  })
+  }, taskDocumentStorageContract)
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
   const fence = createSessionManagementFence()

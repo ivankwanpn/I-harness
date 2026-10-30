@@ -2,7 +2,9 @@ import { it, expect } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createProjectScopeBroker } from '../src/project-scope.ts'
 import { observeRetainedBindingRetirementFor, closeCoordinatorWithRetainedCleanupOperation, joinRetainedRetirementSinks } from '@i-harness/session-persistence/internal/retained-inspection'
@@ -49,7 +51,6 @@ it.each(['return', 'undefined', 'ignored-profile'] as const)('read-time guard re
   const backend = createJsonlBackend(root), originalProfile = backend.profile.bind(backend)
   const profileEntered = Promise.withResolvers<void>(), profileGate = Promise.withResolvers<void>()
   let holdProfile = false
-  backend.profile = async id => { if (holdProfile && id === 't') { profileEntered.resolve(); await profileGate.promise }; return originalProfile(id) }
   const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
   const coordinator = createSessionCoordinator(backend, options), other = createSessionCoordinator(createJsonlBackend(root), options)
   const fence = createSessionManagementFence(), observe = fence.observe.bind(fence)
@@ -60,6 +61,7 @@ it.each(['return', 'undefined', 'ignored-profile'] as const)('read-time guard re
   let retired = 0
   try {
     for (const id of ['s', 't']) { await coordinator.create({ sessionId: id }); await coordinator.releaseOwnership(id) }
+  backend.profile = async id => { if (holdProfile && id === 't') { profileEntered.resolve(); await profileGate.promise }; return originalProfile(id) }
     const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 't' }, () => {})
     const observed = broker.observeExecutionBinding(ref, () => { retired++; notified.resolve() })
     holdProfile = outcome === 'ignored-profile'

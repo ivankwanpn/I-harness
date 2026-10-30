@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import type { InspectorProfile } from '../src/coordinator/retained-binding.ts'
 import { assertRetainedBindingReferenceFor } from '../src/coordinator/retained-binding.ts'
 
@@ -11,10 +13,10 @@ async function fixture() {
   const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'retained-'))
   const backend = createJsonlBackend(root), read = backend.profile
   let hook: (() => Promise<void>) | undefined, reads = 0
-  backend.profile = async id => { reads++; await hook?.(); return read.call(backend, id) }
   const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
   const coordinator = createSessionCoordinator(backend, options), other = createSessionCoordinator(createJsonlBackend(root), options)
   await coordinator.create({ sessionId: 'source' }); await coordinator.releaseOwnership('source')
+  backend.profile = async id => { reads++; await hook?.(); return read.call(backend, id) }
   return { coordinator, other, setHook(value?: () => Promise<void>) { hook = value }, reads: () => reads,
     async close() { hook = undefined; await coordinator.close(); await other.close(); await rm(root, { recursive: true, force: true }) } }
 }

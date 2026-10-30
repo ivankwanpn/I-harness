@@ -3,7 +3,9 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
-import { createSessionCoordinator } from '../src/index.ts'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '../../subagent/src/task/storage-contract.ts'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createOwnership } from '../src/coordinator/ownership.ts'
 import { createBindingObservations } from '../src/coordinator/binding-observation.ts'
 import { createRetainedCleanupOperation, finishRetainedCleanupOperation } from '../src/coordinator/retained-cleanup.ts'
@@ -50,10 +52,10 @@ it('retains partial acquisition disposal in the original error lookup and retrie
   ownership.acquireLease = async key => { const lock = await acquire(key); return { get held() { return lock.held }, async release() { releaseCalls++; if (fail) throw false; await lock.release() } } }
   ownership.pinOwnership = async id => { const claim = await pin(id); return { assertHeld: claim.assertHeld, retainLive: claim.retainLive, async release() { pinReleases++; await claim.release() } } }
   const read = backend.readDocumentObserved!
-  backend.readDocumentObserved = async () => { throw undefined }
   const owner = createBindingObservations(backend, ownership)
   try {
     await seed.create({ sessionId: 'source' }); await seed.releaseOwnership('source')
+  backend.readDocumentObserved = async () => { throw undefined }
     let failure: unknown
     try { await owner.retainExistingSessionBindingObservation({ sessionId: 'source' }, () => {}) } catch (error) { failure = error }
     expect(failure).toBeInstanceOf(AggregateError)

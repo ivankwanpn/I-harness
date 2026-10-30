@@ -208,7 +208,7 @@ export async function createNativeContextRuntime(options:NativeContextOptions & 
         const assertSourceCurrent=()=>{if(!captureSlot||captureSlot.source!==slot.source)throw Error('Original selected source unavailable');captureSlot.assertCurrent()}
         const assertTargetCurrent=()=>{available();inspectSelectedTarget(options.coordinator as SessionCoordinator,target);projectPreparation!.assertTargetCurrent()}
         if(!legacyTransfer){
-          const targetView=freezeJsonData({formatVersion:13,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
+          const targetView=freezeJsonData({formatVersion:inspection.stage.headerBase.formatVersion,header:JSON.parse(inspection.stage.headerBytes),events:inspection.seed.records}) as import('@i-harness/core-session').SessionView
           legacyTransfer=bridge.acquireSelectedLegacyTransfer(options.coordinator as SessionCoordinator,target,{invocation:operation.invocation,sourceSessionId:operation.prepared.core.sourceSessionId,facts:inspection.facts,targetView,
             target:{available:()=>{try{assertTargetCurrent();return true}catch{return false}},assertCurrent:assertTargetCurrent,sourceId:()=>{assertTargetCurrent();return contextSourceIdentity(workspaceKey,canonical,projectPreparation!.targetScope().scope)}},
             source:{view:slot.source.view,assertCurrent:assertSourceCurrent,read(){assertSourceCurrent();const observation=observations.current(operation.prepared.core.sourceSessionId);if(!observation||observation.view!==slot.source.view)throw Error('Original result observation unavailable');return legacyObservationFor(observation)}}})

@@ -736,3 +736,9 @@ it("defers a post-tool reminder until every parallel tool result after early ass
   append(s, { type: "step/end" })
   expect(deriveMessages(s).map((message) => message.role === "user" ? message.content : message.role === "tool" ? message.toolCallId : message.toolCalls?.map((call) => call.id))).toEqual(["inspect", ["a", "b"], "a", "b", "reminder"])
 })
+it('serializes physical 14 with the existing framed journal',()=>{
+ const session=createSession();append(session,{type:'user/message',text:'framed'});session.formatVersion=14
+ const lines=toJSONL(session).trim().split('\n')
+ expect(JSON.parse(lines[0]!).journal.version).toBe(1)
+ expect(JSON.parse(lines[1]!).recordKind).toBe('session/fact-batch')
+})

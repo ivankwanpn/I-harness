@@ -32,7 +32,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     const close=document.close
     document.close=async()=>{
       assertTaskOutside(id)
-      const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+      // An unready cold entry already owns the retryable cleanup fence.
+      const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
       let outcome:'settled'|'unknown'='unknown'
       try {await revokeTaskOperations(id);await close();await bootstrap.releaseCapture(entry);if(documents.get(id)===entry){documents.delete(id);resolved.delete(id)};outcome='settled'}
       finally {token?.end(outcome)}
@@ -48,7 +49,8 @@ export function createManagedDocuments(backend: PersistenceBackend, ownership: O
     assertTaskOutside(id)
     bootstrap.assertOutsideCapture(id)
     const entry=documents.get(id);if(!entry)return
-    const token=processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
+    // Retain the original cold fence across failed cleanup instead of poisoning it.
+    const token=entry.selected?.cold&&entry.selected.processToken ? undefined : processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})
     let outcome:'settled'|'unknown'='unknown'
     try {
     revokeManagedEntry(entry);await entry.flight?.catch(()=>{})

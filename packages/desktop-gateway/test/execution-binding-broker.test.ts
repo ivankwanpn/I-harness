@@ -2,7 +2,9 @@ import { it, expect } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createSessionCoordinator } from '@i-harness/session-persistence'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
+const createSessionCoordinator = (backend: Parameters<typeof composeJsonlTaskTransitionCoordinator>[0], options?: Parameters<typeof composeJsonlTaskTransitionCoordinator>[1]) => composeJsonlTaskTransitionCoordinator(backend, options, taskDocumentStorageContract)
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
 import { createProjectScopeBroker } from '../src/project-scope.ts'
 import { createSessionManagementFence } from '../src/session-management-fence.ts'
@@ -38,7 +40,7 @@ it('rejects foreign and cloned references and applies the actual conversation po
       ['team', 'team', undefined, true], ['child', 'subagent', 'root', false],
       ['review', 'approval-review', 'root', false], ['team-child', 'team', 'root', false],
     ] as const) {
-      await coordinator.create({ sessionId: id, origin, parentSession }); await coordinator.releaseOwnership(id)
+      await coordinator.create({ sessionId: id, ...(origin ? { origin } : {}), ...(parentSession ? { parentSession } : {}) }); await coordinator.releaseOwnership(id)
       const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: id }, () => {})
       if (accepted) { const observation = broker.observeExecutionBinding(ref, () => {}); observation.assertCurrent(); observation.release() }
       else expect(() => broker.observeExecutionBinding(ref, () => {})).toThrow()

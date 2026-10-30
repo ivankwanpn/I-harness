@@ -14,7 +14,7 @@ import { buildSession } from '../format/validation.ts'
 import { bootstrapManifest, buildBootstrapHeader, captureBootstrapInvocation, captureBootstrapRequest, parseBootstrapHeaderStage, sameBootstrapData } from './bootstrap-header.ts'
 import type { BootstrapDocumentControl, BootstrapFrame, BootstrapGuards, BootstrapHeaderOperation, BootstrapHeaderStage, BootstrapInspection, BootstrapOutcome, BootstrapReadState, BootstrapRequest, HeaderOutcome } from './bootstrap-types.ts'
 import type { createManagedDocument } from './managed-document.ts'
-import type { PersistenceBackend } from './types.ts'
+import type { PersistenceBackend, SessionMeta } from './types.ts'
 import type { Ownership } from './ownership.ts'
 import type { Mutations } from './mutations.ts'
 import { heldFactOwner, issuingFactOwner } from './fact-owner.ts'
@@ -31,7 +31,7 @@ import { selectedResultsPreparationFacts } from './selected-results-preparation.
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl; cachedTaskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;
@@ -87,7 +87,7 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.captureReservation)validateOwnedCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
-  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state))) throw new Error('Bootstrap storage format conflict')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state)) && !(original.formatVersion===13 && meta.formatVersion===14 && readyState(state))) throw new Error('Bootstrap storage format conflict')
   for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
@@ -195,15 +195,19 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    const retireColdWitness=()=>{
+      if(entry.selected?.cold&&entry.selected.processToken){entry.selected.processToken.end('settled');entry.selected.processToken=undefined}
+    }
     // The task transition borrows this exact claim. Its original file and
     // document-lease cleanup must finish before the capture owner retires it.
     await entry.bootstrap?.taskBarrier?.retryClose()
+    await entry.selected?.taskBarrier?.retryClose()
     await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
-    if(!io||io.released)return
+    if(!io||io.released){retireColdWitness();return}
     if(io.releasing)return io.releasing
-    const flight=io.claim.release().then(()=>{io.released=true}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
+    const flight=io.claim.release().then(()=>{io.released=true;retireColdWitness()}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
     io.releasing=flight
     await flight
   }
@@ -602,6 +606,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       owned.flight=flight;return flight
     }
   function prepareSelectedCapture(input:SelectedResultsRoute,identity:object,guard:()=>void,capture:()=>Promise<unknown>) {
+    if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
     const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
     if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
@@ -635,14 +640,26 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           if(selectedEntry.lane&&selectedEntry.lane!==lane)throw Error('Original selected lane changed')
           selectedEntry.lane=lane
         }
-        if(state.kind==='captured'&&selectedEntry.header?.kind!=='committed'){
+        if(state.kind==='captured'&&(selectedEntry.header?.kind!=='committed'||!!selectedEntry.taskBarrier&&!selectedEntry.taskBarrier.completed)){
           const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
+          if (transitions) {
+            originalBootstrapEntries.set(owned,{id,documents})
+            selectedEntry.taskBarrier ??= transitions.bootstrap(id,owned,route,'new',{claim:io.claim,held:io.held})
+            selectedEntry.taskBarrier.setGuard(check)
+            try { await selectedEntry.taskBarrier.prepare() }
+            catch (error) { if (!selectedEntry.taskBarrier.taskIssued || selectedEntry.taskBarrier.taskConflict) { await selectedEntry.taskBarrier.close(); selectedEntry.taskBarrier=undefined }; throw error }
+          }
           const reconcile=selectedEntry.headerIssued===true
-          if(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'){
+          if(selectedEntry.header?.kind!=='committed'&&(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'||selectedEntry.header?.kind==='unknown'&&!selectedEntry.headerIssued)){
             selectedEntry.headerAttempted=true;io.settled=false
-            selectedEntry.header=await ownership.withSessionOperation(id,()=>reconcile?selected.reconcileSelectedHeader(id,io.held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true}))
+            const issue = (held:HeldFactOwner,beforeIssue:()=>void) => {
+              io.activeIssue=()=>{beforeIssue();check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
+              return reconcile?selected.reconcileSelectedHeader(id,held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true})
+            }
+            selectedEntry.header=selectedEntry.taskBarrier ? await selectedEntry.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(io.held,()=>{}))
             await settleCapture(owned);check()
           }
+          if (selectedEntry.header?.kind==='committed' && selectedEntry.taskBarrier) { selectedEntry.taskBarrier.markHeaderCommitted(); await selectedEntry.taskBarrier.finishHeader() }
         }
         return state
       }
@@ -704,6 +721,70 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }).catch(()=>({kind:'blocked' as const})).finally(async()=>{io.activeIssue=undefined;try{await settleCapture(entry)}finally{if(entry.flight===flight)entry.flight=undefined}})
     entry.flight=flight;return flight
   }
+  /** Cold admission retains the original entry and owner, but does not release
+   * readiness until the completed-target transition and target qualification. */
+  function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required'|'conflict'|'blocked'}> {
+    if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
+    const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
+    let entry=documents.get(id)
+    if(entry) {
+      if(!entry.selected||!sameBootstrapData(entry.selected.route,route))return Promise.resolve({kind:'conflict'})
+      if(entry.revoked||captureClosed)return Promise.resolve({kind:'blocked'})
+      if(entry.flight)return entry.flight.then(()=>({kind:'blocked' as const}),()=>({kind:'blocked' as const}))
+      if(entry.document)return Promise.resolve({kind:entry.selected.resultReceipt?'qualification-required':'blocked'})
+      if(!entry.selected.cold)return Promise.resolve({kind:'conflict'})
+    }
+    if(captureClosed||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)return Promise.resolve({kind:'blocked'})
+    const journal=(backend as PersistenceBackend & {selectedJournal?:{inspectCheckedBirth(route:SelectedResultsRoute,held:HeldFactOwner):Promise<
+      {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix};meta:SessionMeta}
+    >}}).selectedJournal
+    if(!journal)return Promise.resolve({kind:'blocked'})
+    if(!entry){entry={selected:{cold:true,route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}};documents.set(id,entry)}
+    const owned=entry
+    const check=()=>{if(captureClosed||owned.revoked||documents.get(id)!==owned)throw new FactRecoveryRequiredError()}
+    const flight=Promise.resolve().then(async()=>{
+      await backend.checkBootstrapCaptureRoot!();check();const io=await captureBundle(owned);await settleCapture(owned);check()
+      io.settled=false
+      let result=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held))
+      await settleCapture(owned);check()
+      if(result.kind!=='checked')return {kind:result.kind==='conflict'?'conflict' as const:'blocked' as const}
+      if(transitions&&!owned.selected?.taskBarrier?.completed){
+        originalBootstrapEntries.set(owned,{id,documents})
+        const selected=owned.selected!; selected.taskBarrier ??= transitions.bootstrap(id,owned,route,'completed',{claim:io.claim,held:io.held})
+        const barrier=selected.taskBarrier;barrier.setGuard(check);await barrier.prepare();check()
+        const capture=(backend as PersistenceBackend & {selectedCapture?:{confirmSelectedBirthHeader(id:string,held:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,version:number):Promise<HeaderOutcome>}}).selectedCapture
+        if(!capture)throw new FactRecoveryRequiredError()
+        const stage=result.birth.stage,operation:BootstrapHeaderOperation={invocation:stage.invocation,target:stage.originalTarget,stageBytes:Buffer.from(canonicalJsonData(stage)+'\n'),headerBytes:Buffer.from(stage.headerBytes)}
+        if(!barrier.headerCommitted){
+          io.settled=false;const header=await barrier.runHeader(held=>capture.confirmSelectedBirthHeader(id,held,route,operation,result.kind==='checked'?result.meta.formatVersion:-1));await settleCapture(owned);check()
+          if(header.kind!=='committed')throw new FactRecoveryRequiredError()
+          barrier.markHeaderCommitted()
+        }
+        if(result.meta.formatVersion<CURRENT_FORMAT_VERSION||barrier.upgradePending)await barrier.upgrade()
+        await barrier.finishHeader();check()
+        io.settled=false;const current=await ownership.withSessionOperation(id,()=>journal.inspectCheckedBirth(route,io.held));await settleCapture(owned);check()
+        if(current.kind!=='checked'||current.meta.formatVersion!==CURRENT_FORMAT_VERSION||!sameBootstrapData(current.birth.stage,result.birth.stage)||!sameBootstrapData(current.history.events,result.history.events)||!sameBootstrapData(current.history.prefix,result.history.prefix))throw new FactRecoveryRequiredError()
+        result=current
+      }
+      const {birth,history}=result,completion=history.events[birth.stage.seed.seedLength]
+      if(!completion||completion.type!=='session/bootstrap')return {kind:'blocked' as const}
+      const facts=birth.facts,meta=result.meta
+      const doc=attach(id,owned,buildSession(meta,history.events),history.prefix)
+      await owned.control!.bindSelected!();check()
+      owned.selected!.resultReceipt=Object.freeze({version:2,invocation:birth.stage.invocation,manifestDigest:facts.manifestDigest,seedLength:facts.seedLength,dependencyClosureDigest:completion.dependencyClosureDigest,seedDigest:facts.seedDigest,sourceObservation:facts.sourceObservation,results:facts.semantic.results})
+      void doc
+      return {kind:'qualification-required' as const}
+    }).catch(()=>({kind:'blocked' as const})).finally(async()=>{
+      try {
+        await settleCapture(owned)
+        if(!owned.document&&!owned.selected?.taskBarrier) {
+          await releaseCapture(owned)
+          if(documents.get(id)===owned)documents.delete(id)
+        }
+      } finally {if(owned.flight===flight)owned.flight=undefined}
+    })
+    owned.flight=flight;return flight
+  }
   function inspectSelected(input:SelectedResultsRoute,identity:object) {
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId,entry=documents.get(id),selected=entry?.selected,io=entry?.captureIO
     if(!entry||entry.revoked||!selected||selected.identity!==identity||!sameBootstrapData(selected.route,route)||!io||io.released||!selected.lane||!selected.headerIssued||selected.header?.kind!=='committed')throw Error('Original selected target unavailable')
@@ -715,7 +796,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!entry||!entry.selected||entry.selected.identity!==identity)return
     if(!sameBootstrapData(entry.selected.route,route))throw Error('Selected target conflict')
     entry.captureIO&&(entry.captureIO.activeIssue=undefined)
-    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}await releaseCapture(entry)
+    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}
+    if(entry.selected.taskBarrier && !entry.selected.taskBarrier.completed) await entry.selected.taskBarrier.close()
+    await releaseCapture(entry)
     entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
     if(!entry.selected.issued&&!entry.document&&documents.get(route.request.invocation.targetSessionId)===entry)documents.delete(route.request.invocation.targetSessionId)
   }
@@ -735,12 +818,16 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(checked.kind==='absent'){selected.pending=undefined;return {kind:'absent' as const}}
         return {kind:checked.kind==='conflict'?'conflict' as const:'unknown' as const}
       }
-      const outcome=await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation));selected.header=outcome;return outcome
+      const barrier=selected.taskBarrier
+      const outcome=barrier && !barrier.completed ? await barrier.runHeader(held=>backendSelected.reconcileSelectedHeader(id,held,route,operation)) : await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation))
+      selected.header=outcome
+      if(outcome.kind==='committed' && barrier && !barrier.completed){barrier.markHeaderCommitted();await settleCapture(entry);await barrier.finishHeader()}
+      return outcome
     }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }
   return {
-    prepareSelectedCapture,captureSelected,inspectSelected,publishSelected,releaseSelected,reconcileSelected,
+    prepareSelectedCapture,captureSelected,inspectSelected,inspectColdSelected,publishSelected,releaseSelected,reconcileSelected,
     captureSupported, childSupported, assertOutsideCapture, captureSelfConflict, closeCaptureAdmission, settleCapture, releaseCapture, trackBootstrapInvocation: trackBootstrap,
     inspectBootstrapCapture:(input:BootstrapCaptureRequest)=>inspectCapture({protocol:'public',request:captureBootstrapCaptureRequest(input)}) as Promise<BootstrapCaptureInspection>,
     inspectChildBootstrapCapture:(input:ChildBootstrapCaptureRequest)=>inspectCapture({protocol:'child-v1',request:captureChildBootstrapCaptureRequest(input)}) as Promise<ChildBootstrapCaptureInspection>,

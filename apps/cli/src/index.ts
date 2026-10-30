@@ -12,8 +12,9 @@ import { createCliDiagnostics } from "./diagnostics-bootstrap.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { createSessionCoordinator, createForkSessionController, ForkAdmissionError } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createForkSessionController, ForkAdmissionError } from "@i-harness/session-persistence"
+import { createJsonlTaskTransitionCoordinator } from "@i-harness/session-persistence-jsonl/internal/task-document-factory"
+import { taskDocumentStorageContract } from "@i-harness/subagent/internal/task-storage-contract"
 import type { SessionCoordinator, ForkPrepareRequest, ForkCommand, ForkExecutionControl } from "@i-harness/session-persistence"
 import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/session-query"
 import { createDurableSessionLoader, createSessionService, createCliForkHost } from "@i-harness/session-executor"
@@ -395,7 +396,7 @@ export async function main(argv: string[]): Promise<number> {
     // session STORE directory — lock files share the store's lifecycle, and a
     // conflicting live writer fails the create below (fail-closed) instead of
     // silently double-writing.
-    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
+    coordinator = createJsonlTaskTransitionCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }, taskDocumentStorageContract)
     if (resumeIdx !== -1) {
       resumeSessionId = args[resumeIdx + 1]
       if (!resumeSessionId) {
@@ -653,7 +654,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
       return 1
     }
     storeRoot = dir
-    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
+    coordinator = createJsonlTaskTransitionCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }, taskDocumentStorageContract)
   }
   const { settings, settingsPath, credentials, runtime } = await loadProviderRuntime()
   // W6 T4: this host's diagnostics instance. It goes in HERE rather than before
@@ -923,7 +924,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
       return 1
     }
     storeRoot = dir
-    coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
+    coordinator = createJsonlTaskTransitionCoordinator(dir, { lock: { enabled: true, lockRoot: dir } }, taskDocumentStorageContract)
   }
   const { settings, settingsPath, credentials, runtime } = await loadProviderRuntime()
   // W6 T4: same seam as the sdk path above, same reason — see there.

@@ -3,6 +3,7 @@ import { types } from 'node:util'
 import type { SessionMeta } from './types.ts'
 import type { HeldFactOwner } from './fact-types.ts'
 import type { BootstrapRoute } from './bootstrap-route.ts'
+import type { SelectedResultsRoute } from './selected-results-route.ts'
 import type { BootstrapReadState } from './bootstrap-types.ts'
 import { heldFactOwner } from './fact-owner.ts'
 import { randomUUID } from 'node:crypto'
@@ -19,14 +20,15 @@ type Header = { handle: TaskDocumentWrite; settle(): Promise<void> }
 type HistoryProof = { initial: SessionView; seedLength: number; assertCurrent(): Promise<void>; assertRoot(): Promise<void> }
 type HistoryHeader = { confirm(): Promise<import('./bootstrap-types.ts').HeaderOutcome | {kind:'not-required'}>; settle(): Promise<void> }
 type HistoryReader = { observe(): Promise<HistoryProof>; settleResources(): Promise<void>; retryResources(): Promise<void>; hasDebt(): boolean }
+type TransitionRoute = BootstrapRoute | SelectedResultsRoute
 export type TaskTransitionBackendSession = TaskDocumentBackendSession & { stageInitialize(bytes: Uint8Array): TaskDocumentWrite }
 export type TaskTransitionConfiguration = {
   validator: { validate(value: unknown): void; empty(): unknown; consistency(parent: string, events: readonly SessionEventView[], seedLength: number, value: unknown): { kind: 'consistent' | 'recovery-required' } }
   open(scope: HeldTaskDocumentScope): TaskTransitionBackendSession
   observeFresh(scope: HeldTaskDocumentScope): Promise<FreshProof>
-  observeBootstrap(scope: HeldTaskDocumentScope, route: BootstrapRoute, held: HeldFactOwner): Promise<FreshProof>
+  observeBootstrap(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): Promise<FreshProof>
   openHistory(scope: HeldTaskDocumentScope, held: HeldFactOwner): HistoryReader
-  openBootstrapHistory(scope: HeldTaskDocumentScope, route: BootstrapRoute, held: HeldFactOwner): HistoryReader
+  openBootstrapHistory(scope: HeldTaskDocumentScope, route: TransitionRoute, held: HeldFactOwner): HistoryReader
   openHistoryHeader(scope: HeldTaskDocumentScope, held: HeldFactOwner, proof: HistoryProof): HistoryHeader
   stageUpgrade(scope: HeldTaskDocumentScope, proof: HistoryProof, held: HeldFactOwner): Promise<Header>
   trackHeader(id: string, held: HeldFactOwner): void
@@ -82,7 +84,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
   const records = new Map<string, { execute(): Promise<void>; close(): Promise<void>; retryClose(): Promise<void>; finite(): Promise<void> }>()
   const failures = new WeakMap<object, { retry(): Promise<'committed' | 'not-committed'> }>()
   const conflict = () => { throw new Error('TASK_TRANSITION_CONFLICT') }
-  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: () => Promise<T>, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>): Promise<T | void> {
+  function begin<T>(id: string, meta: SessionMeta | undefined, recover?: (beforeRepair: (version:number, events:readonly SessionEventView[], seedLength:number) => Promise<void>, markRepair: () => void) => Promise<T>, beforeQueue?: () => Promise<void>, finalize?: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>): Promise<T | void> {
     if (records.has(id)) return Promise.reject(new Error('TASK_TRANSITION_RETRY_REQUIRED'))
     const capturedMeta = meta === undefined ? undefined : captureTaskSnapshot(meta) as SessionMeta
     if (!ownership.lockEnabled) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
@@ -137,28 +139,49 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           queue = ownership.captureActiveSessionOperation(id); guard()
           if (!claim) { claim = await ownership.borrowOwnership(id); releaseClaim = method(claim,'release'); retainClaim = method(claim,'retainLive') }; guard()
           if (!lease) { lease = await ownership.acquireLease('doc:' + key); releaseLease = method(lease,'release') }; guard()
-          if (recover && !recoveryDone) { recoveryStarted = true; loaded = await recover(); recoveryDone = true; guard() }
-          scope ??= issueHeldTaskDocumentScope(ownership, id, claim, { assertActive: guard })
-          if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }; guard()
-          if (recover) {
-            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim!.assertHeld()); trackHeader(id,historyHeld)
-            if (historyAttempted && hasHeaderDebt(id,historyHeld)) await settleHeader(id,historyHeld); if (historyAttempted && historyReader?.hasDebt() && history) await historyReader.retryResources(); if (historyAttempted && !history && historyReader) { await historyReader.settleResources(); historyReader = undefined }
-            historyAttempted = true; historyReader ??= openHistory(scope,historyHeld); history ??= await historyReader.observe(); guard(); if (!header) { await history.assertCurrent(); guard() }
-          } else { proof ??= await observeFresh(scope); guard() }
-          observation ??= await observeTask!(); guard()
-          if (recover) {
-            if (observation.kind === 'present') {
-              if (validate(observation.value) !== undefined) throw new TypeError('Task validator must be synchronous')
-              if (consistency(id, history!.initial.events, history!.seedLength, observation.value).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+          const ensureTask = async () => {
+            scope ??= issueHeldTaskDocumentScope(ownership, id, claim!, { assertActive: guard })
+            if (!task) { task = open(scope); taskFields = Object.getOwnPropertyDescriptors(task); observeTask = method(task,'observe'); confirmTask = method(task,'confirm'); initializeTask = method(task,'stageInitialize'); settleTask = method(task,'settleResources') }
+            guard(); observation ??= await observeTask!(); guard()
+          }
+          if (recover && !recoveryDone) {
+            loaded = await recover(async (version,events,seedLength) => {
+              if (version < 14) return
+              await ensureTask()
+              if (observation!.kind !== 'present') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+              if (validate(observation!.value) !== undefined) throw new TypeError('Task validator must be synchronous')
+              if (consistency(id,events,seedLength,observation!.value).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
               if (!confirmed) {
                 if (confirmationUnknown) await settleTask!()
-                const outcome = await confirmTask!(observation.witness); confirmationConflict = outcome.kind === 'conflict'; confirmationUnknown = outcome.kind !== 'conflict' && (outcome.kind === 'unknown' || outcome.cleanupPending)
+                const outcome = await confirmTask!(observation!.witness); confirmationConflict = outcome.kind === 'conflict'; confirmationUnknown = outcome.kind !== 'conflict' && (outcome.kind === 'unknown' || outcome.cleanupPending)
                 if (outcome.kind !== 'confirmed' || outcome.cleanupPending) throw new Error('TASK_TRANSITION_CONFIRM_UNRESOLVED')
                 confirmed = true; confirmationUnknown = false
               }
-            } else if (consistency(id, history!.initial.events, history!.seedLength, undefined).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
-          } else if (observation.kind !== 'absent') throw new Error('TASK_TRANSITION_ORPHAN')
-          if (observation.kind === 'absent') {
+              await settleTask!(); guard()
+            }, () => { recoveryStarted = true })
+            recoveryDone = true; guard()
+          }
+          await ensureTask()
+          const taskScope=scope as HeldTaskDocumentScope, taskObservation=observation as Awaited<ReturnType<TaskTransitionBackendSession['observe']>>
+          if (recover) {
+            historyHeld ??= heldFactOwner({sessionId:id,incarnation:randomUUID()},ownership,()=>claim!.assertHeld()); trackHeader(id,historyHeld)
+            if (historyAttempted && hasHeaderDebt(id,historyHeld)) await settleHeader(id,historyHeld); if (historyAttempted && historyReader?.hasDebt() && history) await historyReader.retryResources(); if (historyAttempted && !history && historyReader) { await historyReader.settleResources(); historyReader = undefined }
+            historyAttempted = true; historyReader ??= openHistory(taskScope,historyHeld); history ??= await historyReader.observe(); guard(); if (!header) { await history.assertCurrent(); guard() }
+          } else { proof ??= await observeFresh(taskScope); guard() }
+          guard()
+          if (recover) {
+            if (taskObservation.kind === 'present') {
+              if (validate(taskObservation.value) !== undefined) throw new TypeError('Task validator must be synchronous')
+              if (consistency(id, history!.initial.events, history!.seedLength, taskObservation.value).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+              if (!confirmed) {
+                if (confirmationUnknown) await settleTask!()
+                const outcome = await confirmTask!(taskObservation.witness); confirmationConflict = outcome.kind === 'conflict'; confirmationUnknown = outcome.kind !== 'conflict' && (outcome.kind === 'unknown' || outcome.cleanupPending)
+                if (outcome.kind !== 'confirmed' || outcome.cleanupPending) throw new Error('TASK_TRANSITION_CONFIRM_UNRESOLVED')
+                confirmed = true; confirmationUnknown = false
+              }
+            } else if (history!.initial.formatVersion >= 14 || consistency(id, history!.initial.events, history!.seedLength, undefined).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED')
+          } else if (taskObservation.kind !== 'absent') throw new Error('TASK_TRANSITION_ORPHAN')
+          if (taskObservation.kind === 'absent') {
             if (!write) {
               guard(); write = initializeTask!(candidate!); writeFields = Object.getOwnPropertyDescriptors(write); issueWrite = method(write,'issue'); retryWrite = method(write,'retry'); token = latches?.beginMutation({ sessionIds: [], documentKeys: [key], kind: 'other' })
               taskIssued = true; result = await issueWrite!()
@@ -168,14 +191,14 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
           await settleTask!(); guard()
           if (recover) {
             if (!historyHeaderConfirmed) {
-              historyHeader ??= openHistoryHeader(scope,historyHeld!,history!)
+              historyHeader ??= openHistoryHeader(taskScope,historyHeld!,history!)
               if (historyHeaderUnknown || historyHeaderCleanupPending) { await historyHeader.settle(); historyHeaderCleanupPending = false }
               const headerConfirmation = await historyHeader.confirm(); historyHeaderConflict = headerConfirmation.kind === 'conflict'; historyHeaderUnknown = !historyHeaderConflict && (headerConfirmation.kind === 'unknown' || headerConfirmation.kind === 'absent' || headerConfirmation.kind === 'not-issued')
               if (headerConfirmation.kind !== 'not-required' && headerConfirmation.kind !== 'committed') throw new Error('TASK_TRANSITION_HEADER_UNRESOLVED')
               historyHeaderCleanupPending = true; await historyHeader.settle(); historyHeaderCleanupPending = false; historyHeaderConfirmed = true; historyHeaderUnknown = false; guard()
             }
             if (history!.initial.formatVersion < CURRENT_FORMAT_VERSION) {
-              if (!header) { await history!.assertCurrent(); guard(); captureHeader(await stageUpgrade(scope, history!, historyHeld!)); guard() }
+              if (!header) { await history!.assertCurrent(); guard(); captureHeader(await stageUpgrade(taskScope, history!, historyHeld!)); guard() }
               const outcome = outcomeHeader!() ? await retryHeader!() : await issueHeader!(); headerResult = outcome
               if (outcome.kind !== 'committed' || outcome.cleanupPending) throw new Error('TASK_TRANSITION_HEADER_UNRESOLVED')
               await settleHeaderCandidate!(); guard()
@@ -183,7 +206,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
             if (!finalize) throw new Error('TASK_TRANSITION_UNSUPPORTED'); loaded = await finalize(history!); guard(); if (after && !postDone) { postAttempted = true; await after(events => { guard(); validateDeliveryFrame(events, CURRENT_FORMAT_VERSION); const taskValue = observation!.kind === 'present' ? observation!.value : candidateSnapshot; if (consistency(id, [...history!.initial.events, ...events], history!.seedLength, taskValue).kind !== 'consistent') throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }, () => { postStarted = true }); postDone = true; guard() }
           }
           else {
-            if (!header) { await proof!.assertCurrent(); guard(); captureHeader(stageHeader(scope, capturedMeta!, proof!)) }
+            if (!header) { await proof!.assertCurrent(); guard(); captureHeader(stageHeader(taskScope, capturedMeta!, proof!)) }
             const outcome = outcomeHeader!() ? await retryHeader!() : await issueHeader!(); headerResult = outcome
             if (outcome.kind !== 'committed' || outcome.cleanupPending) throw new Error('TASK_TRANSITION_HEADER_UNRESOLVED')
             await settleHeaderCandidate!(); guard()
@@ -214,7 +237,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     })(); completion = outcome; return outcome
   }
   const bootstrapRecords = new WeakMap<object, ReturnType<typeof makeBootstrap>>()
-  function makeBootstrap(id: string, entry: object, route: BootstrapRoute, initialMode: 'new'|'existing-empty'|'completed' | undefined, borrowed?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner }) {
+  function makeBootstrap(id: string, entry: object, route: TransitionRoute, initialMode: 'new'|'existing-empty'|'completed' | undefined, borrowed?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner }) {
     if (!ownership.lockEnabled || records.has(id)) throw new Error('TASK_TRANSITION_UNSUPPORTED')
     ownership.assertOutsideSessionOperation(id); latches?.assertUnpoisoned(id, [`task-${id}`])
     const identity = Object.freeze({}), key = `task-${id}`
@@ -295,7 +318,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
                 if (outcome.kind !== 'confirmed' || outcome.cleanupPending) throw new Error('TASK_TRANSITION_CONFIRM_UNRESOLVED')
                 confirmed = true; confirmationUnknown = false
               }
-            } else if (consistency(id,history.initial.events,history.seedLength,undefined).kind !== 'consistent') { taskConflict = true; throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }
+            } else if (history.initial.formatVersion >= 14 || consistency(id,history.initial.events,history.seedLength,undefined).kind !== 'consistent') { taskConflict = true; throw new Error('TASK_TRANSITION_RECOVERY_REQUIRED') }
           } else if (observation.kind !== 'absent') { taskConflict = true; throw new Error('TASK_TRANSITION_ORPHAN') }
           if (observation.kind === 'absent') {
             if (!write) {
@@ -314,7 +337,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       setGuard(value: () => void) { if (this !== barrier || typeof value !== 'function' || types.isProxy(value) || flight || ownerFlight || externalFlight) throw new Error('TASK_TRANSITION_CONFLICT'); currentGuard = value },
       setMode(value:'new'|'existing-empty'|'completed') { if (this !== barrier || mode && mode !== value) throw new Error('TASK_TRANSITION_CONFLICT'); mode = value },
       get mode() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return mode },
-      async readState() { if (this !== barrier || !held) throw new Error('TASK_TRANSITION_CONFLICT'); return runExternal(async () => { if (hasHeaderDebt(id,held!)) await settleHeader(id,held!); return readBootstrapState(route,held!) }) },
+      async readState() { if (this !== barrier || !held || route.protocol === 'public-results-v1') throw new Error('TASK_TRANSITION_CONFLICT'); return runExternal(async () => { if (hasHeaderDebt(id,held!)) await settleHeader(id,held!); return readBootstrapState(route,held!) }) },
       prepare() { if (this !== barrier) return Promise.reject(new TypeError('Invalid bootstrap barrier receiver')); return prepare() },
       held() { if (this !== barrier || !held || done) throw new Error('TASK_TRANSITION_CONFLICT'); return held },
       transferClaim() { if (this !== barrier || !claim || !held || done || revoked) throw new Error('TASK_TRANSITION_CONFLICT'); claim.assertHeld(); borrowedClaim = true; return claim },
@@ -365,9 +388,9 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     }
     records.set(id,{execute:prepare,close,retryClose,finite}); return barrier
   }
-  function bootstrap(id: string, entry: object, route: BootstrapRoute, mode: 'new'|'existing-empty'|'completed' | undefined, borrowed?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner }) {
+  function bootstrap(id: string, entry: object, route: TransitionRoute, mode: 'new'|'existing-empty'|'completed' | undefined, borrowed?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner }) {
     const prior = bootstrapRecords.get(entry); if (prior) return prior
     const value = makeBootstrap(id,entry,route,mode,borrowed); bootstrapRecords.set(entry,value); return value
   }
-  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: () => Promise<T>, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>) { return begin(id, undefined, recover, beforeQueue, finalize, after) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
+  return { async joinIO() { const results = await Promise.allSettled([...records.values()].map(record => record.finite())); const errors = results.flatMap(value => value.status === 'rejected' ? [value.reason] : []); if (errors.length) throw new AggregateError(errors,'Task transition IO unresolved') }, bootstrap, create(id: string, meta: SessionMeta) { return begin(id, meta) }, existing<T>(id: string, recover: (beforeRepair:(version:number,events:readonly SessionEventView[],seedLength:number)=>Promise<void>,markRepair:()=>void) => Promise<T>, beforeQueue: (() => Promise<void>) | undefined, finalize: (proof: HistoryProof) => Promise<T>, after?: (check: (events: readonly SessionEventView[]) => void, markIssue: () => void) => Promise<void>) { return begin(id, undefined, recover, beforeQueue, finalize, after) as Promise<T> }, cleanupFor(error: unknown) { return error && typeof error === 'object' ? failures.get(error) : undefined } }
 }

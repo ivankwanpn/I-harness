@@ -164,3 +164,8 @@ it.each(['inline value', 'preview', 'media'] as const)('still refuses selected r
   expect(all(source)).toEqual({ kind: 'refused', reason: 'invalid-seed' })
   expect(reads).toBe(0)
 })
+it('installs a format 14 memory bootstrap with a memory-ready receipt', () => {
+  const target = createSession(); target.formatVersion = 14
+  expect(bootstrapMemorySession(target, literalReady.header!, literalReady.events, () => true)).toEqual({kind:'memory-ready',seedLength:2})
+  expect(target.events).toHaveLength(3)
+})

@@ -51,7 +51,17 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
     { validator, open(scope) { owner.assertOriginal(); return owner.openTask(scope) } },
     { validator, open(scope) { owner.assertOriginal(); return owner.openTransitionTask(scope) }, observeFresh(scope) { owner.assertOriginal(); return owner.capability.observeFreshTaskParent(scope) },
       observeBootstrap(scope, route, held) {
-        owner.assertOriginal(); if (routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        owner.assertOriginal(); if ((route.protocol === 'public-results-v1' ? route.request.invocation : routeInvocation(route)).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        if (route.protocol === 'public-results-v1') return owner.capability.observeReservedTaskParent(scope, async () => {
+          owner.assertOriginal(); scope.assertActive()
+          const selected = (backend as PersistenceBackend & {selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture']}).selectedCapture
+          try {
+            const state = await selected.readSelectedCapture(scope.parentSessionId,held,route)
+            scope.assertActive(); owner.assertOriginal()
+            if (state.kind !== 'reserved' || canonicalJsonData(state.reservation.request) !== canonicalJsonData(route.request)) throw new Error('Selected bootstrap target unavailable')
+            return canonicalJsonData(state)
+          } finally { await backend.settleBootstrapCaptureIO!(scope.parentSessionId,held) }
+        })
         return owner.capability.observeReservedTaskParent(scope, async () => {
           owner.assertOriginal(); scope.assertActive(); const state = await owner.readTrackedState(route,held); scope.assertActive(); owner.assertOriginal()
           if (state.kind === 'unavailable' || state.foreign || state.meta || state.rawHeader || state.publicationPresent || state.promotionPresent || state.stagePresent && !state.stageBytes && !state.captureReservation) throw new Error('Bootstrap target unavailable')
@@ -62,7 +72,7 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
         return owner.capability.openTaskHistory(scope, async () => { owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal(); return birth?.digest })
       },
       openBootstrapHistory(scope, route, held) {
-        owner.assertOriginal(); if (routeInvocation(route).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
+        owner.assertOriginal(); if ((route.protocol === 'public-results-v1' ? route.request.invocation : routeInvocation(route)).targetSessionId !== scope.parentSessionId) throw new Error('Invalid bootstrap task route')
         let originalStage: string | undefined
         return owner.capability.openTaskHistory(scope, async () => {
           owner.assertOriginal(); const birth = await owner.resolveTrackedBirth(scope.parentSessionId,held); scope.assertActive(); owner.assertOriginal()
@@ -73,7 +83,7 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
       },
       openHistoryHeader(scope, held, proof) {
         owner.assertOriginal(); owner.capability.originalHistory(proof,scope); scope.assertActive()
-        let decided = false, operation: import('@i-harness/session-persistence').BootstrapHeaderOperation | undefined, captured = false
+        let decided = false, operation: import('@i-harness/session-persistence').BootstrapHeaderOperation | undefined, captured = false, selectedRoute: import('@i-harness/session-persistence').SelectedResultsRoute | undefined
         let result: import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'} | undefined, flight: Promise<import('@i-harness/session-persistence').HeaderOutcome | {kind:'not-required'}> | undefined, settling: Promise<void> | undefined
         const session = Object.freeze({
           confirm() {
@@ -87,8 +97,9 @@ export function composeJsonlTaskTransitionCoordinator(backend: PersistenceBacken
                 if (!birth) return result = {kind:'not-required' as const}
                 operation = { invocation:birth.stage.invocation, target:birth.stage.originalTarget, stageBytes:birth.stageBytes, headerBytes:Buffer.from(birth.stage.headerBytes) }
                 captured = !!birth.stage.captureReservation
+                if (birth.route.protocol === 'public-results-v1') selectedRoute = birth.route
               }
-              try { result = await backend.reconcileBootstrapHeader!(scope.parentSessionId,held,operation!); return result }
+              try { result = selectedRoute ? await (backend as PersistenceBackend & {selectedCapture: ReturnType<typeof createBootstrapHeaderBackend>['selectedCapture']}).selectedCapture.confirmSelectedBirthHeader(scope.parentSessionId,held,selectedRoute,operation!,proof.initial.formatVersion) : await backend.reconcileBootstrapHeader!(scope.parentSessionId,held,operation!); return result }
               catch { return result = {kind:'unknown' as const} }
             })
             void flight.then(() => { flight = undefined }, () => { flight = undefined }); return flight
@@ -242,7 +253,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         const lastByte = Buffer.alloc(1)
         if (committedBytes > 0) await handle.read(lastByte, 0, 1, committedBytes - 1)
         const separator = events.length > 0 && committedBytes > 0 && lastByte[0] !== 0x0a ? "\n" : ""
-        const data = [6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)
+        const data = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)
           ? (() => {
             const raw = readFile(path)
             return raw.then(bytes => {
@@ -282,8 +293,8 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       const lines = text.split("\n")
       if (lines.length === 0 || lines[0]!.trim() === "") throw new Error(`empty session file: ${sessionId}`)
       const header = parseHeader(lines[0]!)
-      const events = [6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
-      if (![6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
+      const events = [6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header).events : parseEventLines(lines.slice(1))
+      if (![6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion) && events.some(event => event.type === 'compaction/replacement')) validateConversationHistory(events, header.formatVersion, header)
       return { version: header.formatVersion, events, meta: header }
     },
 
@@ -305,7 +316,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
       const headerLine = lines[0]!
       const header = parseHeader(headerLine)
       if (header.formatVersion > CURRENT_FORMAT_VERSION) throw new Error('Future session format; upgrade the harness')
-      if ([6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)) {
         const decoded = readFactJournal(Buffer.from(lines.slice(1).join('\n')), header.journal!, header.formatVersion, header)
         const closers = missingClosers(decoded.events).map((event, position) => ({ ...event, seq: decoded.events.length + position }))
         if (decoded.torn || closers.length) {
@@ -359,7 +370,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         await replaceRawSessionFile(path, Buffer.concat([raw.subarray(0, raw.indexOf(10) + 1), birth.bytes, Buffer.from(frame)]))
         return
       }
-      if ([6, 7, 8, 9, 10, 11, 12, 13].includes(header.formatVersion)) {
+      if ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(header.formatVersion)) {
         const journal = { version: 1 as const, legacyBodyBytes: 0, legacyEventCount: 0, legacyPrefixDigest: legacyPrefixDigest(0, new Uint8Array()), separatorBytes: 0 as const }
         const frame = events.length ? encodeFactBatch(randomUUID(), journal.legacyPrefixDigest, events).bytes : new Uint8Array()
         await replaceRawSessionFile(path, Buffer.concat([Buffer.from(serializeHeader({ ...header, journal }) + '\n'), Buffer.from(frame)]))
@@ -371,7 +382,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
     async upgradeSessionFormat(sessionId, expected, target) {
       await assertNotDeleted("session", sessionId)
       await assertPublicBootstrap(sessionId)
-      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
+      if (target !== CURRENT_FORMAT_VERSION || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, target].includes(expected)) throw new Error("unexpected session format upgrade or downgrade")
       const path = filePath(sessionId)
       return upgradeFactJournal(path, expected)
     },
@@ -386,7 +397,7 @@ export function createJsonlBackend(root: string): PersistenceBackend & { selecte
         const lines = (await readFile(path, "utf-8")).split("\n")
         return {
           meta: parseHeader(lines[0]!),
-          blank: ([6, 7, 8, 9, 10, 11, 12, 13].includes(parseHeader(lines[0]!).formatVersion)
+          blank: ([6, 7, 8, 9, 10, 11, 12, 13, 14].includes(parseHeader(lines[0]!).formatVersion)
             ? readFactJournal(Buffer.from(lines.slice(1).join('\n')), parseHeader(lines[0]!).journal!, parseHeader(lines[0]!).formatVersion, parseHeader(lines[0]!)).events
             : parseEventLines(lines.slice(1))).every((ev) => ev.type !== "turn/start"), updatedAt,
         }

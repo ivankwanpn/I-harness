@@ -14,7 +14,7 @@ function fixture(){
  const core=readSelectedResultsCore({version:2,kind:'session-fork-core',sourceSessionId:'source',selection:{kind:'completed'},sourceCapture:'first-authorized-capture',metadata:{title:'test'},results:'selected-results-v1'})
  const {intent,requestDigest}=createSelectedResultsIntent(core,{kind:'unmanaged'}),invocation={version:1 as const,operationId:'op',targetSessionId:'target',createdAt:'2026-10-28T00:00:00.000Z',requestDigest}
  const request={invocation,core,requestIntent:intent},route={protocol:'public-results-v1' as const,request},reservation={version:1,kind:'semantic-bootstrap-selected-results-capture',request}
- const built=buildSelectedResultsHeader({invocation,target:{kind:'new'},metadata:core.metadata,lineage:{origin:'fork',parentSession:'source'},seed:compileSelectedResultsSemanticSeed(codecSeed('public-completed'))},reservation)
+ const built=buildSelectedResultsHeader({invocation,target:{kind:'new'},metadata:core.metadata,lineage:{origin:'fork',parentSession:'source'},seed:compileSelectedResultsSemanticSeed(codecSeed('public-completed'))},reservation,13)
  return {route,reservation,built}
 }
 it('reads absent, reservation, full and promotion observations without changing bytes',async()=>{
@@ -145,4 +145,14 @@ it('uses the original assertion immediately before return after publication boun
  const io={assertCurrent(){expect(this).toBe(io);checks++;if(!current)throw Error('lost at finish');if(checks===9){current=false;io.assertCurrent=()=>{}}},async namespace(){return []},async read(p:string){if(p.endsWith('.publish')){entered.release();await held.promise}return undefined}}
  const pending=lookupSelectedBootstrapStage('target.jsonl',{kind:'route',route},io);await entered.promise;held.release()
  expect((await pending).kind).toBe('unavailable');expect(checks).toBe(10)
+})
+it('matches only the reviewed selected 13 to 14 live header change',async()=>{
+ const root=await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT!,'selected-live-'))
+ try {
+  const path=join(root,'target.jsonl'),{route,built}=fixture(),io=ordinaryStageIO(path),original=JSON.parse(built.headerBytes)
+  await writeFile(selectedBootstrapPaths(path,route).stage,built.stageBytes)
+  expect((await lookupSelectedBootstrapStage(path,{kind:'header',meta:{...original,formatVersion:14}},io)).kind).toBe('full')
+  expect((await lookupSelectedBootstrapStage(path,{kind:'header',meta:{...original,formatVersion:14,parentSession:'foreign'}},io)).kind).toBe('conflict')
+  expect((await lookupSelectedBootstrapStage(path,{kind:'header',meta:{...original,formatVersion:15}},io)).kind).toBe('conflict')
+ } finally { await rm(root,{recursive:true,force:true}) }
 })

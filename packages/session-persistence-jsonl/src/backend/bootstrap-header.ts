@@ -13,6 +13,8 @@ import { bootstrapPaths, bootstrapNamespace, bootstrapPathsForRoute, lookupBoots
 export { bootstrapPaths } from './bootstrap-stage.ts'
 import { captureBootstrapRoute, routeInvocation, type BootstrapRoute, type BootstrapRouteBackend, type BootstrapReadState } from '@i-harness/session-persistence'
 import { preserveBootstrapBirth } from './fact-journal.ts'
+import { resolveSelectedBirth } from './selected-birth.ts'
+import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
 
 export async function bootstrapArtifacts(path:string):Promise<string[]> {
   const prefix=basename(path)+'.bootstrap-'
@@ -45,12 +47,12 @@ function originalEmptyTarget(actual:Buffer,id:string,operation:BootstrapHeaderOp
   if(operation.target.kind!=='existing-empty')return false
   try {
     const end=actual.indexOf(10),meta=end>=0?parseHeader(actual.subarray(0,end).toString('utf8')):undefined
-    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&[11,12,13].includes(meta.formatVersion)&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
+    return end===actual.length-1&&!!meta&&!meta.semanticSeed&&[11,12,13,14].includes(meta.formatVersion)&&meta.sessionId===id&&meta.createdAt===operation.invocation.createdAt
       &&rawHeaderDigest(actual)===operation.target.expectedHeaderDigest&&meta.journal?.legacyEventCount===0&&meta.journal?.legacyBodyBytes===0
       &&meta.journal?.separatorBytes===0&&meta.journal?.legacyPrefixDigest===operation.target.expectedPrefix.prefixDigest
   }catch{return false}
 }
-export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'>; bootstrapRoutes:BootstrapRouteBackend; trackHeaderOwner(id:string, owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string, owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | undefined>} {
+export function createBootstrapHeaderBackend(filePath:(id:string)=>string, assertNotDeleted:(kind:string,id:string)=>Promise<void>, rootPath:string,captureIO:BootstrapCaptureIO=createBootstrapCaptureIO()):Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & {selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'|'confirmSelectedBirthHeader'>; bootstrapRoutes:BootstrapRouteBackend; trackHeaderOwner(id:string, owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string, owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | {route:import('@i-harness/session-persistence').SelectedResultsRoute; stage:import('@i-harness/session-persistence').SelectedResultsHeaderStageV2; stageBytes:Uint8Array; digest:string} | undefined>} {
   const capture = createBootstrapCaptureBackend(filePath, assertNotDeleted, rootPath, captureIO)
   type HeaderResource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
   type HeaderLedger = { id: string; handles: Set<HeaderResource>; pending: Set<Promise<unknown>>; settling?: Promise<void> }
@@ -171,6 +173,14 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
       const end=raw.indexOf(10); if(end<0)throw new Error('Invalid bootstrap header'); const meta=parseHeader(raw.subarray(0,end).toString('utf8'))
       if(!meta.semanticSeed) { if((await bootstrapNamespace(path)).length)throw new Error('Foreign bootstrap namespace'); return undefined }
       const io={ namespace:()=>bootstrapNamespace(path), read:(artifact:string,limit:number)=>ownedRead(artifact,id,owner,limit), assertCurrent:()=>scope(id,owner) }
+      if(meta.semanticSeed.version===3) {
+        const birth=await resolveSelectedBirth(path,id,assertNotDeleted,{stage:io,readJournal:async()=>{const bytes=await ownedRead(path,id,owner);if(!bytes)throw new Error('Selected parent unavailable');return bytes}})
+        if(!birth)throw new Error('Selected birth unavailable')
+        const stage=await lookupSelectedBootstrapStage(path,{kind:'route',route:birth.route},io)
+        if(stage.kind!=='full' || canonicalJsonData(stage.stage)!==canonicalJsonData(birth.stage))throw new Error('Selected stage changed')
+        if(hasTrackedHeaderDebt(id,owner))throw new Error('Bootstrap tracked read cleanup unresolved')
+        return {route:birth.route,stage:birth.stage,stageBytes:stage.exactBytes,digest:createHash('sha256').update(raw).digest('hex')}
+      }
       const selected=await lookupBootstrapStage(path,{kind:'header',meta},io); if(selected.kind!=='full')throw new Error('Original bootstrap stage unavailable')
       const journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal!,meta.formatVersion,meta); if(journal.torn)throw new Error('Incomplete bootstrap history')
       await preserveBootstrapBirth(path,raw,meta,journal.events,io); scope(id,owner)
@@ -190,9 +200,9 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     await assertNotDeleted('session',id)
     return{route:selected.route,stage:selected.stage}
   }}
-  const result: Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & { selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'>; bootstrapRoutes: BootstrapRouteBackend; trackHeaderOwner(id:string,owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string,owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | undefined> } = {
+  const result: Pick<BootstrapBackend,'prepareBootstrapHeader'|'reconcileBootstrapHeader'|'readBootstrapState'|'checkBootstrapCaptureRoot'|'readBootstrapCapture'|'prepareBootstrapCapture'|'settleBootstrapCaptureIO'> & { selectedCapture:Pick<ReturnType<typeof createBootstrapCaptureBackend>,'readSelectedCapture'|'reserveSelectedCapture'|'prepareSelectedHeader'|'reconcileSelectedHeader'|'confirmSelectedBirthHeader'>; bootstrapRoutes: BootstrapRouteBackend; trackHeaderOwner(id:string,owner:HeldFactOwner):void; settleTrackedHeaderIO(id:string,owner:HeldFactOwner):Promise<void>; readTrackedState(route:BootstrapRoute,owner:HeldFactOwner):Promise<BootstrapReadState>; hasTrackedHeaderDebt(id:string,owner:HeldFactOwner):boolean; trackedStageIO(id:string,owner:HeldFactOwner):import('./bootstrap-stage.ts').StageLookupIO; resolveTrackedBirth(id:string,owner:HeldFactOwner):Promise<{route:BootstrapRoute; stage:import('@i-harness/session-persistence').BootstrapHeaderStage; stageBytes:Uint8Array; digest:string} | {route:import('@i-harness/session-persistence').SelectedResultsRoute; stage:import('@i-harness/session-persistence').SelectedResultsHeaderStageV2; stageBytes:Uint8Array; digest:string} | undefined> } = {
     trackHeaderOwner, settleTrackedHeaderIO, readTrackedState, hasTrackedHeaderDebt, trackedStageIO, resolveTrackedBirth,
-    selectedCapture:Object.freeze({readSelectedCapture:capture.readSelectedCapture,reserveSelectedCapture:capture.reserveSelectedCapture,prepareSelectedHeader:capture.prepareSelectedHeader,reconcileSelectedHeader:capture.reconcileSelectedHeader}),
+    selectedCapture:Object.freeze({readSelectedCapture:capture.readSelectedCapture,reserveSelectedCapture:capture.reserveSelectedCapture,prepareSelectedHeader:capture.prepareSelectedHeader,reconcileSelectedHeader:capture.reconcileSelectedHeader,confirmSelectedBirthHeader:capture.confirmSelectedBirthHeader}),
     checkBootstrapCaptureRoot: capture.checkBootstrapCaptureRoot,
     readBootstrapCapture: capture.readBootstrapCapture,
     prepareBootstrapCapture: capture.prepareBootstrapCapture,
@@ -280,9 +290,16 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
         if(!target)return {kind:'unknown'}
         if(originalEmptyTarget(target,id,operation))return {kind:'unknown'}
         if(target.length<operation.headerBytes.length)return {kind:target.equals(Buffer.from(operation.headerBytes.subarray(0,target.length)))?'unknown':'conflict'}
-        if(!target.subarray(0,operation.headerBytes.length).equals(Buffer.from(operation.headerBytes)))return {kind:'conflict'}
-        if(!await syncExact(path,operation.headerBytes,id,owner))return {kind:'unknown'}
-        return {kind:'committed',headerDigest:rawHeaderDigest(operation.headerBytes)}
+        let liveBytes=Buffer.from(operation.headerBytes)
+        if(!target.subarray(0,liveBytes.length).equals(liveBytes)) {
+          const original=JSON.parse(liveBytes.toString('utf8'))
+          if(original.formatVersion!==13)return {kind:'conflict'}
+          const upgraded=Buffer.from(canonicalJsonData({...original,formatVersion:14})+'\n')
+          if(!target.subarray(0,upgraded.length).equals(upgraded))return {kind:'conflict'}
+          liveBytes=upgraded
+        }
+        if(!await syncExact(path,liveBytes,id,owner))return {kind:'unknown'}
+        return {kind:'committed',headerDigest:rawHeaderDigest(liveBytes)}
       } catch{return {kind:'unknown'}}
     },
   }

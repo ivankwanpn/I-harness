@@ -72,7 +72,7 @@ export async function lookupSelectedBootstrapStage(path:string,expectation:Selec
   if(header){
    if(!stage)return finish({kind:'unavailable',present:true})
    const original=JSON.parse(stage.headerBytes) as SessionMeta
-   for(const key of headerFields)if(!same(header[key],original[key]))return finish({kind:'conflict',present:true})
+   for(const key of headerFields)if(!(key==='formatVersion' && original.formatVersion===13 && header.formatVersion===14) && !same(header[key],original[key]))return finish({kind:'conflict',present:true})
   }
   return finish(stage?{kind:'full',route,stage,exactBytes:bytes}:{kind:'reserved',route,reservation,exactBytes:bytes,...(promotion===undefined?{}:{promotionBytes:promotion})})
  }catch{return {kind:'unavailable',present}}
