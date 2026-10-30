@@ -16,8 +16,9 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
-import { allocOverlapped, allocPtrSlot, decodePtr, decodeUint8At, decodeUint16At, decodeUint32At, getTempPath, isInvalidHandle, isNullPtr, ptrAddress, sameSidAt, throwLastError, throwWin32 } from './ffi.ts'
+import { decodePtr, decodeUint8At, decodeUint16At, decodeUint32At, getTempPath, ptrAddress, sameSidAt, throwLastError, throwWin32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
+import { NativeInitOwner, NativeCleanupFailure, runInitScope } from './init-owner.ts'
 import * as abi from './win32-abi.ts'
 
 /**
@@ -66,46 +67,38 @@ export function lockFilePath(api: Win32Bindings, path: string): string {
  * synchronous handle — see allocOverlapped for why not NULL), then
  * UnlockFileEx + CloseHandle. Fail-closed: open/lock/unlock/close failures
  * throw like every other Win32 call in this package; an `action` failure
- * still unlocks (best-effort) and rethrows the original error.
+ * still attempts checked unlock/close and retains failed cleanup on the same
+ * owner, with the original error first.
  * @param api - the binding table.
  * @param path - the protected directory (absolute).
  * @param action - the get-merge-set sequence to serialize.
  * @returns the action's result.
  */
-export function withPathLock<T>(api: Win32Bindings, path: string, action: () => T): T {
-  const lockPath = lockFilePath(api, path)
-  mkdirSync(dirname(lockPath), { recursive: true })
-  const handle = api.createFileW(
-    lockPath,
-    abi.GENERIC_READ | abi.GENERIC_WRITE,
-    abi.FILE_SHARE_READ | abi.FILE_SHARE_WRITE,
-    null, abi.OPEN_ALWAYS, 0, null,
-  )
-  if (isInvalidHandle(handle)) throwLastError(api, 'CreateFileW', lockPath)
-  const overlapped = allocOverlapped() // stays zeroed: offset 0, hEvent NULL
-  if (api.lockFileEx(handle, abi.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped) === 0) {
-    const win32Code = api.getLastError()
-    api.closeHandle(handle) // best-effort on the lock-failure path
-    throwWin32(api, 'LockFileEx', win32Code, lockPath)
-  }
-
-  let result: T
-  try {
-    result = action()
-  } catch (error) {
-    // Best-effort release on the action-failure path: cleanup failures must
-    // not mask the action's error.
-    api.unlockFileEx(handle, 0, 1, 0, overlapped)
-    api.closeHandle(handle)
-    throw error
-  }
-  if (api.unlockFileEx(handle, 0, 1, 0, overlapped) === 0) {
-    const win32Code = api.getLastError()
-    api.closeHandle(handle) // best-effort on the unlock-failure path
-    throwWin32(api, 'UnlockFileEx', win32Code, lockPath)
-  }
-  if (api.closeHandle(handle) === 0) throwLastError(api, 'CloseHandle', `lock file ${lockPath}`)
-  return result
+export function withPathLock<T>(api: Win32Bindings, path: string, action: (scope: NativeInitOwner) => T, owner?: NativeInitOwner): T {
+  return runInitScope(api, owner, scope => {
+    const lockPath = lockFilePath(api, path)
+    mkdirSync(dirname(lockPath), { recursive: true })
+    const handle = scope.handle(() => api.createFileW(lockPath, abi.GENERIC_READ | abi.GENERIC_WRITE,
+      abi.FILE_SHARE_READ | abi.FILE_SHARE_WRITE, null, abi.OPEN_ALWAYS, 0, null), 'CreateFileW')
+    const overlapped = scope.bytes(32)
+    let locked: 'unknown' | 'yes' | 'no' = 'unknown'
+    const unlock = scope.defer(() => {
+      if (locked === 'no') return
+      if (!api.unlockFileEx(handle, 0, 1, 0, overlapped)) throwLastError(api, 'UnlockFileEx', lockPath)
+      locked = 'no'
+    })
+    let result!: T, failed = false, primary: unknown
+    try {
+      if (!api.lockFileEx(handle, abi.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, overlapped)) { const code = api.getLastError(); locked = 'no'; throwWin32(api, 'LockFileEx', code, lockPath) }
+      locked = 'yes'
+      result = action(scope)
+    } catch (error) { failed = true; primary = error }
+    const cleanup: unknown[] = []
+    try { unlock(); scope.release(handle, 'handle') } catch (error) { cleanup.push(error) }
+    if (failed) { if (cleanup.length) throw new NativeCleanupFailure([primary, ...cleanup], false); throw primary }
+    if (cleanup.length) throw new NativeCleanupFailure(cleanup, true)
+    return result
+  })
 }
 
 /**
@@ -119,18 +112,11 @@ export function withPathLock<T>(api: Win32Bindings, path: string, action: () => 
  * @param path - the directory whose DACL is read.
  * @returns the current explicit DACL (null when the directory carries none) and its owning descriptor.
  */
-function readCurrentDacl(api: Win32Bindings, path: string): { oldAcl: NativePtr | null; descriptor: NativePtr | null } {
-  const ownerSlot = allocPtrSlot()
-  const groupSlot = allocPtrSlot()
-  const daclSlot = allocPtrSlot()
-  const saclSlot = allocPtrSlot()
-  const descriptorSlot = allocPtrSlot()
-  const readResult = api.getNamedSecurityInfoW(
-    path, abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION,
-    ownerSlot, groupSlot, daclSlot, saclSlot, descriptorSlot,
-  )
-  if (readResult !== abi.ERROR_SUCCESS) throwWin32(api, 'GetNamedSecurityInfoW', readResult, path)
-  return { oldAcl: decodePtr(daclSlot), descriptor: decodePtr(descriptorSlot) }
+function readCurrentDacl(api: Win32Bindings, path: string, scope: NativeInitOwner): { oldAcl: NativePtr | null; descriptor: NativePtr | null } {
+  const ownerSlot = scope.slot(), groupSlot = scope.slot(), daclSlot = scope.slot(), saclSlot = scope.slot(), descriptorSlot = scope.slot()
+  const descriptor = scope.output(descriptorSlot, 'local', 'GetNamedSecurityInfoW', () => api.getNamedSecurityInfoW(
+    path, abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION, ownerSlot, groupSlot, daclSlot, saclSlot, descriptorSlot), true, true)
+  return { oldAcl: decodePtr(daclSlot), descriptor }
 }
 
 /**
@@ -145,37 +131,13 @@ function readCurrentDacl(api: Win32Bindings, path: string): { oldAcl: NativePtr 
  * @param descriptor - the descriptor allocation owning `oldAcl`.
  * @param label - the caller's name for error details.
  */
-function mergeAndApply(
-  api: Win32Bindings,
-  path: string,
-  entry: Buffer,
-  oldAcl: NativePtr | null,
-  descriptor: NativePtr | null,
-  label: string,
-): void {
-  const newAclSlot = allocPtrSlot()
-  const mergeResult = api.setEntriesInAclW(1, entry, oldAcl, newAclSlot)
-  if (mergeResult !== abi.ERROR_SUCCESS) {
-    if (descriptor !== null) api.localFree(descriptor) // frees the ACL block too
-    throwWin32(api, 'SetEntriesInAclW', mergeResult, `${label}(${path})`)
-  }
-  const newAcl = decodePtr(newAclSlot)
-  if (newAcl === null) {
-    if (descriptor !== null) api.localFree(descriptor)
-    throwWin32(api, 'SetEntriesInAclW', api.getLastError(), `${label}(${path}): null new ACL`)
-  }
-
-  // The descriptor block (oldAcl included) is dead after the merge — free it
-  // before applying, exactly like the POC.
-  const freedDescriptor = descriptor !== null ? api.localFree(descriptor) : null
-  const applyResult = api.setNamedSecurityInfoW(
-    path, abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION,
-    null, null, newAcl, null,
-  )
-  const freedNew = api.localFree(newAcl)
-  if (applyResult !== abi.ERROR_SUCCESS) throwWin32(api, 'SetNamedSecurityInfoW', applyResult, `${label}(${path})`)
-  if (freedDescriptor !== null && !isNullPtr(freedDescriptor)) throwLastError(api, 'LocalFree', `${label}(${path}) descriptor`)
-  if (!isNullPtr(freedNew)) throwLastError(api, 'LocalFree', `${label}(${path}) new ACL`)
+function mergeAndApply(api: Win32Bindings, path: string, entry: Buffer, oldAcl: NativePtr | null, descriptor: NativePtr | null, _label: string, scope: NativeInitOwner): void {
+  const newAclSlot = scope.slot()
+  const newAcl = scope.output(newAclSlot, 'local', 'SetEntriesInAclW', () => api.setEntriesInAclW(1, entry, oldAcl, newAclSlot), true)
+  if (descriptor !== null) scope.release(descriptor, 'local')
+  const result = api.setNamedSecurityInfoW(path, abi.SE_FILE_OBJECT, abi.DACL_SECURITY_INFORMATION, null, null, newAcl, null)
+  if (result !== abi.ERROR_SUCCESS) throwWin32(api, 'SetNamedSecurityInfoW', result, path)
+  // Cleanup follows the acknowledged mutation outside the action, preserving that fact on failure.
 }
 
 /**
@@ -228,19 +190,15 @@ function hasExactGrant(oldAcl: NativePtr, sidPtr: NativePtr): boolean {
  * @param path - the directory whose DACL gains the grant (the workspace or temp root).
  * @param sidPtr - the capability SID the ACE names.
  */
-export function grantWrite(api: Win32Bindings, path: string, sidPtr: NativePtr): void {
-  withPathLock(api, path, () => {
-    const { oldAcl, descriptor } = readCurrentDacl(api, path)
+export function grantWrite(api: Win32Bindings, path: string, sidPtr: NativePtr, owner?: NativeInitOwner): void {
+  withPathLock(api, path, scope => {
+    const { oldAcl, descriptor } = readCurrentDacl(api, path, scope)
     if (oldAcl !== null && hasExactGrant(oldAcl, sidPtr)) {
       // The exact ACE stands: releasing the descriptor is the whole operation.
-      if (descriptor !== null) {
-        const freed = api.localFree(descriptor)
-        if (!isNullPtr(freed)) throwLastError(api, 'LocalFree', `grantWrite(${path}) descriptor`)
-      }
       return
     }
-    mergeAndApply(api, path, buildExplicitAccess(sidPtr, abi.GRANT_ACCESS, abi.GRANT_MASK), oldAcl, descriptor, 'grantWrite')
-  })
+    mergeAndApply(api, path, buildExplicitAccess(sidPtr, abi.GRANT_ACCESS, abi.GRANT_MASK), oldAcl, descriptor, 'grantWrite', scope)
+  }, owner)
 }
 
 /**
@@ -255,17 +213,13 @@ export function grantWrite(api: Win32Bindings, path: string, sidPtr: NativePtr):
  * @param sidPtr - the capability SID whose ACEs are removed.
  * @returns whether an ACE removal was attempted (false when the directory carries no DACL at all).
  */
-export function revokeWrite(api: Win32Bindings, path: string, sidPtr: NativePtr): boolean {
-  return withPathLock(api, path, () => {
-    const { oldAcl, descriptor } = readCurrentDacl(api, path)
+export function revokeWrite(api: Win32Bindings, path: string, sidPtr: NativePtr, owner?: NativeInitOwner): boolean {
+  return withPathLock(api, path, scope => {
+    const { oldAcl, descriptor } = readCurrentDacl(api, path, scope)
     if (oldAcl === null) {
-      if (descriptor !== null) {
-        const freed = api.localFree(descriptor)
-        if (!isNullPtr(freed)) throwLastError(api, 'LocalFree', `revokeWrite(${path}) descriptor`)
-      }
       return false
     }
-    mergeAndApply(api, path, buildExplicitAccess(sidPtr, abi.REVOKE_ACCESS, 0), oldAcl, descriptor, 'revokeWrite')
+    mergeAndApply(api, path, buildExplicitAccess(sidPtr, abi.REVOKE_ACCESS, 0), oldAcl, descriptor, 'revokeWrite', scope)
     return true
-  })
+  }, owner)
 }
