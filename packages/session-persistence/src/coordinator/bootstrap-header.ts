@@ -125,7 +125,7 @@ export function parseBootstrapHeaderStage(bytes: Uint8Array): BootstrapHeaderSta
   const header=JSON.parse(value.headerBytes) as SessionMeta, s=header.semanticSeed
   if (!s || !(s.version === 1 && s.codec === 'semantic-seed-v1' || s.version === 2 && s.codec === 'semantic-seed-v2')) bad()
   validateSubagentHeader(header)
-  if (!s || ![11,12,13].includes(header.formatVersion) || header.journal?.version!==1 || header.journal.legacyBodyBytes!==0 || header.journal.legacyEventCount!==0 || header.journal.separatorBytes!==0 || header.journal.legacyPrefixDigest!==legacyPrefixDigest(0,new Uint8Array())
+  if (!s || ![11,12,13,14].includes(header.formatVersion) || header.journal?.version!==1 || header.journal.legacyBodyBytes!==0 || header.journal.legacyEventCount!==0 || header.journal.separatorBytes!==0 || header.journal.legacyPrefixDigest!==legacyPrefixDigest(0,new Uint8Array())
     || header.sessionId!==value.invocation.targetSessionId || header.createdAt!==value.invocation.createdAt || s.operationId!==value.invocation.operationId || s.requestDigest!==value.invocation.requestDigest
     || s.seedDigest!==value.seed.digest || s.dependencyDigest!==value.seed.dependencyDigest || s.seedLength!==value.seed.seedLength || s.groupCount!==value.seed.groupCount || header.seedLength!==s.seedLength
     || s.initialInputId!==value.initial?.inputId || s.initialInputDigest!==value.initial?.digest || s.initialStartedAt!==value.initial?.startedAt || s.initialExpiresAt!==value.initial?.expiresAt) bad()

@@ -277,6 +277,27 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
   }
   const prepareSelectedHeader=(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void)=>selectedHeader(id,owner,route,operation,true,onHeaderIssue)
   const reconcileSelectedHeader=(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation)=>selectedHeader(id,owner,route,operation,false)
+  async function confirmSelectedBirthHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,liveVersion:number):Promise<HeaderOutcome> {
+    const captured=selectedOperation(id,owner,route,operation)
+    const original=JSON.parse(captured.headerBytes.toString('utf8'))
+    if(liveVersion!==original.formatVersion && !(original.formatVersion===13 && liveVersion===14))throw new TypeError('Selected header version changed')
+    const liveHeader=liveVersion===original.formatVersion?captured.headerBytes:Buffer.from(canonicalJsonData({...original,formatVersion:liveVersion})+'\n')
+    return tracked(id,owner,async ledger=>{
+      const guard=()=>scope(id,owner),path=filePath(id)
+      try {
+        guard();await assertNotDeleted('session',id)
+        const stage=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
+        if(stage.kind!=='full'||!Buffer.from(stage.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
+        const resource=await acquire(ledger,path,'r+')
+        try {
+          const read=async()=>{const value=Buffer.alloc(liveHeader.length);const result=await resource.handle.read(value,0,value.length,0);guard();return result.bytesRead===value.length&&value.equals(liveHeader)}
+          if(!await read())return {kind:'conflict'}
+          await resource.handle.sync();guard();if(!await read())return {kind:'conflict'}
+        } finally { await close(ledger,resource) }
+        await assertNotDeleted('session',id);guard();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader)}
+      } catch { return {kind:'unknown'} }
+    })
+  }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}
-  return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
+  return { readCapture, reserveCapture, readSelectedCapture, reserveSelectedCapture, prepareSelectedHeader, reconcileSelectedHeader, confirmSelectedBirthHeader, checkBootstrapCaptureRoot, readBootstrapCapture, prepareBootstrapCapture, settleBootstrapCaptureIO, prepareCapturedHeader, reconcileCapturedHeader }
 }

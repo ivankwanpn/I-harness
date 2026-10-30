@@ -17,7 +17,7 @@ export function bootstrapMemorySession(session: Session, header: SessionHeader, 
     if (managedSessions.has(session) || managedFactOwners.has(session) || hasNondurableFactOwner(session) || conversationIndexes.has(session)
       || !events || !('value' in events) || !events.writable || !events.enumerable || !Array.isArray(events.value) || events.value.length
       || header && (!('value' in header) || !header.writable || !header.enumerable || header.value !== undefined)
-      || ![11, 12, 13].includes(fields.formatVersion?.value ?? -1) || !Object.isExtensible(session)) throw new TypeError('Bootstrap requires a pristine unbound installable memory session')
+      || ![11, 12, 13, 14].includes(fields.formatVersion?.value ?? -1) || !Object.isExtensible(session)) throw new TypeError('Bootstrap requires a pristine unbound installable memory session')
     return events.value as Session['events']
   }
   const originalEvents = installable()

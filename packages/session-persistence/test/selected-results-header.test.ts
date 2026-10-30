@@ -160,3 +160,11 @@ it('retains detached frozen structural and verified snapshots',()=>{
  expect(Object.isFrozen(stage.captureReservation.request.core.metadata)).toBe(true)
  expect(Object.isFrozen(facts.semantic.turns)).toBe(true)
 })
+
+it('reconstitutes a selected stage using its original physical header version',()=>{
+ const f=fixture([codecPage([codecRow()])])
+ const built=buildSelectedResultsHeader(f.request,f.reservation,14)
+ expect(built.stage.headerBase.formatVersion).toBe(14)
+ expect(parseSelectedResultsHeaderStage(Buffer.from(built.stageBytes))).toEqual(built.stage)
+ expect(reconstituteSelectedResultsStage(built.stage,f.request.seed.records).stage).toEqual(built.stage)
+})

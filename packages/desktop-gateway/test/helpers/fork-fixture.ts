@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSessionCoordinator, createForkSessionController, createForkOperation, readForkOutcome, type ForkOperation } from '@i-harness/session-persistence'
 import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { composeJsonlTaskTransitionCoordinator } from '../../../session-persistence-jsonl/src/task-document-factory.ts'
+import { taskDocumentStorageContract } from '../../../subagent/src/task/storage-contract.ts'
 import { managedResultRefs, semanticSeedResultRefs, rewindCuts } from '@i-harness/core-session'
 import { createSessionService, createDurableSessionLoader, type SessionServiceOptions } from '@i-harness/session-executor'
 import { createSdkServer } from '@i-harness/sdk/server'
@@ -18,10 +20,10 @@ import type { DesktopHandlers } from '../../src/types.ts'
 import { createConversationResultReader } from '../../src/result-reader.ts'
 
 /** Actual Gateway owners and route; only provider/backend leaves are controlled. */
-export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string) {
-  const root = existingRoot ?? await mkdtemp(join(tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
+export async function createGatewayForkFixture(options: Pick<SessionServiceOptions, 'model' | 'additionalTools' | 'shellRetention'> = {}, existingRoot?: string, taskTransition = true) {
+  const root = existingRoot ?? await mkdtemp(join(process.env.IH_NATIVE_DEPENDENCY_EVIDENCE_ROOT ?? tmpdir(), 'ih-c-fork-')), workspace = join(root, 'workspace'), sessions = join(root, 'sessions')
   await mkdir(workspace, { recursive: true })
-  const backend=createJsonlBackend(sessions),coordinator = createSessionCoordinator(backend, { lock: { enabled: true } }), fence = createSessionManagementFence()
+  const backend=createJsonlBackend(sessions),coordinator = taskTransition ? composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract) : createSessionCoordinator(backend, { lock: { enabled: true } }), fence = createSessionManagementFence()
   if (!existingRoot) { await coordinator.create({ sessionId: 'source' }); await coordinator.create({ sessionId: 'other' }) }
   const projects = createProjectScopeBroker(coordinator, workspace)
   const project = { id: 'p', name: 'Project', roots: [workspace], primaryRoot: workspace }

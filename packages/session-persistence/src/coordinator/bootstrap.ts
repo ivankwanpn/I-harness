@@ -31,7 +31,7 @@ import { selectedResultsPreparationFacts } from './selected-results-preparation.
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;identity:object;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl; cachedTaskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;
@@ -87,7 +87,7 @@ function framesFor(stage:BootstrapHeaderStage,events:readonly SessionEvent[]):Bo
 function checkBirth(stage:BootstrapHeaderStage,state:BootstrapReadState) {
   if(stage.captureReservation)validateOwnedCaptureStage(stage.captureReservation,stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])
   const meta=state.meta!,original=JSON.parse(stage.headerBytes)
-  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state))) throw new Error('Bootstrap storage format conflict')
+  if (meta.formatVersion !== original.formatVersion && !([11,12].includes(original.formatVersion) && meta.formatVersion > original.formatVersion && meta.formatVersion <= CURRENT_FORMAT_VERSION && readyState(state)) && !(original.formatVersion===13 && meta.formatVersion===14 && readyState(state))) throw new Error('Bootstrap storage format conflict')
   for(const key of ['sessionId','createdAt','journal','parentSession','seedLength','origin','delegationDepth','subagentProtocolVersion','semanticSeed'])if(!sameBootstrapData((meta as any)[key],original[key]))throw new Error('Bootstrap birth conflict')
   if(bootstrapManifest(stage,state.events!.slice(0,stage.seed.seedLength) as BootstrapRequest['seed']['records'])!==manifest(stage))throw new Error('Bootstrap manifest conflict')
   const first=state.events![0]
@@ -635,14 +635,26 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
           if(selectedEntry.lane&&selectedEntry.lane!==lane)throw Error('Original selected lane changed')
           selectedEntry.lane=lane
         }
-        if(state.kind==='captured'&&selectedEntry.header?.kind!=='committed'){
+        if(state.kind==='captured'&&(selectedEntry.header?.kind!=='committed'||!!selectedEntry.taskBarrier&&!selectedEntry.taskBarrier.completed)){
           const operation:BootstrapHeaderOperation={invocation:route.request.invocation,target:{kind:'new'},stageBytes:Buffer.from(state.stageBytes),headerBytes:Buffer.from(state.headerBytes)}
+          if (transitions) {
+            originalBootstrapEntries.set(owned,{id,documents})
+            selectedEntry.taskBarrier ??= transitions.bootstrap(id,owned,route,'new',{claim:io.claim,held:io.held})
+            selectedEntry.taskBarrier.setGuard(check)
+            try { await selectedEntry.taskBarrier.prepare() }
+            catch (error) { if (!selectedEntry.taskBarrier.taskIssued || selectedEntry.taskBarrier.taskConflict) { await selectedEntry.taskBarrier.close(); selectedEntry.taskBarrier=undefined }; throw error }
+          }
           const reconcile=selectedEntry.headerIssued===true
-          if(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'){
+          if(selectedEntry.header?.kind!=='committed'&&(!selectedEntry.headerAttempted||reconcile||selectedEntry.header?.kind==='not-issued'||selectedEntry.header?.kind==='unknown'&&!selectedEntry.headerIssued)){
             selectedEntry.headerAttempted=true;io.settled=false
-            selectedEntry.header=await ownership.withSessionOperation(id,()=>reconcile?selected.reconcileSelectedHeader(id,io.held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true}))
+            const issue = (held:HeldFactOwner,beforeIssue:()=>void) => {
+              io.activeIssue=()=>{beforeIssue();check();mutations.assertWritableBootstrap(id);selectedEntry.issued=true;io.settled=false}
+              return reconcile?selected.reconcileSelectedHeader(id,held,route,operation):selected.prepareSelectedHeader(id,io.issuer,route,operation,()=>{selectedEntry.headerIssued=true})
+            }
+            selectedEntry.header=selectedEntry.taskBarrier ? await selectedEntry.taskBarrier.runHeader(issue) : await ownership.withSessionOperation(id,()=>issue(io.held,()=>{}))
             await settleCapture(owned);check()
           }
+          if (selectedEntry.header?.kind==='committed' && selectedEntry.taskBarrier) { selectedEntry.taskBarrier.markHeaderCommitted(); await selectedEntry.taskBarrier.finishHeader() }
         }
         return state
       }
@@ -715,7 +727,9 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     if(!entry||!entry.selected||entry.selected.identity!==identity)return
     if(!sameBootstrapData(entry.selected.route,route))throw Error('Selected target conflict')
     entry.captureIO&&(entry.captureIO.activeIssue=undefined)
-    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}await releaseCapture(entry)
+    await entry.flight?.catch(()=>{});if(entry.selected.pending!==undefined){await reconcileSelected(entry.selected.route,identity);if(entry.selected.pending!==undefined)throw new FactRecoveryRequiredError()}
+    if(entry.selected.taskBarrier && !entry.selected.taskBarrier.completed) await entry.selected.taskBarrier.close()
+    await releaseCapture(entry)
     entry.selected.processToken?.end(entry.selected.issued?'unknown':'settled');entry.selected.processToken=undefined
     if(!entry.selected.issued&&!entry.document&&documents.get(route.request.invocation.targetSessionId)===entry)documents.delete(route.request.invocation.targetSessionId)
   }
@@ -735,7 +749,11 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         if(checked.kind==='absent'){selected.pending=undefined;return {kind:'absent' as const}}
         return {kind:checked.kind==='conflict'?'conflict' as const:'unknown' as const}
       }
-      const outcome=await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation));selected.header=outcome;return outcome
+      const barrier=selected.taskBarrier
+      const outcome=barrier && !barrier.completed ? await barrier.runHeader(held=>backendSelected.reconcileSelectedHeader(id,held,route,operation)) : await ownership.withSessionOperation(id,()=>backendSelected.reconcileSelectedHeader(id,io.held,route,operation))
+      selected.header=outcome
+      if(outcome.kind==='committed' && barrier && !barrier.completed){barrier.markHeaderCommitted();await settleCapture(entry);await barrier.finishHeader()}
+      return outcome
     }finally{await settleCapture(entry)}}).finally(()=>{if(entry.flight===flight)entry.flight=undefined})
     entry.flight=flight;return flight
   }

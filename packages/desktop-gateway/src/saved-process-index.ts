@@ -196,7 +196,7 @@ export function buildSavedProcessIndex(events: readonly unknown[], owner: string
 
 export function buildObservedSavedProcessIndex(initial: { readonly session: SessionView; readonly highWater: number }, owner: string) {
   const session = initial?.session, header = session?.header
-  if (typeof owner !== 'string' || !owner || !session || !Array.isArray(session.events) || !Number.isSafeInteger(initial.highWater) || initial.highWater !== session.events.length || session.formatVersion !== 13) throw new Error('Unsupported process read initial')
+  if (typeof owner !== 'string' || !owner || !session || !Array.isArray(session.events) || !Number.isSafeInteger(initial.highWater) || initial.highWater !== session.events.length || ![13,14].includes(session.formatVersion)) throw new Error('Unsupported process read initial')
   if (header !== undefined && !object(header) || header && Object.hasOwn(header, 'semanticSeed') || header?.seedLength !== undefined && (!Number.isSafeInteger(header.seedLength) || header.seedLength !== 0)
     || session.events.some(e => e.type === 'conversation/seed-group')) throw new Error('Inherited process history unavailable')
   return buildSavedProcessIndex(session.events, owner)

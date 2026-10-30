@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
+import { canonicalJsonData } from '@i-harness/core-session'
 import { selectedResultsPreparationFacts } from '../../../session-persistence/src/coordinator/selected-results-preparation.ts'
 import { parseHeader } from '../format.ts'
 import { lookupSelectedBootstrapStage } from './selected-bootstrap-stage.ts'
@@ -17,7 +18,10 @@ export async function resolveSelectedBirth(path: string, id: string, assertNotDe
  if(!meta.semanticSeed) { await assertNotDeleted('session',id); return undefined }
  if(meta.sessionId!==id || meta.semanticSeed.version!==3 || !meta.journal) throw new TypeError('Selected birth required')
  const found=await lookupSelectedBootstrapStage(path,{kind:'header',meta},io.stage)
- if(found.kind!=='full' || !raw.subarray(0,end+1).equals(Buffer.from(found.stage.headerBytes))) throw new TypeError('Original selected stage unavailable')
+ if(found.kind!=='full') throw new TypeError('Original selected stage unavailable')
+ const original=JSON.parse(found.stage.headerBytes)
+ const expected=original.formatVersion===13 && meta.formatVersion===14 ? canonicalJsonData({...original,formatVersion:14})+'\n' : found.stage.headerBytes
+ if(!raw.subarray(0,end+1).equals(Buffer.from(expected))) throw new TypeError('Original selected header changed')
  const journal=readBootstrapFactJournal(raw.subarray(end+1),meta.journal,meta.formatVersion,meta)
  const count=meta.semanticSeed.seedLength, frames=journal.frames
  const seed=frames[0], complete=frames[1]
