@@ -29,46 +29,56 @@ vi.mock('@i-harness/sandbox-local', async original => {
     } } },
   }), async dispose() {} } } }
 })
-import { createSessionService } from '../src/service.ts'
 
 it('forwards the real registered Exec collection and detaches both owners once through retirement and cleanup retry', async () => {
-  let failCleanup = true
-  const owner = createSessionService({ workspace: process.cwd(), modelPolicy: 'test-mock', codeMode: { mode: 'mixed' }, codeModeFactory: () => ({ schemas: () => [], surfaceState: () => 'available', onSurfaceChanged: () => () => {}, async cancel() {}, async dispose() { if (failCleanup) throw Error('controlled original cleanup failure') } }) })
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
   try {
-    const assembly = await owner.assemblyFor('original-owner')
-    expect(state.attached).toEqual({ exec: 1, workflow: 1 })
-    const seen: any[][] = []
-    assembly.onExecutionSurfaceChanged!(() => { throw Error('first consumer fails') })
-    const off = assembly.onExecutionSurfaceChanged!(() => seen.push(assembly.backgroundJobs!()))
-    expect(seen).toEqual([])
-    const first = await state.exec.runBackground({ argv: ['controlled-first'] })
-    expect(seen.some(rows => rows.some(row => row.nativeJob?.instanceId === first.nativeJob.instanceId && row.status === 'running'))).toBe(true)
-    expect(seen.flat().find(row => row.nativeJob?.instanceId === first.nativeJob.instanceId)!.nativeJob).toBe(first.nativeJob)
-    state.controls[0]!.root.resolve({ exitCode: 0 }); state.controls[0]!.tree.resolve()
-    await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve))
-    expect(seen.some(rows => rows.some(row => row.nativeJob?.instanceId === first.nativeJob.instanceId && row.status === 'completed'))).toBe(true)
-    const idleCount = seen.length, launchCount = state.launches
-    const idleReads = [vi.spyOn(assembly, 'executionBackendStatus'), vi.spyOn(assembly, 'backgroundJobs'), vi.spyOn(state.exec, 'listJobViews'), vi.spyOn(state.workflow, 'listJobs')]
-    vi.useFakeTimers(); await vi.advanceTimersByTimeAsync(600_000)
-    expect(seen).toHaveLength(idleCount); expect(state.launches).toBe(launchCount)
-    idleReads.forEach(read => { expect(read).not.toHaveBeenCalled(); read.mockRestore() }); vi.useRealTimers()
-    const second = await state.exec.runBackground({ argv: ['controlled-second'] })
-    expect(seen.at(-1)!.some(row => row.nativeJob?.instanceId === second.nativeJob.instanceId)).toBe(true)
-    assembly.revokeNewWork(); assembly.revokeNewWork()
-    expect(state.detached).toEqual({ exec: 1, workflow: 1 })
-    const retiredCount = seen.length
-    state.controls[1]!.root.resolve({ exitCode: 0 }); state.controls[1]!.tree.resolve()
-    await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve))
-    expect(seen).toHaveLength(retiredCount)
-    await expect(assembly.dispose()).rejects.toThrow()
-    failCleanup = false; await assembly.dispose(); await assembly.dispose()
-    expect(state.detached).toEqual({ exec: 1, workflow: 1 }); expect(state.launches).toBe(2)
-    off()
-    const status = vi.spyOn(assembly, 'executionBackendStatus'), jobs = vi.spyOn(assembly, 'backgroundJobs'), execRead = vi.spyOn(state.exec, 'listJobViews'), workflowRead = vi.spyOn(state.workflow, 'listJobs')
-    vi.useFakeTimers()
-    await vi.advanceTimersByTimeAsync(600_000)
-    expect(seen).toHaveLength(retiredCount)
-    for (const read of [status, jobs, execRead, workflowRead]) expect(read).not.toHaveBeenCalled()
-    vi.useRealTimers()
-  } finally { vi.useRealTimers(); failCleanup = false; for (const control of state.controls) { control.root.resolve({ exitCode: 0 }); control.tree.resolve() }; await owner.close() }
-})
+    // Vite's finite module loader uses zero-delay turns. Pump only time zero;
+    // never advance an idle polling interval or replace the installed clock.
+    async function finiteSetup<T>(work: Promise<T>): Promise<T> {
+      let settled = false
+      const result = work.finally(() => { settled = true }); void result.catch(() => {})
+      while (!settled) { await new Promise(resolve => setImmediate(resolve)); await vi.advanceTimersByTimeAsync(0) }
+      return result
+    }
+    const { createSessionService } = await finiteSetup(import('../src/service.ts'))
+    let failCleanup = true
+    const owner = createSessionService({ workspace: process.cwd(), modelPolicy: 'test-mock', codeMode: { mode: 'mixed' }, codeModeFactory: () => ({ schemas: () => [], surfaceState: () => 'available', onSurfaceChanged: () => () => {}, async cancel() {}, async dispose() { if (failCleanup) throw Error('controlled original cleanup failure') } }) })
+    try {
+      const assembly = await finiteSetup(owner.assemblyFor('original-owner'))
+      expect(state.attached).toEqual({ exec: 1, workflow: 1 })
+      const seen: any[][] = []
+      assembly.onExecutionSurfaceChanged!(() => { throw Error('first consumer fails') })
+      const off = assembly.onExecutionSurfaceChanged!(() => seen.push(assembly.backgroundJobs!()))
+      expect(seen).toEqual([])
+      const first = await state.exec.runBackground({ argv: ['controlled-first'] })
+      expect(seen.some(rows => rows.some(row => row.nativeJob?.instanceId === first.nativeJob.instanceId && row.status === 'running'))).toBe(true)
+      expect(seen.flat().find(row => row.nativeJob?.instanceId === first.nativeJob.instanceId)!.nativeJob).toBe(first.nativeJob)
+      state.controls[0]!.root.resolve({ exitCode: 0 }); state.controls[0]!.tree.resolve()
+      await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve))
+      expect(seen.some(rows => rows.some(row => row.nativeJob?.instanceId === first.nativeJob.instanceId && row.status === 'completed'))).toBe(true)
+      const idleCount = seen.length, launchCount = state.launches
+      const idleReads = [vi.spyOn(assembly, 'executionBackendStatus'), vi.spyOn(assembly, 'backgroundJobs'), vi.spyOn(state.exec, 'listJobViews'), vi.spyOn(state.workflow, 'listJobs')]
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(seen).toHaveLength(idleCount); expect(state.launches).toBe(launchCount)
+      idleReads.forEach(read => { expect(read).not.toHaveBeenCalled(); read.mockRestore() }); expect(vi.getTimerCount()).toBe(0)
+      const second = await state.exec.runBackground({ argv: ['controlled-second'] })
+      expect(seen.at(-1)!.some(row => row.nativeJob?.instanceId === second.nativeJob.instanceId)).toBe(true)
+      assembly.revokeNewWork(); assembly.revokeNewWork()
+      expect(state.detached).toEqual({ exec: 1, workflow: 1 })
+      const retiredCount = seen.length
+      state.controls[1]!.root.resolve({ exitCode: 0 }); state.controls[1]!.tree.resolve()
+      await new Promise(resolve => setImmediate(resolve)); await new Promise(resolve => setImmediate(resolve))
+      expect(seen).toHaveLength(retiredCount)
+      await expect(assembly.dispose()).rejects.toThrow()
+      failCleanup = false; await assembly.dispose(); await assembly.dispose()
+      expect(state.detached).toEqual({ exec: 1, workflow: 1 }); expect(state.launches).toBe(2)
+      off()
+      const status = vi.spyOn(assembly, 'executionBackendStatus'), jobs = vi.spyOn(assembly, 'backgroundJobs'), execRead = vi.spyOn(state.exec, 'listJobViews'), workflowRead = vi.spyOn(state.workflow, 'listJobs')
+      await vi.advanceTimersByTimeAsync(600_000)
+      expect(seen).toHaveLength(retiredCount)
+      for (const read of [status, jobs, execRead, workflowRead]) expect(read).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { failCleanup = false; for (const control of state.controls) { control.root.resolve({ exitCode: 0 }); control.tree.resolve() }; await finiteSetup(owner.close()) }
+  } finally { vi.useRealTimers() }
+}, 15000)

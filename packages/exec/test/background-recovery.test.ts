@@ -171,19 +171,25 @@ it('notifies only the actual passive recovery disposition after ordinary termina
 })
 
 it('keeps settled collection subscriptions passive for ten virtual minutes before and after unsubscribe', async () => {
-  const job = await runJob({ finishes: [{ kind: 'artifact' }] })
-  await new Promise<void>(done => setImmediate(done))
-  let calls = 0
-  const off = job.exec.subscribeJobs!(() => { calls++ })
-  const reads = ['getOutput', 'listJobs', 'getJobView', 'listJobViews'].map(name => vi.spyOn(job.exec, name as 'getOutput'))
-  const before = { ...job.counters(), settlements: job.settlements() }
-  vi.useFakeTimers()
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  let job: Awaited<ReturnType<typeof runJob>> | undefined
+  let calls = 0, off = () => {}
+  let reads: { mockClear(): unknown; mockRestore(): unknown }[] = []
   try {
+    job = await runJob({ finishes: [{ kind: 'artifact' }], onCollection: exec => {
+      reads = ['getOutput', 'listJobs', 'getJobView', 'listJobViews'].map(name => vi.spyOn(exec, name as 'getOutput'))
+      off = exec.subscribeJobs!(() => { calls++ })
+    } })
+    // Drain only real IO/microtasks. Never advance timers or reset the clock
+    // between source construction, subscription and either idle phase.
+    await new Promise<void>(done => setImmediate(done))
+    const baseline = calls, before = { ...job.counters(), settlements: job.settlements() }
+    reads.forEach(read => read.mockClear())
     await vi.advanceTimersByTimeAsync(600_000)
-    expect(calls).toBe(0); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
-    reads.forEach(read => expect(read).not.toHaveBeenCalled())
+    expect(calls).toBe(baseline); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
+    reads.forEach(read => expect(read).not.toHaveBeenCalled()); expect(vi.getTimerCount()).toBe(0)
     off(); await vi.advanceTimersByTimeAsync(600_000)
-    expect(calls).toBe(0); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
-    reads.forEach(read => expect(read).not.toHaveBeenCalled())
-  } finally { vi.useRealTimers(); reads.forEach(read => read.mockRestore()); off(); await job.exec.dispose() }
+    expect(calls).toBe(baseline); expect({ ...job.counters(), settlements: job.settlements() }).toEqual(before)
+    reads.forEach(read => expect(read).not.toHaveBeenCalled()); expect(vi.getTimerCount()).toBe(0)
+  } finally { reads.forEach(read => read.mockRestore()); off(); try { await job?.exec.dispose() } finally { vi.useRealTimers() } }
 })
