@@ -33,6 +33,15 @@ export class NativeInitOwner {
     state = 'ready'
     return () => this.retire(entry)
   }
+  /** Non-consuming dependency check on original heap storage. The control entry
+   * blocks cleanup/transfer; the backing entry also checks direct retirement. */
+  retirementGate(value: NativePtr, check: () => void) {
+    const backing = this.entries.find(entry => !entry.done && entry.domain === 'heap' && entry.value === value)
+    if (!backing) throw new Error('retirement gate backing storage is not owned')
+    const release = backing.release
+    backing.release = () => { check(); release() }
+    this.own(check)
+  }
   deferBool(name: string, invoke: () => number, afterSuccess?: () => void) {
     const entry = this.own(() => { this.consume(entry, name, invoke, boolAck, () => throwLastError(this.api, name)); afterSuccess?.() })
     return () => this.retire(entry)
