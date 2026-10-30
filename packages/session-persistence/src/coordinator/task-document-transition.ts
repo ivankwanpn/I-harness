@@ -102,7 +102,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const key = `task-${id}`, identity = Object.freeze({})
     latches?.assertUnpoisoned(id, [key])
     const assertOutside = () => { for (let current = transitionContext.getStore(); current; current = current.parent) if (current.identity === identity) conflict() }
-    const guard = () => { if (revoked || closed) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id, [key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (header && headerFields && headerWriteFields) { assertMethods(header,headerFields,['settle']); assertMethods(header.handle,headerWriteFields,['issue','reconcile','retry','outcome']) } }
+    const guard = () => { if (revoked || closed) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id, [key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (header && headerFields && headerWriteFields) { assertMethods(header,headerFields,['handle','settle']); assertMethods(header.handle,headerWriteFields,['issue','reconcile','retry','outcome']) } }
     const closeAttempt = () => {
       if (cleanup) return cleanup
       pendingCleanup = true
@@ -229,14 +229,23 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
     const captureUpgrade = (value: Header) => { upgrade = value; upgradeFields = Object.getOwnPropertyDescriptors(value); upgradeWriteFields = Object.getOwnPropertyDescriptors(value.handle); settleUpgrade = method(value,'settle'); issueUpgrade = method(value.handle,'issue'); retryUpgrade = method(value.handle,'retry'); outcomeUpgrade = method(value.handle,'outcome') }
     let retainedHeaderOutcome: import('./bootstrap-types.ts').HeaderOutcome | undefined, upgrade: Header | undefined, upgradeResult: TaskWriteOutcome | undefined, task: TaskTransitionBackendSession | undefined, proof: FreshProof | HistoryProof | undefined, historyReader: HistoryReader | undefined, observation: Awaited<ReturnType<TaskTransitionBackendSession['observe']>> | undefined, write: TaskDocumentWrite | undefined, result: TaskWriteOutcome | undefined, held: HeldFactOwner | undefined = borrowed?.held
     let queue: ReturnType<Ownership['captureActiveSessionOperation']> | undefined, ownerFlight: Promise<void> | undefined, externalFlight: Promise<unknown> | undefined, flight: Promise<void> | undefined, cleanup: Promise<void> | undefined, cleanupPending = false
+    let headerSettlement: Promise<void> | undefined, finishFlight: Promise<void> | undefined, headerSettlementFailure: { cause: unknown } | undefined
     let token: ReturnType<NonNullable<typeof latches>['beginMutation']> | undefined
     const assertOutside = () => { for (let context = transitionContext.getStore(); context; context = context.parent) if (context.identity === identity) conflict() }
     let ticket: ReturnType<typeof admission.beginBootstrapTaskTransition>
-    const guard = () => { if (revoked || done) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id,[key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (upgrade && upgradeFields && upgradeWriteFields) { assertMethods(upgrade,upgradeFields,['settle']); assertMethods(upgrade.handle,upgradeWriteFields,['issue','reconcile','retry','outcome']) }; if (!currentGuard) conflict(); currentGuard!() }
+    const guard = () => { if (revoked || done) conflict(); ticket.assertCurrent(); assertConfig(); latches?.assertUnpoisoned(id,[key]); queue?.assertCurrent(); claim?.assertHeld(); if (lease && !lease.held) conflict(); if (task && taskFields) assertMethods(task,taskFields,['observe','confirm','stageInitialize','settleResources']); if (write && writeFields) assertMethods(write,writeFields,['issue','reconcile','retry','outcome']); if (upgrade && upgradeFields && upgradeWriteFields) { assertMethods(upgrade,upgradeFields,['handle','settle']); assertMethods(upgrade.handle,upgradeWriteFields,['issue','reconcile','retry','outcome']) }; if (!currentGuard) conflict(); currentGuard!() }
+    const settleHeaderResources = () => {
+      if (headerSettlement) return headerSettlement
+      const context = { identity, admission: admission.taskContextIdentity, ownership, id, key, parent: transitionContext.getStore() }
+      const pending = Promise.resolve().then(() => transitionContext.run(context, () => settleHeader(id,held!)))
+      headerSettlement = pending
+      void pending.then(() => { headerSettlementFailure = undefined; if (headerSettlement === pending) headerSettlement = undefined }, cause => { headerSettlementFailure = { cause }; if (headerSettlement === pending) headerSettlement = undefined })
+      return pending
+    }
     const closeAttempt = () => {
       if (cleanup) return cleanup; cleanupPending = true
       cleanup = Promise.resolve().then(async () => {
-        await ownerFlight?.catch(() => {}); await flight?.catch(() => {}); await externalFlight?.catch(() => {}); if (held) await settleHeader(id,held); if (upgrade) { if (!settleUpgrade) throw new Error('Header cleanup unavailable'); await settleUpgrade() }; if (historyReader) await historyReader.settleResources(); if (task) { if (!settleTask) throw new Error('Task transition file cleanup unavailable'); await settleTask() }
+        await ownerFlight?.catch(() => {}); await flight?.catch(() => {}); await externalFlight?.catch(() => {}); if (held) await settleHeaderResources(); if (upgrade) { if (!settleUpgrade) throw new Error('Header cleanup unavailable'); await settleUpgrade() }; if (historyReader) await historyReader.settleResources(); if (task) { if (!settleTask) throw new Error('Task transition file cleanup unavailable'); await settleTask() }
         if (token) { token.end(result?.kind === 'committed' || result?.kind === 'conflict' || result?.kind === 'not-issued' ? 'settled' : 'unknown'); token = undefined }
         if (lease) { if (!releaseLease) throw new Error('Task transition lease cleanup unavailable'); await releaseLease(); lease = undefined }
         if (claim && !borrowedClaim) { if (!releaseClaim) throw new Error('Task transition claim cleanup unavailable'); await releaseClaim(); claim = undefined }
@@ -313,7 +322,7 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
         if (this !== barrier || !held || !proof || !(confirmed || result?.kind === 'committed')) throw new Error('TASK_TRANSITION_CONFLICT')
         return runExternal(async () => { if (!headerIssued) { await proof!.assertCurrent(); guard() }; const outcome = await work(held!, () => { guard(); headerIssued = true }); retainedHeaderOutcome = outcome; if (outcome.kind === 'committed') headerAck = true; return outcome })
       },
-      async settleHeader() { if (this !== barrier || !held) throw new Error('TASK_TRANSITION_CONFLICT'); await settleHeader(id,held) },
+      settleHeader() { if (this !== barrier || !held) return Promise.reject(new Error('TASK_TRANSITION_CONFLICT')); assertOutside(); return settleHeaderResources() },
       async upgrade() {
         if (this !== barrier || mode !== 'completed' || !scope || !proof || !('initial' in proof) || !headerAck) throw new Error('TASK_TRANSITION_CONFLICT')
         return runExternal(async () => {
@@ -325,7 +334,16 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       },
       get upgradePending() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return !!upgrade && (upgradeResult?.kind !== 'committed' || upgradeResult.cleanupPending) },
       markHeaderCommitted() { if (this !== barrier || !held) throw new Error('TASK_TRANSITION_CONFLICT'); headerAck = true },
-      async finishHeader() { if (this !== barrier || !held || !headerAck) throw new Error('TASK_TRANSITION_CONFLICT'); await settleHeader(id,held); await close() },
+      finishHeader() {
+        if (this !== barrier || !held || !headerAck) return Promise.reject(new Error('TASK_TRANSITION_CONFLICT'))
+        assertOutside(); if (finishFlight) return finishFlight
+        // Finish joins close, while close joins only the settlement phase. This
+        // retains the whole finite operation for flush without a self-wait.
+        const pending = Promise.resolve().then(async () => { await settleHeaderResources(); await close() })
+        finishFlight = pending
+        void pending.then(() => { if (finishFlight === pending) finishFlight = undefined }, () => { if (finishFlight === pending) finishFlight = undefined })
+        return pending
+      },
       close() { if (this !== barrier) return Promise.reject(new TypeError('Invalid bootstrap barrier receiver')); return close() },
       retryClose() { if (this !== barrier) return Promise.reject(new TypeError('Invalid bootstrap barrier receiver')); return retryClose() },
       get completed() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return done && headerAck && !externallyRevoked },
@@ -337,7 +355,14 @@ export function createTaskDocumentTransitions(ownership: Ownership, admission: R
       get taskIssued() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return issued || confirmationUnknown || !!held && hasHeaderDebt(id,held) || !!historyReader && historyReader.hasDebt() },
       get taskConflict() { if (this !== barrier) throw new TypeError('Invalid bootstrap barrier receiver'); return taskConflict },
     })
-    const finite = async () => { assertOutside(); await ownerFlight?.catch(() => {}); await flight?.catch(() => {}); await externalFlight?.catch(() => {}); if (cleanup) await cleanup; if (!done && (result?.kind === 'unknown' || result?.cleanupPending || confirmationUnknown || headerIssued && !headerAck || upgradeResult?.kind === 'unknown' || upgradeResult?.cleanupPending || historyReader?.hasDebt() || held && hasHeaderDebt(id,held))) throw new Error('Bootstrap task transition IO unresolved') }
+    const finite = async () => {
+      assertOutside()
+      await ownerFlight?.catch(() => {}); await flight?.catch(() => {}); await externalFlight?.catch(() => {})
+      await headerSettlement?.catch(() => {}); await finishFlight?.catch(() => {})
+      if (cleanup) await cleanup
+      if (!done && headerSettlementFailure) throw new Error('Bootstrap task transition header cleanup unresolved', { cause: headerSettlementFailure.cause })
+      if (!done && (result?.kind === 'unknown' || result?.cleanupPending || confirmationUnknown || headerIssued && !headerAck || upgradeResult?.kind === 'unknown' || upgradeResult?.cleanupPending || historyReader?.hasDebt() || held && hasHeaderDebt(id,held))) throw new Error('Bootstrap task transition IO unresolved')
+    }
     records.set(id,{execute:prepare,close,retryClose,finite}); return barrier
   }
   function bootstrap(id: string, entry: object, route: BootstrapRoute, mode: 'new'|'existing-empty'|'completed' | undefined, borrowed?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner }) {

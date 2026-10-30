@@ -190,6 +190,10 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    // The task transition borrows this exact claim. Its original file and
+    // document-lease cleanup must finish before the capture owner retires it.
+    await entry.bootstrap?.taskBarrier?.retryClose()
+    await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
     if(!io||io.released)return

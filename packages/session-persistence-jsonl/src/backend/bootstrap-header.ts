@@ -2,6 +2,7 @@ import { lstat, open, readFile, readdir, rename, mkdir, type FileHandle } from '
 import { basename, dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { BigIntStats } from 'node:fs'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { readBootstrapFactJournal } from '@i-harness/core-session/internal/bootstrap'
 import { isHeldFactOwner, parseBootstrapHeaderStage, parseBootstrapCaptureReservation, rawHeaderDigest, type HeldFactOwner, type BootstrapBackend, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
@@ -53,6 +54,8 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   type HeaderResource = { handle: FileHandle; close: FileHandle['close']; failed: boolean; cause?: unknown }
   type HeaderLedger = { id: string; handles: Set<HeaderResource>; pending: Set<Promise<unknown>>; settling?: Promise<void> }
   const headerLedgers = new WeakMap<object, HeaderLedger>()
+  const headerFlight = new AsyncLocalStorage<{ ledger: HeaderLedger; active: boolean }>()
+  const sameRevision = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs
   function trackHeaderOwner(id:string, owner:HeldFactOwner) {
     scope(id, owner); const existing = headerLedgers.get(owner.owner)
     if (existing && existing.id !== id) throw new TypeError('Invalid bootstrap header owner')
@@ -60,6 +63,8 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   }
   async function ownedOpen(id:string, owner:HeldFactOwner, path:string, flags:string) {
     scope(id,owner); const ledger = headerLedgers.get(owner.owner), failed = ledger && [...ledger.handles].find(value => value.failed); if (failed) throw failed.cause
+    const admitted = headerFlight.getStore()
+    if (ledger?.settling && (!admitted?.active || admitted.ledger !== ledger)) throw new Error('Bootstrap header settlement in progress')
     const handle = await open(path, flags)
     const resource:HeaderResource = { handle, close: handle.close, failed: false }; ledger?.handles.add(resource)
     return { resource, ledger }
@@ -79,11 +84,11 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
     } catch (error) { if ((error as NodeJS.ErrnoException | null | undefined)?.code === 'ENOENT') return; throw error }
     try {
       scope(id,owner); const before = await opened.resource.handle.stat({ bigint: true }); scope(id,owner)
-      if (!before.isFile() || before.ino <= 0n || before.dev !== pathBefore.dev || before.ino !== pathBefore.ino || before.size !== pathBefore.size || before.size < 0n || before.size > BigInt(Number.MAX_SAFE_INTEGER) || limit !== undefined && before.size > BigInt(limit)) throw new Error('Bootstrap stage exceeds byte limit')
+      if (!before.isFile() || before.ino <= 0n || !sameRevision(before,pathBefore) || before.size < 0n || before.size > BigInt(Number.MAX_SAFE_INTEGER) || limit !== undefined && before.size > BigInt(limit)) throw new Error('Bootstrap stage exceeds byte limit or changed')
       const length = Number(before.size), bytes = Buffer.alloc(length + 1); let offset = 0
       while (offset < bytes.length) { scope(id,owner); const read = await opened.resource.handle.read(bytes, offset, Math.min(65536, bytes.length - offset), offset); if (!read.bytesRead) break; offset += read.bytesRead }
       const after = await opened.resource.handle.stat({ bigint: true }), pathAfter = await lstat(path,{bigint:true}); scope(id,owner)
-      if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || offset !== length || after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size || pathAfter.dev !== before.dev || pathAfter.ino !== before.ino || pathAfter.size !== before.size) throw new Error('Bootstrap file changed')
+      if (!pathAfter.isFile() || pathAfter.isSymbolicLink() || offset !== length || !sameRevision(after,before) || !sameRevision(pathAfter,before)) throw new Error('Bootstrap file changed')
       return bytes.subarray(0, length)
     }
     finally { await ownedClose(opened.resource,opened.ledger) }
@@ -101,7 +106,9 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   }
   function trackHeaderFlight<T>(id:string,owner:HeldFactOwner,work:()=>Promise<T>):Promise<T> {
     scope(id,owner); const ledger = headerLedgers.get(owner.owner); if (!ledger) return work()
-    const flight = Promise.resolve().then(work); ledger.pending.add(flight)
+    if (ledger.settling) return Promise.reject(new Error('Bootstrap header settlement in progress'))
+    const context = { ledger, active: true }
+    const flight = Promise.resolve().then(() => headerFlight.run(context, async () => { try { return await work() } finally { context.active = false } })); ledger.pending.add(flight)
     void flight.then(() => ledger.pending.delete(flight), () => ledger.pending.delete(flight)); return flight
   }
   function check(id:string,owner:HeldFactOwner,operation:BootstrapHeaderOperation) {
@@ -155,7 +162,7 @@ export function createBootstrapHeaderBackend(filePath:(id:string)=>string, asser
   }
   function trackedStageIO(id:string,owner:HeldFactOwner) {
     scope(id,owner); const path=filePath(id)
-    return { namespace:()=>bootstrapNamespace(path), read:(artifact:string,limit:number)=>ownedRead(artifact,id,owner,limit), assertCurrent:()=>scope(id,owner) }
+    return { namespace:()=>trackHeaderFlight(id,owner,()=>bootstrapNamespace(path)), read:(artifact:string,limit:number)=>trackHeaderFlight(id,owner,()=>ownedRead(artifact,id,owner,limit)), assertCurrent:()=>scope(id,owner) }
   }
   function resolveTrackedBirth(id:string,owner:HeldFactOwner) {
     return trackHeaderFlight(id,owner,async()=>{
