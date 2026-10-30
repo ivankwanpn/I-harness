@@ -31,7 +31,7 @@ import { selectedResultsPreparationFacts } from './selected-results-preparation.
 import { createSelectedCaptureAttempt } from './selected-capture-attempt.ts'
 
 export interface ManagedEntry {
-  selected?: {route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
+  selected?: {cold?:true;route:SelectedResultsRoute;identity:object;taskBarrier?:ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;attempt?:ReturnType<typeof createSelectedCaptureAttempt>;lane?:Readonly<{kind:'selected-lane'}>;frames?:BootstrapFrame[];receipts?:import('@i-harness/core-session').FactReceipt[];resultReceipt?:import('../selected-results-fork-contract.ts').ForkReceiptSummaryV2;pending?:number;closure?:string;capture?:()=>Promise<unknown>;issued:boolean;headerAttempted?:boolean;headerIssued?:boolean;header?:HeaderOutcome;processToken?:ReturnType<ReturnType<typeof createProcessReadLatches>['beginMutation']>};
   route?: BootstrapRoute;
   captureIO?: { claim: Awaited<ReturnType<Ownership['pinOwnership']>>; held: HeldFactOwner; issuer: IssuingFactOwner; activeIssue?: () => void; settled: boolean; released: boolean; releasing?:Promise<void> };
   document?: ReturnType<typeof createManagedDocument>; control?: BootstrapDocumentControl; cachedTaskBarrier?: ReturnType<ReturnType<typeof createTaskDocumentTransitions>['bootstrap']>;
@@ -195,15 +195,18 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
     }
   }
   async function releaseCapture(entry:ManagedEntry) {
+    const retireColdWitness=()=>{
+      if(entry.selected?.cold&&entry.selected.processToken){entry.selected.processToken.end('settled');entry.selected.processToken=undefined}
+    }
     // The task transition borrows this exact claim. Its original file and
     // document-lease cleanup must finish before the capture owner retires it.
     await entry.bootstrap?.taskBarrier?.retryClose()
     await entry.cachedTaskBarrier?.retryClose()
     await settleCapture(entry)
     const io=entry.captureIO
-    if(!io||io.released)return
+    if(!io||io.released){retireColdWitness();return}
     if(io.releasing)return io.releasing
-    const flight=io.claim.release().then(()=>{io.released=true}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
+    const flight=io.claim.release().then(()=>{io.released=true;retireColdWitness()}).finally(()=>{if(io.releasing===flight)io.releasing=undefined})
     io.releasing=flight
     await flight
   }
@@ -732,7 +735,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       {kind:'unavailable'|'conflict'}|{kind:'checked';birth:{stage:import('./selected-results-header.ts').SelectedResultsHeaderStageV2;facts:ReturnType<typeof selectedResultsPreparationFacts>};history:{events:SessionEvent[];prefix:JournalPrefix}}
     >}}).selectedJournal
     if(!journal)return Promise.resolve({kind:'blocked'})
-    entry={selected:{route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}}
+    entry={selected:{cold:true,route,identity:Object.freeze({}),issued:false,processToken:processLatches?.beginMutation({sessionIds:[id],documentKeys:[],kind:'other'})}}
     documents.set(id,entry);const owned=entry
     const check=()=>{if(captureClosed||owned.revoked||documents.get(id)!==owned)throw new FactRecoveryRequiredError()}
     const flight=Promise.resolve().then(async()=>{
@@ -754,7 +757,6 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
         await settleCapture(owned)
         if(!owned.document) {
           await releaseCapture(owned)
-          owned.selected!.processToken?.end('settled');owned.selected!.processToken=undefined
           if(documents.get(id)===owned)documents.delete(id)
         }
       } finally {if(owned.flight===flight)owned.flight=undefined}

@@ -242,3 +242,30 @@ it('admits a cold checked birth into the original managed entry without source c
   entry.revoked=true;expect((await owner.inspectColdSelected(f.route)).kind).toBe('blocked')
   await entry.document.close();await owner.releaseCapture(entry)
 })
+
+it.each(['qualification','close-debt','bind-debt'] as const)('retires the original cold process witness after actual managed cleanup: %s',async mode=>{
+ const f=await fixture();await f.close()
+ const {createManagedDocuments}=await import('../../session-persistence/src/coordinator/managed-documents.ts')
+ const {createProcessReadLatches}=await import('../../session-persistence/src/coordinator/process-read-latches.ts')
+ const {createMutations}=await import('../../session-persistence/src/coordinator/mutations.ts')
+ const {createLoads}=await import('../../session-persistence/src/coordinator/load.ts')
+ const latches=createProcessReadLatches(),options={lock:{enabled:true}},mutations=createMutations(f.backend,f.ownership,200,()=>{}),loads=createLoads(f.backend,f.ownership,mutations)
+ let failCleanup=mode!=='qualification',cleanupCalls=0
+ const registry=createManagedDocuments(f.backend,f.ownership,loads.loadOwned,options,()=>{},mutations,latches,()=>{},async()=>{if(failCleanup&&++cleanupCalls===2){failCleanup=false;throw Error('original close dependency debt')}})
+ const bind=mode==='bind-debt'?vi.spyOn(f.journal,'readJournalPrefix').mockRejectedValueOnce(Error('post-attach selected bind cut')):undefined
+ const capture=()=>latches.capture({sessionId:'target',documentKeys:[],mode:'cold'})
+ try{
+  expect((await registry.inspectColdSelected(f.route)).kind).toBe(mode==='bind-debt'?'blocked':'qualification-required');bind?.mockRestore()
+  expect(registry.has('target')).toBe(true);await expect(registry.open('target')).rejects.toThrow();expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
+  if(mode!=='qualification'){
+   await expect(registry.closeOne('target')).rejects.toThrow('original close dependency debt')
+   expect(registry.has('target')).toBe(true);expect(f.ownership.ownerOf('target')).toBe(true);expect(capture).toThrow('PROCESS_READ_UNAVAILABLE')
+  }
+  await registry.closeOne('target');expect(registry.has('target')).toBe(false);expect(f.ownership.ownerOf('target')).toBe(false)
+  const read=capture();read.assertCurrent();read.markVerified();read.retire()
+  const foreign=createOwnership(f.backend,options),claim=await foreign.pinOwnership('target');claim.assertHeld();await claim.release()
+  await registry.closeOne('target')
+  expect((await registry.inspectColdSelected(f.route)).kind).toBe('qualification-required');expect(capture).toThrow('PROCESS_READ_UNAVAILABLE');await registry.closeOne('target')
+  const reopened=capture();reopened.assertCurrent();reopened.retire()
+ }finally{bind?.mockRestore();failCleanup=false;await registry.close();await Promise.all(f.ownership.releaseHeldLocks())}
+})
