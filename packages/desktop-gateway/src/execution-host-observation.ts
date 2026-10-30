@@ -1,62 +1,154 @@
 import { randomUUID } from 'node:crypto'
 import type { SessionCoordinator } from '@i-harness/session-persistence'
-import { observeColdExecutionWrites } from '@i-harness/session-persistence/internal/retained-inspection'
+import { assertRetainedBindingReferenceFor, observationCleanupFor, observeColdExecutionWrites, preflightRetainedCoordinatorFor, assertRetainedCleanupOperation, createRetainedCleanupOperation, finishRetainedCleanupOperation, joinRetainedRetirementSinks, preflightRetainedBindingReleaseFor, assertOutsideRetirementSink, requestRetainedReferenceRetirementFor, runRetainedRetirementSink, type RetainedCleanupOperation, type RetainedExistingBinding } from '@i-harness/session-persistence/internal/retained-inspection'
 import type { SessionService, SessionAssembly } from '@i-harness/session-executor'
 import type { createProjectScopeBroker } from './project-scope.ts'
 import type { createDesktopExecution } from './execution.ts'
 
 type Notice = { kind: 'invalidate' | 'retired'; epoch: string; revision: number }
-/** Private host owner. No timer, writable acquisition, or renderer authority. */
+/** Private composition of original owners. No wire authority or timer. */
 export function createExecutionHostObservation(coordinator: SessionCoordinator, projects: Pick<ReturnType<typeof createProjectScopeBroker>, 'observeExecutionBinding'>, service: Pick<SessionService, 'liveAssembly' | 'onExecutionSurfaceLifecycle'>, execution: ReturnType<typeof createDesktopExecution>) {
-  let closing = false, charged = 0
-  const leases = new Set<{ close(): Promise<void> }>()
+  type Owned = { preflight(): void; fence(): void; drain(operation: RetainedCleanupOperation, retry?: boolean): Promise<void>; settleRetirement(): Promise<void>; settleExternalClose(): Promise<void> }
+  const leases = new Set<Owned>()
+  let closing = false, closeFlight: Promise<void> | undefined
+  const failures = (results: PromiseSettledResult<unknown>[]) => results.flatMap(result => result.status === 'rejected' ? [result.reason] : [])
+  const raise = (input: unknown[]) => { const errors = [...new Set(input)]; if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, 'Execution observation cleanup failed') }
+  const preflight = () => { preflightRetainedCoordinatorFor(coordinator); for (const lease of leases) lease.preflight(); assertOutsideRetirementSink(coordinator) }
+  const fence = () => { preflight(); closing = true; for (const lease of leases) lease.fence() }
+  function outer(lease: Owned, retry = true): Promise<void> {
+    try { lease.preflight(); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }
+    lease.fence()
+    const operation = createRetainedCleanupOperation()
+    return (async () => {
+      try { const resource = await Promise.allSettled([lease.drain(operation, retry)]); const sinks = await Promise.allSettled([lease.settleRetirement(), joinRetainedRetirementSinks(operation)]); raise([...failures(resource), ...failures(sinks)]) }
+      finally { finishRetainedCleanupOperation(operation) }
+    })()
+  }
   return {
+    fence,
     async subscribe(sessionId: string, sink: (notice: Notice) => void) {
-      if (closing || charged >= 32 || !coordinator.retainExistingSessionBindingObservation) throw Error('Execution observation unavailable')
-      charged++
-      const epoch = randomUUID(); let revision = 0, active = true, source: SessionAssembly | undefined, sourceOff: (() => void) | undefined
-      let reference: Awaited<ReturnType<NonNullable<SessionCoordinator['retainExistingSessionBindingObservation']>>> | undefined
-      let broker: ReturnType<typeof projects.observeExecutionBinding> | undefined
-      let flight: Promise<unknown> | undefined, releaseFlight: Promise<void> | undefined, released = false
-      let offLifecycle: (() => void) | undefined, offCold: (() => void) | undefined
-      let initialized = false, noticePending = false
-      const notify = (kind: Notice['kind']) => { try { sink({ kind, epoch, revision }) } catch { active = false; queueMicrotask(() => { void lease.close().catch(() => {}) }) } }
-      const dirty = () => { if (!active) return; if (revision === Number.MAX_SAFE_INTEGER) { active = false; notify('retired'); queueMicrotask(() => { void lease.close().catch(() => {}) }); return }; revision++; if (!noticePending) { noticePending = true; queueMicrotask(() => { noticePending = false; if (active) notify('invalidate') }) } }
-      const attach = (next: SessionAssembly | undefined) => { if (source === next) return; if (initialized) { active = false; notify('retired'); queueMicrotask(() => { void lease.close().catch(() => {}) }); return }; sourceOff?.(); source = next; sourceOff = next?.onExecutionSurfaceChanged?.(dirty) }
-      const detach = () => { offLifecycle?.(); offLifecycle = undefined; offCold?.(); offCold = undefined; sourceOff?.(); sourceOff = undefined; broker?.release() }
-      const retire = (operation: Parameters<NonNullable<typeof reference>['release']>[0]) => { if (active) { active = false; notify('retired') }; detach(); return reference?.release(operation) }
+      if (closing || leases.size >= 32 || !coordinator.retainExistingSessionBindingObservation || !service.onExecutionSurfaceLifecycle) throw Error('Execution observation unavailable')
+      assertOutsideRetirementSink(coordinator)
+      const epoch = randomUUID(), setup = Promise.withResolvers<void>()
+      void setup.promise.catch(() => {})
+      let revision = 0, active = true, source: SessionAssembly | undefined, enumerating = true, retiredNotice = false
+      let terminalSource: { kind: 'published' | 'retiring' | 'removed'; assembly: SessionAssembly } | undefined
+      let acquisitionCleanup: ReturnType<typeof observationCleanupFor>, acquisitionReported = false, acquisitionFailure: { error: unknown } | undefined
+      let reference: RetainedExistingBinding | undefined, broker: ReturnType<typeof projects.observeExecutionBinding> | undefined
+      let externalClose: Promise<void> | undefined, retirementFlight: Promise<void> | undefined, resourcesClean = false
+      let read: Promise<unknown> | undefined, drainFlight: Promise<void> | undefined, noticePending = false
+      let noticeError: { error: unknown } | undefined
+      const disposers: { dispose(): void; done: boolean }[] = []
+      const add = (dispose: (() => void) | undefined) => { if (dispose) disposers.push({ dispose, done: false }) }
+      const reliable = () => !terminalSource && (!source || (typeof source.onExecutionSurfaceChanged === 'function' && source.executionSurfaceState?.() === 'available'))
+      const terminate = () => {
+        if (!active) return
+        active = false
+        if (reference) {
+          // Original nonwaiting ticket is safe even inside a real retained read.
+          retirementFlight = requestRetainedReferenceRetirementFor(coordinator, reference, 'Execution source retired')
+          void retirementFlight.then(() => { if (resourcesClean) leases.delete(lease) }, () => {})
+        }
+      }
+      const notify = (kind: Notice['kind'], operation?: RetainedCleanupOperation) => {
+        const invoke = (): void | Promise<void> => { try {
+          const returned = (sink as (notice: Notice) => unknown)({ kind, epoch, revision })
+          if (returned && typeof (returned as PromiseLike<unknown>).then === 'function') return Promise.resolve(returned).then(() => {}, error => { noticeError = { error }; terminate(); throw error })
+        } catch (error) { noticeError = { error }; terminate(); throw error } }
+        if (operation) { void runRetainedRetirementSink(operation, coordinator, lease, invoke).catch(() => {}); return }
+        try { void Promise.resolve(invoke()).catch(() => {}) } catch { /* stored on this owned record; original ticket drives cleanup */ }
+      }
+      const dirty = () => {
+        if (!active) return
+        if (!reliable() || revision === Number.MAX_SAFE_INTEGER) { terminate(); return }
+        revision++
+        if (!noticePending) { noticePending = true; queueMicrotask(() => { noticePending = false; if (active) notify('invalidate') }) }
+      }
       const lease = {
         epoch,
-        async snapshot(options: { offset?: number; limit?: number } = {}) {
-          if (!active || !reference || !broker) throw Error('Execution observation retired')
-          if (flight) return { kind: 'reset' as const, epoch, revision }
-          const initial = revision, captured = source
-          const check = () => { if (!active || source !== captured || service.liveAssembly(sessionId) !== captured) throw Error('Execution source retired'); reference!.assertCurrent(); broker!.assertCurrent() }
-          const read = reference.withRead(profile => execution.read(sessionId, options, check, profile)); flight = read
-          try { const value = await read; check(); return initial === revision ? { kind: 'snapshot' as const, epoch, revision, value } : { kind: 'reset' as const, epoch, revision } }
-          finally { if (flight === read) flight = undefined }
+        preflight() { preflightRetainedCoordinatorFor(coordinator, [sessionId]); if (reference) preflightRetainedBindingReleaseFor(coordinator, reference) },
+        fence() { active = false },
+        async settleExternalClose() { await externalClose },
+        async settleRetirement() { const pending = retirementFlight; try { await pending } finally { if (retirementFlight === pending) retirementFlight = undefined } },
+        drain(operation: RetainedCleanupOperation, retry = true): Promise<void> {
+          active = false
+          if (drainFlight) return drainFlight
+          const deferred = Promise.withResolvers<void>(); drainFlight = deferred.promise; void drainFlight.catch(() => {})
+          void (async () => {
+            await setup.promise.catch(() => {}); await read?.catch(() => {})
+            const jobs: Promise<unknown>[] = disposers.filter(item => !item.done).map(async item => { await item.dispose(); item.done = true })
+            if (acquisitionCleanup) jobs.push(Promise.resolve().then(async () => {
+              if (!retry || !acquisitionReported) throw acquisitionFailure!.error
+              await acquisitionCleanup!.retry(operation); acquisitionCleanup = undefined
+            }))
+            if (reference) jobs.push(Promise.resolve().then(() => reference!.release(operation)))
+            const errors = failures(await Promise.allSettled(jobs))
+            if (noticeError) { errors.unshift(noticeError.error); noticeError = undefined }
+            resourcesClean = !errors.length
+            if (resourcesClean && !retirementFlight && !externalClose) leases.delete(lease)
+            raise(errors)
+          })().then(deferred.resolve, deferred.reject).finally(() => { drainFlight = undefined })
+          return deferred.promise
         },
         close(): Promise<void> {
-          active = false; detach()
-          if (released) return Promise.resolve()
-          if (releaseFlight) return releaseFlight
-          const pending = (async () => { await flight?.catch(() => {}); await reference?.release(); released = true; leases.delete(lease); charged-- })()
-          releaseFlight = pending; void pending.finally(() => { if (releaseFlight === pending) releaseFlight = undefined }).catch(() => {})
-          return pending
+          try { lease.preflight(); assertOutsideRetirementSink(coordinator) } catch (error) { return Promise.reject(error) }
+          if (externalClose) return externalClose
+          const flight = outer(lease); externalClose = flight
+          void flight.finally(() => { if (externalClose === flight) externalClose = undefined; if (resourcesClean && !retirementFlight) leases.delete(lease) }).catch(() => {})
+          return flight
+        },
+        async snapshot(options: { offset?: number; limit?: number } = {}) {
+          if (!active || !reference || !broker) throw Error('Execution observation retired or unavailable')
+          if (!reliable()) { terminate(); throw Error('Execution source unavailable') }
+          reference.assertCurrent(); broker.assertCurrent()
+          if (read) return { kind: 'reset' as const, epoch, revision }
+          const initial = revision, captured = source
+          const check = () => { try { if (!active || source !== captured || service.liveAssembly(sessionId) !== captured || !reliable()) throw Error('Execution source retired or unavailable'); reference!.assertCurrent(); broker!.assertCurrent() } catch (error) { terminate(); throw error } }
+          const flight = reference.withRead(profile => execution.read(sessionId, options, check, profile)); read = flight
+          try { const value = await flight; check(); return initial === revision ? { kind: 'snapshot' as const, epoch, revision, value } : { kind: 'reset' as const, epoch, revision } }
+          catch (error) { terminate(); throw error }
+          finally { if (read === flight) read = undefined }
         },
       }
       leases.add(lease)
-      try {
-        offCold = observeColdExecutionWrites(coordinator, id => { if (id === sessionId) dirty() })
-        offLifecycle = service.onExecutionSurfaceLifecycle?.(event => { if (event.sessionId === sessionId) { if (event.kind === 'published') attach(event.assembly); else if (source === event.assembly) attach(undefined) } }, { includeExisting: true })
-        reference = await coordinator.retainExistingSessionBindingObservation({ sessionId }, operation => { void retire(operation) })
+      const retire = (operation: RetainedCleanupOperation) => {
+        active = false
+        if (!retiredNotice) { retiredNotice = true; notify('retired', operation) }
+        // Acquisition's own failure cleanup must not await its public result.
+        if (!reference) return
+        return lease.drain(operation)
+      }
+      const acquisition = (async () => {
+        add(observeColdExecutionWrites(coordinator, id => { if (id === sessionId) dirty() }))
+        add(service.onExecutionSurfaceLifecycle!(event => {
+          if (event.sessionId !== sessionId) return
+          if (event.kind !== 'published' || !enumerating || source && source !== event.assembly) { terminalSource = { kind: event.kind, assembly: event.assembly }; terminate(); return }
+          source = event.assembly
+          add(source.onExecutionSurfaceChanged?.(dirty))
+        }, { includeExisting: true }))
+        enumerating = false
+        reference = await coordinator.retainExistingSessionBindingObservation!({ sessionId }, retire)
         if (!active || closing) throw Error('Execution observation retired')
-        broker = projects.observeExecutionBinding(reference, operation => retire(operation))
+        assertRetainedBindingReferenceFor(coordinator, reference)
+        if (reference.metadata().sessionId !== sessionId) throw Error('Execution retained identity mismatch')
+        broker = projects.observeExecutionBinding(reference, retire); add(() => broker!.release())
         reference.assertCurrent(); broker.assertCurrent()
-        const actual = service.liveAssembly(sessionId); if (source !== actual) attach(actual)
-        initialized = true; return lease
-      } catch (error) { await lease.close(); throw error }
+        if (source !== service.liveAssembly(sessionId) || !reliable()) throw Error('Execution source unavailable')
+      })()
+      void acquisition.then(setup.resolve, error => { acquisitionFailure = { error }; acquisitionCleanup = observationCleanupFor(coordinator, error); setup.reject(error) })
+      try { await acquisition; return Object.freeze({ epoch, snapshot: lease.snapshot, close: lease.close }) }
+      catch (error) { try { await outer(lease, false) } catch (cleanup) { throw new AggregateError([error, cleanup], 'Execution acquisition and cleanup failed') } finally { acquisitionReported = true }; throw error }
     },
-    async close() { closing = true; const results = await Promise.allSettled([...leases].map(lease => lease.close())); const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []); if (errors.length) throw new AggregateError(errors, 'Execution observation cleanup failed') },
+    close(supplied?: RetainedCleanupOperation): Promise<void> {
+      try { if (supplied) assertRetainedCleanupOperation(supplied); fence() } catch (error) { return Promise.reject(error) }
+      if (closeFlight) return closeFlight
+      const operation = supplied ?? createRetainedCleanupOperation()
+      const flight = (async () => {
+        try { const selected = [...leases]; const resources = failures(await Promise.allSettled(selected.map(lease => lease.drain(operation)))); const sinks = failures(await Promise.allSettled([...selected.map(lease => lease.settleRetirement()), ...selected.map(lease => lease.settleExternalClose()), joinRetainedRetirementSinks(operation)])); raise([...resources, ...sinks]) }
+        finally { if (!supplied) finishRetainedCleanupOperation(operation) }
+      })()
+      closeFlight = flight; void flight.finally(() => { if (closeFlight === flight) closeFlight = undefined }).catch(() => {})
+      return flight
+    },
   }
 }

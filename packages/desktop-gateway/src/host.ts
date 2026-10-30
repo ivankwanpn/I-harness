@@ -1,3 +1,4 @@
+import { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
 import { createAgentProcessReadRunner } from './agent-process-read.ts'
 import type { ContextResultRef } from "@i-harness/context-output"
 import type { ManagedArtifactRef } from "@i-harness/core-session"
@@ -524,8 +525,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
     close: () => {
       assertOutsideForkController(coordinator)
+      executionObservation.fence()
       if (shutdownComplete) return Promise.resolve()
       if (closing) return closing
+      const cleanupOperation = createRetainedCleanupOperation()
       shutdownRequested = true
       let pluginFenceFailure: { cause: unknown } | undefined
       try { stopPluginObserver.dispose() } catch (cause) { pluginFenceFailure = { cause } }
@@ -547,7 +550,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
-        await once("execution observation", () => executionObservation.close())
+        await once("execution observation", () => executionObservation.close(cleanupOperation))
         await once('fork controller',()=>forkController.close())
         await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
@@ -569,11 +572,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         if (cleaned.has('trust watcher') && cleaned.has('instructions') && cleaned.has('plugins') && cleaned.has('plugin observer')) await once('instruction watch', () => instructionWatch.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => coordinator.close())
+        if (forksJoined&&cleaned.has("session service")&&cleaned.has('native context')) await once("coordinator", () => closeCoordinatorWithRetainedCleanupOperation(coordinator, cleanupOperation))
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
         shutdownComplete = true
-      })()
+      })().finally(() => finishRetainedCleanupOperation(cleanupOperation))
       closing = attempt
       void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
       return attempt

@@ -1,0 +1,63 @@
+import { expect, it, vi } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
+const state = vi.hoisted(() => ({ target: '', releases: 0, fail: true, profilePath: '', profileFail: false }))
+vi.mock('../../fs-lock/src/index.ts', async original => { const actual = await original<any>(); return { ...actual, async acquireSessionLock(options: any) { const raw = await actual.acquireSessionLock(options); if (options.lockPath !== state.target) return raw; return { get held() { return raw.held }, async release() { state.releases++; if (state.fail) { state.fail = false; throw false }; await raw.release() } } } } })
+vi.mock('node:fs/promises', async original => { const actual = await original<typeof import('node:fs/promises')>(); return { ...actual, async readFile(...args: any[]) { if (state.profileFail && String(args[0]) === state.profilePath) { state.profileFail = false; throw undefined }; return (actual.readFile as any)(...args) } } })
+import { lockPathFor } from '../../fs-lock/src/index.ts'
+import { createJsonlBackend } from '@i-harness/session-persistence-jsonl'
+import { composeJsonlTaskTransitionCoordinator } from '@i-harness/session-persistence-jsonl/internal/task-document-factory'
+import { taskDocumentStorageContract } from '@i-harness/subagent/internal/task-storage-contract'
+import { createSessionService } from '@i-harness/session-executor'
+import { createProjectScopeBroker } from '../src/project-scope.ts'
+import { createDesktopExecution } from '../src/execution.ts'
+import { createRetainedCleanupOperation, finishRetainedCleanupOperation, closeCoordinatorWithRetainedCleanupOperation } from '@i-harness/session-persistence/internal/retained-inspection'
+import { createExecutionHostObservation } from '../src/execution-host-observation.ts'
+it('retains exact original native release debt while independent leases dispose, then explicitly retries once', async () => {
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'adapter-native-debt-'))
+  const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
+  const c = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract), foreign = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract)
+  const service = createSessionService({ workspace: root, coordinator: c, modelPolicy: 'test-mock' }), broker = createProjectScopeBroker(c, root), owner = createExecutionHostObservation(c, broker, service, createDesktopExecution(c, service))
+  try {
+    for (const id of ['s', 't']) { await c.create({ sessionId: id }); await c.releaseOwnership(id) }
+    state.target = lockPathFor(root, 'doc:desktop-session-project-' + createHash('sha256').update('s').digest('hex'))
+    const s = await owner.subscribe('s', () => {}), t = await owner.subscribe('t', () => {})
+    await expect(owner.close()).rejects.toThrow()
+    expect(state.releases).toBe(1)
+    await expect(s.snapshot()).rejects.toThrow(); await expect(t.snapshot()).rejects.toThrow()
+    await expect(foreign.adoptOwnership('s')).rejects.toThrow()
+    await foreign.adoptOwnership('t'); await foreign.releaseOwnership('t')
+    await owner.close(); expect(state.releases).toBe(2)
+    await foreign.adoptOwnership('s'); await foreign.releaseOwnership('s')
+    await owner.close(); expect(state.releases).toBe(2)
+  } finally { state.fail = false; await owner.close(); await broker.close(); await service.close(); await c.close(); await foreign.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+
+it('retains partial genuine acquisition cleanup debt without an implicit retry before reporting the failure', async () => {
+  const root = await mkdtemp(join(process.env.IH_CONFIG_DIR ?? tmpdir(), 'adapter-partial-native-'))
+  const options = { lock: { enabled: true, lockRoot: root }, acquireRetryMs: 1, acquireDeadlineMs: 25 }
+  const c = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract), foreign = composeJsonlTaskTransitionCoordinator(createJsonlBackend(root), options, taskDocumentStorageContract)
+  const service = createSessionService({ workspace: root, coordinator: c, modelPolicy: 'test-mock' }), broker = createProjectScopeBroker(c, root), owner = createExecutionHostObservation(c, broker, service, createDesktopExecution(c, service))
+  try {
+    await c.create({ sessionId: 's' }); await c.releaseOwnership('s')
+    state.target = lockPathFor(root, 'doc:desktop-session-project-' + createHash('sha256').update('s').digest('hex')); state.releases = 0; state.fail = true; state.profilePath = join(root, 's.jsonl'); state.profileFail = true
+    let failure: unknown
+    try { await owner.subscribe('s', () => {}) } catch (error) { failure = error }
+    const flatten = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(flatten) : [error]
+    expect(flatten(failure)).toContain(undefined); expect(flatten(failure)).toContain(false)
+    expect(state.releases).toBe(1)
+    await expect(foreign.adoptOwnership('s')).rejects.toThrow()
+    state.fail = true
+    const operation = createRetainedCleanupOperation()
+    try {
+      await expect(owner.close(operation)).rejects.toThrow(); expect(state.releases).toBe(2)
+      await expect(closeCoordinatorWithRetainedCleanupOperation(c, operation)).rejects.toThrow(); expect(state.releases).toBe(2)
+    } finally { finishRetainedCleanupOperation(operation) }
+    await owner.close(); expect(state.releases).toBe(3)
+    await foreign.adoptOwnership('s'); await foreign.releaseOwnership('s')
+    await owner.close(); expect(state.releases).toBe(3)
+  } finally { state.profileFail = false; state.fail = false; await owner.close(); await broker.close(); await service.close(); await c.close(); await foreign.close(); await rm(root, { recursive: true, force: true }) }
+})
