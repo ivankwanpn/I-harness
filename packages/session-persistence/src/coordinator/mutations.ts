@@ -1,3 +1,4 @@
+import type { createColdExecutionWrites } from './cold-execution-writes.ts'
 import { CURRENT_FORMAT_VERSION, validateSubagentHeader, type SessionEvent } from "@i-harness/core-session"
 import { SessionWriteBehind } from "../write-behind.ts"
 import type { PersistenceBackend, SessionMeta } from "./types.ts"
@@ -20,6 +21,7 @@ export function createMutations(
   processLatches?: ReturnType<typeof createProcessReadLatches>,
   transitions?: ReturnType<typeof createTaskDocumentTransitions>,
   transitionWrite?: (id: string, events: SessionEvent[]) => Promise<void>,
+  coldWrites?: ReturnType<typeof createColdExecutionWrites>,
 ) {
   const writeBehinds = new Map<string, SessionWriteBehind>()
   const deleted = new Set<string>()
@@ -30,6 +32,7 @@ export function createMutations(
       check?.(staged.events.map((event, position) => event.seq === undefined ? { ...event, seq: staged.baseLength + position } : event))
       if (staged.events.length || events.length === 0) { markIssue?.(); await backend.append(sessionId, staged.events) }
       staged.commit()
+      if (staged.events.length) coldWrites?.committed(sessionId)
     } catch (error) { conversation.invalidate(sessionId); throw error }
   }
   function assertWritableBootstrap(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
