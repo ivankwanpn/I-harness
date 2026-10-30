@@ -130,7 +130,9 @@ export async function selectedRow(store: ContextStore, plan:OriginalSelectedPlan
 }
 export async function qualifySelectedGraph(store: ContextStore, plan: OriginalSelectedPlan, observation: LegacyReadObservation, guard: () => void) {
   const distinct = new Map<string, string>(); let rows = 0, metadataBytes = 0, minimumExpiry: number | undefined
+  const expected=plan.root.version===2?plan.selected!.expectedLegacyRows()[Symbol.iterator]():undefined
   for await (const row of walkSelectedPages(store, plan, guard)) {
+    if(expected){const next=expected.next();if(next.done||!same(next.value,{anchor:row.anchor,...rowCommitment(row),extent:row.extent,original:row.original}))throw Error('Selected seed coverage conflict')}
     const commitment = JSON.stringify(rowCommitment(row)), prior = distinct.get(row.refId)
     if (prior !== undefined && prior !== commitment) throw Error('Inconsistent original reference commitment')
     distinct.set(row.refId, commitment); rows++; metadataBytes += row.metadataEncodedBytes
@@ -138,6 +140,8 @@ export async function qualifySelectedGraph(store: ContextStore, plan: OriginalSe
     const visible=plan.root.version!==2||plan.selected!.visible(row)
     if(visible){minimumExpiry = Math.min(minimumExpiry ?? Infinity, row.expiresAt);await selectedRow(store, plan, row, observation, guard,false)}
   }
+  if(expected&&!expected.next().done)throw Error('Selected seed coverage incomplete')
   if (distinct.size !== plan.root.distinctRefCount) throw Error('Original distinct reference count conflict')
+  if(expected)await assertSelectedPlan(store,plan,observation,guard)
   guard(); return { rows, distinctRefs: distinct.size, metadataBytes, minimumExpiry }
 }
