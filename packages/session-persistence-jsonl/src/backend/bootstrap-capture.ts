@@ -1,5 +1,6 @@
-import { readdir, rename, stat } from 'node:fs/promises'
-import { basename } from 'node:path'
+import { readdir, rename, stat, lstat } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
+import { basename, dirname } from 'node:path'
 import { types } from 'node:util'
 import { canonicalJsonData } from '@i-harness/core-session'
 import { parseBootstrapCaptureReservation, parseBootstrapHeaderStage, rawHeaderDigest, type HeldFactOwner, type IssuingFactOwner, type BootstrapCaptureInspection, type BootstrapCaptureRequest, type BootstrapCaptureReserveOutcome, type BootstrapHeaderOperation, type HeaderOutcome } from '@i-harness/session-persistence'
@@ -41,6 +42,9 @@ function selectedByteSnapshot(input:unknown,limit:number):Buffer {
 }
 export function createBootstrapCaptureBackend(filePath: (id: string) => string, assertNotDeleted: (kind: string, id: string) => Promise<void>, rootPath: string, captureIO: BootstrapCaptureIO = createBootstrapCaptureIO()) {
   const { scope, tracked, acquire, close, bytes, settleBootstrapCaptureIO } = captureIO
+  // A retry confirms the same original path revision under the retained owner.
+  // Equal bytes on a replacement inode cannot mint a new acknowledgment.
+  const selectedBirthRevisions = new WeakMap<object, Map<string, { chain: string; revision: BigIntStats }>>()
   async function checkBootstrapCaptureRoot() {
     const info = await stat(rootPath)
     if (!info.isDirectory()) throw new Error('Capture storage root unavailable')
@@ -291,16 +295,50 @@ export function createBootstrapCaptureBackend(filePath: (id: string) => string, 
       const guard=()=>scope(id,owner),path=filePath(id)
       try {
         guard();await assertNotDeleted('session',id)
+        const sameRevision=(a:BigIntStats,b:BigIntStats)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeNs===b.mtimeNs&&a.ctimeNs===b.ctimeNs
+        const parents=async()=>{
+          const chain:string[]=[];let parent=dirname(path),foundRoot=false
+          for(;;){
+            const info=await lstat(parent,{bigint:true});guard()
+            if(!info.isDirectory()||info.isSymbolicLink()||info.ino<=0n)throw Error('Selected header root unavailable')
+            chain.push(`${info.dev}/${info.ino}`);if(parent===rootPath)foundRoot=true
+            const next=dirname(parent);if(next===parent)break;parent=next
+          }
+          if(!foundRoot)throw Error('Selected header outside original root')
+          return chain.join(':')
+        }
+        const observedChain=await parents(),observedPath=await lstat(path,{bigint:true});guard()
+        const key=rawHeaderDigest(captured.stageBytes)+':'+liveVersion
+        let revisions=selectedBirthRevisions.get(owner.owner)
+        if(!revisions){revisions=new Map();selectedBirthRevisions.set(owner.owner,revisions)}
+        let originalRevision=revisions.get(key)
+        if(!originalRevision){originalRevision={chain:observedChain,revision:observedPath};revisions.set(key,originalRevision)}
+        const {chain,revision:originalPath}=originalRevision
+        if(!originalPath.isFile()||originalPath.isSymbolicLink()||originalPath.ino<=0n)throw Error('Selected header identity unavailable')
+        const current=async()=>{
+          guard();const actual=await lstat(path,{bigint:true});guard()
+          if(!actual.isFile()||actual.isSymbolicLink()||!sameRevision(originalPath,actual)||chain!==await parents())throw Error('Selected header path changed')
+          await assertNotDeleted('session',id);guard()
+        }
         const stage=await lookupSelectedBootstrapStage(path,{kind:'route',route:captured.route},{namespace:()=>bootstrapNamespace(path),read:(p,limit)=>bytes(ledger,p,limit,guard),assertCurrent:guard})
         if(stage.kind!=='full'||!Buffer.from(stage.exactBytes).equals(captured.stageBytes))return {kind:'conflict'}
+        await current();assertLookupCleanup(ledger)
         const resource=await acquire(ledger,path,'r+')
         try {
-          const read=async()=>{const value=Buffer.alloc(liveHeader.length);const result=await resource.handle.read(value,0,value.length,0);guard();return result.bytesRead===value.length&&value.equals(liveHeader)}
+          const read=async()=>{
+            await current();const before=await resource.handle.stat({bigint:true});guard()
+            if(!before.isFile()||!sameRevision(originalPath,before))throw Error('Selected header handle changed')
+            const value=Buffer.alloc(liveHeader.length);let offset=0
+            while(offset<value.length){const result=await resource.handle.read(value,offset,value.length-offset,offset);guard();if(!result.bytesRead)break;offset+=result.bytesRead}
+            const after=await resource.handle.stat({bigint:true});guard();await current()
+            if(!sameRevision(originalPath,after))throw Error('Selected header revision changed')
+            return offset===value.length&&value.equals(liveHeader)
+          }
           if(!await read())return {kind:'conflict'}
           await resource.handle.sync();guard();if(!await read())return {kind:'conflict'}
         } finally { await close(ledger,resource) }
-        await assertNotDeleted('session',id);guard();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader)}
-      } catch { return {kind:'unknown'} }
+        await current();return {kind:'committed',headerDigest:rawHeaderDigest(liveHeader)}
+      } catch(error) { ledger.diagnostics.push(error);return {kind:'unknown'} }
     })
   }
   const prepareBootstrapCapture=(id:string,owner:IssuingFactOwner,value:Uint8Array)=>{const reservation=parseBootstrapCaptureReservation(value);return reserveCapture(id,owner,{protocol:'public',request:reservation.request},value)}

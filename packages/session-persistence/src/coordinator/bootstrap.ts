@@ -606,6 +606,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
       owned.flight=flight;return flight
     }
   function prepareSelectedCapture(input:SelectedResultsRoute,identity:object,guard:()=>void,capture:()=>Promise<unknown>) {
+    if (!transitions) throw new Error('TASK_TRANSITION_UNSUPPORTED')
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
     const selected=(backend as PersistenceBackend & {selectedCapture?:Parameters<typeof createSelectedCaptureAttempt>[0]&{prepareSelectedHeader(id:string,owner:IssuingFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation,onHeaderIssue?:()=>void):Promise<HeaderOutcome>;reconcileSelectedHeader(id:string,owner:HeldFactOwner,route:SelectedResultsRoute,operation:BootstrapHeaderOperation):Promise<HeaderOutcome>}}).selectedCapture
     if(!selected||typeof selected.prepareSelectedHeader!=='function'||typeof selected.reconcileSelectedHeader!=='function'||!backend.settleBootstrapCaptureIO||!backend.checkBootstrapCaptureRoot)throw new TypeError('Selected capture unavailable')
@@ -723,6 +724,7 @@ export function createBootstrapOwner(backend:PersistenceBackend,ownership:Owners
   /** Cold admission retains the original entry and owner, but does not release
    * readiness until the completed-target transition and target qualification. */
   function inspectColdSelected(input:SelectedResultsRoute):Promise<{kind:'qualification-required'|'conflict'|'blocked'}> {
+    if (!transitions) return Promise.reject(new Error('TASK_TRANSITION_UNSUPPORTED'))
     const route=captureSelectedResultsRoute(input),id=route.request.invocation.targetSessionId
     let entry=documents.get(id)
     if(entry) {

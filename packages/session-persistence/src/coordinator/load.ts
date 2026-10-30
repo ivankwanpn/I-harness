@@ -78,6 +78,13 @@ export function createLoads(
       } }
     },
     async load(sessionId: string) {
+      // Physical14 recovery is a parent mutation owned by the retained task
+      // transition. Historical public loads retain their original semantics.
+      if (transitions) {
+        const source = await read(sessionId)
+        preflightSessionFormat(source.version, source.events, source.meta)
+        if (source.version >= 14) return transitionLoad(sessionId)
+      }
       return processMutation(sessionId, () => withSessionOperation(sessionId, async () => {
         invalidateConversation(sessionId)
         const peeked = await read(sessionId)
@@ -89,6 +96,8 @@ export function createLoads(
           const owned = await read(sessionId)
           preflightSessionFormat(owned.version, owned.events, owned.meta)
           await migrate(owned.version, guardIgnorable(owned.events, true), owned.meta)
+          // A concurrent upgrade must reenter with the transition's task lease.
+          if (transitions && owned.version >= 14) throw new Error('TASK_TRANSITION_RETRY_REQUIRED')
           repaired = await backend.repair(sessionId)
         } finally {
           await borrowed.release()
