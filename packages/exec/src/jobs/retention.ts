@@ -10,7 +10,7 @@ function failure(result: ExecFrameObservation | undefined): Failure {
 
 /** The job registry delegates original capture retention here. Observer grants
  * do not change the capture's stored disposition or its native exit status. */
-export function createJobRetention(owner: ExecResultRetention | undefined, jobFor: (capture: Capture) => Job | undefined) {
+export function createJobRetention(owner: ExecResultRetention | undefined, jobFor: (capture: Capture) => Job | undefined, changed: () => void = () => {}) {
   const pending = new Set<Capture>()
   async function settle(capture: Capture): Promise<ExecFrameObservation | undefined> {
     if (!capture.frames || !owner) return undefined
@@ -24,10 +24,12 @@ export function createJobRetention(owner: ExecResultRetention | undefined, jobFo
     const result = await settle(job.capture)
     // A known immutable capture cannot be downgraded by a delayed observation.
     if (!result || job.retained) return
+    const before = job.retained, previousFailure = job.retentionFailure
     if (result.kind === 'ready') {
       job.retained = result.dependency
       job.retentionFailure = failure(result)
     } else job.retentionFailure = 'recovery-required'
+    if (before !== job.retained || previousFailure !== job.retentionFailure) changed()
   }
   async function currentObservation(capture: Capture): Promise<ExecFrameObservation | undefined> {
     if (!capture.frames || !owner) return undefined

@@ -188,3 +188,19 @@ it("flushes only after the real live owner has stopped the cell", async () => {
     expect(order).toEqual(["stop-start", "stop-end", "flush"])
   } finally { await f.close() }
 }, 15000)
+
+it('uses the retained profile port inside the real cold execution read', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ih-retained-profile-'))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { lock: { enabled: true, lockRoot: root } })
+  try {
+    await coordinator.create({ sessionId: 's' }); await coordinator.releaseOwnership('s')
+    const ref = await coordinator.retainExistingSessionBindingObservation!({ sessionId: 's' }, () => {})
+    const service = { liveAssembly: () => undefined }
+    const read = createDesktopExecution(coordinator, service).read
+    const ordinary = vi.spyOn(coordinator, 'profile')
+    const view = await ref.withRead(profile => read('s', {}, () => ref.assertCurrent(), profile))
+    expect(view.total).toBe(0)
+    expect(ordinary).not.toHaveBeenCalled()
+    await ref.release()
+  } finally { await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+})

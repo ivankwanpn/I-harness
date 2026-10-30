@@ -61,6 +61,7 @@ export interface WorkflowJobStore {
   get(jobId: string): WorkflowJobEntry | undefined
   // Copy of the public BackgroundJobView shape (never the internal entry).
   view(jobId: string): BackgroundJobView
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   update(jobId: string, patch: Partial<Pick<WorkflowJobEntry, "status" | "stdout" | "stderr" | "exitCode">>): void
   list(): BackgroundJobView[]
@@ -71,8 +72,10 @@ export function createWorkflowJobStore(): WorkflowJobStore {
   let counter = 0
   const jobs = new Map<string, WorkflowJobEntry>()
   const listeners = new Map<string, Set<(view: BackgroundJobView) => void>>()
+  const collection = new Set<() => void>()
 
   function publish(job: WorkflowJobEntry): void {
+    for (const listener of [...collection]) { try { listener() } catch {} }
     for (const listener of [...listeners.get(job.id) ?? []]) {
       try { listener(toView(job)) } catch { /* Observers cannot interrupt the runner. */ }
     }
@@ -94,6 +97,7 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       counter += 1
       const job: WorkflowJobEntry = { id: `workflow-${counter}`, status: "running", stdout: "", stderr: "", controller: new AbortController(), ...(owner !== undefined ? { owner } : {}) }
       jobs.set(job.id, job)
+      publish(job)
       return job
     },
     get(jobId: string): WorkflowJobEntry | undefined {
@@ -104,6 +108,7 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       if (!job) throw new Error(`unknown job: ${jobId}`)
       return toView(job)
     },
+    subscribeJobs(listener) { collection.add(listener); return () => { collection.delete(listener) } },
     subscribeJob(jobId, listener) {
       if (!jobs.has(jobId)) throw new Error(`unknown job: ${jobId}`)
       let group = listeners.get(jobId)
@@ -308,6 +313,7 @@ export function runWorkflow(def: WorkflowDefinition, params: Record<string, stri
 export interface WorkflowExecutor {
   runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle
   getOutput(jobId: string): BackgroundJobView
+  subscribeJobs?(listener: () => void): () => void
   subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   killJob(jobId: string): "cancellation-requested" | "already-finished"
@@ -330,6 +336,7 @@ export function createWorkflowExecutor(deps: WorkflowExecutorDeps): WorkflowExec
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)
     },
+    subscribeJobs(listener) { return jobs.subscribeJobs?.(listener) ?? (() => {}) },
     subscribeJob(jobId, listener) { return jobs.subscribeJob(jobId, listener) },
     listJobs(): BackgroundJobView[] {
       return jobs.list()

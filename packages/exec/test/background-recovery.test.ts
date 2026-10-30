@@ -9,7 +9,7 @@ type Finish = { kind: 'artifact' } | { kind: 'unknown' } | { kind: 'refused' }
 
 /** Real exec service + controlled transport + the real frame capture: only the
  * artifact sink and observer behaviour are controlled. */
-async function runJob(control: { finishes: Finish[]; observeThrows?: number }) {
+async function runJob(control: { finishes: Finish[]; observeThrows?: number; onCollection?: (exec: ReturnType<typeof createExecService>) => void }) {
   let drain!: () => void, release!: () => void
   const drained = new Promise<void>(done => { drain = done }), gate = new Promise<void>(done => { release = done })
   let launches = 0, attempts = 0, observations = 0, frameCapture!: ExecFrameCapture
@@ -38,6 +38,7 @@ async function runJob(control: { finishes: Finish[]; observeThrows?: number }) {
       async settle(capture) { return capture.settle() },
       async observe(capture) { observations++; if (control.observeThrows && observations <= control.observeThrows) throw new Error('observer storage failed'); return capture.settle() },
     } satisfies ExecResultRetention })
+  control.onCollection?.(exec)
   const { jobId } = await exec.runBackground({ argv: ['controlled-recovery-source'] })
   const terminal = new Promise<BackgroundJobView>((done, fail) => {
     const timer = setTimeout(() => fail(new Error('No terminal view')), 5000)
@@ -130,4 +131,13 @@ it('passive job metadata neither retries unknown storage nor registers an observ
     expect(job.counters()).toEqual({ launches: 1, attempts: 2, observations: 1 })
     expect(job.exec.getJobView(job.jobId).retained?.sourceId).toBe(first.nativeJob.sourceId)
   } finally { job.release(); await job.exec.dispose() }
+})
+
+it('publishes a newly registered job to collection observers', async () => {
+  const counts: number[] = []
+  const job = await runJob({ finishes: [{ kind: 'refused' }], onCollection: exec => {
+    exec.subscribeJobs!(() => counts.push(exec.listJobViews!().length))
+  } })
+  try { expect(counts[0]).toBe(1); expect(counts.length).toBeGreaterThan(1) }
+  finally { await job.exec.dispose() }
 })
