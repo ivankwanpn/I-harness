@@ -1,4 +1,4 @@
-import { CURRENT_FORMAT_VERSION, createConversationValidationIndex, type ConversationValidationIndex, type SessionEvent } from "@i-harness/core-session"
+import { CURRENT_FORMAT_VERSION, canonicalJsonData, createConversationValidationIndex, type ConversationValidationIndex, type SessionEvent } from "@i-harness/core-session"
 import { SessionFormatUnsupportedError } from "../format/registry.ts"
 import { preflightBatchShape, preflightSessionFormat } from "../format/validation.ts"
 import { ensureWritableFormatUnlocked } from "./writable-format.ts"
@@ -35,7 +35,11 @@ export function createConversationIndexes(backend: Pick<PersistenceBackend, "rea
       preflightBatchShape(version, suffix)
       try {
         const staged = index.stage(suffix, { readCurrentEvent: position => loaded.events[position] })
-        return { events: suffix, baseLength: loaded.events.length, commit: () => staged.commit() }
+        const before = canonicalJsonData({ version: loaded.version, events: loaded.events })
+        return { events: suffix, baseLength: loaded.events.length, commit: () => staged.commit(), async historyChanged() {
+          const after = await backend.read(id)
+          return canonicalJsonData({ version: after.version, events: after.events }) !== before
+        } }
       } catch (cause) { throw new SessionFormatUnsupportedError("unsupported conversation suffix", { cause }) }
     },
   }

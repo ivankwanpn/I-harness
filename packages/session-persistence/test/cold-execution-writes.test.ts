@@ -24,7 +24,7 @@ it('signals only completed cold appends, isolates listeners, and stops on unsubs
 })
 
 
-it('does not signal a failed backend append', async () => {
+it('does not signal pre-issue backend method-integrity refusal', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cold-feed-failure-'))
   const backend = createJsonlBackend(root)
   const coordinator = composeJsonlTaskTransitionCoordinator(backend, { lock: { enabled: true } }, taskDocumentStorageContract)
