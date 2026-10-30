@@ -318,14 +318,22 @@ export function createJobServiceWithReservation(options: ExecServiceOptions, hos
     },
   }
   const port = Object.freeze({
-    reserve,
+    reserve() {
+      if (this !== port) throw new Error('Invalid reservation port receiver')
+      return reserve()
+    },
     instanceId(handle: object) {
+      if (this !== port) throw new Error('Invalid reservation port receiver')
       const entry = reservations.get(handle)
       if (!entry || entry.state !== 'reserved' || disposed) throw new Error('Original reservation unavailable')
       return entry.instanceId
     },
-    release,
+    release(handle: object) {
+      if (this !== port) throw new Error('Invalid reservation port receiver')
+      release(handle)
+    },
     async start(handle: object, command: import('../index.ts').ExecCommand, mode: 'foreground' | 'background', runOptions?: import('../index.ts').ExecRunOptions) {
+      if (this !== port) throw new Error('Invalid reservation port receiver')
       const entry = consume(handle)
       let captured = false
       const reservedCapture: typeof createCapture = (...args) => { captured = true; return captureReserved(entry, ...args) }
